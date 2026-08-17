@@ -123,6 +123,7 @@ def adapt_scaler_config_for_hierarchy(
     return ScalerConfig(
         human_height_assumption=config.human_height_assumption,
         model_height=config.model_height,
+        root_trajectory_scale=config.root_trajectory_scale,
         joint_scales=new_scales,
         joint_offsets=new_offsets,
         root_joint=root,
@@ -312,8 +313,18 @@ class HumanToRobotScaler:
         # all agree; doing it only as a post-IK root correction makes the feet
         # solve against over-long human strides and then slide when the root is
         # shortened afterwards.
+        #
+        # ``model_height`` is the robot's mesh stature, so the default scale
+        # assumes the robot's leg-to-stature proportions resemble a human's.
+        # ``root_trajectory_scale`` overrides it for robots where they don't
+        # (headless / short-torso models measure a small stature, which would
+        # shorten the root stride well below the leg scale and force the
+        # stance foot to skate).
+        override = config.root_trajectory_scale
         model_h = float(config.model_height)
-        if np.isfinite(model_h) and model_h > 0.01:
+        if override is not None and np.isfinite(override) and override > 0.0:
+            self._trajectory_scale = float(override)
+        elif np.isfinite(model_h) and model_h > 0.01:
             traj_h = float(
                 trajectory_human_height
                 if trajectory_human_height is not None

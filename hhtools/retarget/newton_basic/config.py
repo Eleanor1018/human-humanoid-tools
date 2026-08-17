@@ -40,9 +40,23 @@ class ScalerConfig:
             scaler multiplies every entry by
             ``actual_human_height / human_height_assumption`` to keep the
             relative proportions constant across skeletons of different sizes.
-        model_height: Nominal robot pelvis height (metres) — carried here only
-            for downstream feet-stabilizer / body-ground-clearance tuning, the
-            scaler itself doesn't consume it.
+        model_height: Robot **standing stature** (ground to apex, metres) as
+            measured from the URDF meshes by
+            :func:`~hhtools.robot.standing_height.estimate_robot_standing_height`.
+            Drives the yellow preview overlay scale and, unless
+            ``root_trajectory_scale`` overrides it, the world trajectory scale
+            ``model_height / human_height``.
+        root_trajectory_scale: Explicit override for the world trajectory
+            scale, i.e. how much of the source clip's root displacement the
+            robot reproduces.  ``None`` (default) derives it from
+            ``model_height / human_height``, which assumes the robot's
+            leg-to-stature proportions resemble a human's.  Set this for
+            robots where they don't — a headless / short-torso robot measures
+            a small stature, so the stature ratio shrinks the root stride far
+            below the leg scale and the stance foot has to skate to make up
+            the difference.  Match it to the leg scale (roughly
+            ``robot_pelvis_height / human_pelvis_height``) instead.  Same role
+            as soma-retargeter's ``root_xy_scale``.
         joint_scales: ``canonical_joint_name -> scale_factor``.  Applied to the
             *displacement* between each joint and the root joint in world
             space.  A scale of ``1.0`` is a no-op.
@@ -97,6 +111,7 @@ class ScalerConfig:
 
     human_height_assumption: float = 1.7
     model_height: float = 1.3
+    root_trajectory_scale: float | None = None
     joint_scales: dict[str, float] = field(default_factory=dict)
     joint_offsets: dict[str, tuple[tuple[float, float, float],
                                     tuple[float, float, float, float]]] = field(
@@ -200,9 +215,13 @@ def load_scaler_config(path: str | Path) -> ScalerConfig:
     else:
         lafan_toe_opt = bool(_lafan_toe)
 
+    _traj = data.get("root_trajectory_scale")
+    traj_opt = None if _traj is None else float(_traj)
+
     return ScalerConfig(
         human_height_assumption=float(data.get("human_height_assumption", 1.7)),
         model_height=float(data.get("model_height", 1.3)),
+        root_trajectory_scale=traj_opt,
         joint_scales={k: float(v) for k, v in (data.get("joint_scales") or {}).items()},
         joint_offsets=offsets,
         root_joint=str(data.get("root_joint", "hips")),

@@ -716,6 +716,45 @@ def default_human_height(
     return float(fallback)
 
 
+def root_trajectory_scale_from_preset(preset: "RobotPreset") -> float | None:
+    """Read ``retarget.root_trajectory_scale`` from ``robot.yaml``.
+
+    ``None`` means "derive it from ``model_height / human_height``" (the
+    default).  See :attr:`~hhtools.retarget.newton_basic.config.ScalerConfig.root_trajectory_scale`
+    for when a robot needs the explicit value.
+    """
+
+    raw = _reload_retarget_block(preset).get("root_trajectory_scale")
+    if raw is None:
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        _log.warning(
+            "robot %r: retarget.root_trajectory_scale=%r is not a number — ignoring",
+            preset.name, raw,
+        )
+        return None
+    if not (0.0 < value <= 2.0):
+        _log.warning(
+            "robot %r: retarget.root_trajectory_scale=%s out of the sane "
+            "(0, 2] range — ignoring", preset.name, value,
+        )
+        return None
+    return value
+
+
+def _apply_root_trajectory_scale(
+    cfg: ScalerConfig, preset: "RobotPreset",
+) -> ScalerConfig:
+    """Stamp the yaml root-trajectory-scale override onto a scaler config."""
+
+    override = root_trajectory_scale_from_preset(preset)
+    if override is not None:
+        cfg.root_trajectory_scale = override
+    return cfg
+
+
 def build_scaler_config_for_robot(
     calibration: "RobotRetargetCalibration",
     model: "URDFRobotModel",
@@ -730,13 +769,14 @@ def build_scaler_config_for_robot(
     overrides = _active_joint_scale_overrides_for_model(
         model.preset, robot_model=model, calibration=calibration, motion=motion,
     )
-    return build_scaler_config_from_calibration(
+    cfg = build_scaler_config_from_calibration(
         calibration,
         model,
         motion,
         human_height=human_height,
         joint_scale_overrides=overrides or None,
     )
+    return _apply_root_trajectory_scale(cfg, model.preset)
 
 
 def resolve_retarget_scaler_config(
@@ -765,7 +805,8 @@ def resolve_retarget_scaler_config(
 
             cfg = adapt_scaler_config_for_hierarchy(cfg, motion.hierarchy)
         overrides = _active_joint_scale_overrides_for_model(preset, robot_model=model)
-        return _apply_joint_scale_overrides_to_config(cfg, overrides, motion=motion)
+        cfg = _apply_joint_scale_overrides_to_config(cfg, overrides, motion=motion)
+        return _apply_root_trajectory_scale(cfg, preset)
 
     raise ValueError(
         f"robot {preset.name!r} has no bundled scaler for reference "
