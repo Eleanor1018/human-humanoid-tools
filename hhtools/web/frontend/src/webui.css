@@ -145,13 +145,23 @@ button { font-family: inherit; cursor: pointer; }
 }
 
 .col-resizer {
+  position: relative;
   z-index: 6;
   background: transparent;
-  transition: background 0.15s;
 }
-#resize-sidebar { grid-area: rz-sb; cursor: col-resize; border-right: 1px solid var(--hairline); }
-#resize-inspector { grid-area: rz-insp; cursor: col-resize; border-left: 1px solid var(--hairline); }
-.col-resizer:hover, .col-resizer.dragging { background: var(--accent-soft); }
+.col-resizer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  background: var(--hairline);
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+#resize-sidebar { grid-area: rz-sb; cursor: col-resize; }
+#resize-inspector { grid-area: rz-insp; cursor: col-resize; }
 
 .side-panel-head {
   display: flex; align-items: center; justify-content: space-between;
@@ -182,7 +192,6 @@ button { font-family: inherit; cursor: pointer; }
   background: var(--bg-elevated);
   backdrop-filter: saturate(180%) blur(20px);
   -webkit-backdrop-filter: saturate(180%) blur(20px);
-  border-right: 1px solid var(--hairline);
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -416,7 +425,6 @@ button { font-family: inherit; cursor: pointer; }
   background: var(--bg-elevated);
   backdrop-filter: saturate(180%) blur(20px);
   -webkit-backdrop-filter: saturate(180%) blur(20px);
-  border-left: 1px solid var(--hairline);
   display: flex;
   flex-direction: column;
   min-width: 0;
