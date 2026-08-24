@@ -91,54 +91,57 @@ onBeforeUnmount(() => {
       <canvas id="three-canvas"></canvas>
       <div id="calib-hud" class="calib-hud hidden" aria-hidden="true"></div>
       <div id="calib-hover-hint" class="calib-hover-hint" aria-hidden="true"></div>
-      <div class="view-hud hidden" id="view-hud">
-        <div class="view-hud-row" data-row="motion">
-          <button class="seg-btn" id="tg-skeleton" title="显示/隐藏原始动作骨架">
-            <span class="eye" aria-hidden="true">👁</span><span class="lbl">骨架</span>
-          </button>
-          <button class="seg-btn on" id="tg-mesh" title="显示/隐藏身体 mesh（SMPL 皮肤或管状近似）">
-            <span class="eye" aria-hidden="true">👁</span><span class="lbl">身体</span>
-          </button>
-          <button class="seg-btn" id="tg-env" disabled title="显示/隐藏原始动作的地形与交互物体">
-            <span class="eye" aria-hidden="true">👁</span><span class="lbl">物体/地形</span>
-          </button>
+      <div class="stage-top-tools">
+        <button v-show="panelLayout.state.sidebarHidden" type="button" class="panel-restore-btn stage-sidebar-restore" id="show-sidebar" title="显示左栏" @click="panelLayout.setHidden('sidebar', false)">▶ 导航</button>
+        <div class="view-hud hidden" id="view-hud">
+          <div class="view-hud-row" data-row="motion">
+            <button class="seg-btn" id="tg-skeleton" title="显示/隐藏原始动作骨架">
+              <span class="eye" aria-hidden="true">👁</span><span class="lbl">骨架</span>
+            </button>
+            <button class="seg-btn on" id="tg-mesh" title="显示/隐藏身体 mesh（SMPL 皮肤或管状近似）">
+              <span class="eye" aria-hidden="true">👁</span><span class="lbl">身体</span>
+            </button>
+            <button class="seg-btn" id="tg-env" disabled title="显示/隐藏原始动作的地形与交互物体">
+              <span class="eye" aria-hidden="true">👁</span><span class="lbl">物体/地形</span>
+            </button>
+          </div>
+          <div class="view-hud-row" data-row="robot">
+            <button class="seg-btn" id="tg-scaled" disabled title="按机器人标定缩放后、IK 之前的效应器骨架">
+              <span class="eye" aria-hidden="true">👁</span><span class="lbl">缩放骨架</span>
+            </button>
+            <button class="seg-btn" id="tg-scaled-env" disabled title="缩放后的地形与交互物体（与机器人同坐标系）">
+              <span class="eye" aria-hidden="true">👁</span><span class="lbl">缩放场景</span>
+            </button>
+            <button class="seg-btn" id="tg-robot" disabled title="显示/隐藏重定向后的机器人">
+              <span class="eye" aria-hidden="true">👁</span><span class="lbl">机器人</span>
+            </button>
+          </div>
         </div>
-        <div class="view-hud-row" data-row="robot">
-          <button class="seg-btn" id="tg-scaled" disabled title="按机器人标定缩放后、IK 之前的效应器骨架">
-            <span class="eye" aria-hidden="true">👁</span><span class="lbl">缩放骨架</span>
-          </button>
-          <button class="seg-btn" id="tg-scaled-env" disabled title="缩放后的地形与交互物体（与机器人同坐标系）">
-            <span class="eye" aria-hidden="true">👁</span><span class="lbl">缩放场景</span>
-          </button>
-          <button class="seg-btn" id="tg-robot" disabled title="显示/隐藏重定向后的机器人">
-            <span class="eye" aria-hidden="true">👁</span><span class="lbl">机器人</span>
-          </button>
-        </div>
-      </div>
-      <div class="view-hud hidden" id="view-hud-r2r">
-        <div class="view-hud-row" data-row="r2r-src">
-          <span class="view-hud-tag">源</span>
-          <button class="seg-btn on" id="r2r-tg-src-robot" title="源机器人 mesh">
-            <span class="eye" aria-hidden="true">👁</span><span class="lbl">机器人</span>
-          </button>
-          <button class="seg-btn" id="r2r-tg-src-skel" disabled title="源关键点骨架（FK）">
-            <span class="eye" aria-hidden="true">👁</span><span class="lbl">骨架</span>
-          </button>
-          <button class="seg-btn" id="r2r-tg-src-env" disabled title="源轨迹附带的地形/物体">
-            <span class="eye" aria-hidden="true">👁</span><span class="lbl">物体/地形</span>
-          </button>
-        </div>
-        <div class="view-hud-row" data-row="r2r-tgt">
-          <span class="view-hud-tag">目标</span>
-          <button class="seg-btn" id="r2r-tg-tgt-robot" disabled title="目标机器人 mesh">
-            <span class="eye" aria-hidden="true">👁</span><span class="lbl">机器人</span>
-          </button>
-          <button class="seg-btn" id="r2r-tg-tgt-skel" disabled title="目标缩放骨架（IK 效应器）">
-            <span class="eye" aria-hidden="true">👁</span><span class="lbl">骨架</span>
-          </button>
-          <button class="seg-btn" id="r2r-tg-tgt-env" disabled title="目标缩放后的地形/物体">
-            <span class="eye" aria-hidden="true">👁</span><span class="lbl">物体/地形</span>
-          </button>
+        <div class="view-hud hidden" id="view-hud-r2r">
+          <div class="view-hud-row" data-row="r2r-src">
+            <span class="view-hud-tag">源</span>
+            <button class="seg-btn on" id="r2r-tg-src-robot" title="源机器人 mesh">
+              <span class="eye" aria-hidden="true">👁</span><span class="lbl">机器人</span>
+            </button>
+            <button class="seg-btn" id="r2r-tg-src-skel" disabled title="源关键点骨架（FK）">
+              <span class="eye" aria-hidden="true">👁</span><span class="lbl">骨架</span>
+            </button>
+            <button class="seg-btn" id="r2r-tg-src-env" disabled title="源轨迹附带的地形/物体">
+              <span class="eye" aria-hidden="true">👁</span><span class="lbl">物体/地形</span>
+            </button>
+          </div>
+          <div class="view-hud-row" data-row="r2r-tgt">
+            <span class="view-hud-tag">目标</span>
+            <button class="seg-btn" id="r2r-tg-tgt-robot" disabled title="目标机器人 mesh">
+              <span class="eye" aria-hidden="true">👁</span><span class="lbl">机器人</span>
+            </button>
+            <button class="seg-btn" id="r2r-tg-tgt-skel" disabled title="目标缩放骨架（IK 效应器）">
+              <span class="eye" aria-hidden="true">👁</span><span class="lbl">骨架</span>
+            </button>
+            <button class="seg-btn" id="r2r-tg-tgt-env" disabled title="目标缩放后的地形/物体">
+              <span class="eye" aria-hidden="true">👁</span><span class="lbl">物体/地形</span>
+            </button>
+          </div>
         </div>
       </div>
       <div class="stage-empty" id="stage-empty">
@@ -784,7 +787,6 @@ onBeforeUnmount(() => {
       </div>
     </aside>
 
-    <button v-show="panelLayout.state.sidebarHidden" type="button" class="panel-restore-btn left" id="show-sidebar" title="显示左栏" @click="panelLayout.setHidden('sidebar', false)">▶ 导航</button>
     <button v-show="panelLayout.state.inspectorHidden" type="button" class="panel-restore-btn right" id="show-inspector" title="显示右栏" @click="panelLayout.setHidden('inspector', false)">◀ 面板</button>
   </div>
 
