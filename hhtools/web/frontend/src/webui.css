@@ -334,9 +334,24 @@ button { font-family: inherit; cursor: pointer; }
   .speed-ctrl { display: none; }
 }
 
-/* view-toggle HUD (top-left): row1 motion, row2 robot/scaled */
+/* Top-left stage controls share one layout so the sidebar restore button
+   cannot cover the view toggles when the sidebar is collapsed. */
+.stage-top-tools {
+  position: absolute; left: 18px; top: 18px; z-index: 25;
+  display: flex; align-items: flex-start; gap: 8px;
+  max-width: calc(100% - 36px);
+}
+.stage-top-tools .stage-sidebar-restore {
+  position: static;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/* view-toggle HUD: row1 motion, row2 robot/scaled */
 .view-hud {
-  position: absolute; left: 18px; top: 18px; z-index: 5;
+  position: static;
+  flex: 0 1 auto;
+  min-width: 0;
   display: flex; flex-direction: column; gap: 4px; padding: 6px 8px;
   background: var(--panel); border: 1px solid var(--hairline);
   border-radius: 14px; box-shadow: var(--shadow-sm);
@@ -367,6 +382,15 @@ button { font-family: inherit; cursor: pointer; }
 .seg-btn:not(.on):hover .eye { opacity: 0.75; }
 .seg-btn:disabled { opacity: 0.35; cursor: not-allowed; filter: grayscale(0.35); }
 .seg-btn:not(.on):not(:disabled) .lbl { color: var(--ink-secondary); }
+
+@container (max-width: 440px) {
+  .stage-top-tools {
+    left: 8px; top: 8px;
+    max-width: calc(100% - 16px);
+    flex-direction: column;
+    gap: 6px;
+  }
+}
 
 /* labelled divider used to merge sections inside one panel */
 .section-rule {
