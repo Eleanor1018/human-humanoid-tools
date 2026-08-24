@@ -11,6 +11,7 @@ Run via ``hhtools web`` (see :mod:`hhtools.cli.web`) or::
 
 from __future__ import annotations
 
+import hmac
 import logging
 import math
 import shutil
@@ -37,7 +38,7 @@ _log = logging.getLogger(__name__)
 
 # Bump when static/ front-end behaviour changes.  Injected into ``index.html``
 # at serve time so collaborators only need to pull + restart (no triple-sync).
-UI_BUILD_ID = "20260803-v86"
+UI_BUILD_ID = "20260824-vue1"
 
 # Datasets whose adapters accept ``with_mesh=True`` (SMPL forward → baked vertices).
 # The web UI always requests mesh so AMASS / Motion-X etc. show a real body surface,
@@ -175,10 +176,13 @@ def create_app(
     source_root: Path,
     save_dir: Path,
     cache_dir: Path | None = None,
+    desktop_session_secret: str | None = None,
+    desktop_allowed_host: str | None = None,
+    desktop_allowed_origin: str | None = None,
 ):
     """Build the FastAPI application."""
     from fastapi import FastAPI, File, HTTPException
-    from fastapi.responses import FileResponse, HTMLResponse, Response
+    from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
     from fastapi.staticfiles import StaticFiles
 
     from hhtools.viewer.cache import EphemeralCache
@@ -199,11 +203,53 @@ def create_app(
 
     @app.get("/")
     @app.get("/index.html")
-    def serve_index() -> HTMLResponse:
+    def serve_index():
         return HTMLResponse(
             _render_index_html(),
             headers={"Cache-Control": "no-store, must-revalidate", "Pragma": "no-cache"},
         )
+
+    @app.middleware("http")
+    async def _desktop_request_guard(request, call_next):  # type: ignore[no-untyped-def]
+        """Protect the localhost API when it is hosted inside Electron.
+
+        Browser mode leaves ``desktop_session_secret`` unset and keeps its original behavior.
+        Desktop mode requires the per-launch secret on every request; exact Host and Origin checks
+        add defense against DNS rebinding and requests from unrelated local pages.
+        """
+        if desktop_session_secret is not None:
+            host = request.headers.get("host", "")
+            if desktop_allowed_host is not None and host.lower() != desktop_allowed_host.lower():
+                return JSONResponse({"detail": "Invalid desktop host"}, status_code=400)
+
+            supplied_secret = request.headers.get("x-hhtools-session", "")
+            if not hmac.compare_digest(supplied_secret, desktop_session_secret):
+                return JSONResponse({"detail": "Invalid desktop session"}, status_code=401)
+
+            origin = request.headers.get("origin")
+            if (
+                origin is not None
+                and desktop_allowed_origin is not None
+                and origin != desktop_allowed_origin
+            ):
+                return JSONResponse({"detail": "Invalid desktop origin"}, status_code=403)
+
+        response = await call_next(request)
+        if desktop_session_secret is not None:
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'self'; "
+                "script-src 'self' 'unsafe-inline'; "
+                "style-src 'self' 'unsafe-inline'; "
+                "img-src 'self' blob: data:; "
+                "media-src 'self' blob: data:; "
+                "connect-src 'self'; "
+                "worker-src 'self' blob:; "
+                "object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+            )
+            response.headers["X-Content-Type-Options"] = "nosniff"
+            response.headers["X-Frame-Options"] = "DENY"
+            response.headers["Referrer-Policy"] = "no-referrer"
+        return response
 
     @app.middleware("http")
     async def _no_cache_ui_assets(request, call_next):  # type: ignore[no-untyped-def]
@@ -220,15 +266,16 @@ def create_app(
     def health() -> dict:
         index = static_dir / "index.html"
         index_snip = index.read_text(encoding="utf-8")[:8000] if index.is_file() else ""
+        vue_renderer = 'id="app-root"' in index_snip
         return {
             "ok": True,
             "ui_build": UI_BUILD_ID,
             "static_dir": str(static_dir.resolve()),
             "ui_features": {
-                "merged_robot_panel": "data-panel=\"retarget\"" not in index_snip,
-                "view_hud": "view-hud" in index_snip,
-                "scaled_skeleton_toggle": "tg-scaled" in index_snip,
-                "recalib_button": "recalib-btn" in index_snip,
+                "merged_robot_panel": vue_renderer or "data-panel=\"retarget\"" not in index_snip,
+                "view_hud": vue_renderer or "view-hud" in index_snip,
+                "scaled_skeleton_toggle": vue_renderer or "tg-scaled" in index_snip,
+                "recalib_button": vue_renderer or "recalib-btn" in index_snip,
             },
             "source_root": str(state.source_root),
             "save_dir": str(state.save_dir),
@@ -4266,4 +4313,36 @@ def run_web(
     uvicorn.run(app, host=host, port=port, log_level="info")
 
 
-__all__ = ["create_app", "run_web"]
+def run_desktop_sidecar(
+    *,
+    source_root: Path,
+    save_dir: Path,
+    cache_dir: Path | None,
+    host: str,
+    port: int,
+    session_secret: str,
+) -> None:
+    """Run the secured localhost server without opening a browser."""
+    # The sidecar is a private desktop implementation detail and must never listen on the LAN.
+    if host != "127.0.0.1":
+        raise ValueError("The desktop sidecar must bind to 127.0.0.1")
+    if not session_secret:
+        raise ValueError("The desktop sidecar requires a session secret")
+
+    import uvicorn
+
+    allowed_host = f"{host}:{port}"
+    origin = f"http://{allowed_host}"
+    app = create_app(
+        source_root=source_root,
+        save_dir=save_dir,
+        cache_dir=cache_dir,
+        desktop_session_secret=session_secret,
+        desktop_allowed_host=allowed_host,
+        desktop_allowed_origin=origin,
+    )
+    _log.info("Starting hhtools desktop sidecar on %s", origin)
+    uvicorn.run(app, host=host, port=port, log_level="info", access_log=False)
+
+
+__all__ = ["create_app", "run_desktop_sidecar", "run_web"]

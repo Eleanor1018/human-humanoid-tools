@@ -1,0 +1,50 @@
+{
+  "name": "hhtools-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Electron desktop shell for human-humanoid-tools",
+  "author": "hhtools contributors",
+  "type": "module",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --config vitest.config.ts",
+    "test:e2e": "npm run build && playwright test --config playwright.config.ts",
+    "dist:win": "npm run build && electron-builder --win nsis"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.62.1",
+    "@types/node": "24.10.1",
+    "electron": "43.4.1",
+    "electron-builder": "26.15.3",
+    "electron-vite": "5.0.0",
+    "typescript": "6.0.3",
+    "vite": "7.3.6",
+    "vitest": "4.1.11"
+  },
+  "build": {
+    "appId": "com.roboparty.hhtools.desktop.alpha",
+    "productName": "hhtools Desktop Alpha",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": false
+    }
+  }
+}

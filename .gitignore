@@ -44,6 +44,17 @@ coverage.xml
 .python-version
 # uv.lock is tracked — see README (reproducible installs for clone-and-run users).
 
+# Electron desktop shell
+desktop/node_modules/
+desktop/out/
+desktop/release/
+desktop/.vite/
+desktop/test-results/
+desktop/playwright-report/
+
+# Vue renderer dependencies (compiled assets are packaged by Python).
+hhtools/web/frontend/node_modules/
+
 # NVIDIA Warp / Newton kernel cache (auto-generated, machine-specific)
 .warp_cache/
 warp_cache/
