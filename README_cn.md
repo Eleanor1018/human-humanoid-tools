@@ -42,6 +42,18 @@ uv sync --extra all
 uv run hhtools web
 ```
 
+### Electron 桌面 Alpha
+
+桌面壳直接复用同一套 FastAPI 接口和 three.js 页面，不维护第二套 Renderer。
+
+```powershell
+cd desktop
+npm install
+npm run dev
+```
+
+运行时覆盖、自动化测试和 Windows 打包说明见 [`desktop/README.md`](desktop/README.md)。
+
 浏览器打开 `http://127.0.0.1:8009`。
 
 | 面板 | 流程 |

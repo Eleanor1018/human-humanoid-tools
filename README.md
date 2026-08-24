@@ -42,6 +42,18 @@ uv sync --extra all
 uv run hhtools web
 ```
 
+### Electron desktop alpha
+
+The desktop shell reuses the same FastAPI routes and three.js UI without a parallel renderer.
+
+```powershell
+cd desktop
+npm install
+npm run dev
+```
+
+See [`desktop/README.md`](desktop/README.md) for runtime overrides, tests, and Windows packaging.
+
 Open `http://127.0.0.1:8009`.
 
 | Panel | Flow |
