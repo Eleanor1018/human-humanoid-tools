@@ -19,6 +19,8 @@ import tempfile
 import threading
 import time
 import uuid
+from collections.abc import Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
@@ -39,6 +41,25 @@ _log = logging.getLogger(__name__)
 # Bump when static/ front-end behaviour changes.  Injected into ``index.html``
 # at serve time so collaborators only need to pull + restart (no triple-sync).
 UI_BUILD_ID = "20260824-vue1"
+
+_UPLOAD_CHUNK_BYTES = 1024 * 1024
+_DEFAULT_MAX_UPLOAD_FILES = 4096
+_DEFAULT_MAX_UPLOAD_FILE_BYTES = 2 * 1024**3
+_DEFAULT_MAX_UPLOAD_REQUEST_BYTES = 8 * 1024**3
+_DEFAULT_MAX_RUNNING_JOBS = 8
+_DEFAULT_MAX_RETAINED_JOBS = 64
+_DEFAULT_JOB_TTL_SECONDS = 60 * 60.0
+
+_UPLOAD_ENDPOINTS = frozenset(
+    {
+        "/api/dataset/upload",
+        "/api/basket/upload",
+        "/api/motion/upload",
+        "/api/robot/upload",
+        "/api/r2r/source/upload",
+        "/api/r2r/basket/upload",
+    }
+)
 
 # Datasets whose adapters accept ``with_mesh=True`` (SMPL forward → baked vertices).
 # The web UI always requests mesh so AMASS / Motion-X etc. show a real body surface,
@@ -205,6 +226,7 @@ class SessionState:
     robot_root: Path = field(default_factory=lambda: _robot_library_root())
     export_root: Path = field(default_factory=lambda: _tmpdir("out"))
     robot_prewarm_threads: dict[str, threading.Thread] = field(default_factory=dict)
+    job_lock: threading.Lock = field(default_factory=threading.Lock)
 
 
 @dataclass
@@ -217,6 +239,36 @@ class Job:
     message: str = ""
     result: dict | None = None
     error: str | None = None
+    created_at: float = field(default_factory=time.monotonic)
+    terminal_since: float | None = None
+    last_accessed_at: float = field(default_factory=time.monotonic)
+
+    def mark_terminal(self, status: str) -> None:
+        """Publish terminal status only after the worker has populated its result."""
+        self.terminal_since = time.monotonic()
+        self.status = status
+
+
+def _cleanup_session_state(state: SessionState) -> None:
+    """Release resources owned by one FastAPI process without touching user data."""
+    try:
+        if state.cache is not None:
+            state.cache.cleanup()
+    except Exception:  # noqa: BLE001 - shutdown cleanup must remain best-effort
+        _log.warning("failed to clean the web motion cache", exc_info=True)
+
+    # Robot presets and save_dir are persistent user data. Only roots minted by
+    # SessionState are safe to remove when this server instance shuts down.
+    for root in (state.upload_root, state.export_root):
+        shutil.rmtree(root, ignore_errors=True)
+
+    with state.job_lock:
+        state.jobs.clear()
+    state.motions.clear()
+    state.r2r_sources.clear()
+    state.dataset_previews.clear()
+    state.basket.clear()
+    state.robot_prewarm_threads.clear()
 
 
 def create_app(
@@ -227,6 +279,12 @@ def create_app(
     desktop_session_secret: str | None = None,
     desktop_allowed_host: str | None = None,
     desktop_allowed_origin: str | None = None,
+    max_upload_files: int = _DEFAULT_MAX_UPLOAD_FILES,
+    max_upload_file_bytes: int = _DEFAULT_MAX_UPLOAD_FILE_BYTES,
+    max_upload_request_bytes: int = _DEFAULT_MAX_UPLOAD_REQUEST_BYTES,
+    max_running_jobs: int = _DEFAULT_MAX_RUNNING_JOBS,
+    max_retained_jobs: int = _DEFAULT_MAX_RETAINED_JOBS,
+    job_ttl_seconds: float = _DEFAULT_JOB_TTL_SECONDS,
 ):
     """Build the FastAPI application."""
     from fastapi import FastAPI, File, HTTPException
@@ -235,17 +293,46 @@ def create_app(
 
     from hhtools.viewer.cache import EphemeralCache
 
-    app = FastAPI(title="hhtools web", version="0.1")
     static_dir = Path(__file__).parent / "static"
 
     state = SessionState(source_root=Path(source_root), save_dir=Path(save_dir))
     state.cache = EphemeralCache.create(cache_dir=cache_dir, save_dir=save_dir)
+
+    limits = {
+        "max_upload_files": max_upload_files,
+        "max_upload_file_bytes": max_upload_file_bytes,
+        "max_upload_request_bytes": max_upload_request_bytes,
+        "max_running_jobs": max_running_jobs,
+        "max_retained_jobs": max_retained_jobs,
+    }
+    invalid_limits = [name for name, value in limits.items() if int(value) <= 0]
+    if float(job_ttl_seconds) <= 0:
+        invalid_limits.append("job_ttl_seconds")
+    if invalid_limits:
+        names = ", ".join(invalid_limits)
+        raise ValueError(f"resource limits must be positive: {names}")
+
+    @asynccontextmanager
+    async def _lifespan(_app):  # type: ignore[no-untyped-def]
+        try:
+            yield
+        finally:
+            _cleanup_session_state(state)
+
+    app = FastAPI(title="hhtools web", version="0.1", lifespan=_lifespan)
+    # Exposed for diagnostics and lifecycle regression tests, not as an HTTP API.
+    app.state.session_state = state
 
     def _validated_uploads(
         files: list[UploadFile],
         *,
         default: str = "upload.bin",
     ) -> list[tuple[UploadFile, Path]]:
+        if len(files) > max_upload_files:
+            raise HTTPException(
+                status_code=413,
+                detail=f"too many upload files (limit: {max_upload_files})",
+            )
         validated: list[tuple[UploadFile, Path]] = []
         try:
             for upload in files:
@@ -265,6 +352,138 @@ def create_app(
         except ValueError as err:
             raise HTTPException(status_code=400, detail=str(err)) from err
 
+    async def _store_uploads(
+        files: list[UploadFile],
+        root: Path,
+        *,
+        default: str = "upload.bin",
+        destination_for: Callable[[Path], Path] | None = None,
+    ) -> list[tuple[Path, Path]]:
+        """Stream a multipart upload to disk and atomically publish complete files."""
+        validated = _validated_uploads(files, default=default)
+        staged: list[tuple[Path, Path, Path]] = []
+        total_bytes = 0
+        try:
+            for upload, relative in validated:
+                candidate = destination_for(relative) if destination_for else relative
+                destination = _request_upload_destination(root, candidate)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                part = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.upload")
+                file_bytes = 0
+                try:
+                    with part.open("wb") as fp:
+                        while chunk := await upload.read(_UPLOAD_CHUNK_BYTES):
+                            file_bytes += len(chunk)
+                            total_bytes += len(chunk)
+                            if file_bytes > max_upload_file_bytes:
+                                raise HTTPException(
+                                    status_code=413,
+                                    detail=(
+                                        f"upload file exceeds {max_upload_file_bytes} bytes: "
+                                        f"{relative.as_posix()}"
+                                    ),
+                                )
+                            if total_bytes > max_upload_request_bytes:
+                                raise HTTPException(
+                                    status_code=413,
+                                    detail=(
+                                        "upload request exceeds "
+                                        f"{max_upload_request_bytes} bytes"
+                                    ),
+                                )
+                            fp.write(chunk)
+                except Exception:
+                    part.unlink(missing_ok=True)
+                    raise
+                staged.append((relative, part, destination))
+
+            # Files become visible only after every item passes the limits. This
+            # avoids committing the first half of an oversized folder upload.
+            stored: list[tuple[Path, Path]] = []
+            for relative, part, destination in staged:
+                part.replace(destination)
+                stored.append((relative, destination))
+            return stored
+        finally:
+            for _relative, part, _destination in staged:
+                part.unlink(missing_ok=True)
+            for upload, _relative in validated:
+                await upload.close()
+
+    def _remove_job_artifact(job: Job) -> None:
+        """Delete only generated artifacts that belong to this server instance."""
+        artifact = (job.result or {}).get("artifact_path")
+        if not artifact:
+            return
+        try:
+            path = Path(artifact).resolve()
+            export_root = state.export_root.resolve()
+            path.relative_to(export_root)
+        except (OSError, ValueError, TypeError):
+            # A job result may point at user-owned data. Never remove a path
+            # unless it is provably contained by the ephemeral export root.
+            return
+        try:
+            if path.is_dir():
+                shutil.rmtree(path, ignore_errors=True)
+            else:
+                path.unlink(missing_ok=True)
+        except OSError:
+            _log.warning("failed to remove expired job artifact %s", path, exc_info=True)
+
+    def _prune_jobs_locked(now: float) -> None:
+        terminal: list[Job] = []
+        for job in state.jobs.values():
+            if job.status == "running":
+                continue
+            if job.terminal_since is None:
+                job.terminal_since = now
+            terminal.append(job)
+
+        expired = {
+            job.id
+            for job in terminal
+            if now - max(job.terminal_since or now, job.last_accessed_at)
+            >= job_ttl_seconds
+        }
+        for job_id in expired:
+            removed = state.jobs.pop(job_id, None)
+            if removed is not None:
+                _remove_job_artifact(removed)
+
+        retained = sorted(
+            (job for job in terminal if job.id not in expired),
+            key=lambda job: job.terminal_since or job.created_at,
+        )
+        overflow = max(0, len(retained) - max_retained_jobs)
+        for job in retained[:overflow]:
+            removed = state.jobs.pop(job.id, None)
+            if removed is not None:
+                _remove_job_artifact(removed)
+
+    def _register_job(kind: str) -> Job:
+        now = time.monotonic()
+        with state.job_lock:
+            _prune_jobs_locked(now)
+            running = sum(job.status == "running" for job in state.jobs.values())
+            if running >= max_running_jobs:
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"too many running jobs (limit: {max_running_jobs})",
+                )
+            job = Job(id=uuid.uuid4().hex[:12], kind=kind)
+            state.jobs[job.id] = job
+            return job
+
+    def _get_job(job_id: str) -> Job | None:
+        now = time.monotonic()
+        with state.job_lock:
+            _prune_jobs_locked(now)
+            job = state.jobs.get(job_id)
+            if job is not None:
+                job.last_accessed_at = now
+            return job
+
     from hhtools.web.motion_library_links import ensure_motions_library, motions_library_root
 
     ensure_motions_library()
@@ -280,6 +499,28 @@ def create_app(
             _render_index_html(),
             headers={"Cache-Control": "no-store, must-revalidate", "Pragma": "no-cache"},
         )
+
+    @app.middleware("http")
+    async def _reject_oversized_upload_requests(request, call_next):  # type: ignore[no-untyped-def]
+        """Reject normal browser multipart requests before Starlette parses their files."""
+        if request.method == "POST" and request.url.path in _UPLOAD_ENDPOINTS:
+            content_length = request.headers.get("content-length")
+            if content_length is not None:
+                try:
+                    request_bytes = int(content_length)
+                except ValueError:
+                    return JSONResponse({"detail": "Invalid Content-Length"}, status_code=400)
+                if request_bytes > max_upload_request_bytes:
+                    return JSONResponse(
+                        {
+                            "detail": (
+                                "upload request exceeds "
+                                f"{max_upload_request_bytes} bytes"
+                            )
+                        },
+                        status_code=413,
+                    )
+        return await call_next(request)
 
     @app.middleware("http")
     async def _desktop_request_guard(request, call_next):  # type: ignore[no-untyped-def]
@@ -473,16 +714,15 @@ def create_app(
             )
             job.result = payload
             job.progress = 1.0
-            job.status = "done"
+            job.mark_terminal("done")
         except Exception as err:  # noqa: BLE001
             _log.exception("dataset analyze job failed")
-            job.status = "error"
             job.error = str(err)
+            job.mark_terminal("error")
 
     @app.post("/api/dataset/analyze")
     async def dataset_analyze(body: dict) -> dict:
-        job = Job(id=uuid.uuid4().hex[:12], kind="dataset_analyze")
-        state.jobs[job.id] = job
+        job = _register_job("dataset_analyze")
         threading.Thread(
             target=_run_dataset_analyze_job, args=(job, body), daemon=True,
         ).start()
@@ -541,14 +781,8 @@ def create_app(
         else:
             drop = dataset_root / uuid.uuid4().hex[:8]
             drop.mkdir(parents=True, exist_ok=True)
-        wrote = False
-        for uf, rel in _validated_uploads(files):
-            dst = _request_upload_destination(drop, rel)
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            with dst.open("wb") as fp:
-                fp.write(await uf.read())
-            wrote = True
-        if not wrote:
+        stored = await _store_uploads(files, drop)
+        if not stored:
             raise HTTPException(status_code=400, detail="empty upload")
         hint_root = str(user_source_root or "").strip()
         if hint_root:
@@ -670,8 +904,7 @@ def create_app(
         """Load a robot export CSV for mesh playback (dataset viz scatter preview)."""
         if not body.get("source_path"):
             raise HTTPException(status_code=400, detail="source_path required")
-        job = Job(id=uuid.uuid4().hex[:12], kind="dataset_robot_preview")
-        state.jobs[job.id] = job
+        job = _register_job("dataset_robot_preview")
         threading.Thread(
             target=_run_dataset_robot_preview_job,
             args=(job, body, state),
@@ -829,11 +1062,11 @@ def create_app(
                 job=job,
             )
             job.result = payload
-            job.status = "done"
+            job.mark_terminal("done")
         except Exception as err:  # noqa: BLE001
             _log.exception("motion library job failed")
-            job.status = "error"
             job.error = str(err)
+            job.mark_terminal("error")
 
     def _run_basket_upload_job(job: Job, drop: Path, profile: str) -> None:
         from hhtools.web.upload_resolve import enumerate_upload_clips
@@ -863,13 +1096,13 @@ def create_app(
                 "clip_count": len(entries),
                 "upload_root": str(drop),
             }
-            job.status = "done"
             job.progress = 1.0
             job.message = f"已加入 {len(entries)} 个 clip"
+            job.mark_terminal("done")
         except Exception as err:  # noqa: BLE001
             _log.exception("basket upload job failed")
-            job.status = "error"
             job.error = str(err)
+            job.mark_terminal("error")
 
     def _run_motion_library_dir_job(
         job: Job, lib_dir: Path, folder_label: str, profile: str,
@@ -904,16 +1137,15 @@ def create_app(
                 },
             )
             job.result = payload
-            job.status = "done"
+            job.mark_terminal("done")
         except Exception as err:  # noqa: BLE001
             _log.exception("motion library dir job failed")
-            job.status = "error"
             job.error = str(err)
+            job.mark_terminal("error")
 
     @app.post("/api/motion/load_library")
     async def load_library(body: dict) -> dict:
-        job = Job(id=uuid.uuid4().hex[:12], kind="motion_load")
-        state.jobs[job.id] = job
+        job = _register_job("motion_load")
         threading.Thread(
             target=_run_motion_library_job, args=(job, body), daemon=True,
         ).start()
@@ -927,17 +1159,10 @@ def create_app(
         """Upload external clips into the session cache for batch retarget."""
         drop = state.upload_root / uuid.uuid4().hex[:8]
         drop.mkdir(parents=True, exist_ok=True)
-        wrote = False
-        for uf, rel in _validated_uploads(files):
-            dst = _request_upload_destination(drop, rel)
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            with dst.open("wb") as fp:
-                fp.write(await uf.read())
-            wrote = True
-        if not wrote:
+        stored = await _store_uploads(files, drop)
+        if not stored:
             raise HTTPException(status_code=400, detail="empty upload")
-        job = Job(id=uuid.uuid4().hex[:12], kind="basket_upload")
-        state.jobs[job.id] = job
+        job = _register_job("basket_upload")
         threading.Thread(
             target=_run_basket_upload_job, args=(job, drop, profile), daemon=True,
         ).start()
@@ -958,19 +1183,14 @@ def create_app(
 
         from hhtools.web.upload_resolve import enumerate_upload_clips
 
-        validated_files = _validated_uploads(files)
-        rel_paths = [rel.as_posix() for _uf, rel in validated_files]
         folder_label = str(library_folder_label or "").strip() or None
 
         # Always buffer browser bytes first so a bad on-disk symlink guess
         # cannot discard the only copy of the clip (see link_to_library).
         drop = state.upload_root / uuid.uuid4().hex[:8]
         drop.mkdir(parents=True, exist_ok=True)
-        for uf, rel in validated_files:
-            dst = _request_upload_destination(drop, rel)
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            with dst.open("wb") as fp:
-                fp.write(await uf.read())
+        stored = await _store_uploads(files, drop)
+        rel_paths = [relative.as_posix() for relative, _destination in stored]
 
         lib_dir, label, materialize_mode = materialize_drop(
             rel_paths,
@@ -983,8 +1203,7 @@ def create_app(
                 detail="未找到可识别的动作文件（.npz / .bvh / .glb / .pkl …）",
             )
 
-        job = Job(id=uuid.uuid4().hex[:12], kind="motion_link")
-        state.jobs[job.id] = job
+        job = _register_job("motion_link")
         threading.Thread(
             target=_run_motion_library_dir_job,
             args=(job, lib_dir, label, profile),
@@ -1106,14 +1325,23 @@ def create_app(
                         pass
             preserved_references = _read_yaml_retarget_references(drop)
             shutil.rmtree(drop, ignore_errors=True)
-        for uf, rel_path in _validated_uploads(files, default="f"):
-            rel = rel_path.as_posix()
-            data = await uf.read()
-            is_urdf = rel.lower().endswith(".urdf")
-            dst = robot_upload_destination(drop, rel, is_urdf=is_urdf)
-            dst = _request_upload_destination(drop, dst)
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            dst.write_bytes(data)
+
+        def _robot_upload_path(relative: Path) -> Path:
+            rel = relative.as_posix()
+            return robot_upload_destination(
+                drop,
+                rel,
+                is_urdf=rel.lower().endswith(".urdf"),
+            )
+
+        stored = await _store_uploads(
+            files,
+            drop,
+            default="f",
+            destination_for=_robot_upload_path,
+        )
+        for rel_path, dst in stored:
+            is_urdf = rel_path.suffix.lower() == ".urdf"
             saved.append(dst)
             if is_urdf:
                 urdf_path = dst
@@ -1402,18 +1630,17 @@ def create_app(
                 "has_scene": bool(motion.terrain is not None or motion.objects),
                 "num_frames": ret.num_frames,
             }
-            job.status = "done"
             job.progress = 1.0
             job.message = "done"
+            job.mark_terminal("done")
         except Exception as err:  # noqa: BLE001
             _log.exception("retarget job failed")
-            job.status = "error"
             job.error = str(err)
+            job.mark_terminal("error")
 
     @app.post("/api/retarget")
     async def retarget(body: dict) -> dict:
-        job = Job(id=uuid.uuid4().hex[:12], kind="retarget")
-        state.jobs[job.id] = job
+        job = _register_job("retarget")
         threading.Thread(target=_run_retarget_job, args=(job, body), daemon=True).start()
         return {"job_id": job.id}
 
@@ -1447,7 +1674,7 @@ def create_app(
 
     @app.get("/api/job/{job_id}")
     def job_status(job_id: str) -> dict:
-        job = state.jobs.get(job_id)
+        job = _get_job(job_id)
         if job is None:
             raise HTTPException(status_code=404, detail="unknown job")
         return {
@@ -1463,7 +1690,7 @@ def create_app(
 
     @app.get("/api/job/{job_id}/download")
     def job_download(job_id: str):
-        job = state.jobs.get(job_id)
+        job = _get_job(job_id)
         if job is None or job.status != "done":
             raise HTTPException(status_code=404, detail="job not ready")
         artifact = (job.result or {}).get("artifact_path")
@@ -1747,7 +1974,6 @@ def create_app(
                 "requested_batch_size": requested_batch,
                 "solver_mode": gpu_note,
             }
-            job.status = "done"
             job.progress = 1.0
             job.clip_progress = 1.0
             fail_note = f"，{len(failures)} 失败" if failures else ""
@@ -1755,15 +1981,15 @@ def create_app(
                 f"{len(written)} 成功{fail_note}"
                 + (f" · {gpu_note}" if backend != "interaction_mesh" else "")
             )
+            job.mark_terminal("done")
         except Exception as err:  # noqa: BLE001
             _log.exception("batch job failed")
-            job.status = "error"
             job.error = str(err)
+            job.mark_terminal("error")
 
     @app.post("/api/batch/retarget")
     async def batch_retarget(body: dict) -> dict:
-        job = Job(id=uuid.uuid4().hex[:12], kind="batch")
-        state.jobs[job.id] = job
+        job = _register_job("batch")
         threading.Thread(target=_run_batch_job, args=(job, body), daemon=True).start()
         return {"job_id": job.id}
 
@@ -1895,12 +2121,10 @@ def create_app(
         src_fps = _parse_optional_fps(source_fps)
         drop = state.upload_root / f"r2r_{uuid.uuid4().hex[:8]}"
         drop.mkdir(parents=True, exist_ok=True)
-        for uf, rel in _validated_uploads(files):
-            dst = _request_upload_destination(drop, rel)
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            dst.write_bytes(await uf.read())
-        job = Job(id=uuid.uuid4().hex[:12], kind="r2r_source_upload")
-        state.jobs[job.id] = job
+        stored = await _store_uploads(files, drop)
+        if not stored:
+            raise HTTPException(status_code=400, detail="empty upload")
+        job = _register_job("r2r_source_upload")
         threading.Thread(
             target=_run_r2r_source_upload_job,
             args=(job, drop, source_robot, profile, state, src_fps),
@@ -2096,18 +2320,17 @@ def create_app(
                 "scaled_scene": tgt_scene,
                 "has_scene": has_scene,
             }
-            job.status = "done"
             job.progress = 1.0
             job.message = "done"
+            job.mark_terminal("done")
         except Exception as err:  # noqa: BLE001
             _log.exception("r2r retarget job failed")
-            job.status = "error"
             job.error = str(err)
+            job.mark_terminal("error")
 
     @app.post("/api/r2r/retarget")
     async def r2r_retarget(body: dict) -> dict:
-        job = Job(id=uuid.uuid4().hex[:12], kind="retarget")
-        state.jobs[job.id] = job
+        job = _register_job("retarget")
         threading.Thread(
             target=_run_r2r_retarget_job, args=(job, body), daemon=True,
         ).start()
@@ -2120,16 +2343,10 @@ def create_app(
     ) -> dict:
         drop = state.upload_root / uuid.uuid4().hex[:8]
         drop.mkdir(parents=True, exist_ok=True)
-        wrote = False
-        for uf, rel in _validated_uploads(files):
-            dst = _request_upload_destination(drop, rel)
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            dst.write_bytes(await uf.read())
-            wrote = True
-        if not wrote:
+        stored = await _store_uploads(files, drop)
+        if not stored:
             raise HTTPException(status_code=400, detail="empty upload")
-        job = Job(id=uuid.uuid4().hex[:12], kind="r2r_basket_upload")
-        state.jobs[job.id] = job
+        job = _register_job("r2r_basket_upload")
         threading.Thread(
             target=_run_r2r_basket_upload_job, args=(job, drop, profile), daemon=True,
         ).start()
@@ -2137,8 +2354,7 @@ def create_app(
 
     @app.post("/api/r2r/batch/retarget")
     async def r2r_batch_retarget(body: dict) -> dict:
-        job = Job(id=uuid.uuid4().hex[:12], kind="r2r_batch")
-        state.jobs[job.id] = job
+        job = _register_job("r2r_batch")
         threading.Thread(
             target=_run_r2r_batch_job, args=(job, body, state), daemon=True,
         ).start()
@@ -2740,13 +2956,13 @@ def _run_r2r_source_upload_job(
                 scene_prof, has_scene=bool(src_has_scene),
             ),
         }
-        job.status = "done"
         job.progress = 1.0
         job.message = "done"
+        job.mark_terminal("done")
     except Exception as err:  # noqa: BLE001
         _log.exception("r2r source upload job failed")
-        job.status = "error"
         job.error = str(err)
+        job.mark_terminal("error")
 
 
 def _ground_skeleton_preview(payload: dict) -> dict:
@@ -2818,13 +3034,13 @@ def _run_r2r_basket_upload_job(job: Job, drop: Path, profile: str) -> None:
             "upload_root": str(drop),
             "profile": profile,
         }
-        job.status = "done"
         job.progress = 1.0
         job.message = f"已识别 {len(entries)} 个机器人轨迹 clip"
+        job.mark_terminal("done")
     except Exception as err:  # noqa: BLE001
         _log.exception("r2r basket upload failed")
-        job.status = "error"
         job.error = str(err)
+        job.mark_terminal("error")
 
 
 def _r2r_prepare_retarget_motion(
@@ -3052,13 +3268,13 @@ def _run_r2r_batch_job(job: Job, body: dict, state: SessionState) -> None:
             "artifact_path": str(zip_path),
             "format": fmt,
         }
-        job.status = "done"
         job.progress = 1.0
         job.message = f"完成 {len(written)}/{total}"
+        job.mark_terminal("done")
     except Exception as err:  # noqa: BLE001
         _log.exception("r2r batch job failed")
-        job.status = "error"
         job.error = str(err)
+        job.mark_terminal("error")
 
 
 def _set_retarget_job_clip_progress(job: Job | None, value: float, message: str) -> None:
@@ -3541,13 +3757,13 @@ def _run_dataset_robot_preview_job(job: Job, body: dict, state: SessionState) ->
             progress=load_prog,
         )
         job.result = result
-        job.status = "done"
         job.progress = 1.0
         job.message = "完成"
+        job.mark_terminal("done")
     except Exception as err:  # noqa: BLE001
         _log.exception("dataset robot preview failed")
-        job.status = "error"
         job.error = str(err)
+        job.mark_terminal("error")
 
 
 def _ensure_robot_model(state: SessionState, robot_name: str | None):
