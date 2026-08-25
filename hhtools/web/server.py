@@ -978,11 +978,6 @@ def create_app(
             upload_drop=drop,
         )
         if not enumerate_upload_clips(lib_dir, profile):
-            raise FileNotFoundError(
-                "library folder contains no recognizable clips after materialize"
-            )
-
-        if not enumerate_upload_clips(lib_dir, profile):
             raise HTTPException(
                 status_code=400,
                 detail="未找到可识别的动作文件（.npz / .bvh / .glb / .pkl …）",

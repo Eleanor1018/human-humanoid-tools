@@ -82,6 +82,23 @@ def test_robot_upload_rejects_escaping_robot_name(
     assert not (tmp_path / "escaped-robot").exists()
 
 
+def test_invalid_motion_upload_returns_400(web_client: TestClient) -> None:
+    response = web_client.post(
+        "/api/motion/upload",
+        params={"library_folder_label": "invalid-motion-test"},
+        files={
+            "files": (
+                "readme.definitely-not-motion",
+                b"not a motion clip",
+                "application/octet-stream",
+            )
+        },
+    )
+
+    assert response.status_code == 400
+    assert "未找到可识别的动作文件" in response.json()["detail"]
+
+
 def test_motion_library_label_is_one_directory_name() -> None:
     label = _safe_folder_name("nested/../../escaped-library")
 
