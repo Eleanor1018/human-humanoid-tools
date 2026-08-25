@@ -20,7 +20,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 # These names are referenced in route annotations (e.g. ``list[UploadFile]``).
@@ -81,6 +81,54 @@ _DATASET_TO_REFERENCE: dict[str, str] = {
 
 def _tmpdir(tag: str) -> Path:
     return Path(tempfile.mkdtemp(prefix=f"hhtools_web_{tag}_"))
+
+
+def _safe_upload_relative_path(
+    filename: str | None,
+    *,
+    default: str = "upload.bin",
+) -> Path:
+    """Return a normalized browser upload path that cannot escape its drop root."""
+
+    raw = str(filename or default).strip()
+    if not raw or "\x00" in raw:
+        raise ValueError("invalid upload filename")
+
+    normalized = raw.replace("\\", "/")
+    posix_path = PurePosixPath(normalized)
+    windows_path = PureWindowsPath(normalized)
+    if posix_path.is_absolute() or windows_path.is_absolute() or windows_path.drive:
+        raise ValueError("upload filename must be relative")
+    if not posix_path.parts or any(part == ".." for part in posix_path.parts):
+        raise ValueError("upload filename contains a parent-directory segment")
+
+    relative = Path(*posix_path.parts)
+    if relative.name in ("", ".", ".."):
+        raise ValueError("invalid upload filename")
+    return relative
+
+
+def _ensure_path_within(root: Path, candidate: Path) -> Path:
+    """Resolve ``candidate`` and require it to remain below ``root``."""
+
+    resolved_root = Path(root).resolve()
+    resolved_candidate = Path(candidate).resolve(strict=False)
+    try:
+        resolved_candidate.relative_to(resolved_root)
+    except ValueError as err:
+        raise ValueError("upload path escapes its destination") from err
+    return resolved_candidate
+
+
+def _safe_upload_destination(root: Path, relative: Path) -> Path:
+    return _ensure_path_within(root, Path(root).resolve() / relative)
+
+
+def _safe_upload_directory_name(name: str | None, *, default: str) -> str:
+    relative = _safe_upload_relative_path(name, default=default)
+    if len(relative.parts) != 1:
+        raise ValueError("upload directory name must contain one path segment")
+    return relative.name
 
 
 def _robot_library_root() -> Path:
@@ -192,6 +240,30 @@ def create_app(
 
     state = SessionState(source_root=Path(source_root), save_dir=Path(save_dir))
     state.cache = EphemeralCache.create(cache_dir=cache_dir, save_dir=save_dir)
+
+    def _validated_uploads(
+        files: list[UploadFile],
+        *,
+        default: str = "upload.bin",
+    ) -> list[tuple[UploadFile, Path]]:
+        validated: list[tuple[UploadFile, Path]] = []
+        try:
+            for upload in files:
+                validated.append(
+                    (
+                        upload,
+                        _safe_upload_relative_path(upload.filename, default=default),
+                    )
+                )
+        except ValueError as err:
+            raise HTTPException(status_code=400, detail=str(err)) from err
+        return validated
+
+    def _request_upload_destination(root: Path, relative: Path) -> Path:
+        try:
+            return _safe_upload_destination(root, relative)
+        except ValueError as err:
+            raise HTTPException(status_code=400, detail=str(err)) from err
 
     from hhtools.web.motion_library_links import ensure_motions_library, motions_library_root
 
@@ -470,9 +542,8 @@ def create_app(
             drop = dataset_root / uuid.uuid4().hex[:8]
             drop.mkdir(parents=True, exist_ok=True)
         wrote = False
-        for uf in files:
-            rel = Path(uf.filename or "upload.bin")
-            dst = drop / rel
+        for uf, rel in _validated_uploads(files):
+            dst = _request_upload_destination(drop, rel)
             dst.parent.mkdir(parents=True, exist_ok=True)
             with dst.open("wb") as fp:
                 fp.write(await uf.read())
@@ -857,9 +928,8 @@ def create_app(
         drop = state.upload_root / uuid.uuid4().hex[:8]
         drop.mkdir(parents=True, exist_ok=True)
         wrote = False
-        for uf in files:
-            rel = Path(uf.filename or "upload.bin")
-            dst = drop / rel
+        for uf, rel in _validated_uploads(files):
+            dst = _request_upload_destination(drop, rel)
             dst.parent.mkdir(parents=True, exist_ok=True)
             with dst.open("wb") as fp:
                 fp.write(await uf.read())
@@ -888,16 +958,16 @@ def create_app(
 
         from hhtools.web.upload_resolve import enumerate_upload_clips
 
-        rel_paths = [str(Path(uf.filename or "")) for uf in files]
+        validated_files = _validated_uploads(files)
+        rel_paths = [rel.as_posix() for _uf, rel in validated_files]
         folder_label = str(library_folder_label or "").strip() or None
 
         # Always buffer browser bytes first so a bad on-disk symlink guess
         # cannot discard the only copy of the clip (see link_to_library).
         drop = state.upload_root / uuid.uuid4().hex[:8]
         drop.mkdir(parents=True, exist_ok=True)
-        for uf in files:
-            rel = Path(uf.filename or "upload.bin")
-            dst = drop / rel
+        for uf, rel in validated_files:
+            dst = _request_upload_destination(drop, rel)
             dst.parent.mkdir(parents=True, exist_ok=True)
             with dst.open("wb") as fp:
                 fp.write(await uf.read())
@@ -1022,7 +1092,10 @@ def create_app(
 
         urdf_path: Path | None = None
         saved: list[Path] = []
-        drop_name = name or "uploaded_robot"
+        try:
+            drop_name = _safe_upload_directory_name(name, default="uploaded_robot")
+        except ValueError as err:
+            raise HTTPException(status_code=400, detail=str(err)) from err
         drop = state.robot_root / drop_name
         # Re-uploading an existing robot rebuilds geometry but must NOT wipe the
         # user's tuned retarget config: keep bundled scalers, calibrations, and
@@ -1038,11 +1111,12 @@ def create_app(
                         pass
             preserved_references = _read_yaml_retarget_references(drop)
             shutil.rmtree(drop, ignore_errors=True)
-        for uf in files:
-            rel = uf.filename or "f"
+        for uf, rel_path in _validated_uploads(files, default="f"):
+            rel = rel_path.as_posix()
             data = await uf.read()
             is_urdf = rel.lower().endswith(".urdf")
             dst = robot_upload_destination(drop, rel, is_urdf=is_urdf)
+            dst = _request_upload_destination(drop, dst)
             dst.parent.mkdir(parents=True, exist_ok=True)
             dst.write_bytes(data)
             saved.append(dst)
@@ -1826,9 +1900,8 @@ def create_app(
         src_fps = _parse_optional_fps(source_fps)
         drop = state.upload_root / f"r2r_{uuid.uuid4().hex[:8]}"
         drop.mkdir(parents=True, exist_ok=True)
-        for uf in files:
-            rel = Path(uf.filename or "upload.bin")
-            dst = drop / rel
+        for uf, rel in _validated_uploads(files):
+            dst = _request_upload_destination(drop, rel)
             dst.parent.mkdir(parents=True, exist_ok=True)
             dst.write_bytes(await uf.read())
         job = Job(id=uuid.uuid4().hex[:12], kind="r2r_source_upload")
@@ -2053,9 +2126,8 @@ def create_app(
         drop = state.upload_root / uuid.uuid4().hex[:8]
         drop.mkdir(parents=True, exist_ok=True)
         wrote = False
-        for uf in files:
-            rel = Path(uf.filename or "upload.bin")
-            dst = drop / rel
+        for uf, rel in _validated_uploads(files):
+            dst = _request_upload_destination(drop, rel)
             dst.parent.mkdir(parents=True, exist_ok=True)
             dst.write_bytes(await uf.read())
             wrote = True

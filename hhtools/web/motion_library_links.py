@@ -31,8 +31,10 @@ def ensure_motions_library() -> Path:
 
 
 def _safe_folder_name(label: str) -> str:
-    cleaned = re.sub(r"[^\w.\-+/]+", "_", str(label or "").strip())
-    cleaned = cleaned.strip("._/") or _DEFAULT_LOOSE_LABEL
+    # A library label is one directory name, never a relative path.  Replacing
+    # separators also keeps remove/link operations inside the motions root.
+    cleaned = re.sub(r"[^\w.\-+]+", "_", str(label or "").strip())
+    cleaned = cleaned.strip("._") or _DEFAULT_LOOSE_LABEL
     return cleaned[:120]
 
 
