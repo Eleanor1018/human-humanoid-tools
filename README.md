@@ -23,7 +23,7 @@ We welcome suggestions and ideas — please open an issue or discussion anytime.
 ## Highlights
 
 - **Fast retarget** — Web UI or **CLI** (`hhtools retarget` / `scripts/batch_*_retarget.py`); **Newton IK** + **MPC-SQP** interaction mesh.
-- **Human formats** — BVH / GLB / SMPL family; adapters for AMASS, GVHMR, LAFAN, OMOMO, PHUMA, intermimic, meshmimic, …
+- **Human formats** — BVH / GLB / SMPL family; adapters for AMASS, GVHMR, LAFAN, 100STYLE, OMOMO, PHUMA, intermimic, meshmimic, …
 - **Any URDF** — upload any robot in the Web UI: drag in the URDF, drag in meshes; auto-detected, no manual tuning.
 - **Robot→robot (R2R)** — retarget existing robot CSV/PKL exports onto a new URDF.
 - **Dataset analysis** — scan, tag, embed, cluster, and subset human or robot motion libraries in the Web UI.
@@ -111,11 +111,17 @@ uv run hhtools retarget interaction-mesh run path/to/clip.pkl \
 **Large offline batches** (resumable, subprocess isolation; export matches Web CSV/sidecars, folders not zipped):
 
 ```bash
-# mimic (flat mocap → Newton IK): amass | lafan | glb | …
+# mimic (flat mocap → Newton IK): amass | lafan | xsens_mocap (100STYLE) | glb | …
 python scripts/batch_mimic_retarget.py \
   --robot rp1 --dataset amass \
   --in /path/to/AMASS --out /path/to/AMASS_rp1 \
   --skip-existing --limit 5
+
+# 100STYLE (Xsens MVN BVH → same adapter / calibration as xsens_mocap)
+python scripts/batch_mimic_retarget.py \
+  --robot rp1 --dataset xsens_mocap \
+  --in /path/to/100STYLE --out /path/to/100STYLE_rp1 \
+  --skip-existing
 
 # intermimic (human–object): omomo
 python scripts/batch_intermimic_retarget.py \
@@ -185,12 +191,15 @@ Demo paths only — download full datasets from upstream. Adapters provided; **n
 | mimic | AMASS | [arXiv](https://arxiv.org/abs/1904.03278) | [site](https://amass.is.tue.mpg.de/) |
 | mimic | GVHMR | [arXiv](https://arxiv.org/abs/2409.06662) | [GitHub](https://github.com/zju3dv/GVHMR) |
 | mimic | LAFAN1 | [arXiv](https://arxiv.org/abs/2102.04942) | [GitHub](https://github.com/ubisoft/ubisoft-laforge-animation-dataset) |
+| mimic | [100STYLE](https://www.ianxmason.com/100style/) | [ACM](https://dl.acm.org/doi/10.1145/3522618) | [site](https://www.ianxmason.com/100style/) |
 | mimic | Motion-X | [NeurIPS](https://proceedings.neurips.cc/paper_files/paper/2023/file/4f8e27f6036c1d8b4a66b5b3a947dd7b-Paper-Datasets_and_Benchmarks.pdf) | [GitHub](https://github.com/IDEA-Research/Motion-X) |
 | mimic | PHUMA | [arXiv](https://arxiv.org/abs/2510.26236) | [GitHub](https://github.com/DAVIAN-Robotics/PHUMA) |
 | mimic | SOMA | [arXiv](https://arxiv.org/abs/2603.16858) | [Hugging Face](https://huggingface.co/datasets/bones-studio/seed) |
 | intermimic | OMOMO | [arXiv](https://arxiv.org/abs/2309.16237) | [Hugging Face](https://huggingface.co/datasets/YaojieShen/hhtools_omomo) |
 | meshmimic | holosoma | [arXiv](https://arxiv.org/abs/2509.26633) | [GitHub](https://github.com/amazon-far/holosoma) |
 | meshmimic | PARC MS | [arXiv](https://arxiv.org/abs/2505.04002) | [Hugging Face](https://huggingface.co/datasets/YaojieShen/hhtools_parc_ms) |
+
+**100STYLE** is Xsens MVN BVH (60 fps stylized locomotion). Drop the unzipped tree under a folder named `100STYLE`, `xsens`, or `xsens_mocap` (for example `assets/motions/mimic/100STYLE/`) so the Web library picks it up. Calibrate the robot once with reference `xsens_mocap` — rest is the format T-pose, not a clip’s first frame. Single-file drops are auto-detected from joint names.
 
 ---
 

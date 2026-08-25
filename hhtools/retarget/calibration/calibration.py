@@ -832,6 +832,12 @@ def build_scaler_config_from_calibration(
       — the same file soma-retargeter ships.  Clip frame 0 is **not** used:
       SOMA clips often open mid-motion, and using frame 0 would bake the
       starting pose into the scaler instead of the format's canonical rest.
+    * **Xsens / 100STYLE BVH**: format bind T-pose from the bundled
+      ``xsens_mocap_zero_frame0.bvh`` (identity locals + Y→Z root — not the
+      file's stand-pose frame 0, and not the loaded clip's frame 0).
+      Calibration rest is a property of the **format**, not of a particular
+      motion frame; using a clip's opening pose baked ~15° of pitch into
+      ``q_offset`` and pitched the whole RP1 retarget forward.
     * **LAFAN / GLB / other BVH**: frame-0 rest
       (:func:`~hhtools.retarget.newton_basic.rest_pose.rest_pose_from_motion`).
 
@@ -877,8 +883,16 @@ def build_scaler_config_from_calibration(
     # not the loaded clip's frame 0.
     if _ref == "soma_bvh" and bundled_reference_bvh_path(_ref) is not None:
         rest_pose = rest_pose_from_bundled_reference("soma_bvh")
-    elif _ref == "xsens_mocap" and bundled_reference_bvh_path(_ref) is not None:
-        rest_pose = rest_pose_from_bundled_reference("xsens_mocap")
+    elif _ref == "xsens_mocap" or is_xsens_mocap_like(clip.hierarchy.bone_names):
+        # Format rest only.  Never clip frame 0 (100STYLE / Xsens open in a
+        # hang or mid-stride pose that is not the format's T-pose).
+        if bundled_reference_bvh_path("xsens_mocap") is not None:
+            rest_pose = rest_pose_from_bundled_reference("xsens_mocap")
+        else:
+            rest_pose = rest_pose_from_motion_bind(
+                clip,
+                source_tag="build_scaler_config_from_calibration_xsens_bind",
+            )
     elif _ref == "lafan_bvh" and bundled_reference_bvh_path(_ref) is not None:
         # Clip frame 0 as a *whole* skeleton.  The blue calibration overlay
         # still uses bundled ``lafan_zero_frame0.bvh`` (T-pose), but feeding
