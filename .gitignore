@@ -44,6 +44,11 @@ coverage.xml
 .python-version
 # uv.lock is tracked — see README (reproducible installs for clone-and-run users).
 
+# Internal collaboration notes (local only)
+docs/electron-migration-plan.md
+docs/hhtools-function-map-and-validation.md
+docs/webui-p0-remediation.md
+
 # Electron desktop shell
 desktop/node_modules/
 desktop/out/
