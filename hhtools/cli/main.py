@@ -12,6 +12,11 @@ import sys
 import typer
 
 from hhtools._version import __version__
+from hhtools.cli._stdio import configure_utf8_stdio
+
+# Configure streams before importing a selected subcommand. Rich consoles created by
+# those modules then inherit UTF-8 instead of a locale-dependent Windows code page.
+configure_utf8_stdio()
 
 app = typer.Typer(
     help="hhtools - Human-to-Humanoid Tools.",
