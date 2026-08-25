@@ -465,6 +465,35 @@ def _remove_path(path: Path) -> None:
         shutil.rmtree(path)
 
 
+def _materialize_file_reference(source: Path, dest: Path) -> str:
+    """Reference ``source`` without requiring Windows symlink privileges.
+
+    A symbolic link keeps the library lightweight and remains the preferred
+    representation.  Windows may reject it unless Developer Mode is enabled or
+    the process is elevated, so files fall back to a same-volume hard link and
+    finally to a regular copy.
+    """
+
+    try:
+        dest.symlink_to(source)
+        return "symlink"
+    except OSError:
+        # A failed symlink normally leaves no entry, but remove one defensively
+        # before trying link/copy fallbacks.
+        if dest.exists() or dest.is_symlink():
+            dest.unlink(missing_ok=True)
+
+    try:
+        os.link(source, dest)
+        return "hardlink"
+    except OSError:
+        if dest.exists() or dest.is_symlink():
+            dest.unlink(missing_ok=True)
+
+    shutil.copy2(source, dest)
+    return "copy"
+
+
 def materialize_symlink_dir(source_dir: Path, folder_label: str | None = None) -> Path:
     """Symlink ``source_dir`` into ``~/.config/hhtools/motions/<label>/``."""
 
@@ -533,6 +562,41 @@ def _uploaded_path_for_rel(upload_drop: Path, rel: str) -> Path:
     return upload_drop / PurePosixPath(rel).name
 
 
+def _materialize_single_loose_file(
+    source_file: Path,
+    folder_label: str | None,
+) -> tuple[Path, str, str]:
+    """Place one resolved loose clip in the library using the best link type."""
+
+    lib_root = motions_library_root().resolve()
+    try:
+        source_file.relative_to(lib_root)
+        parent = source_file.parent
+        return parent, parent.name, "symlink"
+    except ValueError:
+        pass
+
+    parent = source_file.parent.resolve()
+    existing = _existing_library_link_for_dir(parent)
+    if existing is not None:
+        return existing, existing.name, "symlink"
+
+    clip_label = _safe_folder_name(folder_label or parent.name)
+    dest_root = ensure_motions_library() / clip_label
+    dest_root.mkdir(parents=True, exist_ok=True)
+    dest = dest_root / source_file.name
+    try:
+        if dest.exists() and os.path.samefile(dest, source_file):
+            mode = "symlink" if dest.is_symlink() else "hardlink"
+            return dest_root, dest_root.name, mode
+    except OSError:
+        pass
+    if dest.exists() or dest.is_symlink():
+        dest.unlink(missing_ok=True)
+    mode = _materialize_file_reference(source_file, dest)
+    return dest_root, dest_root.name, mode
+
+
 def _resolved_matches_upload(resolved: Path, upload_drop: Path, rel: str) -> bool:
     """True when an on-disk auto-resolve hit is the same bytes as the browser upload."""
     uploaded = _uploaded_path_for_rel(upload_drop, rel)
@@ -553,7 +617,7 @@ def materialize_drop(
     """Locate or copy data into the user motions library.
 
     Returns ``(library_dir, folder_label, mode)`` where ``mode`` is
-    ``"symlink"`` or ``"copy"``.
+    ``"symlink"``, ``"hardlink"``, or ``"copy"``.
     """
 
     label = _infer_folder_label(_normalize_relpaths(relative_paths), folder_label)
@@ -566,17 +630,20 @@ def materialize_drop(
             resolved = auto_resolve_source_files(rels)
             dest_root = ensure_motions_library() / label
             dest_root.mkdir(parents=True, exist_ok=True)
+            mode = "symlink"
             for rel, src in zip(rels, resolved, strict=True):
                 dest = dest_root / PurePosixPath(rel).name
                 try:
-                    if dest.exists() and dest.resolve() == src.resolve():
+                    if dest.exists() and os.path.samefile(dest, src):
                         continue
                 except OSError:
                     pass
                 if dest.exists() or dest.is_symlink():
                     dest.unlink(missing_ok=True)
-                dest.symlink_to(src)
-            return dest_root, dest_root.name, "symlink"
+                file_mode = _materialize_file_reference(src, dest)
+                if file_mode == "copy" or (file_mode == "hardlink" and mode == "symlink"):
+                    mode = file_mode
+            return dest_root, dest_root.name, mode
         except FileNotFoundError:
             pass
 
@@ -589,20 +656,7 @@ def materialize_drop(
                 source_file, upload_drop, rels[0],
             ):
                 raise FileNotFoundError("auto-resolved file does not match upload")
-            lib_root = motions_library_root().resolve()
-            try:
-                source_file.relative_to(lib_root)
-                parent = source_file.parent
-                return parent, parent.name, "symlink"
-            except ValueError:
-                pass
-            parent = source_file.parent.resolve()
-            existing = _existing_library_link_for_dir(parent)
-            if existing is not None:
-                return existing, existing.name, "symlink"
-            clip_label = _safe_folder_name(folder_label or parent.name)
-            dest_root = link_to_library(source_file, folder_label=clip_label)
-            return dest_root, dest_root.name, "symlink"
+            return _materialize_single_loose_file(source_file, folder_label)
         except FileNotFoundError:
             pass
 
@@ -620,6 +674,14 @@ def materialize_drop(
             raise
         dest = materialize_upload_tree(upload_drop, label)
         return dest, dest.name, "copy"
+    except OSError:
+        # Directory symlinks have no hard-link equivalent.  A browser upload
+        # already contains the exact tree, so use that safe copy when Windows
+        # denies symlink creation.
+        if upload_drop is None:
+            raise
+        dest = materialize_upload_tree(upload_drop, label)
+        return dest, dest.name, "copy"
 
 
 def link_to_library(path: str | Path, *, folder_label: str | None = None) -> Path:
@@ -633,7 +695,7 @@ def link_to_library(path: str | Path, *, folder_label: str | None = None) -> Pat
         dest = dest_root / target.name
         # Already materialised (upload copy) — never replace with a self-symlink.
         try:
-            if dest.exists() and dest.resolve() == target.resolve():
+            if dest.exists() and os.path.samefile(dest, target):
                 return dest_root
         except OSError:
             pass
@@ -644,7 +706,7 @@ def link_to_library(path: str | Path, *, folder_label: str | None = None) -> Pat
             pass
         if dest.exists() or dest.is_symlink():
             dest.unlink(missing_ok=True)
-        dest.symlink_to(target)
+        _materialize_file_reference(target, dest)
         return dest_root
     raise FileNotFoundError(f"路径不存在: {target}")
 
