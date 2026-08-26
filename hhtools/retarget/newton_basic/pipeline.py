@@ -1526,8 +1526,8 @@ class NewtonBasicPipeline:
         poses are not pulled downward when feet leave the floor.
         """
         from hhtools.web.serialize import (
+            _ground_contact_zs,
             _lowest_ankle_z,
-            _lowest_ground_contact_z,
             _quat_xyzw_to_rotmat,
         )
 
@@ -1535,6 +1535,11 @@ class NewtonBasicPipeline:
         if not ik_map:
             return joint_q
 
+        # ``_MIN_ANKLE_Z`` is a *link-origin* threshold: an ankle / knee origin
+        # sits ``_FOOT_COLLISION_OFFSET`` above the floor when the foot is
+        # planted.  Mesh geometry needs ``_GROUND_CLEARANCE`` alone — holding the
+        # sole itself at ``_MIN_ANKLE_Z`` floated every robot by
+        # ``_MIN_ANKLE_Z`` minus its real sole depth (~5 cm on g1 / rp1).
         _FOOT_COLLISION_OFFSET = 0.05
         _GROUND_CLEARANCE = 0.01
         _MIN_ANKLE_Z = _FOOT_COLLISION_OFFSET + _GROUND_CLEARANCE
@@ -1561,10 +1566,18 @@ class NewtonBasicPipeline:
         # whole body in a single frame: the unbounded penetration lift was the
         # source of the "robot suddenly jumps up/down in Z" artefact on flips,
         # where the lowest-ankle estimate swings rapidly frame to frame.
+        #
+        # The limit applies to *changes* only.  The first corrected frame seeds
+        # the carry with its own target, because a standing clip on a robot whose
+        # feet are thicker than the source's needs the same offset on every frame
+        # — ramping it in from zero left the opening frames lower than the rest,
+        # and ``snap_joint_q_clip_floor`` then grounded those and left the body
+        # of the clip floating by the ramp height.
         _max_lift_rate = float(self.config.foot_clamp_max_lift_rate)
         rate_up = _max_lift_rate if _max_lift_rate > 0.0 else float("inf")
         rate_down = _MAX_CORRECTION_RATE
         prev_correction = 0.0
+        seeded = False
         for f in range(out.shape[0]):
             cfg = {
                 dof_names[i]: float(out[f, self.ctx.root_coord_count + i])
@@ -1578,23 +1591,29 @@ class NewtonBasicPipeline:
             # export often does), skip mesh entirely — otherwise a 77-clip
             # GPU batch appears "stuck" at 帧 N/N while post-IK walks every
             # vertex of every visual STL for tens of thousands of frames.
-            contact_z = _lowest_ground_contact_z(
+            limb_z, mesh_z = _ground_contact_zs(
                 self.robot,
                 ik_map,
                 root_rot,
                 include_mesh=bool(self.config.foot_clamp_anti_penetration),
             )
-            if contact_z is None and ankle_z is None:
+            if limb_z is None and mesh_z is None and ankle_z is None:
                 continue
             root_z = float(out[f, 2])
-            if contact_z is not None:
-                world_contact_z = root_z + float(contact_z)
+            if mesh_z is not None:
+                # Real contact surface: only the clearance margin is required.
+                world_contact_z = root_z + float(mesh_z)
+                min_contact_z = _GROUND_CLEARANCE
             else:
-                world_contact_z = root_z + float(ankle_z)
+                # Mesh-free fallback: the link origin carries the foot-thickness
+                # proxy, so it must clear the floor by ``_MIN_ANKLE_Z``.
+                proxy_z = limb_z if limb_z is not None else ankle_z
+                world_contact_z = root_z + float(proxy_z)
+                min_contact_z = _MIN_ANKLE_Z
 
-            if world_contact_z < _MIN_ANKLE_Z and self.config.foot_clamp_anti_penetration:
+            if world_contact_z < min_contact_z and self.config.foot_clamp_anti_penetration:
                 # Ground penetration: desired *upward* lift (>0).
-                desired = _MIN_ANKLE_Z - world_contact_z
+                desired = min_contact_z - world_contact_z
             elif (
                 self.config.foot_clamp_anti_float
                 and ankle_z is not None
@@ -1615,8 +1634,12 @@ class NewtonBasicPipeline:
             else:
                 desired = 0.0
 
-            delta = max(-rate_down, min(rate_up, desired - prev_correction))
-            prev_correction += delta
+            if seeded:
+                delta = max(-rate_down, min(rate_up, desired - prev_correction))
+                prev_correction += delta
+            else:
+                prev_correction = desired
+                seeded = True
             out[f, 2] += np.float32(prev_correction)
         return out
 

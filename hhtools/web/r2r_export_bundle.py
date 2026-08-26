@@ -29,6 +29,27 @@ from hhtools.web.export_bundle import (
 _log = logging.getLogger(__name__)
 
 
+def _r2r_scaled_source_foot_z(source_motion, ratio: float) -> float | None:
+    """Lowest source ankle/foot Z after the same uniform scale as the yellow overlay."""
+    from hhtools.web.serialize import _scaled_overlay_foot_z
+
+    hierarchy = getattr(source_motion, "hierarchy", None)
+    names = list(getattr(hierarchy, "bone_names", []) or [])
+    positions = np.asarray(getattr(source_motion, "positions", None), dtype=np.float64)
+    if not names or positions.ndim != 3 or positions.shape[0] == 0:
+        return None
+    from hhtools.core.grounding import retarget_source_floor_z_world
+
+    z_min = float(retarget_source_floor_z_world(source_motion))
+    scaled = np.asarray(positions[:1], dtype=np.float32).copy()
+    scaled[:, :, 2] -= np.float32(z_min)
+    scaled *= float(ratio)
+    return _scaled_overlay_foot_z(
+        {"bone_names": names, "positions": scaled.tolist()},
+        0,
+    )
+
+
 def r2r_scene_scale_ratio(
     source_model,
     target_model,
@@ -277,6 +298,9 @@ def write_r2r_export_bundle(
         getattr(source_motion, "terrain", None) is not None
         or _terrain_src_path(Path(source_clip_dir), stem) is not None
     )
+    if yellow_foot_z is None and not has_terrain:
+        yellow_foot_z = _r2r_scaled_source_foot_z(source_motion, ratio)
+
     joint_q, playback_lift = _bake_export_joint_q(
         target_model,
         retargeted,
@@ -285,6 +309,7 @@ def write_r2r_export_bundle(
         meta,
         yellow_foot_z=yellow_foot_z,
         preserve_absolute_z=has_terrain,
+        yellow_align="ankle",
     )
     if abs(playback_lift) > 1e-12:
         meta["playback_mesh_z_lift"] = f"{playback_lift:.6f}"

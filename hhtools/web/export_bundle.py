@@ -145,6 +145,7 @@ def _bake_export_joint_q(
     scaled_preview: dict | None = None,
     yellow_foot_z: float | None = None,
     preserve_absolute_z: bool | None = None,
+    yellow_align: str = "sole",
 ) -> tuple[np.ndarray, float]:
     """Bake viewer ``mesh_z_lift`` into robot ``root_z`` for CSV/PKL export."""
     from hhtools.web.serialize import bake_playback_mesh_z_lift_into_joint_q
@@ -167,6 +168,7 @@ def _bake_export_joint_q(
         scaled_preview=scaled_preview,
         yellow_foot_z=yellow,
         preserve_absolute_z=bool(preserve_absolute_z),
+        yellow_align=yellow_align,
     )
 
 
