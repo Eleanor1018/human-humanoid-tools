@@ -3,12 +3,18 @@ import { onBeforeUnmount, onMounted, ref } from 'vue'
 
 import { usePanelLayout } from './composables/usePanelLayout'
 import PlaybackBar from './components/PlaybackBar.vue'
+import CalibrationEditorControls from './components/CalibrationEditorControls.vue'
+import JobDrawer from './components/JobDrawer.vue'
+import SidebarNavigation from './components/SidebarNavigation.vue'
+import WorkflowPipeline from './components/WorkflowPipeline.vue'
+import type { WorkspacePanelId } from './runtime/types'
 
 const panelLayout = usePanelLayout()
-const activePanel = ref('motion')
+const activePanel = ref<WorkspacePanelId>('motion')
 
 function setActivePanel(panel: string): void {
-  activePanel.value = panel
+  // Keep the old runtime/tutorial panel id working while the workspace is split.
+  activePanel.value = panel === 'robot' ? 'h2r' : panel as WorkspacePanelId
 }
 
 function requestPanel(panel: string): void {
@@ -70,14 +76,7 @@ onBeforeUnmount(() => {
         <button type="button" class="panel-hide-btn" id="hide-sidebar" title="隐藏左栏" @click="panelLayout.setHidden('sidebar', true)">◀</button>
       </div>
       <div id="sidebar-body">
-        <button class="nav-item" :class="{ active: activePanel === 'motion' }" data-panel="motion" @click="requestPanel('motion')"><span class="icon">🎞</span> 动作 Motion</button>
-        <button class="nav-item" :class="{ active: activePanel === 'robot' }" data-panel="robot" @click="requestPanel('robot')"><span class="icon">🤖</span> 机器人 · Retarget</button>
-        <button class="nav-item" :class="{ active: activePanel === 'batch' }" data-panel="batch" @click="requestPanel('batch')"><span class="icon">🧺</span> 批量 Batch<span class="badge" id="basket-badge" style="display:none">0</span></button>
-        <button class="nav-item" :class="{ active: activePanel === 'r2r' }" data-panel="r2r" @click="requestPanel('r2r')"><span class="icon">🔁</span> 机器人→机器人 R2R</button>
-        <button class="nav-item" :class="{ active: activePanel === 'dataset-viz' }" data-panel="dataset-viz" @click="requestPanel('dataset-viz')"><span class="icon">📊</span> 数据集可视化分析</button>
-        <button type="button" class="nav-item nav-tour hidden" id="nav-tour" title="重新查看 Web 操作教程">
-          <span class="icon">📖</span> 操作教程
-        </button>
+        <SidebarNavigation :active-panel="activePanel" @request="requestPanel" />
         <div class="sidebar-foot">
           Human-to-Humanoid Tools<br />
           本地运行 · 数据不出本机
@@ -89,6 +88,8 @@ onBeforeUnmount(() => {
     <!-- 3D stage -->
     <main id="stage">
       <canvas id="three-canvas"></canvas>
+      <svg id="calib-mapping-overlay" class="calib-mapping-overlay" aria-hidden="true"></svg>
+      <div id="calib-landmark-labels" class="calib-landmark-labels" aria-hidden="true"></div>
       <div id="calib-hud" class="calib-hud hidden" aria-hidden="true"></div>
       <div id="calib-hover-hint" class="calib-hover-hint" aria-hidden="true"></div>
       <div class="stage-top-tools">
@@ -224,17 +225,23 @@ onBeforeUnmount(() => {
         <div class="card" id="motion-meta-card" style="display:none">
           <h3 id="motion-name">—</h3>
           <div id="motion-meta"></div>
+          <div class="validation-summary" id="motion-validation-summary" aria-live="polite"></div>
           <div class="divider"></div>
           <button class="btn secondary small" id="add-to-basket">＋ 加入批量篮子</button>
         </div>
       </section>
 
-      <!-- ROBOT + RETARGET (merged) -->
-      <section class="panel" :class="{ active: activePanel === 'robot' }" data-panel="robot">
-        <h2>机器人 · Retarget</h2>
-        <p class="lead">分两步导入：先放 <code>.urdf</code>，再放 <code>meshes/</code> 文件夹（或整包拖入任一区域）。</p>
+      <!-- Robot assets and the H2R workflow share runtime state but have separate workspaces. -->
+      <section
+        class="panel"
+        :class="{ active: activePanel === 'robot-assets' || activePanel === 'h2r' }"
+        data-panel="robot"
+      >
+        <div v-show="activePanel === 'robot-assets'" class="panel-stack">
+          <h2>机器人 Robot Registry</h2>
+          <p class="lead">注册或检查可复用的 Robot Model：URDF 描述、mesh 资源、DoF、<code>ik_map</code> 与标定配置。</p>
 
-        <div class="robot-import-grid" id="tour-robot-import">
+          <div class="robot-import-grid" id="tour-robot-import">
           <div class="dropzone dropzone-compact" id="robot-drop-urdf">
             <div class="dz-glyph">📄</div>
             <div class="dz-title">1 · URDF 文件</div>
@@ -251,27 +258,32 @@ onBeforeUnmount(() => {
               <button class="btn secondary small" id="robot-pick-mesh-folder">选择 mesh 文件夹</button>
             </div>
           </div>
-        </div>
-        <p class="hint" id="robot-import-status" style="margin-top:8px">尚未选择 URDF。</p>
+          </div>
+          <p class="hint" id="robot-import-status" style="margin-top:8px">尚未选择 URDF。</p>
 
-        <div class="card">
-          <h3>已注册机器人</h3>
-          <select class="search" id="robot-select"></select>
-          <p class="hint" id="robot-library-hint" style="margin-top:6px">通过 UI 注册的机器人保存在用户资源库，重启 <code>hhtools web</code> 后仍可用。</p>
-          <div class="row" style="margin-top:8px;gap:8px">
-            <button class="btn secondary small" id="robot-load-btn" style="flex:1">加载选中机器人</button>
-            <button class="btn secondary small" id="robot-delete-btn" style="display:none" title="从用户资源库删除（内置机器人不可删）">删除</button>
+          <div class="card">
+            <h3>已注册机器人</h3>
+            <select class="search" id="robot-select"></select>
+            <p class="hint" id="robot-library-hint" style="margin-top:6px">通过 UI 注册的机器人保存在用户资源库，重启 <code>hhtools web</code> 后仍可用。</p>
+            <div class="row" style="margin-top:8px;gap:8px">
+              <button class="btn secondary small" id="robot-load-btn" style="flex:1">加载选中机器人</button>
+              <button class="btn secondary small" id="robot-delete-btn" style="display:none" title="从用户资源库删除（内置机器人不可删）">删除</button>
+            </div>
+          </div>
+
+          <div class="card" id="robot-meta-card" style="display:none">
+            <h3 id="robot-name">—</h3>
+            <div id="robot-meta"></div>
+            <div class="validation-summary" id="robot-validation-summary" aria-live="polite"></div>
           </div>
         </div>
 
-        <div class="card" id="robot-meta-card" style="display:none">
-          <h3 id="robot-name">—</h3>
-          <div id="robot-meta"></div>
-        </div>
+        <div v-show="activePanel === 'h2r'" class="panel-stack">
+          <h2>人体 → 机器人 H2R</h2>
+          <p class="lead">输入人体 Motion 与目标 Robot Model，匹配标定配置后运行 IK/MPC，输出可播放、可导出的 Robot Trajectory。</p>
+          <WorkflowPipeline workflow="h2r" />
 
-        <div class="section-rule"><span>Retarget</span></div>
-
-        <div class="card" id="tour-calibration">
+          <div class="card" id="tour-calibration">
           <h3>1 · 状态</h3>
           <div class="meta-row"><span class="k">动作</span><span class="v" id="rt-motion">未加载</span></div>
           <div class="meta-row"><span class="k">机器人</span><span class="v" id="rt-robot">未加载</span></div>
@@ -285,12 +297,19 @@ onBeforeUnmount(() => {
           <div class="meta-row"><span class="k">标定</span><span class="v" id="rt-cal"><span class="status-chip"><span class="dot"></span>—</span></span></div>
           <div style="height:8px"></div>
           <button class="btn secondary small" id="recalib-btn" disabled>重新标定</button>
-        </div>
+          <div class="calibration-save-summary" id="calibration-save-summary" aria-live="polite"></div>
+          </div>
 
-        <div class="card" id="calib-card" style="display:none">
-          <h3>2 · 标定 Calibration</h3>
-          <p class="hint">标定时舞台只显示<b>灰色机器人</b>与<b>蓝色参考骨架</b>（当前参考格式的标准姿态，不是正在播放的动作，也不一定是 URDF 零位）。请把机器人各关节对齐到蓝色骨架，可在 3D 中点击关节拖动，或用下方滑块微调。</p>
-          <div id="calib-sliders" style="margin-top:8px; max-height:240px; overflow-y:auto"></div>
+          <div class="card" id="calib-card" style="display:none">
+            <h3>2 · 参考姿态对齐 Calibration</h3>
+            <div class="calibration-principle">
+              调整目标机器人，使其静止姿态与蓝色源参考骨架在语义上对应。机器人比例不同，<b>不要求逐点重合</b>；hhtools 会根据 FK 推导缩放与姿态偏移。
+            </div>
+            <div class="calibration-scope" id="calibration-scope">配置范围：目标机器人 + 源参考格式</div>
+            <div class="validation-summary" id="calibration-validation-summary" aria-live="polite"></div>
+            <p class="hint">舞台只显示<b>灰色机器人</b>与<b>蓝色参考骨架</b>。蓝色骨架是当前参考格式的标准姿态，不是正在播放的 Motion，也不一定是 URDF 零位。可在 3D 中点击关节拖动，或用下方滑块微调。</p>
+          <CalibrationEditorControls workflow="h2r" />
+          <div id="calib-sliders" class="calibration-joint-list"></div>
           <div class="divider"></div>
           <div class="row">
             <button class="btn secondary small" id="calib-zero" title="全部关节置 0（URDF 零位）">归零</button>
@@ -299,9 +318,9 @@ onBeforeUnmount(() => {
             <button class="btn secondary small" id="calib-cancel">取消</button>
             <button class="btn small" id="calib-save">保存标定</button>
           </div>
-        </div>
+          </div>
 
-        <div class="card" id="tour-retarget">
+          <div class="card" id="tour-retarget">
           <h3>3 · 执行</h3>
           <div class="row">
             <select class="search" id="rt-backend">
@@ -325,12 +344,13 @@ onBeforeUnmount(() => {
           </p>
           <div style="height:8px"></div>
           <button class="btn" id="retarget-btn" disabled>开始 Retarget</button>
+          <p class="disabled-action-reason" id="retarget-disabled-reason" role="status">请先加载动作与机器人。</p>
           <div style="height:10px"></div>
           <div class="progress" style="display:none" id="rt-progress"><div class="bar"></div></div>
           <div class="hint" id="rt-status" style="margin-top:8px"></div>
-        </div>
+          </div>
 
-        <div class="card" id="rt-export-card" style="display:none">
+          <div class="card" id="rt-export-card" style="display:none">
           <h3>4 · 导出</h3>
           <p class="hint" id="rt-export-fmt">格式：<code>time, root_x, root_y, root_z, root_qx, root_qy, root_qz, root_qw, dof_*</code>（机器人位置 xyz + 四元数 xyzw + 各自由度）</p>
           <div class="row" style="margin-top:8px; align-items:center; gap:8px">
@@ -366,6 +386,7 @@ onBeforeUnmount(() => {
           <p class="hint" id="rt-export-bundle-hint" style="margin-top:6px;display:none">
             含交互物体/地形时将下载 ZIP：<code>&lt;clip&gt;.csv|.pkl</code>（机器人）、<code>object_&lt;i&gt;_&lt;name&gt;.csv|.pkl</code>（物体 retarget 轨迹，与所选格式一致；位姿为机器人坐标系，几何见同目录 <code>.obj</code>）、以及按机器人尺度缩放的 <code>_terrain.obj</code> / 物体 <code>.obj</code>（布局同 OMOMO / meshmimic clip 文件夹）。
           </p>
+          </div>
         </div>
       </section>
 
@@ -458,6 +479,7 @@ onBeforeUnmount(() => {
       <section class="panel" :class="{ active: activePanel === 'r2r' }" data-panel="r2r">
         <h2>机器人 → 机器人 R2R</h2>
         <p class="lead">把已有的 <b>G1 机器人轨迹</b>（<code>.pkl / .npz / .csv</code>，须为本工具导出格式）重定向到<b>任意其他机器人</b>。CSV 支持两种导出样式：<b>含</b> <code>#</code> 注释与列名表头，或<b>取消勾选表头后</b>从第一行起的纯数值（无注释、无表头，帧率由 <code>time</code> 列推算）。流程：源机器人 → 上传轨迹播放 → 目标机器人 → 标定 → Retarget → 导出。</p>
+        <WorkflowPipeline workflow="r2r" />
 
         <div class="card">
           <h3>1 · 源机器人（轨迹来源）</h3>
@@ -509,7 +531,7 @@ onBeforeUnmount(() => {
 
         <div class="card">
           <h3>3 · 目标机器人</h3>
-          <p class="hint" style="margin-top:0">先在「机器人 · Retarget」面板上传你的机器人（URDF + meshes），这里即可选择。</p>
+          <p class="hint" style="margin-top:0">先在「机器人 Robot Registry」注册你的机器人（URDF + meshes），这里即可选择。</p>
           <select class="search" id="r2r-target-select"></select>
           <div class="row" style="margin-top:8px">
             <button class="btn secondary small" id="r2r-target-load" style="flex:1">加载目标机器人</button>
@@ -522,11 +544,18 @@ onBeforeUnmount(() => {
         <div class="card">
           <h3>4 · 标定 Calibration</h3>
           <div class="meta-row"><span class="k">标定</span><span class="v" id="r2r-cal"><span class="status-chip"><span class="dot"></span>—</span></span></div>
-          <p class="hint" style="margin-top:6px">把<b>目标机器人</b>对齐到<b>蓝色源机器人参考姿态</b>（源机器人零位 FK 得到的标准 pose）。未标定时加载目标机器人会自动进入标定模式；可在 3D 舞台<b>点击关节拖动</b>，或使用下方滑块 / 浮动 HUD 微调。</p>
+          <div class="calibration-principle" style="margin-top:8px">
+            调整目标机器人，使其与蓝色源机器人参考姿态在语义上对应。两台机器人结构和比例可以不同，<b>不要求逐点重合</b>。
+          </div>
+          <div class="calibration-scope" id="r2r-calibration-scope">配置范围：目标机器人 + 源机器人</div>
+          <div class="validation-summary" id="r2r-calibration-validation-summary" aria-live="polite"></div>
+          <p class="hint" style="margin-top:6px">蓝色参考姿态由源机器人零位 FK 得到。未标定时加载目标机器人会自动进入标定模式；可在 3D 舞台<b>点击关节拖动</b>，或使用下方滑块 / 浮动 HUD 微调。</p>
           <div style="height:8px"></div>
           <button class="btn secondary small" id="r2r-calib-btn" disabled>开始 / 重新标定</button>
+          <div class="calibration-save-summary" id="r2r-calibration-save-summary" aria-live="polite"></div>
           <div id="r2r-calib-edit" style="display:none">
-            <div id="r2r-calib-sliders" style="margin-top:8px; max-height:240px; overflow-y:auto"></div>
+            <CalibrationEditorControls workflow="r2r" />
+            <div id="r2r-calib-sliders" class="calibration-joint-list"></div>
             <div class="divider"></div>
             <div class="row">
               <button class="btn secondary small" id="r2r-calib-zero" title="全部关节置 0（URDF 零位）">归零</button>
@@ -551,6 +580,7 @@ onBeforeUnmount(() => {
           <p class="hint" style="margin-top:6px"><b>首次较慢：</b>Newton 首次会编译 GPU/Warp IK 内核；Interaction-Mesh 逐帧 MPC，带地形 clip 更慢，进度条可能短暂不动，属正常现象。</p>
           <div style="height:8px"></div>
           <button class="btn" id="r2r-retarget-btn" disabled>开始 Retarget</button>
+          <p class="disabled-action-reason" id="r2r-disabled-reason" role="status">请先加载源机器人、源轨迹与目标机器人。</p>
           <div style="height:10px"></div>
           <div class="progress" style="display:none" id="r2r-progress"><div class="bar"></div></div>
           <div class="hint" id="r2r-status" style="margin-top:8px"></div>
@@ -788,6 +818,7 @@ onBeforeUnmount(() => {
     </aside>
 
     <button v-show="panelLayout.state.inspectorHidden" type="button" class="panel-restore-btn right" id="show-inspector" title="显示右栏" @click="panelLayout.setHidden('inspector', false)">◀ 面板</button>
+    <JobDrawer />
   </div>
 
   <div id="load-overlay" class="hidden">

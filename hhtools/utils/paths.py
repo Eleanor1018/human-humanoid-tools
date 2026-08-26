@@ -5,10 +5,11 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from platformdirs import user_cache_dir
+from platformdirs import user_cache_dir, user_data_dir
 
 HHTOOLS_CACHE_ENV = "HHTOOLS_CACHE_DIR"
 HHTOOLS_ROBOT_DIR_ENV = "HHTOOLS_ROBOT_DIR"
+HHTOOLS_JOB_HISTORY_DIR_ENV = "HHTOOLS_JOB_HISTORY_DIR"
 
 
 def hhtools_cache_dir() -> Path:
@@ -43,9 +44,33 @@ def user_robot_dir() -> Path:
     return p
 
 
+def user_job_history_dir() -> Path:
+    """Return the persistent per-user Web job-history directory.
+
+    Job records are application data rather than an ephemeral compute cache. Tests and
+    portable installations can redirect the directory with ``HHTOOLS_JOB_HISTORY_DIR``;
+    ``XDG_STATE_HOME`` and ``XDG_CONFIG_HOME`` are also honoured before the platform
+    default so isolated environments never write into the real user profile.
+    """
+    override = os.environ.get(HHTOOLS_JOB_HISTORY_DIR_ENV)
+    if override:
+        p = Path(override).expanduser()
+    else:
+        xdg = os.environ.get("XDG_STATE_HOME") or os.environ.get("XDG_CONFIG_HOME")
+        p = (
+            Path(xdg).expanduser() / "hhtools" / "jobs"
+            if xdg
+            else Path(user_data_dir("hhtools", "hhtools")) / "jobs"
+        )
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
 __all__ = [
     "HHTOOLS_CACHE_ENV",
+    "HHTOOLS_JOB_HISTORY_DIR_ENV",
     "HHTOOLS_ROBOT_DIR_ENV",
     "hhtools_cache_dir",
+    "user_job_history_dir",
     "user_robot_dir",
 ]

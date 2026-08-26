@@ -12,8 +12,10 @@ Run via ``hhtools web`` (see :mod:`hhtools.cli.web`) or::
 from __future__ import annotations
 
 import hmac
+import json
 import logging
 import math
+import shlex
 import shutil
 import tempfile
 import threading
@@ -24,6 +26,13 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
+
+from hhtools.web.job_specs import (
+    JobSpecError,
+    build_job_spec,
+    normalize_job_spec,
+    replay_capability,
+)
 
 # These names are referenced in route annotations (e.g. ``list[UploadFile]``).
 # Because this module uses ``from __future__ import annotations`` *and* imports
@@ -40,7 +49,7 @@ _log = logging.getLogger(__name__)
 
 # Bump when static/ front-end behaviour changes.  Injected into ``index.html``
 # at serve time so collaborators only need to pull + restart (no triple-sync).
-UI_BUILD_ID = "20260824-vue1"
+UI_BUILD_ID = "20260826-ux5"
 
 _UPLOAD_CHUNK_BYTES = 1024 * 1024
 _DEFAULT_MAX_UPLOAD_FILES = 4096
@@ -214,6 +223,7 @@ class SessionState:
     source_root: Path
     save_dir: Path
     cache: Any = None  # EphemeralCache
+    job_history: Any = None  # JobHistoryStore
     motions: dict[str, Any] = field(default_factory=dict)  # token -> (Motion, meta)
     robots: dict[str, Any] = field(default_factory=dict)  # name -> URDFRobotModel
     jobs: dict[str, Job] = field(default_factory=dict)
@@ -233,20 +243,46 @@ class SessionState:
 class Job:
     id: str
     kind: str
+    request: dict[str, Any] = field(default_factory=dict)
     status: str = "running"  # running | done | error
     progress: float = 0.0  # overall job progress (batch: all clips)
     clip_progress: float = 0.0  # batch only: current clip / GPU-chunk progress
     message: str = ""
     result: dict | None = None
     error: str | None = None
+    parent_job_id: str | None = None
     created_at: float = field(default_factory=time.monotonic)
+    created_wall_time: float = field(default_factory=time.time)
+    finished_wall_time: float | None = None
     terminal_since: float | None = None
     last_accessed_at: float = field(default_factory=time.monotonic)
+    on_terminal: Callable[[Job], None] | None = field(
+        default=None, repr=False, compare=False,
+    )
 
     def mark_terminal(self, status: str) -> None:
         """Publish terminal status only after the worker has populated its result."""
         self.terminal_since = time.monotonic()
+        self.finished_wall_time = time.time()
         self.status = status
+        if self.on_terminal is not None:
+            try:
+                self.on_terminal(self)
+            except Exception:  # noqa: BLE001 - history must not fail the actual job
+                _log.exception("failed to persist terminal Web job %s", self.id)
+
+
+def _snapshot_job_request(value: Any) -> Any:
+    """Copy JSON-like request data so later UI mutations cannot alter job history."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(key): _snapshot_job_request(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_snapshot_job_request(item) for item in value]
+    return str(value)
 
 
 def _cleanup_session_state(state: SessionState) -> None:
@@ -285,13 +321,16 @@ def create_app(
     max_running_jobs: int = _DEFAULT_MAX_RUNNING_JOBS,
     max_retained_jobs: int = _DEFAULT_MAX_RETAINED_JOBS,
     job_ttl_seconds: float = _DEFAULT_JOB_TTL_SECONDS,
+    job_history_dir: Path | None = None,
 ):
     """Build the FastAPI application."""
     from fastapi import FastAPI, File, HTTPException
     from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
     from fastapi.staticfiles import StaticFiles
 
+    from hhtools.utils.paths import user_job_history_dir
     from hhtools.viewer.cache import EphemeralCache
+    from hhtools.web.job_history import JobHistoryStore
 
     static_dir = Path(__file__).parent / "static"
 
@@ -311,6 +350,9 @@ def create_app(
     if invalid_limits:
         names = ", ".join(invalid_limits)
         raise ValueError(f"resource limits must be positive: {names}")
+
+    history_root = Path(job_history_dir) if job_history_dir is not None else user_job_history_dir()
+    state.job_history = JobHistoryStore(history_root, max_records=max_retained_jobs)
 
     @asynccontextmanager
     async def _lifespan(_app):  # type: ignore[no-untyped-def]
@@ -461,7 +503,180 @@ def create_app(
             if removed is not None:
                 _remove_job_artifact(removed)
 
-    def _register_job(kind: str) -> Job:
+    def _job_cli_reproduction(  # noqa: PLR0911 - each unsupported case needs its reason
+        kind: str,
+        request: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Build an exact CLI equivalent when the public CLI covers this Web job."""
+        if kind not in {"retarget", "batch"}:
+            return {
+                "available": False,
+                "command": None,
+                "reason": "该任务类型暂时没有等价的 hhtools CLI 命令。",
+            }
+
+        if request.get("retarget_fps") is not None:
+            return {
+                "available": False,
+                "command": None,
+                "reason": "当前 CLI 尚未提供 Retarget FPS 重采样参数。",
+            }
+        if request.get("export_fps") is not None or request.get("fps") is not None:
+            return {
+                "available": False,
+                "command": None,
+                "reason": "当前 CLI 尚未提供 Web 导出 FPS 参数。",
+            }
+        if request.get("t_start") is not None or request.get("t_end") is not None:
+            return {
+                "available": False,
+                "command": None,
+                "reason": "当前 CLI 尚未提供 Web 时间区间导出参数。",
+            }
+        if bool(request.get("foot_clamp_anti_penetration")):
+            return {
+                "available": False,
+                "command": None,
+                "reason": "当前 CLI 尚未提供同等的脚部防穿透参数。",
+            }
+        if str(request.get("format") or "csv").lower() != "csv":
+            return {
+                "available": False,
+                "command": None,
+                "reason": "当前 hhtools retarget CLI 仅能复现 CSV 导出。",
+            }
+
+        entries = request.get("entries")
+        if kind == "batch" and isinstance(entries, list):
+            source_paths = [
+                str(entry.get("source_path"))
+                for entry in entries
+                if isinstance(entry, dict) and entry.get("source_path")
+            ]
+        else:
+            source = request.get("source_path")
+            source_paths = [str(source)] if source else []
+        if not source_paths:
+            return {
+                "available": False,
+                "command": None,
+                "reason": "任务只保留了会话 token，没有可供 CLI 重开的源文件路径。",
+            }
+        if any(not Path(path).is_file() for path in source_paths):
+            return {
+                "available": False,
+                "command": None,
+                "reason": "一个或多个源文件已不存在，无法生成可执行的 CLI 命令。",
+            }
+        try:
+            ephemeral_root = state.upload_root.resolve()
+            if any(
+                Path(path).resolve().is_relative_to(ephemeral_root)
+                for path in source_paths
+            ):
+                return {
+                    "available": False,
+                    "command": None,
+                    "reason": "源文件来自临时上传目录，请先保存到 Motion Library。",
+                }
+        except OSError:
+            return {
+                "available": False,
+                "command": None,
+                "reason": "无法确认源文件是否可供 CLI 访问。",
+            }
+
+        robot = str(request.get("robot") or "").strip()
+        if not robot:
+            return {
+                "available": False,
+                "command": None,
+                "reason": "任务记录缺少目标机器人名称。",
+            }
+
+        backend = str(request.get("backend") or "newton").strip().lower()
+        if backend == "newton" and any(
+            Path(path).suffix.lower() != ".npz" for path in source_paths
+        ):
+            return {
+                "available": False,
+                "command": None,
+                "reason": "Newton CLI 当前只直接接受 NPZ 输入。",
+            }
+        if kind == "batch" and isinstance(entries, list):
+            references = {
+                str(entry.get("reference") or request.get("reference") or "smpl")
+                for entry in entries
+                if isinstance(entry, dict)
+            }
+            if len(references) > 1:
+                return {
+                    "available": False,
+                    "command": None,
+                    "reason": "该批次包含多个校准参考，当前 CLI 需要按参考分别运行。",
+                }
+        if request.get("csv_header") is False:
+            return {
+                "available": False,
+                "command": None,
+                "reason": "当前 CLI 尚未提供无表头 CSV 导出参数。",
+            }
+        output = str(
+            request.get("out_dir")
+            or ("batch_export" if kind == "batch" else "retarget_output.csv")
+        )
+        reference = str(request.get("reference") or "smpl")
+        human_height = float(request.get("human_height") or 1.7)
+        ik_iterations = int(request.get("ik_iterations") or 24)
+
+        if backend == "interaction_mesh":
+            args = ["hhtools", "retarget", "interaction-mesh", "run", *source_paths]
+            args.extend(
+                [
+                    "--robot",
+                    robot,
+                    "--output",
+                    output,
+                    "--human-height",
+                    f"{human_height:g}",
+                    "--calibration-reference",
+                    reference,
+                ]
+            )
+            if request.get("limit_frames") is not None:
+                args.extend(["--limit-frames", str(int(request["limit_frames"]))])
+        elif backend == "newton":
+            args = ["hhtools", "retarget", "run", *source_paths]
+            args.extend(
+                [
+                    "--robot",
+                    robot,
+                    "--output",
+                    output,
+                    "--ik-iterations",
+                    str(ik_iterations),
+                    "--human-height",
+                    f"{human_height:g}",
+                    "--calibration-reference",
+                    reference,
+                ]
+            )
+            if request.get("limit_frames") is not None:
+                args.extend(["--limit-frames", str(int(request["limit_frames"]))])
+        else:
+            return {
+                "available": False,
+                "command": None,
+                "reason": f"未知求解器 {backend!r} 无法映射到 CLI。",
+            }
+        return {"available": True, "command": shlex.join(args), "reason": None}
+
+    def _register_job(
+        kind: str,
+        request: dict[str, Any] | None = None,
+        *,
+        parent_job_id: str | None = None,
+    ) -> Job:
         now = time.monotonic()
         with state.job_lock:
             _prune_jobs_locked(now)
@@ -471,8 +686,15 @@ def create_app(
                     status_code=429,
                     detail=f"too many running jobs (limit: {max_running_jobs})",
                 )
-            job = Job(id=uuid.uuid4().hex[:12], kind=kind)
+            job = Job(
+                id=uuid.uuid4().hex[:12],
+                kind=kind,
+                request=_snapshot_job_request(request or {}),
+                parent_job_id=parent_job_id,
+                on_terminal=_persist_terminal_job,
+            )
             state.jobs[job.id] = job
+            _persist_job(job)
             return job
 
     def _get_job(job_id: str) -> Job | None:
@@ -483,6 +705,228 @@ def create_app(
             if job is not None:
                 job.last_accessed_at = now
             return job
+
+    def _job_parameter_summary(job: Job) -> dict[str, str | int | float | bool]:
+        """Return compact, stable parameters suitable for the always-on job drawer."""
+        request = job.request
+        summary: dict[str, str | int | float | bool] = {}
+        keys = (
+            "robot",
+            "target",
+            "target_robot",
+            "source_robot",
+            "source",
+            "profile",
+            "reference",
+            "backend",
+            "embedding",
+            "format",
+            "retarget_fps",
+            "export_fps",
+            "source_fps",
+            "batch_size",
+            "out_dir",
+            "folder_label",
+            "library_folder_label",
+        )
+        for key in keys:
+            value = request.get(key)
+            if isinstance(value, (str, int, float, bool)) and value != "":
+                summary[key] = value
+
+        entries = request.get("entries")
+        files = request.get("files")
+        if isinstance(entries, list):
+            summary["entry_count"] = len(entries)
+        if isinstance(files, list):
+            summary["file_count"] = len(files)
+        elif isinstance(request.get("file_count"), int):
+            summary["file_count"] = request["file_count"]
+        return summary
+
+    def _job_result_summary(job: Job) -> dict[str, str | int | float | bool]:
+        result = job.result or {}
+        summary: dict[str, str | int | float | bool] = {}
+        for key in ("download_name", "num_frames", "clip_count", "solver_mode", "format"):
+            value = result.get(key)
+            if isinstance(value, (str, int, float, bool)) and value != "":
+                summary[key] = value
+        written = result.get("written")
+        failures = result.get("failures")
+        errors = result.get("errors")
+        if isinstance(written, list):
+            summary["success_count"] = len(written)
+        if isinstance(failures, list):
+            summary["failure_count"] = len(failures)
+        elif isinstance(errors, list):
+            summary["failure_count"] = len(errors)
+        return summary
+
+    def _job_can_download(job: Job) -> bool:
+        artifact = (job.result or {}).get("artifact_path")
+        if job.status != "done" or not isinstance(artifact, str):
+            return False
+        try:
+            return Path(artifact).is_file()
+        except OSError:
+            return False
+
+    def _job_record(job: Job) -> dict[str, Any]:
+        finished = job.finished_wall_time
+        duration_end = finished if finished is not None else time.time()
+        cli = _job_cli_reproduction(job.kind, job.request)
+        spec = build_job_spec(job.kind, job.request)
+        replay = replay_capability(spec, ephemeral_root=state.upload_root)
+        failures = (job.result or {}).get("failures")
+        failed_item_count = len(failures) if isinstance(failures, list) else 0
+        return {
+            "id": job.id,
+            "kind": job.kind,
+            "status": job.status,
+            "progress": job.progress,
+            "clip_progress": job.clip_progress,
+            "message": job.message,
+            "error": job.error,
+            "created_at": job.created_wall_time,
+            "finished_at": finished,
+            "duration_seconds": max(0.0, duration_end - job.created_wall_time),
+            "parameters": _job_parameter_summary(job),
+            "result_summary": _job_result_summary(job),
+            "can_download": _job_can_download(job),
+            "can_copy_cli": bool(cli["available"]),
+            "can_retry": bool(replay["available"]) and job.status != "running",
+            "retry_reason": (
+                "任务仍在运行中。" if job.status == "running" else replay["reason"]
+            ),
+            "can_retry_failed": (
+                job.kind == "batch"
+                and job.status != "running"
+                and failed_item_count > 0
+                and bool(replay["available"])
+            ),
+            "failed_item_count": failed_item_count,
+            "parent_job_id": job.parent_job_id,
+            "scope": "current_session",
+        }
+
+    def _persistent_job_record(job: Job) -> dict[str, Any]:
+        record = {
+            **_job_record(job),
+            "schema_version": 1,
+            "scope": "persistent",
+            "request": _snapshot_job_request(job.request),
+            "cli": _job_cli_reproduction(job.kind, job.request),
+            "parent_job_id": job.parent_job_id,
+        }
+        failures = (job.result or {}).get("failures")
+        if isinstance(failures, list):
+            record["failures"] = _snapshot_job_request(failures)
+        artifact = (job.result or {}).get("artifact_path")
+        if isinstance(artifact, str):
+            record["artifact_path"] = artifact
+        download_name = (job.result or {}).get("download_name")
+        if isinstance(download_name, str):
+            record["download_name"] = download_name
+        return record
+
+    def _persist_job(job: Job) -> None:
+        state.job_history.put(_persistent_job_record(job))
+
+    def _persist_terminal_job(job: Job) -> None:
+        """Persist terminal metadata and move generated ZIPs out of the temp root."""
+        artifact = (job.result or {}).get("artifact_path")
+        if isinstance(artifact, str):
+            try:
+                artifact_path = Path(artifact).resolve()
+                artifact_path.relative_to(state.export_root.resolve())
+                adopted = state.job_history.adopt_artifact(
+                    job.id,
+                    artifact_path,
+                    download_name=(job.result or {}).get("download_name"),
+                )
+                if job.result is not None:
+                    job.result["artifact_path"] = str(adopted)
+            except (OSError, ValueError):
+                _log.warning(
+                    "could not retain generated artifact for job %s", job.id, exc_info=True,
+                )
+        _persist_job(job)
+
+    def _stored_job_record(record: dict[str, Any]) -> dict[str, Any]:
+        artifact = state.job_history.artifact_path(record)
+        cli = _job_cli_reproduction(
+            str(record.get("kind") or ""), record.get("request") or {},
+        )
+        spec = build_job_spec(
+            str(record.get("kind") or ""), record.get("request") or {},
+        )
+        replay = replay_capability(spec, ephemeral_root=state.upload_root)
+        failures = record.get("failures")
+        failed_item_count = len(failures) if isinstance(failures, list) else 0
+        return {
+            key: value
+            for key, value in {
+                **record,
+                "can_download": artifact is not None,
+                "can_copy_cli": bool(cli["available"]),
+                "can_retry": bool(replay["available"]),
+                "retry_reason": replay["reason"],
+                "can_retry_failed": (
+                    record.get("kind") == "batch"
+                    and failed_item_count > 0
+                    and bool(replay["available"])
+                ),
+                "failed_item_count": failed_item_count,
+                "scope": "persistent",
+            }.items()
+            if key not in {
+                "request",
+                "cli",
+                "artifact_path",
+                "download_name",
+                "schema_version",
+                "failures",
+            }
+        }
+
+    def _job_config_payload(job: Job | None, stored: dict[str, Any] | None) -> dict[str, Any]:
+        if job is not None:
+            spec = build_job_spec(job.kind, job.request)
+            return {
+                "schema_version": 1,
+                "job_id": job.id,
+                "kind": job.kind,
+                "status": job.status,
+                "created_at": job.created_wall_time,
+                "finished_at": job.finished_wall_time,
+                "scope": "current_session",
+                "request": job.request,
+                "cli": _job_cli_reproduction(job.kind, job.request),
+                "spec": spec,
+                "replay": replay_capability(spec, ephemeral_root=state.upload_root),
+                "parent_job_id": job.parent_job_id,
+            }
+        if stored is None:
+            raise HTTPException(status_code=404, detail="unknown job")
+        spec = build_job_spec(
+            str(stored.get("kind") or ""), stored.get("request") or {},
+        )
+        return {
+            "schema_version": int(stored.get("schema_version") or 1),
+            "job_id": stored["id"],
+            "kind": stored["kind"],
+            "status": stored["status"],
+            "created_at": stored["created_at"],
+            "finished_at": stored.get("finished_at"),
+            "scope": "persistent",
+            "request": stored.get("request") or {},
+            "cli": _job_cli_reproduction(
+                str(stored.get("kind") or ""), stored.get("request") or {},
+            ),
+            "spec": spec,
+            "replay": replay_capability(spec, ephemeral_root=state.upload_root),
+            "parent_job_id": stored.get("parent_job_id"),
+        }
 
     from hhtools.web.motion_library_links import ensure_motions_library, motions_library_root
 
@@ -722,7 +1166,7 @@ def create_app(
 
     @app.post("/api/dataset/analyze")
     async def dataset_analyze(body: dict) -> dict:
-        job = _register_job("dataset_analyze")
+        job = _register_job("dataset_analyze", body)
         threading.Thread(
             target=_run_dataset_analyze_job, args=(job, body), daemon=True,
         ).start()
@@ -904,7 +1348,7 @@ def create_app(
         """Load a robot export CSV for mesh playback (dataset viz scatter preview)."""
         if not body.get("source_path"):
             raise HTTPException(status_code=400, detail="source_path required")
-        job = _register_job("dataset_robot_preview")
+        job = _register_job("dataset_robot_preview", body)
         threading.Thread(
             target=_run_dataset_robot_preview_job,
             args=(job, body, state),
@@ -996,6 +1440,7 @@ def create_app(
         motion_rec: dict = {"motion": motion, "reference": ref, "origin": origin}
         if library_entry is not None and library_entry.get("source_path"):
             motion_rec["source_path"] = library_entry["source_path"]
+            motion_rec["library_entry"] = _snapshot_job_request(library_entry)
         state.motions[token] = motion_rec
 
         ser_cb = None
@@ -1145,7 +1590,7 @@ def create_app(
 
     @app.post("/api/motion/load_library")
     async def load_library(body: dict) -> dict:
-        job = _register_job("motion_load")
+        job = _register_job("motion_load", body)
         threading.Thread(
             target=_run_motion_library_job, args=(job, body), daemon=True,
         ).start()
@@ -1162,7 +1607,14 @@ def create_app(
         stored = await _store_uploads(files, drop)
         if not stored:
             raise HTTPException(status_code=400, detail="empty upload")
-        job = _register_job("basket_upload")
+        job = _register_job(
+            "basket_upload",
+            {
+                "profile": profile,
+                "file_count": len(stored),
+                "files": [relative.as_posix() for relative, _path in stored],
+            },
+        )
         threading.Thread(
             target=_run_basket_upload_job, args=(job, drop, profile), daemon=True,
         ).start()
@@ -1203,7 +1655,15 @@ def create_app(
                 detail="未找到可识别的动作文件（.npz / .bvh / .glb / .pkl …）",
             )
 
-        job = _register_job("motion_link")
+        job = _register_job(
+            "motion_link",
+            {
+                "profile": profile,
+                "folder_label": label,
+                "file_count": len(rel_paths),
+                "files": rel_paths,
+            },
+        )
         threading.Thread(
             target=_run_motion_library_dir_job,
             args=(job, lib_dir, label, profile),
@@ -1578,6 +2038,21 @@ def create_app(
             rec = state.motions.get(token)
             if rec is None:
                 raise ValueError("motion token expired; reload the clip")
+            source_entry = rec.get("library_entry")
+            job.request = _snapshot_job_request(
+                {
+                    **job.request,
+                    "source_path": rec.get("source_path"),
+                    "source_entry": source_entry,
+                    "robot": robot,
+                    "reference": reference,
+                    "backend": backend,
+                    "ik_iterations": ik_iters,
+                    "human_height": human_height,
+                    "limit_frames": limit_frames,
+                    "retarget_fps": retarget_fps,
+                }
+            )
             motion_src = rec["motion"]
             motion_source_fps = float(motion_src.framerate)
             motion, motion_retarget_fps = _motion_for_retarget(motion_src, retarget_fps)
@@ -1640,7 +2115,7 @@ def create_app(
 
     @app.post("/api/retarget")
     async def retarget(body: dict) -> dict:
-        job = _register_job("retarget")
+        job = _register_job("retarget", body)
         threading.Thread(target=_run_retarget_job, args=(job, body), daemon=True).start()
         return {"job_id": job.id}
 
@@ -1672,37 +2147,335 @@ def create_app(
             _log.exception("scaled preview failed")
             raise HTTPException(status_code=500, detail=str(err)) from err
 
+    def _job_source_for_replay(job_id: str) -> tuple[dict[str, Any], str, list[dict]]:
+        """Return ``(spec, status, failures)`` without exposing stored internals."""
+        job = _get_job(job_id)
+        if job is not None:
+            failures = (job.result or {}).get("failures")
+            return (
+                build_job_spec(job.kind, job.request),
+                job.status,
+                failures if isinstance(failures, list) else [],
+            )
+        stored = state.job_history.get(job_id)
+        if stored is None:
+            raise HTTPException(status_code=404, detail="unknown job")
+        failures = stored.get("failures")
+        return (
+            build_job_spec(
+                str(stored.get("kind") or ""), stored.get("request") or {},
+            ),
+            str(stored.get("status") or ""),
+            failures if isinstance(failures, list) else [],
+        )
+
+    def _ensure_replay_robot(job: Job, robot: str) -> None:
+        if robot in state.robots:
+            return
+        job.progress = max(job.progress, 0.01)
+        job.message = f"正在重新加载机器人 {robot}…"
+        _serialize_and_store_robot(robot)
+
+    def _load_replay_motion(job: Job, request: dict[str, Any]) -> str:
+        """Rebuild a motion token from the source path captured by JobSpec."""
+        from hhtools.web.r2r_upload_resolve import _is_robot_export_trajectory
+
+        source_path = Path(str(request["source_path"])).expanduser().resolve()
+        job.progress = max(job.progress, 0.02)
+        job.message = f"正在重新加载 {source_path.name}…"
+        source_entry = request.get("source_entry")
+        motion = None
+        dataset: str | None = None
+        library_entry: dict[str, Any] | None = None
+
+        if isinstance(source_entry, dict):
+            candidate = dict(source_entry)
+            candidate["source_path"] = str(source_path)
+            try:
+                from hhtools.web.motion_library_links import library_entry_for_load
+
+                entry = library_entry_for_load(
+                    dataset=str(candidate.get("dataset") or "unknown"),
+                    folder_label=str(candidate.get("folder_label") or source_path.parent.name),
+                    sequence_id=str(candidate.get("sequence_id") or source_path.name),
+                    source_path=source_path,
+                    upload_drop=candidate.get("upload_drop"),
+                )
+                if candidate.get("dataset") == "robot" or _is_robot_export_trajectory(
+                    source_path
+                ):
+                    motion = _load_robot_export_for_web(source_path, state)
+                    dataset = "robot"
+                else:
+                    motion = _load_motion_for_web(entry, state.cache)
+                    dataset = str(candidate.get("dataset") or "unknown")
+                library_entry = candidate
+            except Exception as err:  # noqa: BLE001 - direct file load is the fallback
+                _log.info("library replay load fell back to direct IO: %s", err)
+
+        if motion is None:
+            if _is_robot_export_trajectory(source_path):
+                motion = _load_robot_export_for_web(source_path, state)
+                dataset = "robot"
+            else:
+                try:
+                    motion = _load_motion_file(source_path)
+                except Exception as direct_error:  # noqa: BLE001 - adapter fallback
+                    motion, dataset = _load_via_adapter(source_path)
+                    if motion is None:
+                        raise ValueError(
+                            f"无法重新加载源动作 {source_path}: {direct_error}"
+                        ) from direct_error
+            library_entry = {
+                "dataset": dataset or "unknown",
+                "folder_label": source_path.parent.name or "replay",
+                "sequence_id": source_path.name,
+                "source_path": str(source_path),
+                "stem": source_path.stem,
+                "origin": "replay",
+            }
+
+        payload = _register_motion(
+            motion,
+            dataset,
+            "replay",
+            library_entry=library_entry,
+        )
+        return str(payload["token"])
+
+    def _normalise_replay_batch_entries(request: dict[str, Any]) -> dict[str, Any]:
+        """Fill the library-shaped fields required by the existing batch worker."""
+        replay_request = dict(request)
+        normalized: list[dict[str, Any]] = []
+        for raw_entry in replay_request.get("entries") or []:
+            entry = dict(raw_entry)
+            source = Path(str(entry["source_path"])).expanduser().resolve()
+            entry["source_path"] = str(source)
+            entry.setdefault("dataset", "unknown")
+            entry.setdefault("folder_label", source.parent.name or "replay")
+            entry.setdefault("sequence_id", source.name)
+            entry.setdefault("stem", source.stem)
+            if entry.get("dataset") == "unknown" and not entry.get("origin"):
+                # The upload resolver is also the generic single-file loader. It
+                # avoids requiring a dataset adapter for an imported NPZ/BVH/GLB.
+                entry["origin"] = "upload"
+                entry["upload_profile"] = "auto"
+            normalized.append(entry)
+        replay_request["entries"] = normalized
+        return replay_request
+
+    def _run_replayed_retarget_job(job: Job, request: dict[str, Any]) -> None:
+        try:
+            robot = str(request["robot"])
+            _ensure_replay_robot(job, robot)
+            motion_token = _load_replay_motion(job, request)
+            _run_retarget_job(job, {**request, "motion_token": motion_token})
+        except Exception as err:  # noqa: BLE001 - worker errors belong on the job
+            _log.exception("replayed retarget job failed")
+            job.error = str(err)
+            job.mark_terminal("error")
+
+    def _run_replayed_batch_job(job: Job, request: dict[str, Any]) -> None:
+        try:
+            _ensure_replay_robot(job, str(request["robot"]))
+            _run_batch_job(job, _normalise_replay_batch_entries(request))
+        except Exception as err:  # noqa: BLE001 - worker errors belong on the job
+            _log.exception("replayed batch job failed")
+            job.error = str(err)
+            job.mark_terminal("error")
+
+    def _failed_only_spec(
+        spec: dict[str, Any], failures: list[dict],
+    ) -> dict[str, Any]:
+        if spec["kind"] != "batch":
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "not_batch", "msg": "只有批处理任务支持仅重试失败项。"},
+            )
+        failed_paths = {
+            str(Path(str(item["source_path"])).expanduser().resolve())
+            for item in failures
+            if isinstance(item, dict) and item.get("source_path")
+        }
+        request = dict(spec["request"])
+        entries = [
+            entry
+            for entry in request.get("entries") or []
+            if isinstance(entry, dict)
+            and entry.get("source_path")
+            and str(Path(str(entry["source_path"])).expanduser().resolve()) in failed_paths
+        ]
+        if not entries:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "no_failed_entries",
+                    "msg": "该记录没有可定位到源文件的失败条目。",
+                },
+            )
+        request["entries"] = entries
+        out_name = str(request.get("out_dir") or "batch_export")
+        request["out_dir"] = f"{out_name}_failed_retry"
+        return build_job_spec("batch", request)
+
+    def _start_replayed_job(
+        spec: dict[str, Any], *, parent_job_id: str | None,
+    ) -> Job:
+        capability = replay_capability(spec, ephemeral_root=state.upload_root)
+        if not capability["available"]:
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "job_not_replayable", "msg": capability["reason"]},
+            )
+        request = _snapshot_job_request(spec["request"])
+        job = _register_job(
+            str(spec["kind"]), request, parent_job_id=parent_job_id,
+        )
+        target = (
+            _run_replayed_retarget_job
+            if spec["kind"] == "retarget"
+            else _run_replayed_batch_job
+        )
+        threading.Thread(target=target, args=(job, request), daemon=True).start()
+        return job
+
+    @app.post("/api/jobs/spec/validate")
+    async def validate_job_spec(body: dict) -> dict:
+        """Normalize imported JSON and report whether it can be run locally."""
+        try:
+            spec = normalize_job_spec(body)
+        except JobSpecError as err:
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "invalid_job_spec", "msg": str(err)},
+            ) from err
+        return {
+            "spec": spec,
+            "replay": replay_capability(spec, ephemeral_root=state.upload_root),
+        }
+
+    @app.post("/api/jobs/replay")
+    async def replay_job(body: dict) -> dict:
+        """Start a new job from history or from an edited/imported JobSpec."""
+        source_job_id = body.get("job_id")
+        failed_only = bool(body.get("failed_only", False))
+        failures: list[dict] = []
+        if isinstance(source_job_id, str) and source_job_id:
+            spec, source_status, failures = _job_source_for_replay(source_job_id)
+            if source_status == "running":
+                raise HTTPException(
+                    status_code=409,
+                    detail={"code": "job_running", "msg": "原任务仍在运行中。"},
+                )
+        else:
+            try:
+                spec = normalize_job_spec(body)
+            except JobSpecError as err:
+                raise HTTPException(
+                    status_code=400,
+                    detail={"code": "invalid_job_spec", "msg": str(err)},
+                ) from err
+            source_job_id = None
+        if failed_only:
+            spec = _failed_only_spec(spec, failures)
+        job = _start_replayed_job(spec, parent_job_id=source_job_id)
+        return {
+            "job_id": job.id,
+            "parent_job_id": source_job_id,
+            "spec": build_job_spec(job.kind, job.request),
+        }
+
+    @app.get("/api/jobs")
+    def job_list(limit: int = 50) -> dict:
+        """List compact live and disk-backed records, newest first."""
+        bounded_limit = max(1, min(100, limit))
+        now = time.monotonic()
+        persisted = {
+            record["id"]: _stored_job_record(record)
+            for record in state.job_history.list_records(limit=100)
+        }
+        with state.job_lock:
+            _prune_jobs_locked(now)
+            # Listing must not refresh last_accessed_at: otherwise the drawer's
+            # periodic polling would prevent terminal jobs from expiring.
+            live = {job.id: _job_record(job) for job in state.jobs.values()}
+        records = sorted(
+            {**persisted, **live}.values(),
+            key=lambda record: float(record.get("created_at") or 0.0),
+            reverse=True,
+        )[:bounded_limit]
+        return {"jobs": records, "session_only": False, "persistence": "disk"}
+
+    @app.get("/api/job/{job_id}/config")
+    def job_config(job_id: str) -> dict:
+        """Return the exact effective request captured when this job was started."""
+        job = _get_job(job_id)
+        stored = None if job is not None else state.job_history.get(job_id)
+        return _job_config_payload(job, stored)
+
+    @app.get("/api/job/{job_id}/config/download")
+    def job_config_download(job_id: str) -> Response:
+        """Download the effective request as a UTF-8 JSON reproduction record."""
+        job = _get_job(job_id)
+        stored = None if job is not None else state.job_history.get(job_id)
+        payload = _job_config_payload(job, stored)
+        return Response(
+            content=json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            media_type="application/json; charset=utf-8",
+            headers={
+                "Content-Disposition": f'attachment; filename="hhtools-job-{job_id}.json"'
+            },
+        )
+
+    @app.get("/api/job/{job_id}/cli")
+    def job_cli(job_id: str) -> dict:
+        """Return the exact public CLI equivalent, or why none exists yet."""
+        job = _get_job(job_id)
+        if job is not None:
+            return _job_cli_reproduction(job.kind, job.request)
+        stored = state.job_history.get(job_id)
+        if stored is None:
+            raise HTTPException(status_code=404, detail="unknown job")
+        return _job_cli_reproduction(
+            str(stored.get("kind") or ""), stored.get("request") or {},
+        )
+
     @app.get("/api/job/{job_id}")
     def job_status(job_id: str) -> dict:
         job = _get_job(job_id)
-        if job is None:
+        if job is not None:
+            return {**_job_record(job), "result": job.result}
+        stored = state.job_history.get(job_id)
+        if stored is None:
             raise HTTPException(status_code=404, detail="unknown job")
-        return {
-            "id": job.id,
-            "kind": job.kind,
-            "status": job.status,
-            "progress": job.progress,
-            "clip_progress": job.clip_progress,
-            "message": job.message,
-            "result": job.result,
-            "error": job.error,
+        result = {
+            "artifact_path": stored.get("artifact_path"),
+            "download_name": stored.get("download_name"),
         }
+        return {**_stored_job_record(stored), "result": result}
 
     @app.get("/api/job/{job_id}/download")
     def job_download(job_id: str):
         job = _get_job(job_id)
-        if job is None or job.status != "done":
-            raise HTTPException(status_code=404, detail="job not ready")
-        artifact = (job.result or {}).get("artifact_path")
-        if not artifact:
+        if job is not None:
+            if job.status != "done":
+                raise HTTPException(status_code=404, detail="job not ready")
+            artifact = (job.result or {}).get("artifact_path")
+            path = Path(artifact) if artifact else None
+            name = (job.result or {}).get("download_name") or (path.name if path else None)
+        else:
+            stored = state.job_history.get(job_id)
+            if stored is None or stored.get("status") != "done":
+                raise HTTPException(status_code=404, detail="job not ready")
+            path = state.job_history.artifact_path(stored)
+            name = stored.get("download_name") or (path.name if path else None)
+        if path is None:
             raise HTTPException(status_code=404, detail="no download artifact")
-        path = Path(artifact)
         if not path.is_file():
             raise HTTPException(status_code=404, detail="artifact missing")
-        name = (job.result or {}).get("download_name") or path.name
         return FileResponse(
             path,
-            filename=name,
+            filename=name or path.name,
             media_type="application/zip",
         )
 
@@ -1770,6 +2543,24 @@ def create_app(
                         robot,
                     )
 
+            job.request = _snapshot_job_request(
+                {
+                    **job.request,
+                    "entries": entries,
+                    "robot": robot,
+                    "reference": default_reference,
+                    "backend": backend,
+                    "ik_iterations": ik_iters,
+                    "human_height": human_height,
+                    "limit_frames": limit_frames,
+                    "batch_size": batch_size,
+                    "retarget_fps": retarget_fps,
+                    "export_fps": export_fps,
+                    "format": fmt,
+                    "csv_header": csv_header,
+                    "out_dir": out_name,
+                }
+            )
             out_dir = state.export_root / job.id
             if out_dir.exists():
                 shutil.rmtree(out_dir, ignore_errors=True)
@@ -1989,7 +2780,7 @@ def create_app(
 
     @app.post("/api/batch/retarget")
     async def batch_retarget(body: dict) -> dict:
-        job = _register_job("batch")
+        job = _register_job("batch", body)
         threading.Thread(target=_run_batch_job, args=(job, body), daemon=True).start()
         return {"job_id": job.id}
 
@@ -2124,7 +2915,16 @@ def create_app(
         stored = await _store_uploads(files, drop)
         if not stored:
             raise HTTPException(status_code=400, detail="empty upload")
-        job = _register_job("r2r_source_upload")
+        job = _register_job(
+            "r2r_source_upload",
+            {
+                "source_robot": source_robot,
+                "profile": profile,
+                "source_fps": src_fps,
+                "file_count": len(stored),
+                "files": [relative.as_posix() for relative, _path in stored],
+            },
+        )
         threading.Thread(
             target=_run_r2r_source_upload_job,
             args=(job, drop, source_robot, profile, state, src_fps),
@@ -2221,6 +3021,17 @@ def create_app(
             rec = state.r2r_sources.get(token)
             if rec is None:
                 raise ValueError("source trajectory expired; re-upload the clip")
+            job.request = _snapshot_job_request(
+                {
+                    **job.request,
+                    "target": target,
+                    "source": source,
+                    "source_path": rec.get("source_path"),
+                    "backend": backend,
+                    "ik_iterations": ik_iters,
+                    "retarget_fps": retarget_fps,
+                }
+            )
 
             from hhtools.retarget import robot_to_robot as r2r
 
@@ -2330,7 +3141,7 @@ def create_app(
 
     @app.post("/api/r2r/retarget")
     async def r2r_retarget(body: dict) -> dict:
-        job = _register_job("retarget")
+        job = _register_job("r2r_retarget", body)
         threading.Thread(
             target=_run_r2r_retarget_job, args=(job, body), daemon=True,
         ).start()
@@ -2346,7 +3157,14 @@ def create_app(
         stored = await _store_uploads(files, drop)
         if not stored:
             raise HTTPException(status_code=400, detail="empty upload")
-        job = _register_job("r2r_basket_upload")
+        job = _register_job(
+            "r2r_basket_upload",
+            {
+                "profile": profile,
+                "file_count": len(stored),
+                "files": [relative.as_posix() for relative, _path in stored],
+            },
+        )
         threading.Thread(
             target=_run_r2r_basket_upload_job, args=(job, drop, profile), daemon=True,
         ).start()
@@ -2354,7 +3172,7 @@ def create_app(
 
     @app.post("/api/r2r/batch/retarget")
     async def r2r_batch_retarget(body: dict) -> dict:
-        job = _register_job("r2r_batch")
+        job = _register_job("r2r_batch", body)
         threading.Thread(
             target=_run_r2r_batch_job, args=(job, body, state), daemon=True,
         ).start()
@@ -3167,6 +3985,23 @@ def _run_r2r_batch_job(job: Job, body: dict, state: SessionState) -> None:
         csv_header = _parse_csv_header(body.get("csv_header", True))
         out_name = body.get("out_dir") or "r2r_batch_export"
         backend = (body.get("backend") or "newton").strip().lower()
+
+        job.request = _snapshot_job_request(
+            {
+                **job.request,
+                "target": target,
+                "source": source,
+                "entries": entries,
+                "backend": backend,
+                "ik_iterations": ik_iters,
+                "retarget_fps": retarget_fps,
+                "source_fps": source_fps,
+                "export_fps": export_fps,
+                "format": fmt,
+                "csv_header": csv_header,
+                "out_dir": out_name,
+            }
+        )
 
         from hhtools.retarget import robot_to_robot as r2r
 

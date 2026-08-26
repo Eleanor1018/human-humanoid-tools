@@ -1,10 +1,15 @@
 /// <reference types="vite/client" />
 
 import type {
+  CalibrationEditorCommandDetail,
+  CalibrationEditorStateDetail,
   HhAppBridge,
+  JobHistoryCommandDetail,
+  JobHistoryStateDetail,
   PlaybackCommandDetail,
   PlaybackUiState,
   UploadFile,
+  WorkflowStateDetail,
 } from './runtime/types'
 import type { GuidedTour } from './runtime/tutorial'
 
@@ -180,9 +185,14 @@ declare global {
   }
 
   interface WindowEventMap {
+    'hhtools:calibration-editor-command': CustomEvent<CalibrationEditorCommandDetail>
+    'hhtools:calibration-editor-state': CustomEvent<CalibrationEditorStateDetail>
+    'hhtools:job-history-command': CustomEvent<JobHistoryCommandDetail>
+    'hhtools:job-history-state': CustomEvent<JobHistoryStateDetail>
     'hhtools:panel-request': CustomEvent<string>
     'hhtools:playback-command': CustomEvent<PlaybackCommandDetail>
     'hhtools:playback-state': CustomEvent<Partial<PlaybackUiState>>
+    'hhtools:workflow-state': CustomEvent<WorkflowStateDetail>
   }
 }
 

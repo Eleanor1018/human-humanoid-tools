@@ -7,6 +7,7 @@ from typing import Any
 import numpy as np
 
 from hhtools.core.grounding import foot_floor_z_in_positions
+from hhtools.core.math import quaternion as Q
 from hhtools.core.motion import Motion
 from hhtools.robot.loader import URDFRobotModel
 
@@ -149,15 +150,24 @@ def serialize_reference_skeleton(
         parents.append(-1 if p is None else name_to_i.get(p, -1))
 
     pos = np.asarray(ref.positions, dtype=np.float32).reshape(-1, 3).copy()
+    quat = np.asarray(ref.quaternions, dtype=np.float32).reshape(-1, 4).copy()
     if pos.shape[0] != len(names):
         raise ValueError(
             f"reference positions ({pos.shape[0]} joints) != joint_names ({len(names)})"
+        )
+    if quat.shape[0] != len(names):
+        raise ValueError(
+            f"reference quaternions ({quat.shape[0]} joints) != joint_names ({len(names)})"
         )
 
     if abs(heading_rad) > 1e-8:
         c, s = float(np.cos(heading_rad)), float(np.sin(heading_rad))
         rot = np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]], dtype=np.float32)
         pos = (pos @ rot.T).astype(np.float32, copy=False)
+        heading_q = Q.from_axis_angle(
+            np.array([[0.0, 0.0, heading_rad]], dtype=np.float32),
+        )[0]
+        quat = Q.normalize(Q.multiply(np.broadcast_to(heading_q, quat.shape), quat))
 
     z_floor = float(foot_floor_z_in_positions(pos, tuple(names)))
     if abs(z_floor) > 1e-6:
@@ -165,8 +175,10 @@ def serialize_reference_skeleton(
 
     return {
         "bone_names": names,
+        "canonical_names": [ref.source_to_canonical.get(name, name) for name in names],
         "parent_indices": parents,
         "positions": [pos.tolist()],
+        "quaternions": [quat.astype(np.float32).tolist()],
         "color": 0x5eb3ff,
     }
 
