@@ -177,7 +177,10 @@ button { font-family: inherit; cursor: pointer; }
   z-index: 200;
 }
 .workspace-shell #topbar .logo {
-  flex: 0 0 208px;
+  /* End the brand slot at the stage's 12px floating-control inset.  Because
+     the topbar itself starts at 25px, subtracting 13px makes the menubar and
+     .stage-top-tools share the same global left edge as the sidebar resizes. */
+  flex: 0 0 calc(var(--sidebar-w) + var(--sidebar-handle-w) - 13px);
   gap: 8px;
   margin: 0;
   color: var(--ink);
@@ -189,6 +192,11 @@ button { font-family: inherit; cursor: pointer; }
   width: 24px;
   height: 24px;
 }
+.workspace-shell.sidebar-hidden #topbar .desktop-brand-name {
+  /* The collapsed 52px rail keeps only the mark, leaving the aligned navbar
+     enough room without overlapping the brand. */
+  display: none;
+}
 .workspace-shell #topbar .pill {
   padding: 3px 8px;
   font-size: 11px;
@@ -199,8 +207,8 @@ button { font-family: inherit; cursor: pointer; }
   display: flex;
   align-items: stretch;
   align-self: stretch;
-  gap: 1px;
-  margin-left: 14px;
+  gap: 8px;
+  margin-left: 0;
 }
 .desktop-menu-root {
   position: relative;
@@ -209,13 +217,18 @@ button { font-family: inherit; cursor: pointer; }
 }
 .desktop-menu-trigger {
   height: 28px;
-  padding: 0 9px;
+  padding: 0 10px;
   border: 0;
   border-radius: 4px;
   background: transparent;
   color: var(--ink-secondary);
   font-size: 12px;
   font-weight: 500;
+}
+.desktop-menu-root:first-child .desktop-menu-trigger {
+  /* Align the first visible label as well as its dropdown with the floating
+     stage menu; later items retain symmetric hit-area padding. */
+  padding-left: 0;
 }
 .desktop-menu-trigger:hover,
 .desktop-menu-trigger:focus-visible,
