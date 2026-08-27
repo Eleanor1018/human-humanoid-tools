@@ -156,6 +156,10 @@ import {
   formatCalibrationAngle,
 } from "./calibration-editor";
 import { initTutorial } from "./tutorial";
+import {
+  loadWorkspacePreferences,
+  updateWorkspacePreferences,
+} from "./workspace-preferences";
 import type {
   ApiClient,
   ApiGetResponse,
@@ -170,6 +174,7 @@ import type {
   CalibrationEditorStateDetail,
   CalibrationJointRegion,
   CalibrationReferencePayload,
+  ComparisonPreset,
   JobConfigResponse,
   JobHistoryStateDetail,
   JobListResponse,
@@ -186,6 +191,7 @@ import type {
   RobotPayload,
   RobotExportPreviewResult,
   RetargetResult,
+  ResultDiagnostics,
   R2rBasketUploadResult,
   R2rSourceTrajectoryResult,
   RobotJointLimit,
@@ -2256,6 +2262,10 @@ function mat4(flat: Matrix4Data): THREE.Matrix4 {
 }
 
 // =================================================================  PLAYER
+const initialWorkspacePreferences = loadWorkspacePreferences();
+const comparisonPresets: Record<WorkflowId, ComparisonPreset> = {
+  ...initialWorkspacePreferences.comparisonPresets,
+};
 const skel = new SkeletonView();
 const refSkel = new ReferenceSkeletonView();
 const mesh = new CapsuleMeshView();
@@ -2331,11 +2341,11 @@ function bodyIsVisible(): boolean {
 // can be shown together.
 const player: PlayerController = {
   playing: false,
-  loop: true,
+  loop: initialWorkspacePreferences.playbackLoop,
   t: 0,
   duration: 0,
   active: false,
-  speed: 1, // playback rate multiplier (0.1×–4×), independent of the timeline
+  speed: initialWorkspacePreferences.playbackSpeed,
   // Set by update() on a loop wrap; consumed by animate() to hard-snap the camera.
   _justLooped: false,
   ready(duration: number) {
@@ -2408,6 +2418,7 @@ const player: PlayerController = {
   setSpeed(mult: number) {
     const m = Math.min(4, Math.max(0.1, Number(mult) || 1));
     this.speed = m;
+    updateWorkspacePreferences({ playbackSpeed: m });
     publishPlaybackState();
   },
   // Re-pose whatever is currently visible at the current cursor (after a toggle).
@@ -2435,6 +2446,7 @@ window.addEventListener("hhtools:playback-command", (event) => {
   else if (action === "speed") player.setSpeed(value ?? 1);
   else if (action === "loop") {
     player.loop = !player.loop;
+    updateWorkspacePreferences({ playbackLoop: player.loop });
     publishPlaybackState();
   }
 });
@@ -2482,6 +2494,57 @@ function setViewVisible(view: PlaybackView, btnId: ViewToggleButtonId, on: boole
   if (btnId === "tg-env") syncEnvToggleButton();
   player.refreshFrame();
 }
+
+function emitResultDiagnostics(
+  workflow: WorkflowId,
+  diagnostics: ResultDiagnostics | null,
+): void {
+  window.dispatchEvent(new CustomEvent("hhtools:result-diagnostics", {
+    detail: {
+      workflow,
+      diagnostics,
+      comparisonPreset: comparisonPresets[workflow],
+    },
+  }));
+}
+
+function clearResultDiagnostics(workflow: WorkflowId): void {
+  emitResultDiagnostics(workflow, null);
+}
+
+function emitComparisonState(workflow: WorkflowId): void {
+  window.dispatchEvent(new CustomEvent("hhtools:comparison-state", {
+    detail: { workflow, preset: comparisonPresets[workflow] },
+  }));
+}
+
+/** Apply a repeatable H2R visibility preset without changing any trajectory data. */
+function applyH2rComparisonPreset(preset: ComparisonPreset): void {
+  comparisonPresets.h2r = preset;
+  const showSource = preset === "source" || preset === "overlay";
+  const showTarget = preset === "target" || preset === "overlay";
+  const showResult = preset === "result" || preset === "overlay";
+
+  setViewVisible(skel, "tg-skeleton", showSource && skel.numFrames > 0);
+  // The opaque body is useful by itself, but hides the diagnostic overlays.
+  setBodyVisible(preset === "source" && Boolean(state.motion));
+  setViewVisible(
+    envView,
+    "tg-env",
+    preset === "source" && motionHasEnvironment(state.motion),
+  );
+  setViewVisible(scaledSkel, "tg-scaled", showTarget && scaledSkel.numFrames > 0);
+  setViewVisible(
+    scaledEnv,
+    "tg-scaled-env",
+    (showTarget || showResult) && (
+      scaledEnv.numFrames > 0 || scaledEnv.group.children.length > 0
+    ),
+  );
+  setViewVisible(robot, "tg-robot", showResult && Boolean(robot.trajectory));
+  emitComparisonState("h2r");
+}
+
 document.getElementById("tg-skeleton").onclick = () =>
   setViewVisible(skel, "tg-skeleton", !skel.group.visible);
 document.getElementById("tg-mesh").onclick = () => setBodyVisible(!bodyIsVisible());
@@ -3003,6 +3066,7 @@ async function loadMotionPayload(payload: MotionPayload): Promise<void> {
   state.reference = payload.suggested_reference ?? null;
   syncRefSelect();
   state.exportToken = null;
+  clearResultDiagnostics("h2r");
   state.calibration = false;
   h2rRunState = "idle";
   // In calibration mode only the robot + blue reference T-pose should be visible.
@@ -3096,6 +3160,7 @@ async function loadRobotExportPreview(result: RobotExportPreviewResult): Promise
   state.motion = null;
   state.libraryEntry = null;
   state.exportToken = null;
+  clearResultDiagnostics("h2r");
   skel.clear();
   mesh.clear();
   skin.clear();
@@ -3559,6 +3624,7 @@ async function applyRobot(robotData: RobotPayload): Promise<void> {
   state.robot = robotData;
   state.exportToken = null;
   state.robotTrajectory = null;
+  clearResultDiagnostics("h2r");
   state.calibration = false;
   h2rRunState = "idle";
   document.getElementById("rt-export-card").style.display = "none";
@@ -3664,6 +3730,7 @@ document.getElementById("robot-delete-btn").onclick = async () => {
       state.robot = null;
       state.exportToken = null;
       state.robotTrajectory = null;
+      clearResultDiagnostics("h2r");
       h2rRunState = "idle";
       robot.group.visible = false;
       document.getElementById("robot-meta-card").style.display = "none";
@@ -4649,6 +4716,7 @@ function updateR2rCalibBanner(): void {
 function _applyCalibSceneLayout(): void {
   state.robotTrajectory = null;
   robot.trajectory = null;
+  clearResultDiagnostics("h2r");
   scaledSkel.clear();
   scaledEnv.clear();
   setViewVisible(skel, "tg-skeleton", false);
@@ -5147,6 +5215,7 @@ document.getElementById("retarget-btn").onclick = async () => {
   );
   document.getElementById("retarget-btn").disabled = true;
   h2rRunState = "running";
+  clearResultDiagnostics("h2r");
   setRobotPanelLocked(true);
   publishH2rWorkflowState();
   try {
@@ -5214,6 +5283,12 @@ document.getElementById("retarget-btn").onclick = async () => {
     setBodyVisible(true);
     setViewVisible(scaledSkel, "tg-scaled", true);
     setViewVisible(robot, "tg-robot", true);
+    applyH2rComparisonPreset(comparisonPresets.h2r);
+    emitResultDiagnostics("h2r", j.result.diagnostics ?? {
+      schema_version: 1,
+      available: false,
+      reason: "当前结果未返回可用的 tracking/contact 诊断。",
+    });
     player.setPlaying(true);
     robot.group.getWorldPosition(_camFocus);
     orbit.target.copy(_camFocus);
@@ -6266,6 +6341,35 @@ function r2rApplyStage(): void {
 
 }
 
+/** Apply a repeatable R2R visibility preset using the workflow's isolated views. */
+function applyR2rComparisonPreset(preset: ComparisonPreset): void {
+  comparisonPresets.r2r = preset;
+  r2rVis.srcRobot = preset === "source" || preset === "overlay";
+  r2rVis.srcSkel = false;
+  r2rVis.srcEnv = preset === "source";
+  r2rVis.tgtRobot = preset === "result" || preset === "overlay";
+  r2rVis.tgtSkel = preset === "target" || preset === "overlay";
+  r2rVis.tgtEnv = preset !== "source";
+  r2rApplyStage();
+  emitComparisonState("r2r");
+}
+
+const comparisonPresetIds = new Set<ComparisonPreset>([
+  "source",
+  "target",
+  "result",
+  "overlay",
+]);
+
+window.addEventListener("hhtools:comparison-command", (event) => {
+  const { workflow, preset } = event.detail;
+  if (!comparisonPresetIds.has(preset)) return;
+  comparisonPresets[workflow] = preset;
+  updateWorkspacePreferences({ comparisonPresets: { [workflow]: preset } });
+  if (workflow === "h2r") applyH2rComparisonPreset(preset);
+  else applyR2rComparisonPreset(preset);
+});
+
 function r2rEnterPanel(): void {
   if (r2r.active) { r2rApplyStage(); return; }
   r2r.active = true;
@@ -6716,6 +6820,7 @@ async function r2rUploadTraj(
   r2rTrajectoryState = "validating";
   r2r.exportToken = null;
   r2rRunState = "idle";
+  clearResultDiagnostics("r2r");
   publishR2rWorkflowState();
   st.textContent = "上传中…";
   toast("上传源轨迹…");
@@ -6828,6 +6933,7 @@ async function r2rRunRetarget(): Promise<void> {
   document.getElementById("r2r-retarget-btn").disabled = true;
   r2rRunState = "running";
   r2r.exportToken = null;
+  clearResultDiagnostics("r2r");
   publishR2rWorkflowState();
   try {
     const body: R2rRetargetRequest = {
@@ -6870,6 +6976,12 @@ async function r2rRunRetarget(): Promise<void> {
     r2rVis.tgtSkel = !!j.result.scaled_preview;
     r2rVis.tgtEnv = !!j.result.scaled_scene;
     player.ready(r2rTgt.clipDuration || 1);
+    applyR2rComparisonPreset(comparisonPresets.r2r);
+    emitResultDiagnostics("r2r", j.result.diagnostics ?? {
+      schema_version: 1,
+      available: false,
+      reason: "当前结果未返回可用的 tracking/contact 诊断。",
+    });
     player.seek(0);
     r2rApplyStage();
     r2rFocus(r2rTgt);
@@ -7003,6 +7115,7 @@ function r2rInit(): void {
       r2r.sourceName = name;
       r2r.exportToken = null;
       r2rRunState = "idle";
+      clearResultDiagnostics("r2r");
       await r2rSrc.load(sourcePayload);
       switchInspectorPanel("r2r");
       if (!r2r.active) r2rEnterPanel();
@@ -7026,6 +7139,7 @@ function r2rInit(): void {
       r2r.targetName = name;
       r2r.exportToken = null;
       r2rRunState = "idle";
+      clearResultDiagnostics("r2r");
       document.getElementById("r2r-target-status").textContent =
         `目标机器人：${targetPayload.display_name}`;
       toast(`目标机器人已加载：${targetPayload.display_name}`);
@@ -7168,6 +7282,10 @@ async function verifyUiBuild() {
   await verifyUiBuild();
   await Promise.all([loadReferenceCatalog(), refreshLibrary(), refreshRobotList()]);
   r2rInit();
+  switchInspectorPanel(initialWorkspacePreferences.activePanel);
+  publishPlaybackState();
+  emitComparisonState("h2r");
+  emitComparisonState("r2r");
   publishH2rWorkflowState();
   publishR2rWorkflowState();
   const tour = initTutorial(toast);

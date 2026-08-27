@@ -11,13 +11,30 @@ import type {
   JobStatus,
 } from '../runtime/types'
 
+const props = withDefaults(defineProps<{
+  desktop?: boolean
+  locale?: 'en' | 'zh-CN'
+}>(), {
+  desktop: false,
+  locale: 'zh-CN',
+})
+
+const DESKTOP_PANEL_HEIGHT_KEY = 'hhtools-desktop-job-panel-height-v1'
+const DEFAULT_DESKTOP_PANEL_HEIGHT = 300
+const MIN_DESKTOP_PANEL_HEIGHT = 180
+
+function text(en: string, zh: string): string {
+  return props.desktop && props.locale === 'en' ? en : zh
+}
+
 const open = ref(false)
+const panelHeight = ref(loadPanelHeight())
 const jobs = ref<JobHistoryRecord[]>([])
 const loading = ref(false)
 const error = ref<string | null>(null)
 const importInput = ref<HTMLInputElement | null>(null)
 const editorOpen = ref(false)
-const editorTitle = ref('导入任务配置')
+const editorTitle = ref(text('Import task configuration', '导入任务配置'))
 const editorText = ref('')
 const editorBusy = ref(false)
 const editorError = ref<string | null>(null)
@@ -27,6 +44,69 @@ const runningCount = computed(() => jobs.value.filter((job) => job.status === 'r
 const failedCount = computed(() => jobs.value.filter((job) => job.status === 'error').length)
 const doneCount = computed(() => jobs.value.filter((job) => job.status === 'done').length)
 const latestJob = computed(() => jobs.value[0] ?? null)
+const panelStyle = computed(() => (
+  props.desktop && open.value
+    ? { '--job-panel-height': `${panelHeight.value}px` }
+    : undefined
+))
+
+let stopPanelResize: (() => void) | null = null
+
+function loadPanelHeight(): number {
+  if (!props.desktop) return DEFAULT_DESKTOP_PANEL_HEIGHT
+  const value = Number(localStorage.getItem(DESKTOP_PANEL_HEIGHT_KEY))
+  return Number.isFinite(value) && value >= MIN_DESKTOP_PANEL_HEIGHT
+    ? value
+    : DEFAULT_DESKTOP_PANEL_HEIGHT
+}
+
+function togglePanel(): void {
+  open.value = !open.value
+}
+
+function handlePanelShortcut(event: KeyboardEvent): void {
+  if (!props.desktop || (!event.ctrlKey && !event.metaKey) || event.key.toLowerCase() !== 'j') return
+  event.preventDefault()
+  togglePanel()
+}
+
+function startPanelResize(event: PointerEvent): void {
+  if (!props.desktop || !open.value) return
+  event.preventDefault()
+
+  const target = event.currentTarget as HTMLElement
+  target.setPointerCapture(event.pointerId)
+  const startY = event.clientY
+  const startHeight = panelHeight.value
+  const previousCursor = document.body.style.cursor
+  const previousUserSelect = document.body.style.userSelect
+
+  document.body.style.cursor = 'row-resize'
+  document.body.style.userSelect = 'none'
+
+  const move = (moveEvent: PointerEvent): void => {
+    const maxHeight = Math.max(MIN_DESKTOP_PANEL_HEIGHT, window.innerHeight - 160)
+    panelHeight.value = Math.min(
+      maxHeight,
+      Math.max(MIN_DESKTOP_PANEL_HEIGHT, startHeight + startY - moveEvent.clientY),
+    )
+  }
+  const stop = (): void => {
+    document.body.style.cursor = previousCursor
+    document.body.style.userSelect = previousUserSelect
+    localStorage.setItem(DESKTOP_PANEL_HEIGHT_KEY, String(Math.round(panelHeight.value)))
+    window.removeEventListener('pointermove', move)
+    window.removeEventListener('pointerup', stop)
+    window.removeEventListener('pointercancel', stop)
+    stopPanelResize = null
+  }
+
+  stopPanelResize?.()
+  stopPanelResize = stop
+  window.addEventListener('pointermove', move)
+  window.addEventListener('pointerup', stop, { once: true })
+  window.addEventListener('pointercancel', stop, { once: true })
+}
 
 const KIND_LABELS: Record<string, string> = {
   dataset_analyze: '数据集分析',
@@ -42,11 +122,32 @@ const KIND_LABELS: Record<string, string> = {
   r2r_batch: 'R2R 批量任务',
 }
 
+const KIND_LABELS_EN: Record<string, string> = {
+  dataset_analyze: 'Dataset Analysis',
+  dataset_robot_preview: 'Robot Trajectory Preview',
+  motion_load: 'Load Motion',
+  motion_link: 'Link Motion',
+  basket_upload: 'Import Batch Motions',
+  retarget: 'H2R Retarget',
+  batch: 'H2R Batch',
+  r2r_source_upload: 'Load Source Robot Trajectory',
+  r2r_retarget: 'R2R Retarget',
+  r2r_basket_upload: 'Import R2R Batch Trajectories',
+  r2r_batch: 'R2R Batch',
+}
+
 const STATUS_LABELS: Record<JobStatus, string> = {
   pending: '等待中',
   running: '运行中',
   done: '已完成',
   error: '失败',
+}
+
+const STATUS_LABELS_EN: Record<JobStatus, string> = {
+  pending: 'Pending',
+  running: 'Running',
+  done: 'Completed',
+  error: 'Failed',
 }
 
 const PARAMETER_LABELS: Record<string, string> = {
@@ -69,6 +170,28 @@ const PARAMETER_LABELS: Record<string, string> = {
   library_folder_label: '资源目录',
   entry_count: '条目',
   file_count: '文件',
+}
+
+const PARAMETER_LABELS_EN: Record<string, string> = {
+  robot: 'Robot',
+  target: 'Target Robot',
+  target_robot: 'Target Robot',
+  source_robot: 'Source Robot',
+  source: 'Source',
+  profile: 'Profile',
+  reference: 'Reference Skeleton',
+  backend: 'Solver',
+  embedding: 'Feature Space',
+  format: 'Format',
+  retarget_fps: 'Retarget FPS',
+  export_fps: 'Export FPS',
+  source_fps: 'Source FPS',
+  batch_size: 'Batch Size',
+  out_dir: 'Output Directory',
+  folder_label: 'Folder',
+  library_folder_label: 'Library Folder',
+  entry_count: 'Entries',
+  file_count: 'Files',
 }
 
 function receive(event: WindowEventMap['hhtools:job-history-state']): void {
@@ -107,7 +230,9 @@ function requestDownload(job: JobHistoryRecord): void {
 }
 
 function appBridge() {
-  if (!window.__hhApp) throw new Error('WebUI 尚未准备完成，请稍后重试')
+  if (!window.__hhApp) {
+    throw new Error(text('The WebUI is not ready yet. Try again shortly.', 'WebUI 尚未准备完成，请稍后重试'))
+  }
   return window.__hhApp
 }
 
@@ -136,24 +261,28 @@ function openImportPicker(): void {
   importInput.value?.click()
 }
 
+function receiveImportRequest(): void {
+  openImportPicker()
+}
+
 async function importConfig(event: Event): Promise<void> {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
   input.value = ''
   if (!file) return
   try {
-    openEditor(`导入配置 · ${file.name}`, JSON.parse(await file.text()) as unknown)
+    openEditor(`${text('Import configuration', '导入配置')} · ${file.name}`, JSON.parse(await file.text()) as unknown)
   } catch (caught) {
-    appBridge().toast(`读取配置失败：${errorMessage(caught)}`, true)
+    appBridge().toast(`${text('Unable to read configuration', '读取配置失败')}：${errorMessage(caught)}`, true)
   }
 }
 
 async function duplicateForEdit(job: JobHistoryRecord): Promise<void> {
   try {
     const config: JobConfigResponse = await appBridge().API.get(`/api/job/${job.id}/config`)
-    openEditor(`复制编辑 · ${kindLabel(job.kind)}`, config.spec)
+    openEditor(`${text('Duplicate and edit', '复制编辑')} · ${kindLabel(job.kind)}`, config.spec)
   } catch (caught) {
-    appBridge().toast(`读取任务配置失败：${errorMessage(caught)}`, true)
+    appBridge().toast(`${text('Unable to read task configuration', '读取任务配置失败')}：${errorMessage(caught)}`, true)
   }
 }
 
@@ -161,7 +290,7 @@ function parsedEditorValue(): unknown {
   try {
     return JSON.parse(editorText.value) as unknown
   } catch (caught) {
-    throw new Error(`JSON 格式错误：${errorMessage(caught)}`)
+    throw new Error(`${text('Invalid JSON', 'JSON 格式错误')}：${errorMessage(caught)}`)
   }
 }
 
@@ -189,7 +318,7 @@ async function runEditor(): Promise<void> {
     const started = await appBridge().API.post('/api/jobs/replay', {
       spec: validated.spec,
     })
-    appBridge().toast(`已创建任务 ${started.job_id}`)
+    appBridge().toast(`${text('Created task', '已创建任务')} ${started.job_id}`)
     editorOpen.value = false
     requestRefresh()
   } catch (caught) {
@@ -206,28 +335,26 @@ async function retryJob(job: JobHistoryRecord, failedOnly = false): Promise<void
       job_id: job.id,
       failed_only: failedOnly,
     })
-    appBridge().toast(
-      failedOnly
-        ? `已创建失败项重试任务 ${started.job_id}`
-        : `已创建重试任务 ${started.job_id}`,
-    )
+    appBridge().toast(failedOnly
+      ? `${text('Created failed-item retry task', '已创建失败项重试任务')} ${started.job_id}`
+      : `${text('Created retry task', '已创建重试任务')} ${started.job_id}`)
     requestRefresh()
   } catch (caught) {
-    appBridge().toast(`重试失败：${errorMessage(caught)}`, true)
+    appBridge().toast(`${text('Retry failed', '重试失败')}：${errorMessage(caught)}`, true)
   }
 }
 
 function kindLabel(kind: string): string {
-  return KIND_LABELS[kind] ?? kind
+  return (props.desktop && props.locale === 'en' ? KIND_LABELS_EN : KIND_LABELS)[kind] ?? kind
 }
 
 function statusLabel(status: JobStatus): string {
-  return STATUS_LABELS[status]
+  return (props.desktop && props.locale === 'en' ? STATUS_LABELS_EN : STATUS_LABELS)[status]
 }
 
 function formatTime(timestamp: number): string {
-  if (!Number.isFinite(timestamp) || timestamp <= 0) return '时间未知'
-  return new Intl.DateTimeFormat('zh-CN', {
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return text('Unknown time', '时间未知')
+  return new Intl.DateTimeFormat(text('en-US', 'zh-CN'), {
     month: '2-digit',
     day: '2-digit',
     hour: '2-digit',
@@ -239,10 +366,10 @@ function formatTime(timestamp: number): string {
 
 function formatDuration(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return ''
-  if (seconds < 60) return `${Math.max(1, Math.round(seconds))} 秒`
+  if (seconds < 60) return `${Math.max(1, Math.round(seconds))} ${text('sec', '秒')}`
   const minutes = Math.floor(seconds / 60)
   const remainder = Math.round(seconds % 60)
-  return `${minutes} 分 ${remainder} 秒`
+  return `${minutes} ${text('min', '分')} ${remainder} ${text('sec', '秒')}`
 }
 
 function parameterEntries(job: JobHistoryRecord): Array<[string, JobParameterValue]> {
@@ -250,17 +377,17 @@ function parameterEntries(job: JobHistoryRecord): Array<[string, JobParameterVal
 }
 
 function parameterLabel(key: string): string {
-  return PARAMETER_LABELS[key] ?? key
+  return (props.desktop && props.locale === 'en' ? PARAMETER_LABELS_EN : PARAMETER_LABELS)[key] ?? key
 }
 
 function resultText(job: JobHistoryRecord): string {
   const result = job.result_summary
   const parts: string[] = []
-  if (typeof result.success_count === 'number') parts.push(`${result.success_count} 成功`)
+  if (typeof result.success_count === 'number') parts.push(`${result.success_count} ${text('succeeded', '成功')}`)
   if (typeof result.failure_count === 'number' && result.failure_count > 0) {
-    parts.push(`${result.failure_count} 失败`)
+    parts.push(`${result.failure_count} ${text('failed', '失败')}`)
   }
-  if (typeof result.num_frames === 'number') parts.push(`${result.num_frames} 帧`)
+  if (typeof result.num_frames === 'number') parts.push(`${result.num_frames} ${text('frames', '帧')}`)
   return parts.join(' · ')
 }
 
@@ -270,28 +397,47 @@ function progressPercent(job: JobHistoryRecord): number {
 
 onMounted(() => {
   window.addEventListener('hhtools:job-history-state', receive)
+  window.addEventListener('hhtools:job-spec-import-request', receiveImportRequest)
+  window.addEventListener('keydown', handlePanelShortcut)
   requestRefresh()
 })
 
-onBeforeUnmount(() => window.removeEventListener('hhtools:job-history-state', receive))
+onBeforeUnmount(() => {
+  window.removeEventListener('hhtools:job-history-state', receive)
+  window.removeEventListener('hhtools:job-spec-import-request', receiveImportRequest)
+  window.removeEventListener('keydown', handlePanelShortcut)
+  stopPanelResize?.()
+})
 </script>
 
 <template>
-  <section class="job-drawer" :class="{ open }" aria-label="任务历史">
+  <section
+    class="job-drawer"
+    :class="{ open, 'desktop-job-panel': desktop }"
+    :style="panelStyle"
+    :aria-label="text('Task history', '任务历史')"
+  >
+    <div
+      v-if="desktop && open"
+      class="job-panel-resizer"
+      :title="text('Drag to resize the task panel', '拖动调整任务面板高度')"
+      aria-hidden="true"
+      @pointerdown="startPanelResize"
+    ></div>
     <button
       v-if="!open"
       type="button"
       class="job-drawer-summary"
       :aria-expanded="false"
-      title="展开任务历史"
-      @click="open = true"
+      :title="desktop ? 'Toggle Tasks (Ctrl+J)' : '展开任务历史'"
+      @click="togglePanel"
     >
-      <span class="job-summary-title">任务</span>
-      <span v-if="runningCount" class="job-summary-count state-running">{{ runningCount }} 运行中</span>
-      <span v-if="failedCount" class="job-summary-count state-error">{{ failedCount }} 失败</span>
-      <span v-if="doneCount" class="job-summary-count state-done">{{ doneCount }} 完成</span>
+      <span class="job-summary-title">{{ text('Tasks', '任务') }}</span>
+      <span v-if="runningCount" class="job-summary-count state-running">{{ runningCount }} {{ text('running', '运行中') }}</span>
+      <span v-if="failedCount" class="job-summary-count state-error">{{ failedCount }} {{ text('failed', '失败') }}</span>
+      <span v-if="doneCount" class="job-summary-count state-done">{{ doneCount }} {{ text('completed', '完成') }}</span>
       <span class="job-summary-latest">
-        {{ latestJob ? `${kindLabel(latestJob.kind)} · ${latestJob.message || statusLabel(latestJob.status)}` : '暂无任务记录' }}
+        {{ latestJob ? `${kindLabel(latestJob.kind)} · ${latestJob.message || statusLabel(latestJob.status)}` : text('No task history', '暂无任务记录') }}
       </span>
       <span class="job-summary-chevron" aria-hidden="true">⌃</span>
     </button>
@@ -299,20 +445,19 @@ onBeforeUnmount(() => window.removeEventListener('hhtools:job-history-state', re
     <div v-else class="job-drawer-panel">
       <header class="job-drawer-head">
         <div>
-          <strong>任务历史</strong>
-          <span>本机持久化 · {{ jobs.length }} 条</span>
+          <strong>{{ text('Task History', '任务历史') }}</strong>
+          <span>{{ text('Stored locally', '本机持久化') }} · {{ jobs.length }}</span>
         </div>
         <div class="job-drawer-head-actions">
           <input ref="importInput" class="sr-only" type="file" accept="application/json,.json" @change="importConfig">
-          <button type="button" class="job-action-btn" title="导入 JobSpec JSON" @click="openImportPicker">导入配置</button>
-          <button type="button" class="job-icon-btn" title="刷新任务" aria-label="刷新任务" @click="requestRefresh">↻</button>
-          <button type="button" class="job-icon-btn" title="收起任务" aria-label="收起任务" @click="open = false">⌄</button>
+          <button type="button" class="job-icon-btn" :title="text('Refresh tasks', '刷新任务')" :aria-label="text('Refresh tasks', '刷新任务')" @click="requestRefresh">↻</button>
+          <button type="button" class="job-icon-btn" :title="text('Collapse tasks', '收起任务')" :aria-label="text('Collapse tasks', '收起任务')" @click="togglePanel">⌄</button>
         </div>
       </header>
 
       <p v-if="error" class="job-drawer-error" role="alert">{{ error }}</p>
-      <p v-else-if="loading && !jobs.length" class="job-drawer-empty" role="status">正在读取任务…</p>
-      <p v-else-if="!jobs.length" class="job-drawer-empty">运行 Retarget、Batch 或数据集分析后，记录会保存在这里。</p>
+      <p v-else-if="loading && !jobs.length" class="job-drawer-empty" role="status">{{ text('Loading tasks…', '正在读取任务…') }}</p>
+      <p v-else-if="!jobs.length" class="job-drawer-empty">{{ text('Retarget, Batch, and dataset analysis runs will appear here.', '运行 Retarget、Batch 或数据集分析后，记录会保存在这里。') }}</p>
 
       <div v-else class="job-list" aria-live="polite">
         <article v-for="job in jobs" :key="job.id" class="job-row" :class="`state-${job.status}`">
@@ -343,21 +488,21 @@ onBeforeUnmount(() => window.removeEventListener('hhtools:job-history-state', re
               type="button"
               class="job-action-btn primary"
               :disabled="!job.can_retry"
-              :title="job.can_retry ? '使用保存的源文件和有效参数创建新任务' : (job.retry_reason || '当前任务不可重试')"
+              :title="job.can_retry ? text('Create a new task from saved sources and effective parameters', '使用保存的源文件和有效参数创建新任务') : (job.retry_reason || text('This task cannot be retried', '当前任务不可重试'))"
               @click="retryJob(job)"
-            >重试</button>
+            >{{ text('Retry', '重试') }}</button>
             <button
               v-if="job.can_retry_failed"
               type="button"
               class="job-action-btn"
-              title="只重新运行上次失败的批处理条目"
+              :title="text('Run only the failed items from the previous batch', '只重新运行上次失败的批处理条目')"
               @click="retryJob(job, true)"
-            >仅重试失败项 ({{ job.failed_item_count }})</button>
-            <button type="button" class="job-action-btn" title="复制为可编辑 JobSpec" @click="duplicateForEdit(job)">复制编辑</button>
-            <button v-if="job.can_copy_cli" type="button" class="job-action-btn" title="复制等价的 hhtools CLI 命令" @click="requestCli(job.id)">复制 CLI</button>
-            <button type="button" class="job-action-btn" title="复制任务的有效请求配置" @click="requestConfig(job.id)">复制配置</button>
-            <button type="button" class="job-action-btn" title="将有效请求配置保存为 JSON" @click="requestConfigDownload(job.id)">保存配置</button>
-            <button v-if="job.can_download" type="button" class="job-action-btn primary" title="下载任务结果" @click="requestDownload(job)">下载结果</button>
+            >{{ text('Retry failed only', '仅重试失败项') }} ({{ job.failed_item_count }})</button>
+            <button type="button" class="job-action-btn" :title="text('Duplicate as an editable JobSpec', '复制为可编辑 JobSpec')" @click="duplicateForEdit(job)">{{ text('Duplicate & Edit', '复制编辑') }}</button>
+            <button v-if="job.can_copy_cli" type="button" class="job-action-btn" :title="text('Copy the equivalent hhtools CLI command', '复制等价的 hhtools CLI 命令')" @click="requestCli(job.id)">{{ text('Copy CLI', '复制 CLI') }}</button>
+            <button type="button" class="job-action-btn" :title="text('Copy the effective request configuration', '复制任务的有效请求配置')" @click="requestConfig(job.id)">{{ text('Copy Config', '复制配置') }}</button>
+            <button type="button" class="job-action-btn" :title="text('Save the effective request configuration as JSON', '将有效请求配置保存为 JSON')" @click="requestConfigDownload(job.id)">{{ text('Save Config', '保存配置') }}</button>
+            <button v-if="job.can_download" type="button" class="job-action-btn primary" :title="text('Download task result', '下载任务结果')" @click="requestDownload(job)">{{ text('Download Result', '下载结果') }}</button>
           </div>
         </article>
       </div>
@@ -369,9 +514,9 @@ onBeforeUnmount(() => window.removeEventListener('hhtools:job-history-state', re
           <header class="job-spec-dialog-head">
             <div>
               <strong>{{ editorTitle }}</strong>
-              <span>JobSpec v1 · 修改后先验证，再作为新任务运行</span>
+              <span>JobSpec v1 · {{ text('Validate changes before running a new task', '修改后先验证，再作为新任务运行') }}</span>
             </div>
-            <button type="button" class="job-icon-btn" title="关闭" aria-label="关闭" :disabled="editorBusy" @click="closeEditor">×</button>
+            <button type="button" class="job-icon-btn" :title="text('Close', '关闭')" :aria-label="text('Close', '关闭')" :disabled="editorBusy" @click="closeEditor">×</button>
           </header>
           <textarea
             v-model="editorText"
@@ -383,24 +528,24 @@ onBeforeUnmount(() => window.removeEventListener('hhtools:job-history-state', re
           <div class="job-spec-feedback" aria-live="polite">
             <p v-if="editorError" class="error">{{ editorError }}</p>
             <p v-else-if="editorValidation?.available" class="ok">
-              配置有效，可从 {{ editorValidation.source_count }} 个本地源文件重新运行。
+              {{ text('Configuration is valid and can rerun from', '配置有效，可从') }} {{ editorValidation.source_count }} {{ text('local source files.', '个本地源文件重新运行。') }}
             </p>
             <p v-else-if="editorValidation" class="warning">
-              配置格式有效，但不能直接运行：{{ editorValidation.reason }}
+              {{ text('The configuration is valid but cannot run directly', '配置格式有效，但不能直接运行') }}：{{ editorValidation.reason }}
             </p>
-            <p v-else>支持导入从任务历史下载的完整配置，或独立 JobSpec JSON。</p>
+            <p v-else>{{ text('Import a full configuration downloaded from task history or a standalone JobSpec JSON.', '支持导入从任务历史下载的完整配置，或独立 JobSpec JSON。') }}</p>
           </div>
           <footer class="job-spec-dialog-actions">
-            <button type="button" class="job-action-btn" :disabled="editorBusy" @click="closeEditor">取消</button>
+            <button type="button" class="job-action-btn" :disabled="editorBusy" @click="closeEditor">{{ text('Cancel', '取消') }}</button>
             <button type="button" class="job-action-btn" :disabled="editorBusy" @click="validateEditor">
-              {{ editorBusy ? '验证中…' : '验证配置' }}
+              {{ editorBusy ? text('Validating…', '验证中…') : text('Validate Config', '验证配置') }}
             </button>
             <button
               type="button"
               class="job-action-btn primary"
               :disabled="editorBusy || editorValidation?.available === false"
               @click="runEditor"
-            >作为新任务运行</button>
+            >{{ text('Run as New Task', '作为新任务运行') }}</button>
           </footer>
         </section>
       </div>

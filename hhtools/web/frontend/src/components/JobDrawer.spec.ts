@@ -17,6 +17,30 @@ afterEach(() => {
 })
 
 describe('JobDrawer', () => {
+  it('docks as a collapsed desktop panel and toggles with Ctrl+J', async () => {
+    localStorage.removeItem('hhtools-desktop-job-panel-height-v1')
+    const wrapper = mount(JobDrawer, {
+      props: { desktop: true, locale: 'en' },
+    })
+    mountedWrappers.push(wrapper)
+
+    expect(wrapper.classes()).toContain('desktop-job-panel')
+    expect(wrapper.classes()).not.toContain('open')
+    expect(wrapper.find('.job-panel-resizer').exists()).toBe(false)
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'j', ctrlKey: true }))
+    await nextTick()
+
+    expect(wrapper.classes()).toContain('open')
+    expect(wrapper.find('.job-panel-resizer').exists()).toBe(true)
+    expect(wrapper.attributes('style')).toContain('--job-panel-height: 300px')
+    expect(wrapper.text()).not.toContain('Import Config')
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'j', ctrlKey: true }))
+    await nextTick()
+    expect(wrapper.classes()).not.toContain('open')
+  })
+
   it('renders persistent job state and emits reproduction and download commands', async () => {
     const commands: JobHistoryCommandDetail[] = []
     const receiveCommand = (event: WindowEventMap['hhtools:job-history-command']): void => {

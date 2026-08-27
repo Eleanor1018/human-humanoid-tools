@@ -49,7 +49,7 @@ _log = logging.getLogger(__name__)
 
 # Bump when static/ front-end behaviour changes.  Injected into ``index.html``
 # at serve time so collaborators only need to pull + restart (no triple-sync).
-UI_BUILD_ID = "20260826-ux5"
+UI_BUILD_ID = "20260826-ux6"
 
 _UPLOAD_CHUNK_BYTES = 1024 * 1024
 _DEFAULT_MAX_UPLOAD_FILES = 4096
@@ -2074,6 +2074,14 @@ def create_app(
             scaled = _align_scaled_preview_to_robot_playback(
                 model, ret, scaled, traj,
             )
+            from hhtools.web.result_diagnostics import build_result_diagnostics
+
+            diagnostics = build_result_diagnostics(
+                traj,
+                scaled,
+                ik_map=model.preset.ik_map,
+                feet=model.preset.feet,
+            )
             scaled_scene = _compute_scaled_scene(
                 model, robot, motion, reference, human_height,
             )
@@ -2097,6 +2105,7 @@ def create_app(
                 "trajectory": traj,
                 "scaled_preview": scaled,
                 "scaled_scene": scaled_scene,
+                "diagnostics": diagnostics,
                 "export_token": export_token,
                 "stem": motion.name or token,
                 "motion_source_fps": motion_source_fps,
@@ -3077,6 +3086,14 @@ def create_app(
                 tgt, ret, scaled_preview=scaled, ground_follow=False,
             )
             scaled = _align_scaled_preview_to_robot_playback(tgt, ret, scaled, traj)
+            from hhtools.web.result_diagnostics import build_result_diagnostics
+
+            diagnostics = build_result_diagnostics(
+                traj,
+                scaled,
+                ik_map=tgt.preset.ik_map,
+                feet=tgt.preset.feet,
+            )
             from hhtools.web.r2r_export_bundle import clip_has_export_scene
             from hhtools.web.r2r_scene import compute_r2r_target_scaled_scene
             from hhtools.web.serialize import _scaled_overlay_foot_z
@@ -3129,6 +3146,7 @@ def create_app(
                 "source_fps": float(ret.sample_rate),
                 "scaled_preview": scaled,
                 "scaled_scene": tgt_scene,
+                "diagnostics": diagnostics,
                 "has_scene": has_scene,
             }
             job.progress = 1.0

@@ -98,6 +98,25 @@ export type WorkspacePanelId =
 
 export type WorkflowId = 'h2r' | 'r2r'
 
+export type WorkspaceLocale = 'en' | 'zh-CN'
+
+export type WorkspaceTheme = 'light' | 'dark'
+
+export type ComparisonPreset = 'source' | 'target' | 'result' | 'overlay'
+
+export type ImportCommandTarget =
+  | 'motion-file'
+  | 'motion-folder'
+  | 'robot-urdf'
+  | 'robot-mesh-folder'
+  | 'robot-trajectory'
+  | 'dataset-folder'
+  | 'job-spec'
+
+export interface ImportCommandDetail {
+  target: ImportCommandTarget
+}
+
 export type CalibrationJointRegion =
   | 'torso'
   | 'left-arm'
@@ -323,6 +342,79 @@ export interface RobotExportPreviewResult {
   scaled_scene?: ScenePayload
 }
 
+export interface TrackingDiagnosticPoint {
+  frame: number
+  time_s: number
+  mean_error_m: number
+  max_error_m: number
+  source_contacts: number
+  target_contacts: number
+}
+
+export interface EffectorDiagnostic {
+  canonical: string
+  target_link: string
+  sample_count: number
+  mean_error_m: number
+  p95_error_m: number
+  max_error_m: number
+}
+
+export interface FootContactDiagnostic {
+  side: 'left' | 'right'
+  canonical: string
+  target_link: string
+  agreement_ratio: number
+  recall_ratio: number
+  source_contact_ratio: number
+  target_contact_ratio: number
+  target_slide_mean_mps: number
+  target_slide_p95_mps: number
+}
+
+export interface ContactDiagnostics {
+  available: boolean
+  reason?: string
+  agreement_ratio?: number
+  recall_ratio?: number
+  target_slide_mean_mps?: number
+  target_slide_p95_mps?: number
+  feet: FootContactDiagnostic[]
+}
+
+export interface ResultDiagnostics {
+  schema_version: number
+  available: boolean
+  reason?: string
+  frame_count?: number
+  mapped_effectors?: number
+  requested_effectors?: number
+  tracking?: {
+    mean_error_m: number
+    p95_error_m: number
+    max_error_m: number
+    effectors: EffectorDiagnostic[]
+    series: TrackingDiagnosticPoint[]
+  }
+  contact?: ContactDiagnostics
+}
+
+export interface ResultDiagnosticsDetail {
+  workflow: WorkflowId
+  diagnostics: ResultDiagnostics | null
+  comparisonPreset: ComparisonPreset
+}
+
+export interface ComparisonCommandDetail {
+  workflow: WorkflowId
+  preset: ComparisonPreset
+}
+
+export interface ComparisonStateDetail {
+  workflow: WorkflowId
+  preset: ComparisonPreset
+}
+
 export interface RetargetResult {
   motion_source_fps?: number
   retarget_fps?: number
@@ -331,6 +423,7 @@ export interface RetargetResult {
   trajectory: RobotTrajectoryPayload
   scaled_preview?: MotionPayload
   scaled_scene?: ScenePayload
+  diagnostics?: ResultDiagnostics
   export_token: string
   has_scene?: boolean
   stem?: string

@@ -24,8 +24,25 @@ describe('SidebarNavigation', () => {
     ])
     expect(wrapper.get('[data-panel="motion"]').classes()).toContain('active')
     expect(wrapper.get('#basket-badge').text()).toBe('0')
-
     await wrapper.get('[data-panel="h2r"]').trigger('click')
     expect(wrapper.emitted('request')).toEqual([['h2r']])
+  })
+
+  it('adds desktop-only analysis destinations without changing Web navigation', () => {
+    const wrapper = mount(SidebarNavigation, {
+      props: { activePanel: 'motion', desktop: true, locale: 'en' },
+    })
+    mountedWrappers.push(wrapper)
+
+    expect(wrapper.get('[data-panel="dataset-viz"]').text()).toContain('Manual Analysis')
+    expect(wrapper.findAll('.nav-group-label').map((item) => item.text())).toEqual([
+      'Assets',
+      'Workflows',
+      'Analysis',
+      'Help',
+    ])
+    const pae = wrapper.findAll<HTMLButtonElement>('.nav-item')
+      .find((item) => item.text().includes('PAE Analysis'))
+    expect(pae?.attributes('disabled')).toBeDefined()
   })
 })
