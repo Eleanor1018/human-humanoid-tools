@@ -37,6 +37,8 @@ const jobAdmissionSaving = ref(false)
 const jobAdmissionError = ref<string | null>(null)
 const jobAdmissionErrorOperation = ref<'load' | 'save' | null>(null)
 const jobAdmissionSaved = ref(false)
+type MotionUploadProfile = 'intermimic' | 'meshmimic' | 'mimic'
+const openMotionUploadInfo = ref<MotionUploadProfile | null>(null)
 
 document.documentElement.lang = workspaceLocale.value
 document.documentElement.dataset.theme = workspaceTheme.value
@@ -200,10 +202,28 @@ function handleImportCommand(event: WindowEventMap['hhtools:import-command']): v
   }, 0)
 }
 
+function toggleMotionUploadInfo(profile: MotionUploadProfile): void {
+  openMotionUploadInfo.value = openMotionUploadInfo.value === profile ? null : profile
+}
+
+function closeMotionUploadInfo(event: Event): void {
+  const target = event.target
+  // Keep the popover open while its trigger or content is being used; any
+  // click elsewhere in the workspace dismisses it without adding a modal.
+  if (target instanceof Element && target.closest('.motion-import-info')) return
+  openMotionUploadInfo.value = null
+}
+
+function handleMotionUploadInfoKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape') openMotionUploadInfo.value = null
+}
+
 onMounted(async () => {
   window.showBoot = showBoot
   window.__hhUi = { setActivePanel, requestPanel }
   window.addEventListener('hhtools:import-command', handleImportCommand)
+  document.addEventListener('click', closeMotionUploadInfo)
+  document.addEventListener('keydown', handleMotionUploadInfoKeydown)
 
   try {
     // The renderer owns UI markup; the runtime modules own Three.js and long-running workflows.
@@ -222,6 +242,8 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('hhtools:import-command', handleImportCommand)
+  document.removeEventListener('click', closeMotionUploadInfo)
+  document.removeEventListener('keydown', handleMotionUploadInfoKeydown)
   delete window.__hhUi
 })
 </script>
@@ -380,42 +402,101 @@ onBeforeUnmount(() => {
       <!-- MOTION -->
       <section class="panel" :class="{ active: activePanel === 'motion' }" data-panel="motion">
         <h2>动作 Motion</h2>
-        <p class="lead">可视化原始人体动作；也可直接把 clip 放进 <code>assets/motions/</code> 对应目录后在下方资源库打开。点「链接目录」或拖入文件夹可链接到资源库（不复制）。</p>
 
         <div class="motion-import-grid" id="tour-motion-import">
-          <div class="dropzone dropzone-compact" id="motion-drop-intermimic" data-profile="intermimic">
+          <!-- The cards stay intentionally terse. Dataset structure belongs in
+               the on-demand help popover, while validation errors remain visible. -->
+          <div class="dropzone dropzone-compact motion-import-card" id="motion-drop-intermimic" data-profile="intermimic">
+            <div class="motion-import-info">
+              <button
+                type="button"
+                class="motion-import-info-trigger"
+                aria-label="查看 intermimic 上传说明"
+                aria-controls="motion-info-intermimic"
+                :aria-expanded="openMotionUploadInfo === 'intermimic'"
+                :aria-describedby="openMotionUploadInfo === 'intermimic' ? 'motion-info-intermimic' : undefined"
+                @click.stop="toggleMotionUploadInfo('intermimic')"
+              >?</button>
+              <div
+                v-show="openMotionUploadInfo === 'intermimic'"
+                id="motion-info-intermimic"
+                class="motion-import-info-popover"
+                role="tooltip"
+                @click.stop
+              >
+                <strong>物体交互动作 · OMOMO</strong>
+                <span>请选择完整 clip 文件夹或整个数据集目录。需要 <code>&lt;clip&gt;/&lt;clip&gt;.pkl</code>，交互物体通常为 <code>*_cleaned_simplified.obj</code>。</span>
+              </div>
+            </div>
             <div class="dz-glyph">📦</div>
-            <div class="dz-title">intermimic · OMOMO</div>
-            <div class="dz-sub">拖入 <code>sub10_largebox_000/</code> 单 clip 文件夹，或整个 <code>OMOMO/</code> 目录（<code>.pkl</code> + <code>*_cleaned_simplified.obj</code>）</div>
+            <div class="dz-title">intermimic</div>
             <div class="row" style="margin-top:10px">
               <button type="button" class="btn secondary small" data-pick="intermimic" data-folder="1">选择文件夹</button>
             </div>
           </div>
-          <div class="dropzone dropzone-compact" id="motion-drop-meshmimic" data-profile="meshmimic">
+          <div class="dropzone dropzone-compact motion-import-card" id="motion-drop-meshmimic" data-profile="meshmimic">
+            <div class="motion-import-info">
+              <button
+                type="button"
+                class="motion-import-info-trigger"
+                aria-label="查看 meshmimic 上传说明"
+                aria-controls="motion-info-meshmimic"
+                :aria-expanded="openMotionUploadInfo === 'meshmimic'"
+                :aria-describedby="openMotionUploadInfo === 'meshmimic' ? 'motion-info-meshmimic' : undefined"
+                @click.stop="toggleMotionUploadInfo('meshmimic')"
+              >?</button>
+              <div
+                v-show="openMotionUploadInfo === 'meshmimic'"
+                id="motion-info-meshmimic"
+                class="motion-import-info-popover"
+                role="tooltip"
+                @click.stop
+              >
+                <strong>地形动作 · parc_ms</strong>
+                <span>请选择完整 clip 文件夹或整个数据集目录。需要 <code>&lt;clip&gt;/&lt;clip&gt;.pkl</code> 或 <code>.npz</code>，地形通常为 <code>*_terrain.obj</code>。</span>
+              </div>
+            </div>
             <div class="dz-glyph">⛰</div>
-            <div class="dz-title">meshmimic · parc_ms</div>
-            <div class="dz-sub">拖入 <code>beyond_stairs_…/</code> clip 或整个 <code>parc_ms/</code>（<code>.pkl</code> 或 <code>.npz</code> + <code>*_terrain.obj</code>）</div>
+            <div class="dz-title">meshmimic</div>
             <div class="row" style="margin-top:10px">
               <button type="button" class="btn secondary small" data-pick="meshmimic" data-folder="1">选择文件夹</button>
             </div>
           </div>
-          <div class="dropzone dropzone-compact" id="motion-drop-mimic" data-profile="mimic">
-            <div class="dz-glyph">🎞</div>
-            <div class="dz-title">mimic · 通用</div>
-            <div class="dz-sub">AMASS / BVH / GLB / NPZ 等；可拖入含多级子目录的数据集文件夹（如 <code>mimic/AMASS/</code>）</div>
-            <div class="row" style="margin-top:10px">
-              <button type="button" class="btn secondary small" data-pick="mimic">选择文件</button>
-              <button type="button" class="btn secondary small" data-pick="mimic" data-folder="1">文件夹</button>
+          <div class="dropzone dropzone-compact motion-import-card" id="motion-drop-mimic" data-profile="mimic">
+            <div class="motion-import-info">
+              <button
+                type="button"
+                class="motion-import-info-trigger"
+                aria-label="查看 mimic 上传说明"
+                aria-controls="motion-info-mimic"
+                :aria-expanded="openMotionUploadInfo === 'mimic'"
+                :aria-describedby="openMotionUploadInfo === 'mimic' ? 'motion-info-mimic' : undefined"
+                @click.stop="toggleMotionUploadInfo('mimic')"
+              >?</button>
+              <div
+                v-show="openMotionUploadInfo === 'mimic'"
+                id="motion-info-mimic"
+                class="motion-import-info-popover"
+                role="tooltip"
+                @click.stop
+              >
+                <strong>通用人体动作</strong>
+                <span>支持单个文件或多级数据集文件夹。可识别 <code>.bvh</code>、<code>.glb</code>、<code>.gltf</code>、<code>.npz</code>、<code>.npy</code>、<code>.pkl</code>、<code>.pt</code>。</span>
+              </div>
             </div>
-            <div class="fmt-tags" style="margin-top:8px">
-              <span class="fmt-tag">.npz</span><span class="fmt-tag">.bvh</span>
-              <span class="fmt-tag">.glb</span>
+            <div class="dz-glyph">🎞</div>
+            <div class="dz-title">mimic</div>
+            <div class="row" style="margin-top:10px">
+              <button
+                type="button"
+                class="btn secondary small"
+                data-pick="mimic"
+                data-accept=".bvh,.glb,.gltf,.npz,.npy,.pkl,.pt"
+              >选择文件</button>
+              <button type="button" class="btn secondary small" data-pick="mimic" data-folder="1">选择文件夹</button>
             </div>
           </div>
         </div>
-        <p class="hint" style="margin-top:10px">
-          也可手动拷贝到 <code id="motion-assets-hint">assets/motions/</code>（与仓库内 <code>intermimic/</code>、<code>meshmimic/</code>、<code>mimic/</code> 布局一致），再用下方资源库点选。中间舞台拖放按 <b>mimic 通用</b> 规则加载。
-        </p>
 
         <div class="card" id="tour-motion-library">
           <h3>资源库 <span id="lib-count" style="color:var(--ink-tertiary);font-weight:500"></span></h3>

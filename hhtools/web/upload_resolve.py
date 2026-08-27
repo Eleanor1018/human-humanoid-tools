@@ -338,6 +338,33 @@ def detect_upload_profile(drop_dir: Path) -> str:
     return "mimic"
 
 
+def upload_validation_error(profile: str) -> str:
+    """Explain the required upload structure for the selected UI profile."""
+    normalized = (profile or "mimic").strip().lower()
+    extensions = " / ".join(_MOTION_EXTS)
+    if normalized == "auto":
+        return (
+            "未找到可识别的动作内容。请选择支持的动作文件（"
+            f"{extensions}），或完整的 intermimic / meshmimic 数据集文件夹。"
+        )
+    if normalized == "intermimic":
+        return (
+            "未找到可识别的 intermimic 动作内容。请选择完整的 OMOMO clip "
+            "文件夹或数据集目录：需要 <clip>/<clip>.pkl，交互物体通常为 "
+            "*_cleaned_simplified.obj。"
+        )
+    if normalized == "meshmimic":
+        return (
+            "未找到可识别的 meshmimic 动作内容。请选择完整的 parc_ms clip "
+            "文件夹或数据集目录：需要 <clip>/<clip>.pkl 或 .npz，地形通常为 "
+            "*_terrain.obj。"
+        )
+    return (
+        "未找到可识别的动作文件（mimic）。请选择支持的动作文件或包含动作的"
+        f"数据集文件夹：{extensions}。"
+    )
+
+
 def enumerate_upload_clips(drop_dir: Path, profile: str = "auto") -> list[UploadClipRef]:
     """List every primary clip under an upload drop (for batch basket)."""
     drop_dir = Path(drop_dir).resolve()
@@ -441,10 +468,7 @@ def resolve_upload_drop(
     if profile == "intermimic":
         pkls = _find_intermimic_pkls(drop_dir)
         if not pkls:
-            raise ValueError(
-                "未找到 intermimic/OMOMO 风格 clip（需要 <clip>/<clip>.pkl，"
-                "可连同 *_cleaned_simplified.obj 一起拖入）"
-            )
+            raise ValueError(upload_validation_error(profile))
         picked = _pick_primary_clip(pkls, prefer_paths)
         info["picked"] = str(picked)
         info["skipped_clips"] = max(0, len(pkls) - 1)
@@ -454,10 +478,7 @@ def resolve_upload_drop(
     if profile == "meshmimic":
         clips = _find_meshmimic_primaries(drop_dir)
         if not clips:
-            raise ValueError(
-                "未找到 meshmimic/parc_ms 风格 clip（需要 <clip>/<clip>.pkl 或 .npz，"
-                "可连同 *_terrain.obj 一起拖入）"
-            )
+            raise ValueError(upload_validation_error(profile))
         paths = [p for _, p in clips]
         picked_path = _pick_primary_clip(paths, prefer_paths)
         kind = next(k for k, p in clips if p == picked_path)
@@ -469,9 +490,7 @@ def resolve_upload_drop(
     # mimic — any supported motion file
     primaries = _find_mimic_primaries(drop_dir)
     if not primaries:
-        raise ValueError(
-            "未找到可识别的动作文件（.npz / .bvh / .glb / .pkl …）"
-        )
+        raise ValueError(upload_validation_error(profile))
     path = _pick_primary_clip(primaries, prefer_paths)
     info["picked"] = str(path)
     info["skipped_clips"] = max(0, len(primaries) - 1)

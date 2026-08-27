@@ -1798,15 +1798,15 @@ def create_app(
             job.mark_terminal("error")
 
     def _run_basket_upload_job(job: Job, drop: Path, profile: str) -> None:
-        from hhtools.web.upload_resolve import enumerate_upload_clips
+        from hhtools.web.upload_resolve import (
+            enumerate_upload_clips,
+            upload_validation_error,
+        )
 
         try:
             clips = enumerate_upload_clips(drop, profile)
             if not clips:
-                raise ValueError(
-                    "未找到可识别的动作 clip（支持 .npz / .pkl / .bvh / .glb …，"
-                    "可拖入整个文件夹保留子目录结构）"
-                )
+                raise ValueError(upload_validation_error(profile))
             entries = []
             for i, ref in enumerate(clips):
                 job.progress = i / max(1, len(clips))
@@ -1959,7 +1959,10 @@ def create_app(
         if not files:
             raise HTTPException(status_code=400, detail="empty upload")
 
-        from hhtools.web.upload_resolve import enumerate_upload_clips
+        from hhtools.web.upload_resolve import (
+            enumerate_upload_clips,
+            upload_validation_error,
+        )
 
         folder_label = str(library_folder_label or "").strip() or None
 
@@ -1981,7 +1984,7 @@ def create_app(
             if not enumerate_upload_clips(drop, profile):
                 raise HTTPException(
                     status_code=400,
-                    detail="未找到可识别的动作文件（.npz / .bvh / .glb / .pkl …）",
+                    detail=upload_validation_error(profile),
                 )
 
             job = _schedule_job(

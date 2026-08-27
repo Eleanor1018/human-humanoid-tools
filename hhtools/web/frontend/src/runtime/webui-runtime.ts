@@ -282,13 +282,7 @@ interface AppState {
 // FastAPI's `detail` can be a string OR (for 422 validation errors) an array of
 // objects.  Flatten whatever we get into a human-readable string so the UI never
 // shows the useless "[object Object]".
-async function httpError(r: Response): Promise<Error> {
-  let detail: unknown;
-  try {
-    detail = (await r.json()).detail;
-  } catch {
-    detail = null;
-  }
+function apiDetailMessage(detail: unknown): string | undefined {
   let msg: string | undefined;
   if (typeof detail === "string") msg = detail;
   else if (Array.isArray(detail)) {
@@ -301,6 +295,17 @@ async function httpError(r: Response): Promise<Error> {
   } else if (detail && typeof detail === "object") {
     msg = "msg" in detail ? String(detail.msg) : JSON.stringify(detail);
   }
+  return msg;
+}
+
+async function httpError(r: Response): Promise<Error> {
+  let detail: unknown;
+  try {
+    detail = (await r.json()).detail;
+  } catch {
+    detail = null;
+  }
+  const msg = apiDetailMessage(detail);
   return new Error(msg || `${r.status} ${r.statusText}`);
 }
 
@@ -625,7 +630,16 @@ function uploadFilesXHR<Url extends string>(
         catch (err) { reject(err); }
         return;
       }
-      reject(new Error(xhr.responseText || `upload failed (${xhr.status})`));
+      // XHR is required for byte-progress events, so unwrap FastAPI's detail
+      // payload here just as the fetch-based helpers do above.
+      let message = xhr.responseText || `upload failed (${xhr.status})`;
+      try {
+        const payload = JSON.parse(xhr.responseText) as { detail?: unknown };
+        message = apiDetailMessage(payload.detail) || message;
+      } catch {
+        // Non-JSON responses (proxy errors, disconnects) are already readable.
+      }
+      reject(new Error(message));
     };
     xhr.onerror = () => reject(new Error("upload failed"));
     xhr.open("POST", url + q);
@@ -3501,13 +3515,18 @@ function setupDropzone(
 }
 // Hidden <input> based file / folder picker (for environments where native
 // drag-drop is awkward). Folder picker preserves relative paths via
-// webkitRelativePath so mesh subdirs + sidecars survive.
-function pickFiles({ folder = false }: { folder?: boolean } = {}): Promise<UploadFile[]> {
+// webkitRelativePath so mesh subdirs + sidecars survive. Native `accept`
+// filtering applies only to individual files: a folder must retain required
+// .obj sidecars, and its full structure is validated by the server instead.
+function pickFiles(
+  { folder = false, accept = "" }: { folder?: boolean; accept?: string } = {},
+): Promise<UploadFile[]> {
   return new Promise<UploadFile[]>((resolve) => {
     const inp = document.createElement("input");
     inp.type = "file";
     inp.multiple = true;
     if (folder) inp.webkitdirectory = true;
+    else if (accept) inp.accept = accept;
     inp.style.display = "none";
     inp.onchange = () => {
       const files = Array.from(inp.files || []) as UploadFile[];
@@ -3584,7 +3603,8 @@ function initMotionImportZones(): void {
     btn.onclick = async () => {
       const profile = btn.dataset.pick || "mimic";
       const folder = btn.dataset.folder === "1";
-      await ingestMotionFiles(await pickFiles({ folder }), profile);
+      const accept = btn.dataset.accept || "";
+      await ingestMotionFiles(await pickFiles({ folder, accept }), profile);
     };
   });
 }

@@ -121,7 +121,54 @@ test('loads the existing WebUI and shuts down its Python sidecar', async ({}, te
 
     await expect(page.locator('.side-panel-head')).toHaveCount(0)
     await expect(page.locator('.nav-group-label')).toHaveCount(0)
-    await expect(page.locator('#inspector-body .panel.active h2')).toHaveText('动作 Motion')
+    const motionPanel = page.locator('#inspector-body .panel.active')
+    await expect(motionPanel.locator('h2')).toHaveText('动作 Motion')
+    await expect(motionPanel.locator(':scope > .lead')).toHaveCount(0)
+    await expect(motionPanel.locator('#motion-assets-hint')).toHaveCount(0)
+    await expect(motionPanel.locator('.motion-import-card')).toHaveCount(3)
+    await expect(motionPanel.locator('.motion-import-card .dz-title')).toHaveText([
+      'intermimic',
+      'meshmimic',
+      'mimic',
+    ])
+
+    const motionInfoTriggers = motionPanel.locator('.motion-import-info-trigger')
+    const intermimicInfo = motionPanel.locator('#motion-info-intermimic')
+    await expect(motionInfoTriggers).toHaveCount(3)
+    await expect(intermimicInfo).toBeHidden()
+    await motionInfoTriggers.first().click()
+    await expect(motionInfoTriggers.first()).toHaveAttribute('aria-expanded', 'true')
+    await expect(intermimicInfo).toBeVisible()
+    await expect(intermimicInfo).toContainText('<clip>/<clip>.pkl')
+    await page.screenshot({ path: testInfo.outputPath('desktop-motion-upload-info.png'), fullPage: true })
+    await page.keyboard.press('Escape')
+    await expect(intermimicInfo).toBeHidden()
+
+    // The native file dialog filters individual motion files, while directory
+    // pickers stay unfiltered so required object and terrain sidecars survive.
+    const motionFileChooserPromise = page.waitForEvent('filechooser')
+    await motionPanel.locator('[data-pick="mimic"]:not([data-folder])').click()
+    const motionFileChooser = await motionFileChooserPromise
+    expect(await motionFileChooser.element().getAttribute('accept'))
+      .toBe('.bvh,.glb,.gltf,.npz,.npy,.pkl,.pt')
+    await motionFileChooser.setFiles({
+      name: 'not-a-motion.txt',
+      mimeType: 'text/plain',
+      buffer: Buffer.from('unsupported motion content'),
+    })
+    await expect(page.locator('#toast.err')).toContainText('未找到可识别的动作文件（mimic）')
+    await expect(page.locator('#toast.err')).not.toContainText('"detail"')
+
+    const intermimicFolderChooserPromise = page.waitForEvent('filechooser')
+    await motionPanel.locator('[data-pick="intermimic"][data-folder="1"]').click()
+    const intermimicFolderChooser = await intermimicFolderChooserPromise
+    expect(await intermimicFolderChooser.element().evaluate((element) => {
+      const input = element as HTMLInputElement
+      return { accept: input.accept, directory: input.webkitdirectory }
+    })).toEqual({ accept: '', directory: true })
+    await intermimicFolderChooser.element().evaluate((element) => {
+      element.dispatchEvent(new Event('change', { bubbles: true }))
+    })
 
     const leftDrawerHandle = page.locator('#toggle-sidebar')
     const rightDrawerHandle = page.locator('#toggle-inspector')
