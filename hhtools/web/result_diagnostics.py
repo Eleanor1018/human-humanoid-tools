@@ -109,6 +109,12 @@ def _contact_flags(
     height_tolerance_m: float = 0.05,
     speed_tolerance_mps: float = 0.35,
 ) -> tuple[np.ndarray, np.ndarray]:
+    """Estimate rendered contact from low height and low planar speed.
+
+    This is deliberately a viewer-side quality heuristic, not a physics contact
+    query: diagnostics run on downsampled preview payloads after retargeting and
+    may not have a simulator, collision shapes, forces, or the original frames.
+    """
     floor_z = float(np.percentile(points[:, 2], 5.0))
     speed = np.zeros(points.shape[0], dtype=np.float64)
     if points.shape[0] > 1:

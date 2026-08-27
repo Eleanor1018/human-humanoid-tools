@@ -471,7 +471,8 @@ def _materialize_file_reference(source: Path, dest: Path) -> str:
     A symbolic link keeps the library lightweight and remains the preferred
     representation.  Windows may reject it unless Developer Mode is enabled or
     the process is elevated, so files fall back to a same-volume hard link and
-    finally to a regular copy.
+    finally to a regular copy.  A hard link is not an independent snapshot:
+    modifying either path changes the same file contents.
     """
 
     try:
@@ -545,6 +546,9 @@ def materialize_upload_tree(drop_dir: Path, folder_label: str | None = None) -> 
             label = _safe_folder_name(tree.name)
     dest = motions_library_root() / label
     if dest.exists() or dest.is_symlink():
+        # Replacement is intentionally simple but not transactional.  If the
+        # following copy fails, the previous same-named library entry is gone;
+        # callers should surface the error rather than claim a completed import.
         _remove_path(dest)
     # Avoid ``motions/<label>/<label>/…`` when the drop wraps one folder.
     if _safe_folder_name(tree.name) == label:

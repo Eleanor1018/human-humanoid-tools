@@ -320,6 +320,9 @@ def _save_object_track_csv(
             writer.writerow(OBJECT_CSV_HEADER)
         for frame in range(num_frames):
             q = quats_wxyz[frame]
+            # Repeat the constant object dimensions on every row.  This keeps a
+            # clipped or concatenated CSV self-describing even when its OBJ
+            # sidecar or metadata header is not available to the consumer.
             writer.writerow([
                 f"{times[frame]:.6f}",
                 f"{positions[frame, 0]:.6f}",

@@ -164,6 +164,9 @@ def serialize_reference_skeleton(
         c, s = float(np.cos(heading_rad)), float(np.sin(heading_rad))
         rot = np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]], dtype=np.float32)
         pos = (pos @ rot.T).astype(np.float32, copy=False)
+        # Heading is a world-frame edit.  Rotate both the displayed joint
+        # positions and orientations so arcball axes/handles remain registered
+        # with the skeleton instead of retaining their pre-heading directions.
         heading_q = Q.from_axis_angle(
             np.array([[0.0, 0.0, heading_rad]], dtype=np.float32),
         )[0]

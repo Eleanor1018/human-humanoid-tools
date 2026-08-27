@@ -1,9 +1,13 @@
-"""Portable job specifications for reproducing WebUI work.
+"""Portable job specifications for replaying WebUI work.
 
 The live WebUI uses short-lived tokens for loaded motions and robot-to-robot
 sources.  A :class:`JobSpec` deliberately strips those session identifiers and
 keeps only inputs that can survive a process restart.  Validation lives in this
 small module so API routes, persistence, and tests share the same rules.
+
+This is path-and-parameter replay, not bitwise experiment reproducibility: v1
+does not yet record input hashes, the code revision, calibration/preset content,
+dependency versions, or device details.
 """
 
 from __future__ import annotations
@@ -43,7 +47,7 @@ def _portable_value(value: Any) -> Any:
 
 
 def build_job_spec(kind: str, request: dict[str, Any]) -> dict[str, Any]:
-    """Build a versioned, session-independent job specification."""
+    """Build a versioned, session-independent replay specification."""
     return {
         "schema_version": JOB_SPEC_SCHEMA_VERSION,
         "kind": str(kind).strip(),
