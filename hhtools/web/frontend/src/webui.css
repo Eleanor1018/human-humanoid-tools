@@ -464,6 +464,7 @@ button { font-family: inherit; cursor: pointer; }
 }
 #resize-sidebar { grid-area: rz-sb; cursor: col-resize; }
 #resize-inspector { grid-area: rz-insp; cursor: col-resize; }
+.workspace-shell .col-resizer::after { display: none; }
 
 /* Neutral drawer handles borrow the Figma reference's centered edge affordance,
    while retaining hhtools surfaces and avoiding its light-blue treatment. */
@@ -471,45 +472,35 @@ button { font-family: inherit; cursor: pointer; }
   position: fixed;
   top: calc(50% + 20px);
   z-index: 45;
-  width: 30px;
-  height: 90px;
+  width: 34px;
+  height: 116px;
   display: grid;
   place-items: center;
   padding: 0;
-  border: 1px solid var(--hairline);
+  border: 0;
+  border-radius: 0;
   background: var(--panel-solid);
   color: var(--ink-tertiary);
-  box-shadow: var(--shadow-sm);
+  box-shadow: none;
+  cursor: pointer;
   transform: translateY(-50%);
   transition:
     left 200ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    right 200ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    color 150ms ease,
-    background 150ms ease,
-    border-color 150ms ease,
-    box-shadow 150ms ease;
+    right 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 .workspace-drawer-handle.left {
-  left: calc(var(--sidebar-w) + var(--sidebar-handle-w));
-  border-left: 0;
-  border-radius: 0 12px 12px 0;
+  left: var(--sidebar-w);
 }
 .workspace-drawer-handle.right {
-  right: calc(var(--inspector-w) + var(--inspector-handle-w));
-  border-right: 0;
-  border-radius: 12px 0 0 12px;
+  right: var(--inspector-w);
 }
-.workspace-drawer-handle span {
-  font-size: 28px;
-  font-weight: 300;
-  line-height: 1;
-  transform: translateY(-1px);
+.workspace-drawer-icon {
+  width: 32px;
+  height: 48px;
 }
-.workspace-drawer-handle:hover {
-  border-color: color-mix(in srgb, var(--ink) 20%, var(--hairline));
-  background: var(--bg);
+.workspace-drawer-handle:active {
+  background: color-mix(in srgb, var(--panel-solid) 88%, var(--ink));
   color: var(--ink);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
 }
 .workspace-drawer-handle:focus-visible {
   outline: 2px solid var(--ink-secondary);
@@ -522,11 +513,7 @@ button { font-family: inherit; cursor: pointer; }
   transition: none;
 }
 .workspace-shell:has(.col-resizer.dragging) .workspace-drawer-handle {
-  transition:
-    color 150ms ease,
-    background 150ms ease,
-    border-color 150ms ease,
-    box-shadow 150ms ease;
+  transition: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -550,6 +537,12 @@ button { font-family: inherit; cursor: pointer; }
   min-height: 0;
   overflow: hidden;
   transition: opacity 120ms ease;
+}
+.workspace-shell #sidebar,
+.workspace-shell #inspector {
+  background: var(--panel-solid);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 #sidebar-body {
   flex: 1; min-width: 0; min-height: 0; overflow-y: auto;

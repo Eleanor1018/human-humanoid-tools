@@ -125,9 +125,9 @@ test('loads the existing WebUI and shuts down its Python sidecar', async ({}, te
 
     const leftDrawerHandle = page.locator('#toggle-sidebar')
     const rightDrawerHandle = page.locator('#toggle-inspector')
-    await expect(leftDrawerHandle).toHaveText('‹')
+    await expect(leftDrawerHandle.locator('svg')).toHaveAttribute('data-icon', 'chevron-left')
     await expect(leftDrawerHandle).toHaveAttribute('aria-expanded', 'true')
-    await expect(rightDrawerHandle).toHaveText('›')
+    await expect(rightDrawerHandle.locator('svg')).toHaveAttribute('data-icon', 'chevron-right')
     await expect(rightDrawerHandle).toHaveAttribute('aria-expanded', 'true')
 
     const [topbarBounds, leftHandleBounds, rightHandleBounds, viewport] = await Promise.all([
@@ -136,9 +136,51 @@ test('loads the existing WebUI and shuts down its Python sidecar', async ({}, te
       rightDrawerHandle.boundingBox(),
       page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight })),
     ])
+    expect(leftHandleBounds?.x).toBeCloseTo(
+      (expandedSidebar?.x ?? 0) + (expandedSidebar?.width ?? 0),
+      0,
+    )
+    expect((rightHandleBounds?.x ?? 0) + (rightHandleBounds?.width ?? 0)).toBeCloseTo(
+      expandedInspector?.x ?? 0,
+      0,
+    )
+    expect(leftHandleBounds?.height).toBeCloseTo(116, 0)
+    expect(rightHandleBounds?.height).toBeCloseTo(116, 0)
     const drawerCenterY = ((topbarBounds?.y ?? 0) + (topbarBounds?.height ?? 0) + viewport.height) / 2
     expect((leftHandleBounds?.y ?? 0) + (leftHandleBounds?.height ?? 0) / 2).toBeCloseTo(drawerCenterY, 0)
     expect((rightHandleBounds?.y ?? 0) + (rightHandleBounds?.height ?? 0) / 2).toBeCloseTo(drawerCenterY, 0)
+
+    const handleStyleBeforeHover = await leftDrawerHandle.evaluate((element) => {
+      const style = getComputedStyle(element)
+      return {
+        backgroundColor: style.backgroundColor,
+        borderRadius: style.borderRadius,
+        borderTopWidth: style.borderTopWidth,
+        boxShadow: style.boxShadow,
+        color: style.color,
+        cursor: style.cursor,
+      }
+    })
+    expect(handleStyleBeforeHover).toMatchObject({
+      borderRadius: '0px',
+      borderTopWidth: '0px',
+      boxShadow: 'none',
+      cursor: 'pointer',
+    })
+    await leftDrawerHandle.hover()
+    const handleStyleAfterHover = await leftDrawerHandle.evaluate((element) => {
+      const style = getComputedStyle(element)
+      return {
+        backgroundColor: style.backgroundColor,
+        boxShadow: style.boxShadow,
+        color: style.color,
+      }
+    })
+    expect(handleStyleAfterHover).toEqual({
+      backgroundColor: handleStyleBeforeHover.backgroundColor,
+      boxShadow: handleStyleBeforeHover.boxShadow,
+      color: handleStyleBeforeHover.color,
+    })
 
     // The panel and its edge handle must track a resize without drawer-animation lag.
     const sidebarResizer = page.locator('#resize-sidebar')
@@ -157,7 +199,7 @@ test('loads the existing WebUI and shuts down its Python sidecar', async ({}, te
 
     const stageBeforeLeftCollapse = await stage.boundingBox()
     await leftDrawerHandle.click()
-    await expect(leftDrawerHandle).toHaveText('›')
+    await expect(leftDrawerHandle.locator('svg')).toHaveAttribute('data-icon', 'chevron-right')
     await expect(leftDrawerHandle).toHaveAttribute('aria-expanded', 'false')
     await expect(page.locator('#sidebar')).toHaveAttribute('aria-hidden', 'true')
     await expect.poll(async () => (await page.locator('#sidebar').boundingBox())?.width ?? 0).toBeCloseTo(0, 0)
@@ -170,12 +212,12 @@ test('loads the existing WebUI and shuts down its Python sidecar', async ({}, te
     expect((collapsedLeftHandle?.x ?? 0) + (collapsedLeftHandle?.width ?? 0)).toBeLessThanOrEqual(viewport.width)
     await page.screenshot({ path: testInfo.outputPath('desktop-left-drawer-collapsed.png'), fullPage: true })
     await leftDrawerHandle.click()
-    await expect(leftDrawerHandle).toHaveText('‹')
+    await expect(leftDrawerHandle.locator('svg')).toHaveAttribute('data-icon', 'chevron-left')
     await expect.poll(async () => (await page.locator('#sidebar').boundingBox())?.width ?? 0).toBeCloseTo(208, 0)
 
     const stageBeforeRightCollapse = await stage.boundingBox()
     await rightDrawerHandle.click()
-    await expect(rightDrawerHandle).toHaveText('‹')
+    await expect(rightDrawerHandle.locator('svg')).toHaveAttribute('data-icon', 'chevron-left')
     await expect(rightDrawerHandle).toHaveAttribute('aria-expanded', 'false')
     await expect(page.locator('#inspector')).toHaveAttribute('aria-hidden', 'true')
     await expect.poll(async () => (await page.locator('#inspector').boundingBox())?.width ?? 0).toBeCloseTo(0, 0)
@@ -188,7 +230,7 @@ test('loads the existing WebUI and shuts down its Python sidecar', async ({}, te
     expect((collapsedRightHandle?.x ?? 0) + (collapsedRightHandle?.width ?? 0)).toBeLessThanOrEqual(viewport.width)
     await page.screenshot({ path: testInfo.outputPath('desktop-right-drawer-collapsed.png'), fullPage: true })
     await rightDrawerHandle.click()
-    await expect(rightDrawerHandle).toHaveText('›')
+    await expect(rightDrawerHandle.locator('svg')).toHaveAttribute('data-icon', 'chevron-right')
     await expect.poll(async () => (await page.locator('#inspector').boundingBox())?.width ?? 0).toBeCloseTo(360, 0)
     await page.screenshot({ path: testInfo.outputPath('desktop-drawers.png'), fullPage: true })
 

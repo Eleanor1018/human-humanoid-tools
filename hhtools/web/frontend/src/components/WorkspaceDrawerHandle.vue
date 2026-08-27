@@ -16,10 +16,11 @@ const emit = defineEmits<{
 const controls = computed(() => props.side === 'left' ? 'sidebar' : 'inspector')
 const elementId = computed(() => props.side === 'left' ? 'toggle-sidebar' : 'toggle-inspector')
 
-const glyph = computed(() => {
-  if (props.side === 'left') return props.expanded ? '‹' : '›'
-  // The right drawer mirrors the left: its closing direction points outward.
-  return props.expanded ? '›' : '‹'
+const icon = computed(() => {
+  const pointsLeft = props.side === 'left' ? props.expanded : !props.expanded
+  return pointsLeft
+    ? { name: 'chevron-left', path: 'M15.75 19.5 8.25 12l7.5-7.5' }
+    : { name: 'chevron-right', path: 'm8.25 4.5 7.5 7.5-7.5 7.5' }
 })
 
 const label = computed(() => {
@@ -46,6 +47,20 @@ const label = computed(() => {
     :aria-expanded="expanded"
     @click="emit('toggle')"
   >
-    <span aria-hidden="true">{{ glyph }}</span>
+    <!-- Heroicons 24px Outline chevrons (MIT), copied from the official
+         tailwindlabs/heroicons repository instead of drawing a local icon. -->
+    <svg
+      class="workspace-drawer-icon"
+      xmlns="http://www.w3.org/2000/svg"
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke-width="1.5"
+      stroke="currentColor"
+      aria-hidden="true"
+      data-slot="icon"
+      :data-icon="icon.name"
+    >
+      <path stroke-linecap="round" stroke-linejoin="round" :d="icon.path" />
+    </svg>
   </button>
 </template>
