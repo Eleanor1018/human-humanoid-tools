@@ -28,7 +28,7 @@ export interface CommandRegistryContext {
   openSettings: () => void
   theme?: WorkspaceTheme
   toggleTheme?: () => void
-  desktop?: boolean
+  applicationMode?: boolean
   locale?: WorkspaceLocale
 }
 
@@ -133,9 +133,9 @@ export function createApplicationCommands(
   context: CommandRegistryContext,
 ): ApplicationCommand[] {
   const commands: ApplicationCommand[] = []
-  const locale = context.locale ?? (context.desktop ? 'en' : 'zh-CN')
+  const locale = context.locale ?? (context.applicationMode ? 'en' : 'zh-CN')
 
-  if (context.desktop) {
+  if (context.applicationMode) {
     commands.push(
       importCommand({
         id: 'import-motion-file',
@@ -208,22 +208,22 @@ export function createApplicationCommands(
 
   commands.push(...PANEL_COMMANDS.map((item) => ({
     id: `panel-${item.panel}`,
-    group: context.desktop
+    group: context.applicationMode
       ? item.menu === 'workflows'
         ? localize(locale, 'Workflows', '工作流')
         : item.menu === 'analysis'
           ? localize(locale, 'Analysis', '分析')
           : localize(locale, 'Workspace', '工作区')
       : item.menu === 'workflows' ? 'Workflows' : item.menu === 'analysis' ? 'Analysis' : '工作区',
-    label: context.desktop ? localize(locale, item.enLabel, item.zhLabel) : item.label,
-    detail: context.desktop ? localize(locale, item.enDetail, item.zhDetail) : item.detail,
+    label: context.applicationMode ? localize(locale, item.enLabel, item.zhLabel) : item.label,
+    detail: context.applicationMode ? localize(locale, item.enDetail, item.zhDetail) : item.detail,
     shortcut: item.shortcut,
     keywords: `${item.panel} ${item.label} ${item.detail}`,
     menu: item.menu,
     run: () => requestPanel(item.panel),
   })))
 
-  if (context.desktop) {
+  if (context.applicationMode) {
     commands.push({
       id: 'analysis-pae',
       group: localize(locale, 'Analysis', '分析'),
@@ -258,35 +258,35 @@ export function createApplicationCommands(
   commands.push(
     {
       id: 'playback-toggle',
-      group: context.desktop ? localize(locale, 'Playback', '播放') : '播放',
-      label: context.desktop ? localize(locale, 'Play / Pause', '播放 / 暂停') : '播放 / 暂停',
-      detail: context.desktop ? localize(locale, 'Control the active timeline', '控制当前时间轴') : '控制当前时间轴',
+      group: context.applicationMode ? localize(locale, 'Playback', '播放') : '播放',
+      label: context.applicationMode ? localize(locale, 'Play / Pause', '播放 / 暂停') : '播放 / 暂停',
+      detail: context.applicationMode ? localize(locale, 'Control the active timeline', '控制当前时间轴') : '控制当前时间轴',
       shortcut: 'Space',
       keywords: 'play pause 播放 暂停 时间轴',
       run: () => playback('toggle'),
     },
     {
       id: 'playback-loop',
-      group: context.desktop ? localize(locale, 'Playback', '播放') : '播放',
-      label: context.desktop ? localize(locale, 'Toggle Loop', '切换循环播放') : '切换循环播放',
-      detail: context.desktop ? localize(locale, 'Toggle looping for the active timeline', '切换当前时间轴循环状态') : '切换当前时间轴循环状态',
+      group: context.applicationMode ? localize(locale, 'Playback', '播放') : '播放',
+      label: context.applicationMode ? localize(locale, 'Toggle Loop', '切换循环播放') : '切换循环播放',
+      detail: context.applicationMode ? localize(locale, 'Toggle looping for the active timeline', '切换当前时间轴循环状态') : '切换当前时间轴循环状态',
       keywords: 'loop 循环',
       run: () => playback('loop'),
     },
     {
       id: 'view-reset',
-      group: context.desktop ? localize(locale, 'View', '视图') : '视图',
-      label: context.desktop ? localize(locale, 'Reset 3D View', '重置 3D 视角') : '重置 3D 视角',
-      detail: context.desktop ? localize(locale, 'Return to the default camera position', '回到当前对象的默认相机位置') : '回到当前对象的默认相机位置',
+      group: context.applicationMode ? localize(locale, 'View', '视图') : '视图',
+      label: context.applicationMode ? localize(locale, 'Reset 3D View', '重置 3D 视角') : '重置 3D 视角',
+      detail: context.applicationMode ? localize(locale, 'Return to the default camera position', '回到当前对象的默认相机位置') : '回到当前对象的默认相机位置',
       shortcut: 'F',
       keywords: 'camera reset focus 相机 视角 重置',
       run: () => document.getElementById('view-reset-btn')?.click(),
     },
     {
       id: 'panels-reveal',
-      group: context.desktop ? localize(locale, 'View', '视图') : '视图',
-      label: context.desktop ? localize(locale, 'Show Side Panels', '显示左右面板') : '显示左右面板',
-      detail: context.desktop ? localize(locale, 'Restore navigation and inspector panels', '恢复导航栏与控制面板') : '恢复导航栏与控制面板',
+      group: context.applicationMode ? localize(locale, 'View', '视图') : '视图',
+      label: context.applicationMode ? localize(locale, 'Show Side Panels', '显示左右面板') : '显示左右面板',
+      detail: context.applicationMode ? localize(locale, 'Restore navigation and inspector panels', '恢复导航栏与控制面板') : '恢复导航栏与控制面板',
       keywords: 'sidebar inspector panel 显示 面板 导航',
       run: () => window.__hhPanelLayout?.revealBoth(),
     },
@@ -301,12 +301,12 @@ export function createApplicationCommands(
       ['overlay', 'Overlay', '叠加对比', 'Alt+O'],
     ]
     for (const [preset, enLabel, zhLabel, shortcut] of comparisonCommands) {
-      const label = context.desktop ? localize(locale, enLabel, zhLabel) : zhLabel
+      const label = context.applicationMode ? localize(locale, enLabel, zhLabel) : zhLabel
       commands.push({
         id: `compare-${preset}`,
-        group: context.desktop ? localize(locale, 'Result Comparison', '结果对比') : '结果对比',
+        group: context.applicationMode ? localize(locale, 'Result Comparison', '结果对比') : '结果对比',
         label,
-        detail: context.desktop
+        detail: context.applicationMode
           ? localize(locale, `${workflow.toUpperCase()} result view`, `${workflow.toUpperCase()} 结果视图`)
           : `${workflow.toUpperCase()} 结果视图`,
         shortcut,

@@ -53,4 +53,34 @@ describe('CommandPalette', () => {
 
     expect(requests).toEqual(['h2r'])
   })
+
+  it('exposes application imports without requiring the Electron bridge', async () => {
+    const wrapper = mount(CommandPalette, {
+      props: {
+        activePanel: 'motion',
+        applicationMode: true,
+        locale: 'en',
+      },
+      attachTo: document.body,
+    })
+    wrappers.push(wrapper)
+
+    const imports: string[] = []
+    const receive = (event: WindowEventMap['hhtools:import-command']): void => {
+      imports.push(event.detail.target)
+    }
+    window.addEventListener('hhtools:import-command', receive)
+
+    await wrapper.get('.command-palette-trigger').trigger('click')
+    const input = document.body.querySelector<HTMLInputElement>('.command-palette-search input')
+    expect(input).not.toBeNull()
+    if (!input) return
+    input.value = 'Import Motion File'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    await nextTick()
+    document.body.querySelector<HTMLButtonElement>('.command-palette-item')?.click()
+    window.removeEventListener('hhtools:import-command', receive)
+
+    expect(imports).toEqual(['motion-file'])
+  })
 })

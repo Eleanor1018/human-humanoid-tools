@@ -11,9 +11,11 @@ const props = withDefaults(defineProps<{
   activePanel: WorkspacePanelId
   locale?: WorkspaceLocale
   theme?: WorkspaceTheme
+  applicationMode?: boolean
 }>(), {
   locale: 'zh-CN',
   theme: 'light',
+  applicationMode: false,
 })
 
 const emit = defineEmits<{
@@ -31,7 +33,7 @@ const commands = computed(() => createApplicationCommands({
   openSettings: () => emit('openSettings'),
   theme: props.theme,
   toggleTheme: () => emit('toggleTheme'),
-  desktop: window.hhtoolsDesktop !== undefined,
+  applicationMode: props.applicationMode,
   locale: props.locale,
 }))
 

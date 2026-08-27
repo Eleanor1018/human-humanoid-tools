@@ -123,14 +123,14 @@ button { font-family: inherit; cursor: pointer; }
   min-height: 0;
   gap: 0;
 }
-#app.sidebar-hidden:not(.desktop-shell) { --sidebar-w: 0px; }
+#app.sidebar-hidden:not(.workspace-shell) { --sidebar-w: 0px; }
 #app.inspector-hidden { --inspector-w: 0px; }
-#app.sidebar-hidden:not(.desktop-shell) #sidebar,
+#app.sidebar-hidden:not(.workspace-shell) #sidebar,
 #app.sidebar-hidden #resize-sidebar { display: none; }
 #app.inspector-hidden #inspector,
 #app.inspector-hidden #resize-inspector { display: none; }
 
-#app.desktop-shell {
+#app.workspace-shell {
   grid-template-rows: 40px minmax(0, 1fr) auto;
   grid-template-areas:
     "topbar topbar topbar topbar topbar"
@@ -169,12 +169,12 @@ button { font-family: inherit; cursor: pointer; }
 }
 #topbar .spacer { flex: 1; }
 
-.desktop-shell #topbar {
+.workspace-shell #topbar {
   gap: 0;
   padding: 0 12px;
   z-index: 200;
 }
-.desktop-shell #topbar .logo {
+.workspace-shell #topbar .logo {
   flex: 0 0 208px;
   gap: 8px;
   margin: 0;
@@ -183,15 +183,15 @@ button { font-family: inherit; cursor: pointer; }
   font-weight: 750;
   letter-spacing: 0;
 }
-.desktop-shell .desktop-logo-mark {
+.workspace-shell .desktop-logo-mark {
   width: 24px;
   height: 24px;
 }
-.desktop-shell #topbar .pill {
+.workspace-shell #topbar .pill {
   padding: 3px 8px;
   font-size: 11px;
 }
-.desktop-shell #topbar .command-palette-trigger { display: none; }
+.workspace-shell #topbar .command-palette-trigger { display: none; }
 
 .desktop-menubar {
   display: flex;
@@ -483,10 +483,10 @@ button { font-family: inherit; cursor: pointer; }
   min-height: 0;
   overflow: hidden;
 }
-.desktop-shell #sidebar .side-panel-head {
+.workspace-shell #sidebar .side-panel-head {
   padding-left: 25px;
 }
-.desktop-shell #inspector .side-panel-head {
+.workspace-shell #inspector .side-panel-head {
   padding-left: 18px;
 }
 #sidebar-body {
@@ -562,42 +562,42 @@ button { font-family: inherit; cursor: pointer; }
   container-type: inline-size;
 }
 
-.desktop-shell.sidebar-hidden #sidebar {
+.workspace-shell.sidebar-hidden #sidebar {
   display: flex;
 }
-.desktop-shell.sidebar-hidden #sidebar .side-panel-head {
+.workspace-shell.sidebar-hidden #sidebar .side-panel-head {
   justify-content: center;
   padding: 8px;
 }
-.desktop-shell.sidebar-hidden #sidebar .side-panel-title,
-.desktop-shell.sidebar-hidden #sidebar .nav-group-label,
-.desktop-shell.sidebar-hidden #sidebar .nav-item-label,
-.desktop-shell.sidebar-hidden #sidebar .nav-disabled-reason,
-.desktop-shell.sidebar-hidden #sidebar .nav-item .badge,
-.desktop-shell.sidebar-hidden #sidebar .sidebar-foot {
+.workspace-shell.sidebar-hidden #sidebar .side-panel-title,
+.workspace-shell.sidebar-hidden #sidebar .nav-group-label,
+.workspace-shell.sidebar-hidden #sidebar .nav-item-label,
+.workspace-shell.sidebar-hidden #sidebar .nav-disabled-reason,
+.workspace-shell.sidebar-hidden #sidebar .nav-item .badge,
+.workspace-shell.sidebar-hidden #sidebar .sidebar-foot {
   display: none;
 }
-.desktop-shell.sidebar-hidden #sidebar-body {
+.workspace-shell.sidebar-hidden #sidebar-body {
   padding: 10px 8px;
 }
-.desktop-shell.sidebar-hidden #sidebar .nav-groups {
+.workspace-shell.sidebar-hidden #sidebar .nav-groups {
   gap: 10px;
 }
-.desktop-shell.sidebar-hidden #sidebar .nav-group {
+.workspace-shell.sidebar-hidden #sidebar .nav-group {
   align-items: center;
   gap: 4px;
 }
-.desktop-shell.sidebar-hidden #sidebar .nav-item {
+.workspace-shell.sidebar-hidden #sidebar .nav-item {
   width: 36px;
   height: 36px;
   justify-content: center;
   gap: 0;
   padding: 0;
 }
-.desktop-shell.sidebar-hidden #sidebar .nav-item .icon {
+.workspace-shell.sidebar-hidden #sidebar .nav-item .icon {
   width: 20px;
 }
-.desktop-shell.sidebar-hidden #sidebar .panel-hide-btn {
+.workspace-shell.sidebar-hidden #sidebar .panel-hide-btn {
   width: 32px;
   height: 28px;
 }
@@ -713,7 +713,7 @@ button { font-family: inherit; cursor: pointer; }
   z-index: 15;
   pointer-events: none;
 }
-.desktop-shell .job-drawer {
+.workspace-shell .job-drawer {
   --job-panel-collapsed-height: 34px;
   grid-area: jobs;
   position: relative;
@@ -725,11 +725,11 @@ button { font-family: inherit; cursor: pointer; }
   z-index: 16;
   pointer-events: auto;
 }
-.desktop-shell .job-drawer.open {
+.workspace-shell .job-drawer.open {
   height: var(--job-panel-height, 300px);
 }
-.desktop-shell .job-drawer-summary,
-.desktop-shell .job-drawer-panel {
+.workspace-shell .job-drawer-summary,
+.workspace-shell .job-drawer-panel {
   height: 100%;
   border-width: 1px 0 0;
   border-radius: 0;
@@ -737,11 +737,11 @@ button { font-family: inherit; cursor: pointer; }
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }
-.desktop-shell .job-drawer-summary {
+.workspace-shell .job-drawer-summary {
   min-height: var(--job-panel-collapsed-height);
   background: var(--bg-elevated);
 }
-.desktop-shell .job-drawer-panel {
+.workspace-shell .job-drawer-panel {
   max-height: none;
   background: var(--panel-solid);
 }
@@ -1062,7 +1062,7 @@ button { font-family: inherit; cursor: pointer; }
   display: flex; align-items: flex-start; gap: 8px;
   max-width: calc(100% - 36px);
 }
-.desktop-shell .stage-top-tools {
+.workspace-shell .stage-top-tools {
   left: 12px;
   top: 12px;
 }
@@ -1173,9 +1173,9 @@ button { font-family: inherit; cursor: pointer; }
 #inspector-body .row,
 #inspector-body .panel { width: 100%; max-width: 100%; box-sizing: border-box; }
 
-.desktop-shell .panel-restore-btn.right { top: 48px; }
+.workspace-shell .panel-restore-btn.right { top: 48px; }
 
-/* Desktop settings stay limited to shell language and workspace layout. */
+/* Workspace settings stay limited to shell language and panel layout. */
 .workspace-settings-backdrop {
   position: fixed;
   z-index: 1100;

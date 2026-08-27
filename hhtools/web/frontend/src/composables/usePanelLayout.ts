@@ -10,19 +10,19 @@ interface PanelLayoutState {
 }
 
 interface PanelLayoutOptions {
-  desktop?: boolean
+  docked?: boolean
 }
 
 const WEB_STORAGE_KEY = 'hhtools-panel-layout-v2'
-const DESKTOP_STORAGE_KEY = 'hhtools-desktop-panel-layout-v1'
+const DOCKED_STORAGE_KEY = 'hhtools-desktop-panel-layout-v1'
 const SIDEBAR_MIN = 160
 const SIDEBAR_MAX = 520
 const INSPECTOR_MIN = 240
 const INSPECTOR_MAX = 640
 const HANDLE_WIDTH = 6
 const MIN_STAGE_WIDTH = 360
-const DESKTOP_SIDEBAR_WIDTH = 208
-const DESKTOP_SIDEBAR_RAIL_WIDTH = 52
+const DOCKED_SIDEBAR_WIDTH = 208
+const DOCKED_SIDEBAR_RAIL_WIDTH = 52
 
 const DEFAULT_LAYOUT: PanelLayoutState = {
   sidebarWidth: 248,
@@ -31,10 +31,10 @@ const DEFAULT_LAYOUT: PanelLayoutState = {
   inspectorHidden: false
 }
 
-function defaultLayout(desktop: boolean): PanelLayoutState {
+function defaultLayout(docked: boolean): PanelLayoutState {
   return {
     ...DEFAULT_LAYOUT,
-    sidebarWidth: desktop ? DESKTOP_SIDEBAR_WIDTH : DEFAULT_LAYOUT.sidebarWidth,
+    sidebarWidth: docked ? DOCKED_SIDEBAR_WIDTH : DEFAULT_LAYOUT.sidebarWidth,
   }
 }
 
@@ -42,19 +42,19 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
 }
 
-function loadLayout(storageKey: string, desktop: boolean): PanelLayoutState {
+function loadLayout(storageKey: string, docked: boolean): PanelLayoutState {
   try {
     const saved = JSON.parse(localStorage.getItem(storageKey) ?? '{}') as Partial<PanelLayoutState>
-    return { ...defaultLayout(desktop), ...saved }
+    return { ...defaultLayout(docked), ...saved }
   } catch {
-    return defaultLayout(desktop)
+    return defaultLayout(docked)
   }
 }
 
 export function usePanelLayout(options: PanelLayoutOptions = {}) {
-  const desktop = options.desktop === true
-  const storageKey = desktop ? DESKTOP_STORAGE_KEY : WEB_STORAGE_KEY
-  const state = reactive<PanelLayoutState>(loadLayout(storageKey, desktop))
+  const docked = options.docked === true
+  const storageKey = docked ? DOCKED_STORAGE_KEY : WEB_STORAGE_KEY
+  const state = reactive<PanelLayoutState>(loadLayout(storageKey, docked))
 
   function availablePanelWidth(): number {
     const handles =
@@ -114,7 +114,7 @@ export function usePanelLayout(options: PanelLayoutOptions = {}) {
   }
 
   function reset(): void {
-    Object.assign(state, defaultLayout(desktop))
+    Object.assign(state, defaultLayout(docked))
     constrain()
     save()
   }
@@ -148,7 +148,7 @@ export function usePanelLayout(options: PanelLayoutOptions = {}) {
 
   const style = computed(() => ({
     '--sidebar-w': state.sidebarHidden
-      ? `${desktop ? DESKTOP_SIDEBAR_RAIL_WIDTH : 0}px`
+      ? `${docked ? DOCKED_SIDEBAR_RAIL_WIDTH : 0}px`
       : `${Math.round(state.sidebarWidth)}px`,
     '--inspector-w': state.inspectorHidden ? '0px' : `${Math.round(state.inspectorWidth)}px`,
     '--sidebar-handle-w': state.sidebarHidden ? '0px' : `${HANDLE_WIDTH}px`,

@@ -200,8 +200,8 @@ export class GuidedTour {
     if (!hud.dataset.tourForced) return;
     const runtime = window.__hh as { player?: { active?: boolean } } | undefined;
     const motionLoaded = runtime?.player?.active;
-    // Electron keeps the WebUI view controls as a permanent top-left stage menu.
-    if (!motionLoaded && !window.hhtoolsDesktop) hud.classList.add("hidden");
+    // The shared workspace keeps view controls available before a motion is loaded.
+    if (!motionLoaded) hud.classList.remove("hidden");
     delete hud.dataset.tourForced;
   }
 

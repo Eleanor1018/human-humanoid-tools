@@ -17,14 +17,14 @@ afterEach(() => {
 })
 
 describe('JobDrawer', () => {
-  it('docks as a collapsed desktop panel and toggles with Ctrl+J', async () => {
+  it('docks as a collapsed workspace panel and toggles with Ctrl+J', async () => {
     localStorage.removeItem('hhtools-desktop-job-panel-height-v1')
     const wrapper = mount(JobDrawer, {
-      props: { desktop: true, locale: 'en' },
+      props: { docked: true, locale: 'en' },
     })
     mountedWrappers.push(wrapper)
 
-    expect(wrapper.classes()).toContain('desktop-job-panel')
+    expect(wrapper.classes()).toContain('docked-job-panel')
     expect(wrapper.classes()).not.toContain('open')
     expect(wrapper.find('.job-panel-resizer').exists()).toBe(false)
 

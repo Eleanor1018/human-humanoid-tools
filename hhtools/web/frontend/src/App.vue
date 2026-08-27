@@ -17,37 +17,35 @@ import {
   updateWorkspacePreferences,
 } from './runtime/workspace-preferences'
 
-const isDesktop = window.hhtoolsDesktop !== undefined
-const panelLayout = usePanelLayout({ desktop: isDesktop })
+const isElectronHost = window.hhtoolsDesktop !== undefined
+const panelLayout = usePanelLayout({ docked: true })
 const initialWorkspacePreferences = loadWorkspacePreferences()
 const activePanel = ref<WorkspacePanelId>(initialWorkspacePreferences.activePanel)
-const desktopLocale = ref(initialWorkspacePreferences.locale)
-const desktopTheme = ref<WorkspaceTheme>(initialWorkspacePreferences.theme)
+const workspaceLocale = ref(initialWorkspacePreferences.locale)
+const workspaceTheme = ref<WorkspaceTheme>(initialWorkspacePreferences.theme)
 const settingsOpen = ref(false)
 
-if (isDesktop) {
-  document.documentElement.lang = desktopLocale.value
-  document.documentElement.dataset.theme = desktopTheme.value
+document.documentElement.lang = workspaceLocale.value
+document.documentElement.dataset.theme = workspaceTheme.value
+
+function workspaceText(en: string, zh: string): string {
+  return workspaceLocale.value === 'en' ? en : zh
 }
 
-function desktopText(en: string, zh: string): string {
-  return isDesktop && desktopLocale.value === 'en' ? en : zh
-}
-
-function setDesktopLocale(locale: typeof desktopLocale.value): void {
-  desktopLocale.value = locale
+function setWorkspaceLocale(locale: typeof workspaceLocale.value): void {
+  workspaceLocale.value = locale
   document.documentElement.lang = locale
   updateWorkspacePreferences({ locale })
 }
 
-function setDesktopTheme(theme: WorkspaceTheme): void {
-  desktopTheme.value = theme
+function setWorkspaceTheme(theme: WorkspaceTheme): void {
+  workspaceTheme.value = theme
   document.documentElement.dataset.theme = theme
   updateWorkspacePreferences({ theme })
 }
 
-function toggleDesktopTheme(): void {
-  setDesktopTheme(desktopTheme.value === 'light' ? 'dark' : 'light')
+function toggleWorkspaceTheme(): void {
+  setWorkspaceTheme(workspaceTheme.value === 'light' ? 'dark' : 'light')
 }
 
 function setActivePanel(panel: string): void {
@@ -124,7 +122,9 @@ onBeforeUnmount(() => {
   <div
     id="app"
     :class="{
-      'desktop-shell': isDesktop,
+      'workspace-shell': true,
+      'electron-host': isElectronHost,
+      'web-host': !isElectronHost,
       'sidebar-hidden': panelLayout.state.sidebarHidden,
       'inspector-hidden': panelLayout.state.inspectorHidden
     }"
@@ -133,56 +133,51 @@ onBeforeUnmount(() => {
     <!-- top bar -->
     <header id="topbar">
       <div class="logo">
-        <img v-if="isDesktop" class="desktop-logo-mark" src="/hhtools-robot.svg" alt="" />
-        <span v-else class="dot"></span>
-        <span class="desktop-brand-name">{{ isDesktop ? 'HHTOOLS' : 'hhtools' }}</span>
-        <span v-show="!isDesktop" class="ui-build" id="ui-build">UI·v25</span>
+        <img class="desktop-logo-mark" src="/hhtools-robot.svg" alt="" />
+        <span class="desktop-brand-name">HHTOOLS</span>
+        <span v-show="false" class="ui-build" id="ui-build">UI·v25</span>
       </div>
       <DesktopMenuBar
-        v-if="isDesktop"
         :active-panel="activePanel"
-        :locale="desktopLocale"
-        :theme="desktopTheme"
+        :locale="workspaceLocale"
+        :theme="workspaceTheme"
         @open-settings="settingsOpen = true"
-        @toggle-theme="toggleDesktopTheme"
+        @toggle-theme="toggleWorkspaceTheme"
       />
       <div class="spacer"></div>
       <CommandPalette
         :active-panel="activePanel"
-        :locale="isDesktop ? desktopLocale : 'zh-CN'"
-        :theme="desktopTheme"
+        :locale="workspaceLocale"
+        :theme="workspaceTheme"
+        application-mode
         @open-settings="settingsOpen = true"
-        @toggle-theme="toggleDesktopTheme"
+        @toggle-theme="toggleWorkspaceTheme"
       />
-      <span v-show="!isDesktop" class="pill" id="motion-pill">未加载动作</span>
-      <span v-show="!isDesktop" class="pill" id="robot-pill">未加载机器人</span>
+      <span v-show="false" class="pill" id="motion-pill">未加载动作</span>
+      <span v-show="false" class="pill" id="robot-pill">未加载机器人</span>
     </header>
 
     <!-- sidebar nav -->
     <nav id="sidebar" class="side-panel">
       <div class="side-panel-head">
-        <span class="side-panel-title">{{ desktopText('Navigation', '导航') }}</span>
+        <span class="side-panel-title">{{ workspaceText('Navigation', '导航') }}</span>
         <button
           type="button"
           class="panel-hide-btn"
           id="hide-sidebar"
           :title="panelLayout.state.sidebarHidden
-            ? desktopText('Expand navigation', '展开左栏')
-            : desktopText('Collapse navigation', '折叠左栏')"
+            ? workspaceText('Expand navigation', '展开左栏')
+            : workspaceText('Collapse navigation', '折叠左栏')"
           @click="panelLayout.setHidden('sidebar', !panelLayout.state.sidebarHidden)"
         >{{ panelLayout.state.sidebarHidden ? '▶' : '◀' }}</button>
       </div>
       <div id="sidebar-body">
         <SidebarNavigation
           :active-panel="activePanel"
-          :desktop="isDesktop"
-          :locale="desktopLocale"
+          workspace
+          :locale="workspaceLocale"
           @request="requestPanel"
         />
-        <div v-if="!isDesktop" class="sidebar-foot">
-          Human-to-Humanoid Tools<br />
-          本地运行 · 数据不出本机
-        </div>
       </div>
     </nav>
     <div class="col-resizer" id="resize-sidebar" title="拖动调节左栏宽度" @pointerdown="panelLayout.startResize('sidebar', $event)"></div>
@@ -195,54 +190,53 @@ onBeforeUnmount(() => {
       <div id="calib-hud" class="calib-hud hidden" aria-hidden="true"></div>
       <div id="calib-hover-hint" class="calib-hover-hint" aria-hidden="true"></div>
       <div class="stage-top-tools">
-        <button v-show="panelLayout.state.sidebarHidden && !isDesktop" type="button" class="panel-restore-btn stage-sidebar-restore" id="show-sidebar" title="显示左栏" @click="panelLayout.setHidden('sidebar', false)">▶ 导航</button>
-        <div class="view-hud" :class="{ hidden: !isDesktop }" id="view-hud">
+        <div class="view-hud" id="view-hud">
           <div class="view-hud-row" data-row="motion">
             <button class="seg-btn" id="tg-skeleton" title="显示/隐藏原始动作骨架">
-              <span class="eye" aria-hidden="true">👁</span><span class="lbl">{{ desktopText('Skeleton', '骨架') }}</span>
+              <span class="eye" aria-hidden="true">👁</span><span class="lbl">{{ workspaceText('Skeleton', '骨架') }}</span>
             </button>
             <button class="seg-btn on" id="tg-mesh" title="显示/隐藏身体 mesh（SMPL 皮肤或管状近似）">
-              <span class="eye" aria-hidden="true">👁</span><span class="lbl">{{ desktopText('Body', '身体') }}</span>
+              <span class="eye" aria-hidden="true">👁</span><span class="lbl">{{ workspaceText('Body', '身体') }}</span>
             </button>
             <button class="seg-btn" id="tg-env" disabled title="显示/隐藏原始动作的地形与交互物体">
-              <span class="eye" aria-hidden="true">👁</span><span class="lbl">{{ desktopText('Objects/Terrain', '物体/地形') }}</span>
+              <span class="eye" aria-hidden="true">👁</span><span class="lbl">{{ workspaceText('Objects/Terrain', '物体/地形') }}</span>
             </button>
           </div>
           <div class="view-hud-row" data-row="robot">
             <button class="seg-btn" id="tg-scaled" disabled title="按机器人标定缩放后、IK 之前的效应器骨架">
-              <span class="eye" aria-hidden="true">👁</span><span class="lbl">{{ desktopText('Scaled Skeleton', '缩放骨架') }}</span>
+              <span class="eye" aria-hidden="true">👁</span><span class="lbl">{{ workspaceText('Scaled Skeleton', '缩放骨架') }}</span>
             </button>
             <button class="seg-btn" id="tg-scaled-env" disabled title="缩放后的地形与交互物体（与机器人同坐标系）">
-              <span class="eye" aria-hidden="true">👁</span><span class="lbl">{{ desktopText('Scaled Scene', '缩放场景') }}</span>
+              <span class="eye" aria-hidden="true">👁</span><span class="lbl">{{ workspaceText('Scaled Scene', '缩放场景') }}</span>
             </button>
             <button class="seg-btn" id="tg-robot" disabled title="显示/隐藏重定向后的机器人">
-              <span class="eye" aria-hidden="true">👁</span><span class="lbl">{{ desktopText('Robot', '机器人') }}</span>
+              <span class="eye" aria-hidden="true">👁</span><span class="lbl">{{ workspaceText('Robot', '机器人') }}</span>
             </button>
           </div>
         </div>
         <div class="view-hud hidden" id="view-hud-r2r">
           <div class="view-hud-row" data-row="r2r-src">
-            <span class="view-hud-tag">{{ desktopText('Source', '源') }}</span>
+            <span class="view-hud-tag">{{ workspaceText('Source', '源') }}</span>
             <button class="seg-btn on" id="r2r-tg-src-robot" title="源机器人 mesh">
-              <span class="eye" aria-hidden="true">👁</span><span class="lbl">{{ desktopText('Robot', '机器人') }}</span>
+              <span class="eye" aria-hidden="true">👁</span><span class="lbl">{{ workspaceText('Robot', '机器人') }}</span>
             </button>
             <button class="seg-btn" id="r2r-tg-src-skel" disabled title="源关键点骨架（FK）">
-              <span class="eye" aria-hidden="true">👁</span><span class="lbl">{{ desktopText('Skeleton', '骨架') }}</span>
+              <span class="eye" aria-hidden="true">👁</span><span class="lbl">{{ workspaceText('Skeleton', '骨架') }}</span>
             </button>
             <button class="seg-btn" id="r2r-tg-src-env" disabled title="源轨迹附带的地形/物体">
-              <span class="eye" aria-hidden="true">👁</span><span class="lbl">{{ desktopText('Objects/Terrain', '物体/地形') }}</span>
+              <span class="eye" aria-hidden="true">👁</span><span class="lbl">{{ workspaceText('Objects/Terrain', '物体/地形') }}</span>
             </button>
           </div>
           <div class="view-hud-row" data-row="r2r-tgt">
-            <span class="view-hud-tag">{{ desktopText('Target', '目标') }}</span>
+            <span class="view-hud-tag">{{ workspaceText('Target', '目标') }}</span>
             <button class="seg-btn" id="r2r-tg-tgt-robot" disabled title="目标机器人 mesh">
-              <span class="eye" aria-hidden="true">👁</span><span class="lbl">{{ desktopText('Robot', '机器人') }}</span>
+              <span class="eye" aria-hidden="true">👁</span><span class="lbl">{{ workspaceText('Robot', '机器人') }}</span>
             </button>
             <button class="seg-btn" id="r2r-tg-tgt-skel" disabled title="目标缩放骨架（IK 效应器）">
-              <span class="eye" aria-hidden="true">👁</span><span class="lbl">{{ desktopText('Skeleton', '骨架') }}</span>
+              <span class="eye" aria-hidden="true">👁</span><span class="lbl">{{ workspaceText('Skeleton', '骨架') }}</span>
             </button>
             <button class="seg-btn" id="r2r-tg-tgt-env" disabled title="目标缩放后的地形/物体">
-              <span class="eye" aria-hidden="true">👁</span><span class="lbl">{{ desktopText('Objects/Terrain', '物体/地形') }}</span>
+              <span class="eye" aria-hidden="true">👁</span><span class="lbl">{{ workspaceText('Objects/Terrain', '物体/地形') }}</span>
             </button>
           </div>
         </div>
@@ -269,12 +263,12 @@ onBeforeUnmount(() => {
     <!-- right inspector -->
     <aside id="inspector" class="side-panel">
       <div class="side-panel-head">
-        <span class="side-panel-title">{{ desktopText('Inspector', '控制面板') }}</span>
+        <span class="side-panel-title">{{ workspaceText('Inspector', '控制面板') }}</span>
         <button
           type="button"
           class="panel-hide-btn"
           id="hide-inspector"
-          :title="desktopText('Hide inspector', '隐藏右栏')"
+          :title="workspaceText('Hide inspector', '隐藏右栏')"
           @click="panelLayout.setHidden('inspector', true)"
         >▶</button>
       </div>
@@ -930,15 +924,14 @@ onBeforeUnmount(() => {
     </aside>
 
     <button v-show="panelLayout.state.inspectorHidden" type="button" class="panel-restore-btn right" id="show-inspector" title="显示右栏" @click="panelLayout.setHidden('inspector', false)">◀ 面板</button>
-    <JobDrawer :desktop="isDesktop" :locale="desktopLocale" />
+    <JobDrawer docked :locale="workspaceLocale" />
     <WorkspaceSettingsDialog
-      v-if="isDesktop"
       :open="settingsOpen"
-      :locale="desktopLocale"
+      :locale="workspaceLocale"
       :sidebar-hidden="panelLayout.state.sidebarHidden"
       :inspector-hidden="panelLayout.state.inspectorHidden"
       @close="settingsOpen = false"
-      @set-locale="setDesktopLocale"
+      @set-locale="setWorkspaceLocale"
       @set-hidden="panelLayout.setHidden"
       @reset="panelLayout.reset"
     />

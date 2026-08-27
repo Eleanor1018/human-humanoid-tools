@@ -42,7 +42,8 @@ test('loads the existing WebUI and shuts down its Python sidecar', async ({}, te
 
     await expect(page).toHaveTitle('hhtools')
     await expect(page.locator('#app')).toBeVisible()
-    await expect(page.locator('#app')).toHaveClass(/desktop-shell/)
+    await expect(page.locator('#app')).toHaveClass(/workspace-shell/)
+    await expect(page.locator('#app')).toHaveClass(/electron-host/)
     await expect(page.locator('#topbar .desktop-brand-name')).toHaveText('HHTOOLS')
     await expect(page.locator('#topbar .ui-build')).toBeHidden()
     await expect(page.locator('#topbar .command-palette-trigger')).toBeHidden()
@@ -91,7 +92,7 @@ test('loads the existing WebUI and shuts down its Python sidecar', async ({}, te
     await page.screenshot({ path: testInfo.outputPath('desktop-file-menu.png'), fullPage: true })
     await page.keyboard.press('Escape')
 
-    const jobPanel = page.locator('.desktop-job-panel')
+    const jobPanel = page.locator('.docked-job-panel')
     await expect(jobPanel.locator('.job-summary-title')).toHaveText('Tasks')
     const collapsedJobBounds = await jobPanel.boundingBox()
     const collapsedStageBounds = await stage.boundingBox()

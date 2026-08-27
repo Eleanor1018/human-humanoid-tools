@@ -12,19 +12,19 @@ import type {
 } from '../runtime/types'
 
 const props = withDefaults(defineProps<{
-  desktop?: boolean
+  docked?: boolean
   locale?: 'en' | 'zh-CN'
 }>(), {
-  desktop: false,
+  docked: false,
   locale: 'zh-CN',
 })
 
-const DESKTOP_PANEL_HEIGHT_KEY = 'hhtools-desktop-job-panel-height-v1'
-const DEFAULT_DESKTOP_PANEL_HEIGHT = 300
-const MIN_DESKTOP_PANEL_HEIGHT = 180
+const DOCKED_PANEL_HEIGHT_KEY = 'hhtools-desktop-job-panel-height-v1'
+const DEFAULT_DOCKED_PANEL_HEIGHT = 300
+const MIN_DOCKED_PANEL_HEIGHT = 180
 
 function text(en: string, zh: string): string {
-  return props.desktop && props.locale === 'en' ? en : zh
+  return props.docked && props.locale === 'en' ? en : zh
 }
 
 const open = ref(false)
@@ -45,7 +45,7 @@ const failedCount = computed(() => jobs.value.filter((job) => job.status === 'er
 const doneCount = computed(() => jobs.value.filter((job) => job.status === 'done').length)
 const latestJob = computed(() => jobs.value[0] ?? null)
 const panelStyle = computed(() => (
-  props.desktop && open.value
+  props.docked && open.value
     ? { '--job-panel-height': `${panelHeight.value}px` }
     : undefined
 ))
@@ -53,11 +53,11 @@ const panelStyle = computed(() => (
 let stopPanelResize: (() => void) | null = null
 
 function loadPanelHeight(): number {
-  if (!props.desktop) return DEFAULT_DESKTOP_PANEL_HEIGHT
-  const value = Number(localStorage.getItem(DESKTOP_PANEL_HEIGHT_KEY))
-  return Number.isFinite(value) && value >= MIN_DESKTOP_PANEL_HEIGHT
+  if (!props.docked) return DEFAULT_DOCKED_PANEL_HEIGHT
+  const value = Number(localStorage.getItem(DOCKED_PANEL_HEIGHT_KEY))
+  return Number.isFinite(value) && value >= MIN_DOCKED_PANEL_HEIGHT
     ? value
-    : DEFAULT_DESKTOP_PANEL_HEIGHT
+    : DEFAULT_DOCKED_PANEL_HEIGHT
 }
 
 function togglePanel(): void {
@@ -65,13 +65,13 @@ function togglePanel(): void {
 }
 
 function handlePanelShortcut(event: KeyboardEvent): void {
-  if (!props.desktop || (!event.ctrlKey && !event.metaKey) || event.key.toLowerCase() !== 'j') return
+  if (!props.docked || (!event.ctrlKey && !event.metaKey) || event.key.toLowerCase() !== 'j') return
   event.preventDefault()
   togglePanel()
 }
 
 function startPanelResize(event: PointerEvent): void {
-  if (!props.desktop || !open.value) return
+  if (!props.docked || !open.value) return
   event.preventDefault()
 
   const target = event.currentTarget as HTMLElement
@@ -85,16 +85,16 @@ function startPanelResize(event: PointerEvent): void {
   document.body.style.userSelect = 'none'
 
   const move = (moveEvent: PointerEvent): void => {
-    const maxHeight = Math.max(MIN_DESKTOP_PANEL_HEIGHT, window.innerHeight - 160)
+    const maxHeight = Math.max(MIN_DOCKED_PANEL_HEIGHT, window.innerHeight - 160)
     panelHeight.value = Math.min(
       maxHeight,
-      Math.max(MIN_DESKTOP_PANEL_HEIGHT, startHeight + startY - moveEvent.clientY),
+      Math.max(MIN_DOCKED_PANEL_HEIGHT, startHeight + startY - moveEvent.clientY),
     )
   }
   const stop = (): void => {
     document.body.style.cursor = previousCursor
     document.body.style.userSelect = previousUserSelect
-    localStorage.setItem(DESKTOP_PANEL_HEIGHT_KEY, String(Math.round(panelHeight.value)))
+    localStorage.setItem(DOCKED_PANEL_HEIGHT_KEY, String(Math.round(panelHeight.value)))
     window.removeEventListener('pointermove', move)
     window.removeEventListener('pointerup', stop)
     window.removeEventListener('pointercancel', stop)
@@ -345,11 +345,11 @@ async function retryJob(job: JobHistoryRecord, failedOnly = false): Promise<void
 }
 
 function kindLabel(kind: string): string {
-  return (props.desktop && props.locale === 'en' ? KIND_LABELS_EN : KIND_LABELS)[kind] ?? kind
+  return (props.docked && props.locale === 'en' ? KIND_LABELS_EN : KIND_LABELS)[kind] ?? kind
 }
 
 function statusLabel(status: JobStatus): string {
-  return (props.desktop && props.locale === 'en' ? STATUS_LABELS_EN : STATUS_LABELS)[status]
+  return (props.docked && props.locale === 'en' ? STATUS_LABELS_EN : STATUS_LABELS)[status]
 }
 
 function formatTime(timestamp: number): string {
@@ -377,7 +377,7 @@ function parameterEntries(job: JobHistoryRecord): Array<[string, JobParameterVal
 }
 
 function parameterLabel(key: string): string {
-  return (props.desktop && props.locale === 'en' ? PARAMETER_LABELS_EN : PARAMETER_LABELS)[key] ?? key
+  return (props.docked && props.locale === 'en' ? PARAMETER_LABELS_EN : PARAMETER_LABELS)[key] ?? key
 }
 
 function resultText(job: JobHistoryRecord): string {
@@ -413,12 +413,12 @@ onBeforeUnmount(() => {
 <template>
   <section
     class="job-drawer"
-    :class="{ open, 'desktop-job-panel': desktop }"
+    :class="{ open, 'docked-job-panel': docked }"
     :style="panelStyle"
     :aria-label="text('Task history', '任务历史')"
   >
     <div
-      v-if="desktop && open"
+      v-if="docked && open"
       class="job-panel-resizer"
       :title="text('Drag to resize the task panel', '拖动调整任务面板高度')"
       aria-hidden="true"
@@ -429,7 +429,7 @@ onBeforeUnmount(() => {
       type="button"
       class="job-drawer-summary"
       :aria-expanded="false"
-      :title="desktop ? 'Toggle Tasks (Ctrl+J)' : '展开任务历史'"
+      :title="docked ? text('Toggle Tasks (Ctrl+J)', '切换任务面板 (Ctrl+J)') : '展开任务历史'"
       @click="togglePanel"
     >
       <span class="job-summary-title">{{ text('Tasks', '任务') }}</span>

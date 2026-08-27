@@ -10,7 +10,7 @@ interface NavigationItem {
   badgeId?: string
   disabled?: boolean
   disabledReason?: string
-  desktopOnly?: boolean
+  workspaceOnly?: boolean
 }
 
 interface NavigationGroup {
@@ -22,10 +22,10 @@ interface NavigationGroup {
 
 const props = withDefaults(defineProps<{
   activePanel: WorkspacePanelId
-  desktop?: boolean
+  workspace?: boolean
   locale?: WorkspaceLocale
 }>(), {
-  desktop: false,
+  workspace: false,
   locale: 'en',
 })
 
@@ -72,19 +72,19 @@ const groups: NavigationGroup[] = [
         icon: '◫',
         disabled: true,
         disabledReason: 'Coming soon',
-        desktopOnly: true,
+        workspaceOnly: true,
       },
     ],
   },
 ]
 
 function groupLabel(group: NavigationGroup): string {
-  if (!props.desktop) return group.label
+  if (!props.workspace) return group.label
   return props.locale === 'zh-CN' ? group.zhLabel : group.enLabel
 }
 
 function itemLabel(item: NavigationItem): string {
-  if (!props.desktop) return item.label
+  if (!props.workspace) return item.label
   return props.locale === 'zh-CN' ? item.zhLabel : item.enLabel
 }
 
@@ -103,7 +103,7 @@ function disabledReason(item: NavigationItem): string | undefined {
         :key="item.id"
         type="button"
         class="nav-item"
-        v-show="!item.desktopOnly || desktop"
+        v-show="!item.workspaceOnly || workspace"
         :class="{ active: activePanel === item.id }"
         :data-panel="item.id"
         :disabled="item.disabled"
@@ -119,12 +119,12 @@ function disabledReason(item: NavigationItem): string | undefined {
     </section>
 
     <section class="nav-group nav-help-group">
-      <h2 class="nav-group-label">{{ desktop ? (locale === 'zh-CN' ? '帮助' : 'Help') : '帮助 Help' }}</h2>
+      <h2 class="nav-group-label">{{ workspace ? (locale === 'zh-CN' ? '帮助' : 'Help') : '帮助 Help' }}</h2>
       <button
         id="nav-tour"
         type="button"
         class="nav-item nav-tour"
-        :class="{ hidden: !desktop }"
+        :class="{ hidden: !workspace }"
         :title="locale === 'zh-CN' ? '重新查看操作教程' : 'Run the tutorial again'"
       >
         <span class="icon" aria-hidden="true">?</span>

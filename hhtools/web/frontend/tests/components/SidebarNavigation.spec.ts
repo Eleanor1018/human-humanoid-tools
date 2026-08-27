@@ -28,9 +28,9 @@ describe('SidebarNavigation', () => {
     expect(wrapper.emitted('request')).toEqual([['h2r']])
   })
 
-  it('adds desktop-only analysis destinations without changing Web navigation', () => {
+  it('adds full-workspace analysis destinations in application mode', () => {
     const wrapper = mount(SidebarNavigation, {
-      props: { activePanel: 'motion', desktop: true, locale: 'en' },
+      props: { activePanel: 'motion', workspace: true, locale: 'en' },
     })
     mountedWrappers.push(wrapper)
 

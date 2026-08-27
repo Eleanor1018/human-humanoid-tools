@@ -20,10 +20,10 @@ const emit = defineEmits<{
 const copy = computed(() => props.locale === 'zh-CN'
   ? {
       title: '工作区设置',
-      subtitle: '桌面语言与面板布局',
+      subtitle: '语言与工作区面板布局',
       close: '关闭设置',
       language: '语言',
-      languageDetail: '设置桌面菜单和导航使用的语言。',
+      languageDetail: '设置菜单和导航使用的语言。',
       left: '左侧导航',
       leftDetail: '保持工作区导航栏展开。',
       right: '右侧控制面板',
@@ -33,10 +33,10 @@ const copy = computed(() => props.locale === 'zh-CN'
     }
   : {
       title: 'Workspace Settings',
-      subtitle: 'Desktop language and panel layout',
+      subtitle: 'Language and workspace panel layout',
       close: 'Close settings',
       language: 'Language',
-      languageDetail: 'Set the language used by desktop menus and navigation.',
+      languageDetail: 'Set the language used by menus and navigation.',
       left: 'Left navigation',
       leftDetail: 'Keep the workspace navigation expanded.',
       right: 'Right inspector',

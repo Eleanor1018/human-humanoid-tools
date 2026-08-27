@@ -31,7 +31,7 @@ const commands = computed(() => createApplicationCommands({
   openSettings: () => emit('openSettings'),
   theme: props.theme,
   toggleTheme: () => emit('toggleTheme'),
-  desktop: true,
+  applicationMode: true,
   locale: props.locale,
 }))
 
