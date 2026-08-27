@@ -149,12 +149,19 @@ class JobHistoryStore:
             self.put(recovered)
 
     def _prune_locked(self) -> None:
-        records = sorted(
-            self._records.values(),
+        # Active jobs are accepted work, not retained history.  Keeping every
+        # pending/running record lets a restart recover it as interrupted even
+        # when an unlimited queue temporarily exceeds ``max_records``.
+        terminal_records = sorted(
+            (
+                record
+                for record in self._records.values()
+                if record.get("status") not in _ACTIVE_STATUSES
+            ),
             key=lambda record: float(record.get("created_at") or 0.0),
             reverse=True,
         )
-        for record in records[self.max_records :]:
+        for record in terminal_records[self.max_records :]:
             job_id = str(record.get("id") or "")
             self._records.pop(job_id, None)
             (self.records_dir / f"{job_id}.json").unlink(missing_ok=True)

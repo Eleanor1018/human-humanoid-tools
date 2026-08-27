@@ -3554,7 +3554,14 @@ async function ingestMotionFiles(files: UploadFile[], profile = "mimic"): Promis
         renderLibrary();
       }
     }
-    const modeHint = materialize_mode === "symlink" ? "软链接" : "已复制";
+    const resolvedMaterializeMode = materialize_mode === "pending"
+      ? payload.materialize_mode
+      : materialize_mode;
+    const modeHint = resolvedMaterializeMode === "symlink"
+      ? "软链接"
+      : resolvedMaterializeMode === "hardlink"
+        ? "硬链接"
+        : "已复制";
     if (payload.library_entry) {
       addToBasket([payload.library_entry]);
       toast(`已${modeHint}并加载：${payload.name}（资源库 · ${folder_label || payload.linked_folder}）`);

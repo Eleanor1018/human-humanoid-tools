@@ -56,6 +56,19 @@ See [`desktop/README.md`](desktop/README.md) for runtime overrides, tests, and W
 
 Open `http://127.0.0.1:8009`.
 
+Web jobs are unlimited by default. To enable FIFO admission control on a shared or
+memory-constrained GPU, set positive concurrency and an optional queue capacity:
+
+```bash
+uv run hhtools web --max-running-jobs 1 --max-queued-jobs 32
+```
+
+`0` means unlimited for both options; the queue setting only applies when running concurrency is
+limited. The same settings are available as `HHTOOLS_MAX_RUNNING_JOBS` and
+`HHTOOLS_MAX_QUEUED_JOBS` (including in the Electron sidecar).
+The cap applies to scheduled Web jobs, not the optional Warp/Newton robot prewarm thread, so it
+is admission control rather than a process-wide GPU concurrency guarantee.
+
 | Panel | Flow |
 |-------|------|
 | **Motion → Robot** | Load clip → select robot → calibrate (once) → retarget → download CSV/ZIP |

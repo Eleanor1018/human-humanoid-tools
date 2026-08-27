@@ -30,6 +30,21 @@ npm run dev
 Optional data path overrides are `HHTOOLS_SOURCE_ROOT`, `HHTOOLS_SAVE_DIR`,
 `HHTOOLS_CACHE_DIR`, and `HHTOOLS_LOG_DIR`.
 
+Background-job admission is optional. Both settings default to `0`, preserving unlimited
+concurrency for expert users:
+
+```powershell
+$env:HHTOOLS_MAX_RUNNING_JOBS = '1'
+$env:HHTOOLS_MAX_QUEUED_JOBS = '32'
+npm run dev
+```
+
+A positive running value enables the FIFO waiting queue. A queued value of `0` means unlimited
+waiting; it has no effect while running is `0`. The Electron environment filter forwards only
+these two named `HHTOOLS_*` settings, not arbitrary variables or secrets.
+This cap covers scheduled Web jobs, not the optional Warp/Newton robot prewarm thread; it is not
+a process-wide GPU concurrency guarantee.
+
 ## Verification
 
 ```powershell

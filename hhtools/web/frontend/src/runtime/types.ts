@@ -62,6 +62,7 @@ export interface MotionPayload extends ScenePayload {
   body_mesh?: BodyMeshPayload
   library_entry?: LibraryEntry
   linked_folder?: string
+  materialize_mode?: 'symlink' | 'hardlink' | 'copy' | string
   meta?: Record<string, unknown>
 }
 
@@ -329,7 +330,7 @@ export interface JobStartResponse {
   job_id: string
   linked?: boolean
   folder_label?: string
-  materialize_mode?: 'symlink' | 'copy' | string
+  materialize_mode?: 'pending' | 'symlink' | 'hardlink' | 'copy' | string
 }
 
 export interface RobotExportPreviewResult {

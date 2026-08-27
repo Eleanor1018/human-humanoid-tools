@@ -11,6 +11,7 @@ Run via ``hhtools web`` (see :mod:`hhtools.cli.web`) or::
 
 from __future__ import annotations
 
+import atexit
 import hmac
 import json
 import logging
@@ -27,6 +28,12 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
+from hhtools.web.job_scheduler import (
+    JobQueueFullError,
+    JobReservation,
+    JobScheduler,
+    JobSchedulerClosedError,
+)
 from hhtools.web.job_specs import (
     JobSpecError,
     build_job_spec,
@@ -52,12 +59,18 @@ _log = logging.getLogger(__name__)
 UI_BUILD_ID = "20260826-ux6"
 
 _UPLOAD_CHUNK_BYTES = 1024 * 1024
+# These are application-level resource controls, not transport tuning knobs.
+# Upload/retention bounds are active by default; job admission is deliberately
+# unlimited unless an expert deployment opts into a concurrency cap and queue.
 _DEFAULT_MAX_UPLOAD_FILES = 4096
 _DEFAULT_MAX_UPLOAD_FILE_BYTES = 2 * 1024**3
 _DEFAULT_MAX_UPLOAD_REQUEST_BYTES = 8 * 1024**3
-_DEFAULT_MAX_RUNNING_JOBS = 8
+_DEFAULT_MAX_RUNNING_JOBS = 0
+_DEFAULT_MAX_QUEUED_JOBS = 0
 _DEFAULT_MAX_RETAINED_JOBS = 64
 _DEFAULT_JOB_TTL_SECONDS = 60 * 60.0
+
+_ACTIVE_JOB_STATUSES = frozenset({"pending", "running"})
 
 _UPLOAD_ENDPOINTS = frozenset(
     {
@@ -244,7 +257,7 @@ class Job:
     id: str
     kind: str
     request: dict[str, Any] = field(default_factory=dict)
-    status: str = "running"  # running | done | error
+    status: str = "running"  # pending | running | done | error
     progress: float = 0.0  # overall job progress (batch: all clips)
     clip_progress: float = 0.0  # batch only: current clip / GPU-chunk progress
     message: str = ""
@@ -259,6 +272,11 @@ class Job:
     on_terminal: Callable[[Job], None] | None = field(
         default=None, repr=False, compare=False,
     )
+
+    def mark_running(self) -> None:
+        """Publish the transition from the FIFO queue into an execution slot."""
+
+        self.status = "running"
 
     def mark_terminal(self, status: str) -> None:
         """Publish terminal status only after the worker has populated its result."""
@@ -319,6 +337,7 @@ def create_app(
     max_upload_file_bytes: int = _DEFAULT_MAX_UPLOAD_FILE_BYTES,
     max_upload_request_bytes: int = _DEFAULT_MAX_UPLOAD_REQUEST_BYTES,
     max_running_jobs: int = _DEFAULT_MAX_RUNNING_JOBS,
+    max_queued_jobs: int = _DEFAULT_MAX_QUEUED_JOBS,
     max_retained_jobs: int = _DEFAULT_MAX_RETAINED_JOBS,
     job_ttl_seconds: float = _DEFAULT_JOB_TTL_SECONDS,
     job_history_dir: Path | None = None,
@@ -334,36 +353,102 @@ def create_app(
 
     static_dir = Path(__file__).parent / "static"
 
-    state = SessionState(source_root=Path(source_root), save_dir=Path(save_dir))
-    state.cache = EphemeralCache.create(cache_dir=cache_dir, save_dir=save_dir)
-
-    limits = {
+    positive_limits = {
         "max_upload_files": max_upload_files,
         "max_upload_file_bytes": max_upload_file_bytes,
         "max_upload_request_bytes": max_upload_request_bytes,
-        "max_running_jobs": max_running_jobs,
         "max_retained_jobs": max_retained_jobs,
     }
-    invalid_limits = [name for name, value in limits.items() if int(value) <= 0]
+    invalid_limits = [
+        name for name, value in positive_limits.items() if int(value) <= 0
+    ]
     if float(job_ttl_seconds) <= 0:
         invalid_limits.append("job_ttl_seconds")
     if invalid_limits:
         names = ", ".join(invalid_limits)
         raise ValueError(f"resource limits must be positive: {names}")
+    non_negative_limits = {
+        "max_running_jobs": max_running_jobs,
+        "max_queued_jobs": max_queued_jobs,
+    }
+    invalid_limits = [
+        name for name, value in non_negative_limits.items() if int(value) < 0
+    ]
+    if invalid_limits:
+        names = ", ".join(invalid_limits)
+        raise ValueError(f"job scheduler limits must be non-negative: {names}")
 
-    history_root = Path(job_history_dir) if job_history_dir is not None else user_job_history_dir()
-    state.job_history = JobHistoryStore(history_root, max_records=max_retained_jobs)
+    state = SessionState(source_root=Path(source_root), save_dir=Path(save_dir))
+    try:
+        state.cache = EphemeralCache.create(cache_dir=cache_dir, save_dir=save_dir)
+        history_root = (
+            Path(job_history_dir)
+            if job_history_dir is not None
+            else user_job_history_dir()
+        )
+        state.job_history = JobHistoryStore(history_root, max_records=max_retained_jobs)
+        scheduler = JobScheduler(
+            max_running_jobs=max_running_jobs,
+            max_queued_jobs=max_queued_jobs,
+        )
+    except Exception:
+        _cleanup_session_state(state)
+        raise
+    # Motion uploads load from immutable per-request drops.  Publication into
+    # the shared label namespace is short and serialized so same-label imports
+    # cannot interleave delete/copy operations.
+    motion_library_publish_lock = threading.Lock()
+    cleanup_lock = threading.Lock()
+    cleanup_complete = False
+
+    def _cleanup_session_once() -> None:
+        """Release session-owned roots once, including at interpreter exit."""
+
+        nonlocal cleanup_complete
+        with cleanup_lock:
+            if cleanup_complete:
+                return
+            cleanup_complete = True
+        _cleanup_session_state(state)
+        atexit.unregister(_cleanup_session_once)
+
+    # If uvicorn exits after the graceful timeout, its daemon cleanup thread
+    # cannot keep the process alive.  The interpreter callback still removes
+    # this process's temporary roots; persistent user data is never included.
+    atexit.register(_cleanup_session_once)
+
+    def _deferred_session_cleanup() -> None:
+        """Clean temporary roots once jobs that outlive graceful shutdown finish."""
+
+        scheduler.shutdown(wait=True)
+        _cleanup_session_once()
 
     @asynccontextmanager
     async def _lifespan(_app):  # type: ignore[no-untyped-def]
         try:
             yield
         finally:
-            _cleanup_session_state(state)
+            drained = scheduler.shutdown(wait=True, timeout=5.0)
+            if drained:
+                _cleanup_session_once()
+            else:
+                # A Python thread cannot be force-cancelled safely.  Preserve
+                # its temporary inputs instead of deleting files beneath it,
+                # then reclaim them if the host process remains alive long
+                # enough for the worker to finish.
+                _log.warning(
+                    "Web shutdown timed out with active jobs; deferring session cleanup"
+                )
+                threading.Thread(
+                    target=_deferred_session_cleanup,
+                    name="hhtools-web-deferred-cleanup",
+                    daemon=True,
+                ).start()
 
     app = FastAPI(title="hhtools web", version="0.1", lifespan=_lifespan)
     # Exposed for diagnostics and lifecycle regression tests, not as an HTTP API.
     app.state.session_state = state
+    app.state.job_scheduler = scheduler
 
     def _validated_uploads(
         files: list[UploadFile],
@@ -401,7 +486,12 @@ def create_app(
         default: str = "upload.bin",
         destination_for: Callable[[Path], Path] | None = None,
     ) -> list[tuple[Path, Path]]:
-        """Stream a multipart upload to disk and atomically publish complete files."""
+        """Stage a multipart upload, then publish each complete file atomically.
+
+        The size checks finish before publication starts.  Each ``replace`` is
+        atomic, but the group is not a filesystem transaction: an I/O failure
+        between replacements can still leave a published subset.
+        """
         validated = _validated_uploads(files, default=default)
         staged: list[tuple[Path, Path, Path]] = []
         total_bytes = 0
@@ -439,8 +529,10 @@ def create_app(
                     raise
                 staged.append((relative, part, destination))
 
-            # Files become visible only after every item passes the limits. This
-            # avoids committing the first half of an oversized folder upload.
+            # Files become visible only after every item passes the size limits,
+            # avoiding a partial folder on a normal 413 rejection.  Publication
+            # is per-file; an unexpected filesystem failure can still interrupt
+            # this loop after an earlier destination has been replaced.
             stored: list[tuple[Path, Path]] = []
             for relative, part, destination in staged:
                 part.replace(destination)
@@ -476,7 +568,7 @@ def create_app(
     def _prune_jobs_locked(now: float) -> None:
         terminal: list[Job] = []
         for job in state.jobs.values():
-            if job.status == "running":
+            if job.status in _ACTIVE_JOB_STATUSES:
                 continue
             if job.terminal_since is None:
                 job.terminal_since = now
@@ -671,31 +763,103 @@ def create_app(
             }
         return {"available": True, "command": shlex.join(args), "reason": None}
 
-    def _register_job(
+    def _reserve_job_slot() -> JobReservation:
+        """Reserve scheduler admission before a route performs durable writes."""
+
+        try:
+            return scheduler.reserve()
+        except JobQueueFullError as err:
+            raise HTTPException(status_code=429, detail=str(err)) from err
+        except JobSchedulerClosedError as err:
+            raise HTTPException(status_code=503, detail=str(err)) from err
+
+    def _scheduler_payload() -> dict[str, int | bool | str]:
+        snapshot = scheduler.snapshot()
+        return {
+            "mode": "unlimited" if snapshot.max_running_jobs == 0 else "queued",
+            "max_running_jobs": snapshot.max_running_jobs,
+            "max_queued_jobs": snapshot.max_queued_jobs,
+            "running_jobs": snapshot.running_jobs,
+            "queued_jobs": snapshot.queued_jobs,
+            "reserved_jobs": snapshot.reserved_jobs,
+            "cancelling_jobs": snapshot.cancelling_jobs,
+            "closed": snapshot.closed,
+        }
+
+    def _schedule_job(
         kind: str,
         request: dict[str, Any] | None = None,
+        target: Callable[..., None] | None = None,
         *,
+        args: tuple[Any, ...] = (),
+        kwargs: dict[str, Any] | None = None,
         parent_job_id: str | None = None,
+        reservation: JobReservation | None = None,
     ) -> Job:
-        now = time.monotonic()
-        with state.job_lock:
-            _prune_jobs_locked(now)
-            running = sum(job.status == "running" for job in state.jobs.values())
-            if running >= max_running_jobs:
-                raise HTTPException(
-                    status_code=429,
-                    detail=f"too many running jobs (limit: {max_running_jobs})",
-                )
+        """Create, persist, and submit one background Job through the scheduler."""
+
+        if target is None:
+            raise TypeError("scheduled job target is required")
+        admission = reservation or _reserve_job_slot()
+        submitted = False
+        try:
+            now = time.monotonic()
             job = Job(
                 id=uuid.uuid4().hex[:12],
                 kind=kind,
                 request=_snapshot_job_request(request or {}),
+                status="pending",
+                message="等待可用的任务执行槽位…",
                 parent_job_id=parent_job_id,
                 on_terminal=_persist_terminal_job,
             )
-            state.jobs[job.id] = job
-            _persist_job(job)
+
+            def run() -> None:
+                try:
+                    job.mark_running()
+                    if job.message == "等待可用的任务执行槽位…":
+                        job.message = "任务已开始…"
+                    _persist_job(job)
+                    target(job, *args, **(kwargs or {}))
+                except Exception as err:  # noqa: BLE001 - expose worker failure
+                    _log.exception("unhandled %s job failure", kind)
+                    if job.status in _ACTIVE_JOB_STATUSES:
+                        job.error = str(err)
+                        job.mark_terminal("error")
+                finally:
+                    if job.status in _ACTIVE_JOB_STATUSES:
+                        job.error = "后台任务提前结束，未发布完成状态。"
+                        job.mark_terminal("error")
+
+            def cancel(reason: str) -> None:
+                if job.status not in _ACTIVE_JOB_STATUSES:
+                    return
+                job.message = "任务未开始"
+                job.error = reason
+                job.mark_terminal("error")
+
+            try:
+                with state.job_lock:
+                    _prune_jobs_locked(now)
+                    state.jobs[job.id] = job
+                    _persist_job(job)
+            except Exception:
+                with state.job_lock:
+                    state.jobs.pop(job.id, None)
+                raise
+            try:
+                admission.submit(run, on_cancel=cancel)
+            except JobSchedulerClosedError as err:
+                cancel(str(err))
+                raise HTTPException(status_code=503, detail=str(err)) from err
+            except Exception:
+                cancel("无法启动后台任务。")
+                raise
+            submitted = True
             return job
+        finally:
+            if not submitted:
+                admission.cancel()
 
     def _get_job(job_id: str) -> Job | None:
         now = time.monotonic()
@@ -794,13 +958,18 @@ def create_app(
             "result_summary": _job_result_summary(job),
             "can_download": _job_can_download(job),
             "can_copy_cli": bool(cli["available"]),
-            "can_retry": bool(replay["available"]) and job.status != "running",
+            "can_retry": (
+                bool(replay["available"])
+                and job.status not in _ACTIVE_JOB_STATUSES
+            ),
             "retry_reason": (
-                "任务仍在运行中。" if job.status == "running" else replay["reason"]
+                "任务仍在排队或运行中。"
+                if job.status in _ACTIVE_JOB_STATUSES
+                else replay["reason"]
             ),
             "can_retry_failed": (
                 job.kind == "batch"
-                and job.status != "running"
+                and job.status not in _ACTIVE_JOB_STATUSES
                 and failed_item_count > 0
                 and bool(replay["available"])
             ),
@@ -1037,6 +1206,7 @@ def create_app(
             "source_root": str(state.source_root),
             "save_dir": str(state.save_dir),
             "motions_library_root": str(motions_library_root()),
+            "job_scheduler": _scheduler_payload(),
         }
 
     @app.get("/api/formats")
@@ -1084,7 +1254,12 @@ def create_app(
             })
             seen.add(row["source_path"])
             merged.append(row)
-        for raw in scan_motions_library():
+        # Avoid observing a half-copied same-process publish.  The filesystem
+        # namespace is still only process-local; multi-worker deployments need
+        # a cross-process file lock before they can offer this guarantee.
+        with motion_library_publish_lock:
+            motion_entries = scan_motions_library()
+        for raw in motion_entries:
             sp = str(raw.get("source_path") or "")
             if not sp or sp in seen:
                 continue
@@ -1109,15 +1284,20 @@ def create_app(
         }
 
     @app.post("/api/library/link")
-    async def library_link(body: dict) -> dict:
+    def library_link(body: dict) -> dict:
         from hhtools.web.motion_library_links import link_to_library, scan_motions_library
 
         path = str(body.get("path") or "").strip()
         folder_label = str(body.get("folder_label") or "").strip() or None
         if not path:
             raise HTTPException(status_code=400, detail="需要 path")
-        dest = link_to_library(path, folder_label=folder_label)
-        entries = [e for e in scan_motions_library() if e.get("folder_label") == dest.name]
+        with motion_library_publish_lock:
+            dest = link_to_library(path, folder_label=folder_label)
+            entries = [
+                entry
+                for entry in scan_motions_library()
+                if entry.get("folder_label") == dest.name
+            ]
         return {
             "folder_label": dest.name,
             "kind": "directory",
@@ -1130,7 +1310,9 @@ def create_app(
     def library_unlink(folder_label: str) -> dict:
         from hhtools.web.motion_library_links import remove_library_folder
 
-        if not remove_library_folder(folder_label):
+        with motion_library_publish_lock:
+            removed = remove_library_folder(folder_label)
+        if not removed:
             raise HTTPException(status_code=404, detail="link not found")
         return {"removed": folder_label}
 
@@ -1166,10 +1348,9 @@ def create_app(
 
     @app.post("/api/dataset/analyze")
     async def dataset_analyze(body: dict) -> dict:
-        job = _register_job("dataset_analyze", body)
-        threading.Thread(
-            target=_run_dataset_analyze_job, args=(job, body), daemon=True,
-        ).start()
+        job = _schedule_job(
+            "dataset_analyze", body, _run_dataset_analyze_job, args=(body,),
+        )
         return {"job_id": job.id}
 
     @app.get("/api/dataset/result")
@@ -1348,12 +1529,12 @@ def create_app(
         """Load a robot export CSV for mesh playback (dataset viz scatter preview)."""
         if not body.get("source_path"):
             raise HTTPException(status_code=400, detail="source_path required")
-        job = _register_job("dataset_robot_preview", body)
-        threading.Thread(
-            target=_run_dataset_robot_preview_job,
-            args=(job, body, state),
-            daemon=True,
-        ).start()
+        job = _schedule_job(
+            "dataset_robot_preview",
+            body,
+            _run_dataset_robot_preview_job,
+            args=(body, state),
+        )
         return {"job_id": job.id}
 
     @app.get("/api/dataset/scene_glb")
@@ -1550,26 +1731,60 @@ def create_app(
             job.mark_terminal("error")
 
     def _run_motion_library_dir_job(
-        job: Job, lib_dir: Path, folder_label: str, profile: str,
+        job: Job,
+        drop: Path,
+        relative_paths: list[str],
+        folder_label_hint: str | None,
+        profile: str,
         prefer_paths: list[str] | None = None,
     ) -> None:
+        from hhtools.web.motion_library_links import materialize_drop
         from hhtools.web.motion_progress import MotionLoadProgress
         from hhtools.web.upload_resolve import resolve_upload_drop
 
         try:
             load_prog = MotionLoadProgress(job, base=0.08, span=0.34)
             motion, dataset, info = resolve_upload_drop(
-                lib_dir,
+                # Never parse through the mutable library label.  A later
+                # same-label upload may replace it while this job is pending.
+                drop,
                 profile,
                 load_motion_file=_load_motion_file,
                 load_via_adapter=_load_via_adapter,
                 progress=load_prog,
                 prefer_paths=prefer_paths,
             )
-            picked = Path(info.get("picked", lib_dir))
-            library_entry = _library_entry_from_link(
-                folder_label, lib_dir, picked, dataset,
-            )
+            snapshot_picked = Path(info.get("picked", drop))
+            with motion_library_publish_lock:
+                lib_dir, folder_label, materialize_mode = materialize_drop(
+                    relative_paths,
+                    folder_label=folder_label_hint,
+                    upload_drop=drop,
+                )
+                library_picked = _matching_materialized_clip(
+                    lib_dir,
+                    snapshot_root=drop,
+                    snapshot_picked=snapshot_picked,
+                    profile=profile,
+                )
+                library_entry = _library_entry_from_link(
+                    folder_label, lib_dir, library_picked, dataset,
+                )
+                # The request is persisted as soon as it is admitted, when a
+                # single-file upload may not yet have an inferred label and no
+                # materialisation mode exists.  Replace the snapshot after the
+                # atomic publish step so history/restart diagnostics retain the
+                # actual library destination instead of the original hint.
+                job.request = {
+                    **job.request,
+                    "folder_label": folder_label,
+                    "materialize_mode": materialize_mode,
+                }
+            # Persist the publication metadata before the potentially long
+            # grounding/serialization phase.  A process interruption after
+            # library publication must not leave history pointing only at the
+            # original label hint.
+            _persist_job(job)
             payload = _register_motion(
                 motion,
                 dataset,
@@ -1579,6 +1794,7 @@ def create_app(
                 extra={
                     "upload_info": info,
                     "linked_folder": folder_label,
+                    "materialize_mode": materialize_mode,
                 },
             )
             job.result = payload
@@ -1590,10 +1806,9 @@ def create_app(
 
     @app.post("/api/motion/load_library")
     async def load_library(body: dict) -> dict:
-        job = _register_job("motion_load", body)
-        threading.Thread(
-            target=_run_motion_library_job, args=(job, body), daemon=True,
-        ).start()
+        job = _schedule_job(
+            "motion_load", body, _run_motion_library_job, args=(body,),
+        )
         return {"job_id": job.id}
 
     @app.post("/api/basket/upload")
@@ -1602,23 +1817,31 @@ def create_app(
         profile: str = "auto",
     ) -> dict:
         """Upload external clips into the session cache for batch retarget."""
+        admission = _reserve_job_slot()
         drop = state.upload_root / uuid.uuid4().hex[:8]
-        drop.mkdir(parents=True, exist_ok=True)
-        stored = await _store_uploads(files, drop)
-        if not stored:
-            raise HTTPException(status_code=400, detail="empty upload")
-        job = _register_job(
-            "basket_upload",
-            {
-                "profile": profile,
-                "file_count": len(stored),
-                "files": [relative.as_posix() for relative, _path in stored],
-            },
-        )
-        threading.Thread(
-            target=_run_basket_upload_job, args=(job, drop, profile), daemon=True,
-        ).start()
-        return {"job_id": job.id}
+        scheduled = False
+        try:
+            drop.mkdir(parents=True, exist_ok=True)
+            stored = await _store_uploads(files, drop)
+            if not stored:
+                raise HTTPException(status_code=400, detail="empty upload")
+            job = _schedule_job(
+                "basket_upload",
+                {
+                    "profile": profile,
+                    "file_count": len(stored),
+                    "files": [relative.as_posix() for relative, _path in stored],
+                },
+                _run_basket_upload_job,
+                args=(drop, profile),
+                reservation=admission,
+            )
+            scheduled = True
+            return {"job_id": job.id}
+        finally:
+            if not scheduled:
+                admission.cancel()
+                shutil.rmtree(drop, ignore_errors=True)
 
     @app.post("/api/motion/upload")
     async def upload_motion(
@@ -1628,7 +1851,7 @@ def create_app(
     ) -> dict:
         """Upload motion clips; auto-symlink or copy into ``~/.config/hhtools/motions``."""
 
-        from hhtools.web.motion_library_links import materialize_drop, motions_library_root
+        from hhtools.web.motion_library_links import motions_library_root
 
         if not files:
             raise HTTPException(status_code=400, detail="empty upload")
@@ -1637,46 +1860,51 @@ def create_app(
 
         folder_label = str(library_folder_label or "").strip() or None
 
-        # Always buffer browser bytes first so a bad on-disk symlink guess
-        # cannot discard the only copy of the clip (see link_to_library).
+        # Reserve admission before touching either the upload tree or the user's
+        # persistent Motion Library.  A bounded queue therefore rejects cleanly.
+        admission = _reserve_job_slot()
         drop = state.upload_root / uuid.uuid4().hex[:8]
-        drop.mkdir(parents=True, exist_ok=True)
-        stored = await _store_uploads(files, drop)
-        rel_paths = [relative.as_posix() for relative, _destination in stored]
+        scheduled = False
+        try:
+            drop.mkdir(parents=True, exist_ok=True)
+            # Always buffer browser bytes first so a bad on-disk symlink guess
+            # cannot discard the only copy of the clip (see link_to_library).
+            stored = await _store_uploads(files, drop)
+            rel_paths = [relative.as_posix() for relative, _destination in stored]
 
-        lib_dir, label, materialize_mode = materialize_drop(
-            rel_paths,
-            folder_label=folder_label,
-            upload_drop=drop,
-        )
-        if not enumerate_upload_clips(lib_dir, profile):
-            raise HTTPException(
-                status_code=400,
-                detail="未找到可识别的动作文件（.npz / .bvh / .glb / .pkl …）",
+            # Validate the isolated drop before materialisation.  Previously an
+            # unsupported upload could replace a same-named library folder and
+            # only then return HTTP 400.
+            if not enumerate_upload_clips(drop, profile):
+                raise HTTPException(
+                    status_code=400,
+                    detail="未找到可识别的动作文件（.npz / .bvh / .glb / .pkl …）",
+                )
+
+            job = _schedule_job(
+                "motion_link",
+                {
+                    "profile": profile,
+                    "folder_label": folder_label,
+                    "file_count": len(rel_paths),
+                    "files": rel_paths,
+                },
+                _run_motion_library_dir_job,
+                args=(drop, rel_paths, folder_label, profile),
+                kwargs={"prefer_paths": rel_paths},
+                reservation=admission,
             )
-
-        job = _register_job(
-            "motion_link",
-            {
-                "profile": profile,
-                "folder_label": label,
-                "file_count": len(rel_paths),
-                "files": rel_paths,
-            },
-        )
-        threading.Thread(
-            target=_run_motion_library_dir_job,
-            args=(job, lib_dir, label, profile),
-            kwargs={"prefer_paths": rel_paths},
-            daemon=True,
-        ).start()
-        return {
-            "job_id": job.id,
-            "linked": True,
-            "folder_label": label,
-            "materialize_mode": materialize_mode,
-            "motions_library_root": str(motions_library_root()),
-        }
+            scheduled = True
+            return {
+                "job_id": job.id,
+                "linked": False,
+                "materialize_mode": "pending",
+                "motions_library_root": str(motions_library_root()),
+            }
+        finally:
+            if not scheduled:
+                admission.cancel()
+                shutil.rmtree(drop, ignore_errors=True)
 
     @app.get("/api/object_glb")
     def object_glb(token: str, index: int, scale: float | None = None) -> Response:
@@ -2124,8 +2352,7 @@ def create_app(
 
     @app.post("/api/retarget")
     async def retarget(body: dict) -> dict:
-        job = _register_job("retarget", body)
-        threading.Thread(target=_run_retarget_job, args=(job, body), daemon=True).start()
+        job = _schedule_job("retarget", body, _run_retarget_job, args=(body,))
         return {"job_id": job.id}
 
     @app.post("/api/scaled_preview")
@@ -2337,16 +2564,18 @@ def create_app(
                 detail={"code": "job_not_replayable", "msg": capability["reason"]},
             )
         request = _snapshot_job_request(spec["request"])
-        job = _register_job(
-            str(spec["kind"]), request, parent_job_id=parent_job_id,
-        )
         target = (
             _run_replayed_retarget_job
             if spec["kind"] == "retarget"
             else _run_replayed_batch_job
         )
-        threading.Thread(target=target, args=(job, request), daemon=True).start()
-        return job
+        return _schedule_job(
+            str(spec["kind"]),
+            request,
+            target,
+            args=(request,),
+            parent_job_id=parent_job_id,
+        )
 
     @app.post("/api/jobs/spec/validate")
     async def validate_job_spec(body: dict) -> dict:
@@ -2371,10 +2600,15 @@ def create_app(
         failures: list[dict] = []
         if isinstance(source_job_id, str) and source_job_id:
             spec, source_status, failures = _job_source_for_replay(source_job_id)
-            if source_status == "running":
+            if source_status in _ACTIVE_JOB_STATUSES:
                 raise HTTPException(
                     status_code=409,
-                    detail={"code": "job_running", "msg": "原任务仍在运行中。"},
+                    detail={
+                        # Keep the established machine-readable code for API
+                        # compatibility; its message now also covers pending.
+                        "code": "job_running",
+                        "msg": "原任务仍在排队或运行中。",
+                    },
                 )
         else:
             try:
@@ -2413,7 +2647,12 @@ def create_app(
             key=lambda record: float(record.get("created_at") or 0.0),
             reverse=True,
         )[:bounded_limit]
-        return {"jobs": records, "session_only": False, "persistence": "disk"}
+        return {
+            "jobs": records,
+            "session_only": False,
+            "persistence": "disk",
+            "scheduler": _scheduler_payload(),
+        }
 
     @app.get("/api/job/{job_id}/config")
     def job_config(job_id: str) -> dict:
@@ -2789,8 +3028,7 @@ def create_app(
 
     @app.post("/api/batch/retarget")
     async def batch_retarget(body: dict) -> dict:
-        job = _register_job("batch", body)
-        threading.Thread(target=_run_batch_job, args=(job, body), daemon=True).start()
+        job = _schedule_job("batch", body, _run_batch_job, args=(body,))
         return {"job_id": job.id}
 
     # ----------------------------------------------------------------- export
@@ -2919,27 +3157,33 @@ def create_app(
         if not source_robot:
             raise HTTPException(status_code=400, detail="source_robot is required")
         src_fps = _parse_optional_fps(source_fps)
+        admission = _reserve_job_slot()
         drop = state.upload_root / f"r2r_{uuid.uuid4().hex[:8]}"
-        drop.mkdir(parents=True, exist_ok=True)
-        stored = await _store_uploads(files, drop)
-        if not stored:
-            raise HTTPException(status_code=400, detail="empty upload")
-        job = _register_job(
-            "r2r_source_upload",
-            {
-                "source_robot": source_robot,
-                "profile": profile,
-                "source_fps": src_fps,
-                "file_count": len(stored),
-                "files": [relative.as_posix() for relative, _path in stored],
-            },
-        )
-        threading.Thread(
-            target=_run_r2r_source_upload_job,
-            args=(job, drop, source_robot, profile, state, src_fps),
-            daemon=True,
-        ).start()
-        return {"job_id": job.id}
+        scheduled = False
+        try:
+            drop.mkdir(parents=True, exist_ok=True)
+            stored = await _store_uploads(files, drop)
+            if not stored:
+                raise HTTPException(status_code=400, detail="empty upload")
+            job = _schedule_job(
+                "r2r_source_upload",
+                {
+                    "source_robot": source_robot,
+                    "profile": profile,
+                    "source_fps": src_fps,
+                    "file_count": len(stored),
+                    "files": [relative.as_posix() for relative, _path in stored],
+                },
+                _run_r2r_source_upload_job,
+                args=(drop, source_robot, profile, state, src_fps),
+                reservation=admission,
+            )
+            scheduled = True
+            return {"job_id": job.id}
+        finally:
+            if not scheduled:
+                admission.cancel()
+                shutil.rmtree(drop, ignore_errors=True)
 
     @app.get("/api/r2r/scene_glb")
     def r2r_scene_glb(token: str, mesh: str, scale: float | None = None) -> Response:
@@ -3162,10 +3406,9 @@ def create_app(
 
     @app.post("/api/r2r/retarget")
     async def r2r_retarget(body: dict) -> dict:
-        job = _register_job("r2r_retarget", body)
-        threading.Thread(
-            target=_run_r2r_retarget_job, args=(job, body), daemon=True,
-        ).start()
+        job = _schedule_job(
+            "r2r_retarget", body, _run_r2r_retarget_job, args=(body,),
+        )
         return {"job_id": job.id}
 
     @app.post("/api/r2r/basket/upload")
@@ -3173,30 +3416,37 @@ def create_app(
         files: list[UploadFile] = File(...),
         profile: str = "auto",
     ) -> dict:
+        admission = _reserve_job_slot()
         drop = state.upload_root / uuid.uuid4().hex[:8]
-        drop.mkdir(parents=True, exist_ok=True)
-        stored = await _store_uploads(files, drop)
-        if not stored:
-            raise HTTPException(status_code=400, detail="empty upload")
-        job = _register_job(
-            "r2r_basket_upload",
-            {
-                "profile": profile,
-                "file_count": len(stored),
-                "files": [relative.as_posix() for relative, _path in stored],
-            },
-        )
-        threading.Thread(
-            target=_run_r2r_basket_upload_job, args=(job, drop, profile), daemon=True,
-        ).start()
-        return {"job_id": job.id}
+        scheduled = False
+        try:
+            drop.mkdir(parents=True, exist_ok=True)
+            stored = await _store_uploads(files, drop)
+            if not stored:
+                raise HTTPException(status_code=400, detail="empty upload")
+            job = _schedule_job(
+                "r2r_basket_upload",
+                {
+                    "profile": profile,
+                    "file_count": len(stored),
+                    "files": [relative.as_posix() for relative, _path in stored],
+                },
+                _run_r2r_basket_upload_job,
+                args=(drop, profile),
+                reservation=admission,
+            )
+            scheduled = True
+            return {"job_id": job.id}
+        finally:
+            if not scheduled:
+                admission.cancel()
+                shutil.rmtree(drop, ignore_errors=True)
 
     @app.post("/api/r2r/batch/retarget")
     async def r2r_batch_retarget(body: dict) -> dict:
-        job = _register_job("r2r_batch", body)
-        threading.Thread(
-            target=_run_r2r_batch_job, args=(job, body, state), daemon=True,
-        ).start()
+        job = _schedule_job(
+            "r2r_batch", body, _run_r2r_batch_job, args=(body, state),
+        )
         return {"job_id": job.id}
 
     # ----------------------------------------------------------------- static
@@ -3213,6 +3463,55 @@ def _enrich_basket_entry(entry: dict, fallback: str = "smpl") -> dict:
     if not (out.get("reference") or "").strip():
         out["reference"] = _entry_reference(out, fallback)
     return out
+
+
+def _matching_materialized_clip(
+    library_root: Path,
+    *,
+    snapshot_root: Path,
+    snapshot_picked: Path,
+    profile: str,
+) -> Path:
+    """Match a loaded snapshot clip to its newly materialized library path."""
+
+    from hhtools.web.upload_resolve import enumerate_upload_clips
+
+    library_root = Path(library_root).resolve()
+    snapshot_root = Path(snapshot_root).resolve()
+    snapshot_picked = Path(snapshot_picked).resolve()
+    candidates = enumerate_upload_clips(library_root, profile)
+    if not candidates:
+        raise ValueError("动作已解析，但发布后的 Motion Library 中没有可识别文件。")
+    try:
+        snapshot_parts = snapshot_picked.relative_to(snapshot_root).parts
+    except ValueError:
+        snapshot_parts = (snapshot_picked.name,)
+
+    def score(candidate: Any) -> tuple[int, bool]:
+        # Keep the candidate lexical while deriving its library-relative
+        # suffix.  ``resolve()`` here would follow file/directory symlinks out
+        # of the library and collapse distinct paths such as ``a/clip.bvh``
+        # and ``b/clip.bvh`` to their external targets.
+        candidate_path = Path(candidate.path)
+        try:
+            candidate_parts = candidate_path.relative_to(library_root).parts
+        except ValueError:
+            try:
+                candidate_parts = candidate_path.absolute().relative_to(
+                    library_root
+                ).parts
+            except ValueError:
+                candidate_parts = (candidate_path.name,)
+        matching_suffix = 0
+        for left, right in zip(
+            reversed(snapshot_parts), reversed(candidate_parts), strict=False,
+        ):
+            if left != right:
+                break
+            matching_suffix += 1
+        return matching_suffix, candidate_path.name == snapshot_picked.name
+
+    return Path(max(candidates, key=score).path).resolve()
 
 
 def _library_entry_from_link(
@@ -5417,16 +5716,33 @@ def run_web(
     cache_dir: Path | None = None,
     host: str = "127.0.0.1",
     port: int = 8009,
+    max_running_jobs: int = _DEFAULT_MAX_RUNNING_JOBS,
+    max_queued_jobs: int = _DEFAULT_MAX_QUEUED_JOBS,
 ) -> None:
     """Launch the uvicorn server (blocking)."""
     import uvicorn
 
-    app = create_app(source_root=source_root, save_dir=save_dir, cache_dir=cache_dir)
+    app = create_app(
+        source_root=source_root,
+        save_dir=save_dir,
+        cache_dir=cache_dir,
+        max_running_jobs=max_running_jobs,
+        max_queued_jobs=max_queued_jobs,
+    )
     url = f"http://{host}:{port}"
     static_dir = Path(__file__).parent / "static"
     print(f"\n  hhtools web  →  {url}")
     print(f"  UI build     →  {UI_BUILD_ID}")
     print(f"  static dir   →  {static_dir.resolve()}")
+    print(
+        "  jobs         →  "
+        + (
+            "unlimited concurrency"
+            if max_running_jobs == 0
+            else f"{max_running_jobs} running, "
+            + ("unlimited waiting" if max_queued_jobs == 0 else f"{max_queued_jobs} waiting")
+        )
+    )
     print(
         "  侧栏应为 3 项（含「机器人 · Retarget」）；舞台左上角有「骨架|身体|机器人」。"
         "\n  git pull 后请在本仓库执行 uv sync 并用 uv run hhtools web 重启（勿用全局旧包）。"
@@ -5450,6 +5766,8 @@ def run_desktop_sidecar(
     host: str,
     port: int,
     session_secret: str,
+    max_running_jobs: int = _DEFAULT_MAX_RUNNING_JOBS,
+    max_queued_jobs: int = _DEFAULT_MAX_QUEUED_JOBS,
 ) -> None:
     """Run the secured localhost server without opening a browser."""
     # The sidecar is a private desktop implementation detail and must never listen on the LAN.
@@ -5469,6 +5787,8 @@ def run_desktop_sidecar(
         desktop_session_secret=session_secret,
         desktop_allowed_host=allowed_host,
         desktop_allowed_origin=origin,
+        max_running_jobs=max_running_jobs,
+        max_queued_jobs=max_queued_jobs,
     )
     _log.info("Starting hhtools desktop sidecar on %s", origin)
     uvicorn.run(app, host=host, port=port, log_level="info", access_log=False)

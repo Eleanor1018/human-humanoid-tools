@@ -56,6 +56,17 @@ npm run dev
 
 浏览器打开 `http://127.0.0.1:8009`。
 
+Web 后台任务默认不限制并发。共享服务器或显存紧张时，可以显式启用 FIFO 调度：
+
+```bash
+uv run hhtools web --max-running-jobs 1 --max-queued-jobs 32
+```
+
+两个参数的 `0` 都表示不限；只有运行并发为正数时，等待队列设置才生效。也可以使用
+`HHTOOLS_MAX_RUNNING_JOBS` 和 `HHTOOLS_MAX_QUEUED_JOBS` 环境变量，Electron sidecar 同样支持。
+该上限只约束调度器管理的 Web Job，不包含选择机器人时可选的 Warp/Newton 预热线程，
+因此它是任务准入控制，并非整个进程的严格 GPU 并发上限。
+
 | 面板 | 流程 |
 |------|------|
 | **Motion → Robot** | 加载动作 → 选机器人 → 标定（首次）→ Retarget → 下载 CSV/ZIP |
