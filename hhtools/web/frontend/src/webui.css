@@ -111,6 +111,7 @@ button { font-family: inherit; cursor: pointer; }
   --inspector-w: 360px;
   --sidebar-handle-w: 6px;
   --inspector-handle-w: 6px;
+  --side-panel-option-font-size: 14px;
   display: grid;
   grid-template-columns: var(--sidebar-w) var(--sidebar-handle-w) minmax(0, 1fr) var(--inspector-handle-w) var(--inspector-w);
   grid-template-rows: 52px minmax(0, 1fr);
@@ -468,7 +469,7 @@ button { font-family: inherit; cursor: pointer; }
   padding: 10px 12px 8px; border-bottom: 1px solid var(--hairline);
   flex-shrink: 0;
 }
-.side-panel-title { font-size: 11px; font-weight: 600; color: var(--ink-tertiary);
+.side-panel-title { font-size: var(--side-panel-option-font-size); font-weight: 600; color: var(--ink-tertiary);
   text-transform: uppercase; letter-spacing: 0.04em; }
 .panel-hide-btn {
   border: none; background: transparent; color: var(--ink-tertiary);
@@ -533,7 +534,7 @@ button { font-family: inherit; cursor: pointer; }
   padding: 10px 13px;
   border-radius: var(--radius-sm);
   color: var(--ink-secondary);
-  font-size: 14px;
+  font-size: var(--side-panel-option-font-size);
   font-weight: 500;
   border: none;
   background: transparent;
