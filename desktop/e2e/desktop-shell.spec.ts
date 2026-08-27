@@ -125,29 +125,46 @@ test('loads the existing WebUI and shuts down its Python sidecar', async ({}, te
     await expect(motionPanel.locator('h2')).toHaveText('动作 Motion')
     await expect(motionPanel.locator(':scope > .lead')).toHaveCount(0)
     await expect(motionPanel.locator('#motion-assets-hint')).toHaveCount(0)
-    await expect(motionPanel.locator('.motion-import-card')).toHaveCount(3)
-    await expect(motionPanel.locator('.motion-import-card .dz-title')).toHaveText([
+    await expect(motionPanel.locator('.motion-import-card')).toHaveCount(0)
+    await expect(motionPanel.locator('.motion-profile-selector-content')).toHaveText([
+      'mimic',
       'intermimic',
       'meshmimic',
-      'mimic',
     ])
+    const motionProfileRadios = motionPanel.getByRole('radio')
+    const sharedMotionDropzone = motionPanel.locator('#motion-drop-shared')
+    await expect(motionProfileRadios).toHaveCount(3)
+    await expect(motionProfileRadios.first()).toBeChecked()
+    await expect(sharedMotionDropzone).toHaveCount(1)
+    await expect(sharedMotionDropzone).toHaveAttribute('data-profile', 'mimic')
+    await expect(motionPanel.locator('#motion-pick-file')).toBeVisible()
+    await expect(motionPanel.locator('#motion-pick-folder')).toBeVisible()
+    expect((await sharedMotionDropzone.boundingBox())?.height).toBeLessThan(180)
+    await page.screenshot({ path: testInfo.outputPath('desktop-motion-compact-default.png'), fullPage: true })
 
-    const motionInfoTriggers = motionPanel.locator('.motion-import-info-trigger')
-    const intermimicInfo = motionPanel.locator('#motion-info-intermimic')
-    await expect(motionInfoTriggers).toHaveCount(3)
-    await expect(intermimicInfo).toBeHidden()
-    await motionInfoTriggers.first().click()
-    await expect(motionInfoTriggers.first()).toHaveAttribute('aria-expanded', 'true')
-    await expect(intermimicInfo).toBeVisible()
-    await expect(intermimicInfo).toContainText('<clip>/<clip>.pkl')
-    await page.screenshot({ path: testInfo.outputPath('desktop-motion-upload-info.png'), fullPage: true })
+    await motionPanel.locator('.motion-profile-selector', { hasText: 'intermimic' }).click()
+    await expect(motionProfileRadios.nth(1)).toBeChecked()
+    await expect(sharedMotionDropzone).toHaveAttribute('data-profile', 'intermimic')
+    await expect(motionPanel.locator('#motion-pick-file')).toBeHidden()
+    await expect(motionPanel.locator('#motion-pick-folder')).toHaveAttribute('data-pick', 'intermimic')
+
+    const motionInfoTrigger = motionPanel.locator('.motion-import-info-trigger')
+    const motionUploadInfo = motionPanel.locator('#motion-upload-info')
+    await expect(motionInfoTrigger).toHaveCount(1)
+    await expect(motionUploadInfo).toBeHidden()
+    await motionInfoTrigger.click()
+    await expect(motionInfoTrigger).toHaveAttribute('aria-expanded', 'true')
+    await expect(motionUploadInfo).toBeVisible()
+    await expect(motionUploadInfo).toContainText('<clip>/<clip>.pkl')
+    await page.screenshot({ path: testInfo.outputPath('desktop-motion-compact-upload-info.png'), fullPage: true })
     await page.keyboard.press('Escape')
-    await expect(intermimicInfo).toBeHidden()
+    await expect(motionUploadInfo).toBeHidden()
 
     // The native file dialog filters individual motion files, while directory
     // pickers stay unfiltered so required object and terrain sidecars survive.
+    await motionPanel.locator('.motion-profile-selector', { hasText: /^mimic$/ }).click()
     const motionFileChooserPromise = page.waitForEvent('filechooser')
-    await motionPanel.locator('[data-pick="mimic"]:not([data-folder])').click()
+    await motionPanel.locator('#motion-pick-file').click()
     const motionFileChooser = await motionFileChooserPromise
     expect(await motionFileChooser.element().getAttribute('accept'))
       .toBe('.bvh,.glb,.gltf,.npz,.npy,.pkl,.pt')
@@ -159,8 +176,9 @@ test('loads the existing WebUI and shuts down its Python sidecar', async ({}, te
     await expect(page.locator('#toast.err')).toContainText('未找到可识别的动作文件（mimic）')
     await expect(page.locator('#toast.err')).not.toContainText('"detail"')
 
+    await motionPanel.locator('.motion-profile-selector', { hasText: 'intermimic' }).click()
     const intermimicFolderChooserPromise = page.waitForEvent('filechooser')
-    await motionPanel.locator('[data-pick="intermimic"][data-folder="1"]').click()
+    await motionPanel.locator('#motion-pick-folder').click()
     const intermimicFolderChooser = await intermimicFolderChooserPromise
     expect(await intermimicFolderChooser.element().evaluate((element) => {
       const input = element as HTMLInputElement

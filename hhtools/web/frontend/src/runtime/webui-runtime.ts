@@ -3494,9 +3494,10 @@ async function collectDroppedFiles(dataTransfer: DataTransfer | null): Promise<U
   return files;
 }
 
-function setupDropzone(
+function setupDropzone<DropContext = void>(
   el: HTMLElement,
-  onFiles: (files: UploadFile[]) => void | Promise<void>,
+  onFiles: (files: UploadFile[], context: DropContext) => void | Promise<void>,
+  captureDropContext?: () => DropContext,
 ): void {
   ["dragenter", "dragover"].forEach((ev) =>
     el.addEventListener(ev, (event) => { event.preventDefault(); el.classList.add("hover"); })
@@ -3508,8 +3509,11 @@ function setupDropzone(
     const dropEvent = event as DragEvent;
     dropEvent.stopPropagation();
     el.classList.remove("hover");
+    // Snapshot mutable UI state before recursively walking a potentially large
+    // folder; changing a selector mid-walk must not reinterpret this drop.
+    const dropContext = captureDropContext?.() as DropContext;
     void collectDroppedFiles(dropEvent.dataTransfer).then((files) => {
-      if (files.length) void onFiles(files);
+      if (files.length) void onFiles(files, dropContext);
     });
   });
 }
@@ -3594,10 +3598,14 @@ async function ingestMotionFiles(files: UploadFile[], profile = "mimic"): Promis
   }
 }
 
-function initMotionImportZones(): void {
-  for (const el of document.querySelectorAll<HTMLElement>(".motion-import-grid [data-profile]")) {
-    const profile = el.dataset.profile || "mimic";
-    setupDropzone(el, (files) => ingestMotionFiles(files, profile));
+function initMotionImportZone(): void {
+  const dropzone = document.getElementById("motion-drop-shared");
+  if (dropzone) {
+    setupDropzone(
+      dropzone,
+      (files, profile) => ingestMotionFiles(files, profile),
+      () => dropzone.dataset.profile || "mimic",
+    );
   }
   document.querySelectorAll<HTMLButtonElement>("[data-pick]").forEach((btn) => {
     btn.onclick = async () => {
@@ -3608,7 +3616,7 @@ function initMotionImportZones(): void {
     };
   });
 }
-initMotionImportZones();
+initMotionImportZone();
 setupDropzone(document.getElementById("stage"), (files) => ingestMotionFiles(files, "mimic"));
 
 document.getElementById("add-to-basket").onclick = () => {

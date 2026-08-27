@@ -38,7 +38,21 @@ const jobAdmissionError = ref<string | null>(null)
 const jobAdmissionErrorOperation = ref<'load' | 'save' | null>(null)
 const jobAdmissionSaved = ref(false)
 type MotionUploadProfile = 'intermimic' | 'meshmimic' | 'mimic'
-const openMotionUploadInfo = ref<MotionUploadProfile | null>(null)
+const motionUploadProfiles: ReadonlyArray<{ id: MotionUploadProfile; label: string }> = [
+  { id: 'mimic', label: 'mimic' },
+  { id: 'intermimic', label: 'intermimic' },
+  { id: 'meshmimic', label: 'meshmimic' },
+]
+const motionUploadProfileMeta: Record<MotionUploadProfile, {
+  glyph: string
+  dropHint: string
+}> = {
+  mimic: { glyph: '🎞', dropHint: '拖入动作文件或文件夹' },
+  intermimic: { glyph: '📦', dropHint: '拖入完整的物体交互动作文件夹' },
+  meshmimic: { glyph: '⛰', dropHint: '拖入完整的地形动作文件夹' },
+}
+const activeMotionUploadProfile = ref<MotionUploadProfile>('mimic')
+const motionUploadInfoOpen = ref(false)
 
 document.documentElement.lang = workspaceLocale.value
 document.documentElement.dataset.theme = workspaceTheme.value
@@ -178,9 +192,10 @@ function showBoot(message: string): void {
 const importTargets: Record<Exclude<ImportCommandTarget, 'job-spec'>, {
   panel: WorkspacePanelId
   selector: string
+  motionProfile?: MotionUploadProfile
 }> = {
-  'motion-file': { panel: 'motion', selector: '[data-pick="mimic"]:not([data-folder])' },
-  'motion-folder': { panel: 'motion', selector: '[data-pick="mimic"][data-folder="1"]' },
+  'motion-file': { panel: 'motion', selector: '#motion-pick-file', motionProfile: 'mimic' },
+  'motion-folder': { panel: 'motion', selector: '#motion-pick-folder', motionProfile: 'mimic' },
   'robot-urdf': { panel: 'robot-assets', selector: '#robot-pick-urdf' },
   'robot-mesh-folder': { panel: 'robot-assets', selector: '#robot-pick-mesh-folder' },
   'robot-trajectory': { panel: 'r2r', selector: '[data-r2r-pick="mimic"]:not([data-folder])' },
@@ -194,6 +209,7 @@ function handleImportCommand(event: WindowEventMap['hhtools:import-command']): v
   }
 
   const target = importTargets[event.detail.target]
+  if (target.motionProfile) selectMotionUploadProfile(target.motionProfile)
   requestPanel(target.panel)
   window.setTimeout(() => {
     const button = document.querySelector<HTMLButtonElement>(target.selector)
@@ -202,8 +218,13 @@ function handleImportCommand(event: WindowEventMap['hhtools:import-command']): v
   }, 0)
 }
 
-function toggleMotionUploadInfo(profile: MotionUploadProfile): void {
-  openMotionUploadInfo.value = openMotionUploadInfo.value === profile ? null : profile
+function selectMotionUploadProfile(profile: MotionUploadProfile): void {
+  activeMotionUploadProfile.value = profile
+  motionUploadInfoOpen.value = false
+}
+
+function toggleMotionUploadInfo(): void {
+  motionUploadInfoOpen.value = !motionUploadInfoOpen.value
 }
 
 function closeMotionUploadInfo(event: Event): void {
@@ -211,11 +232,11 @@ function closeMotionUploadInfo(event: Event): void {
   // Keep the popover open while its trigger or content is being used; any
   // click elsewhere in the workspace dismisses it without adding a modal.
   if (target instanceof Element && target.closest('.motion-import-info')) return
-  openMotionUploadInfo.value = null
+  motionUploadInfoOpen.value = false
 }
 
 function handleMotionUploadInfoKeydown(event: KeyboardEvent): void {
-  if (event.key === 'Escape') openMotionUploadInfo.value = null
+  if (event.key === 'Escape') motionUploadInfoOpen.value = false
 }
 
 onMounted(async () => {
@@ -403,97 +424,83 @@ onBeforeUnmount(() => {
       <section class="panel" :class="{ active: activePanel === 'motion' }" data-panel="motion">
         <h2>动作 Motion</h2>
 
-        <div class="motion-import-grid" id="tour-motion-import">
-          <!-- The cards stay intentionally terse. Dataset structure belongs in
-               the on-demand help popover, while validation errors remain visible. -->
-          <div class="dropzone dropzone-compact motion-import-card" id="motion-drop-intermimic" data-profile="intermimic">
-            <div class="motion-import-info">
-              <button
-                type="button"
-                class="motion-import-info-trigger"
-                aria-label="查看 intermimic 上传说明"
-                aria-controls="motion-info-intermimic"
-                :aria-expanded="openMotionUploadInfo === 'intermimic'"
-                :aria-describedby="openMotionUploadInfo === 'intermimic' ? 'motion-info-intermimic' : undefined"
-                @click.stop="toggleMotionUploadInfo('intermimic')"
-              >?</button>
-              <div
-                v-show="openMotionUploadInfo === 'intermimic'"
-                id="motion-info-intermimic"
-                class="motion-import-info-popover"
-                role="tooltip"
-                @click.stop
-              >
-                <strong>物体交互动作 · OMOMO</strong>
-                <span>请选择完整 clip 文件夹或整个数据集目录。需要 <code>&lt;clip&gt;/&lt;clip&gt;.pkl</code>，交互物体通常为 <code>*_cleaned_simplified.obj</code>。</span>
-              </div>
-            </div>
-            <div class="dz-glyph">📦</div>
-            <div class="dz-title">intermimic</div>
-            <div class="row" style="margin-top:10px">
-              <button type="button" class="btn secondary small" data-pick="intermimic" data-folder="1">选择文件夹</button>
-            </div>
+        <div class="motion-import-control" id="tour-motion-import">
+          <!-- Native radios keep the compact profile switcher keyboard-friendly.
+               The selected profile drives one shared dropzone and both pickers. -->
+          <div class="motion-profile-switcher" role="radiogroup" aria-label="动作上传类型">
+            <label
+              v-for="profile in motionUploadProfiles"
+              :key="profile.id"
+              class="motion-profile-selector"
+            >
+              <input
+                class="sr-only"
+                type="radio"
+                name="motion-upload-profile"
+                :value="profile.id"
+                :checked="activeMotionUploadProfile === profile.id"
+                @change="selectMotionUploadProfile(profile.id)"
+              />
+              <span class="motion-profile-selector-content">{{ profile.label }}</span>
+            </label>
           </div>
-          <div class="dropzone dropzone-compact motion-import-card" id="motion-drop-meshmimic" data-profile="meshmimic">
+
+          <div
+            class="dropzone motion-upload-shared"
+            id="motion-drop-shared"
+            :data-profile="activeMotionUploadProfile"
+            role="group"
+            :aria-label="`${activeMotionUploadProfile} 上传区`"
+          >
             <div class="motion-import-info">
               <button
                 type="button"
                 class="motion-import-info-trigger"
-                aria-label="查看 meshmimic 上传说明"
-                aria-controls="motion-info-meshmimic"
-                :aria-expanded="openMotionUploadInfo === 'meshmimic'"
-                :aria-describedby="openMotionUploadInfo === 'meshmimic' ? 'motion-info-meshmimic' : undefined"
-                @click.stop="toggleMotionUploadInfo('meshmimic')"
+                :aria-label="`查看 ${activeMotionUploadProfile} 上传说明`"
+                aria-controls="motion-upload-info"
+                :aria-expanded="motionUploadInfoOpen"
+                :aria-describedby="motionUploadInfoOpen ? 'motion-upload-info' : undefined"
+                @click.stop="toggleMotionUploadInfo"
               >?</button>
               <div
-                v-show="openMotionUploadInfo === 'meshmimic'"
-                id="motion-info-meshmimic"
+                v-show="motionUploadInfoOpen"
+                id="motion-upload-info"
                 class="motion-import-info-popover"
                 role="tooltip"
                 @click.stop
               >
-                <strong>地形动作 · parc_ms</strong>
-                <span>请选择完整 clip 文件夹或整个数据集目录。需要 <code>&lt;clip&gt;/&lt;clip&gt;.pkl</code> 或 <code>.npz</code>，地形通常为 <code>*_terrain.obj</code>。</span>
+                <template v-if="activeMotionUploadProfile === 'intermimic'">
+                  <strong>物体交互动作 · OMOMO</strong>
+                  <span>请选择完整 clip 文件夹或整个数据集目录。需要 <code>&lt;clip&gt;/&lt;clip&gt;.pkl</code>，交互物体通常为 <code>*_cleaned_simplified.obj</code>。</span>
+                </template>
+                <template v-else-if="activeMotionUploadProfile === 'meshmimic'">
+                  <strong>地形动作 · parc_ms</strong>
+                  <span>请选择完整 clip 文件夹或整个数据集目录。需要 <code>&lt;clip&gt;/&lt;clip&gt;.pkl</code> 或 <code>.npz</code>，地形通常为 <code>*_terrain.obj</code>。</span>
+                </template>
+                <template v-else>
+                  <strong>通用人体动作</strong>
+                  <span>支持单个文件或多级数据集文件夹。可识别 <code>.bvh</code>、<code>.glb</code>、<code>.gltf</code>、<code>.npz</code>、<code>.npy</code>、<code>.pkl</code>、<code>.pt</code>。</span>
+                </template>
               </div>
             </div>
-            <div class="dz-glyph">⛰</div>
-            <div class="dz-title">meshmimic</div>
-            <div class="row" style="margin-top:10px">
-              <button type="button" class="btn secondary small" data-pick="meshmimic" data-folder="1">选择文件夹</button>
-            </div>
-          </div>
-          <div class="dropzone dropzone-compact motion-import-card" id="motion-drop-mimic" data-profile="mimic">
-            <div class="motion-import-info">
-              <button
-                type="button"
-                class="motion-import-info-trigger"
-                aria-label="查看 mimic 上传说明"
-                aria-controls="motion-info-mimic"
-                :aria-expanded="openMotionUploadInfo === 'mimic'"
-                :aria-describedby="openMotionUploadInfo === 'mimic' ? 'motion-info-mimic' : undefined"
-                @click.stop="toggleMotionUploadInfo('mimic')"
-              >?</button>
-              <div
-                v-show="openMotionUploadInfo === 'mimic'"
-                id="motion-info-mimic"
-                class="motion-import-info-popover"
-                role="tooltip"
-                @click.stop
-              >
-                <strong>通用人体动作</strong>
-                <span>支持单个文件或多级数据集文件夹。可识别 <code>.bvh</code>、<code>.glb</code>、<code>.gltf</code>、<code>.npz</code>、<code>.npy</code>、<code>.pkl</code>、<code>.pt</code>。</span>
-              </div>
-            </div>
-            <div class="dz-glyph">🎞</div>
-            <div class="dz-title">mimic</div>
+            <div class="dz-glyph">{{ motionUploadProfileMeta[activeMotionUploadProfile].glyph }}</div>
+            <div class="dz-title">{{ motionUploadProfileMeta[activeMotionUploadProfile].dropHint }}</div>
             <div class="row" style="margin-top:10px">
               <button
+                v-show="activeMotionUploadProfile === 'mimic'"
+                id="motion-pick-file"
                 type="button"
                 class="btn secondary small"
-                data-pick="mimic"
+                :data-pick="activeMotionUploadProfile"
                 data-accept=".bvh,.glb,.gltf,.npz,.npy,.pkl,.pt"
               >选择文件</button>
-              <button type="button" class="btn secondary small" data-pick="mimic" data-folder="1">选择文件夹</button>
+              <button
+                id="motion-pick-folder"
+                type="button"
+                class="btn secondary small"
+                :data-pick="activeMotionUploadProfile"
+                data-folder="1"
+              >选择文件夹</button>
             </div>
           </div>
         </div>
