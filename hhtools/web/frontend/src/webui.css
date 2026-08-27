@@ -13,6 +13,8 @@
   --accent: #0071e3;
   --accent-hover: #0077ed;
   --accent-soft: rgba(0, 113, 227, 0.12);
+  --scaled-accent: #007c83;
+  --result-accent: #8e44ad;
   --green: #34c759;
   --orange: #ff9f0a;
   --red: #ff3b30;
@@ -45,6 +47,8 @@
   --accent: #0a84ff;
   --accent-hover: #409cff;
   --accent-soft: rgba(10, 132, 255, 0.22);
+  --scaled-accent: #00838f;
+  --result-accent: #9b41c9;
   --code-bg: rgba(255, 255, 255, 0.12);
   --thumb-bg: #d1d1d6;
   --overlay-scrim: rgba(0, 0, 0, 0.58);
@@ -65,6 +69,8 @@
     --accent: #0a84ff;
     --accent-hover: #409cff;
     --accent-soft: rgba(10, 132, 255, 0.22);
+    --scaled-accent: #00838f;
+    --result-accent: #9b41c9;
     --code-bg: rgba(255, 255, 255, 0.12);
     --thumb-bg: #d1d1d6;
     --overlay-scrim: rgba(0, 0, 0, 0.58);
@@ -1095,6 +1101,21 @@ button { font-family: inherit; cursor: pointer; }
 }
 .seg-btn .eye { font-size: 13px; line-height: 1; opacity: 0.45; }
 .seg-btn.on { background: var(--accent); color: #fff; }
+/* Stage colors describe the visible asset family first: human/source layers
+   use the default blue, scaled references use teal, and every robot mesh uses
+   purple. Source/Target is already expressed by the R2R row label, so the same
+   Robot control must not change color merely because it appears in another row. */
+#tg-scaled.on,
+#tg-scaled-env.on,
+#r2r-tg-tgt-skel.on,
+#r2r-tg-tgt-env.on {
+  background: var(--scaled-accent);
+}
+#tg-robot.on,
+#r2r-tg-src-robot.on,
+#r2r-tg-tgt-robot.on {
+  background: var(--result-accent);
+}
 .seg-btn.on .eye { opacity: 1; }
 .seg-btn:not(.on) .eye { filter: grayscale(0.6); }
 .seg-btn:not(.on):hover { background: var(--accent-soft); color: var(--ink); }
@@ -1651,7 +1672,18 @@ button { font-family: inherit; cursor: pointer; }
 }
 .comparison-presets button:last-child { border-right: 0; }
 .comparison-presets button:hover { color: var(--ink); background: var(--accent-soft); }
+/* Comparison presets reuse the stage palette: source is blue, the scaled IK
+   reference is teal, the solved robot is purple, and overlay blends both ends. */
 .comparison-presets button.active { color: #fff; background: var(--accent); }
+.comparison-presets button[data-preset="target"].active {
+  background: var(--scaled-accent);
+}
+.comparison-presets button[data-preset="result"].active {
+  background: var(--result-accent);
+}
+.comparison-presets button[data-preset="overlay"].active {
+  background: linear-gradient(135deg, var(--accent), var(--result-accent));
+}
 .result-diagnostics-empty {
   padding: 10px 0;
   color: var(--ink-secondary);

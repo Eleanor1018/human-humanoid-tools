@@ -1,7 +1,7 @@
 import { mount } from '@vue/test-utils'
 import { afterEach, describe, expect, it } from 'vitest'
 
-import DesktopMenuBar from './DesktopMenuBar.vue'
+import DesktopMenuBar from '../../src/components/DesktopMenuBar.vue'
 
 const wrappers: Array<ReturnType<typeof mount>> = []
 

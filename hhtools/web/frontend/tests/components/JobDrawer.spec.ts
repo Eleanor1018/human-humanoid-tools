@@ -6,8 +6,8 @@ import type {
   JobHistoryCommandDetail,
   JobHistoryStateDetail,
   HhAppBridge,
-} from '../runtime/types'
-import JobDrawer from './JobDrawer.vue'
+} from '../../src/runtime/types'
+import JobDrawer from '../../src/components/JobDrawer.vue'
 
 const mountedWrappers: Array<ReturnType<typeof mount>> = []
 

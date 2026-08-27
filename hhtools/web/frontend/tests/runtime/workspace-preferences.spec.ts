@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import {
   loadWorkspacePreferences,
   updateWorkspacePreferences,
-} from './workspace-preferences'
+} from '../../src/runtime/workspace-preferences'
 
 const STORAGE_KEY = 'hhtools-workspace-preferences-v1'
 

@@ -2,8 +2,8 @@ import { mount } from '@vue/test-utils'
 import { afterEach, describe, expect, it } from 'vitest'
 import { nextTick } from 'vue'
 
-import type { CalibrationEditorCommandDetail, CalibrationEditorStateDetail } from '../runtime/types'
-import CalibrationEditorControls from './CalibrationEditorControls.vue'
+import type { CalibrationEditorCommandDetail, CalibrationEditorStateDetail } from '../../src/runtime/types'
+import CalibrationEditorControls from '../../src/components/CalibrationEditorControls.vue'
 
 const wrappers: Array<ReturnType<typeof mount>> = []
 

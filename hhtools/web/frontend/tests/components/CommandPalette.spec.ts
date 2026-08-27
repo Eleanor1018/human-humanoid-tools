@@ -2,7 +2,7 @@ import { mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { nextTick } from 'vue'
 
-import CommandPalette from './CommandPalette.vue'
+import CommandPalette from '../../src/components/CommandPalette.vue'
 
 const wrappers: Array<ReturnType<typeof mount>> = []
 

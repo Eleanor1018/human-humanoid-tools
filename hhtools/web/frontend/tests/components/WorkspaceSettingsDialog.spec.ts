@@ -1,7 +1,7 @@
 import { mount } from '@vue/test-utils'
 import { afterEach, describe, expect, it } from 'vitest'
 
-import WorkspaceSettingsDialog from './WorkspaceSettingsDialog.vue'
+import WorkspaceSettingsDialog from '../../src/components/WorkspaceSettingsDialog.vue'
 
 const wrappers: Array<ReturnType<typeof mount>> = []
 

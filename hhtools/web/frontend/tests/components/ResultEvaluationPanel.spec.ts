@@ -2,8 +2,8 @@ import { mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { nextTick } from 'vue'
 
-import type { ResultDiagnosticsDetail } from '../runtime/types'
-import ResultEvaluationPanel from './ResultEvaluationPanel.vue'
+import type { ResultDiagnosticsDetail } from '../../src/runtime/types'
+import ResultEvaluationPanel from '../../src/components/ResultEvaluationPanel.vue'
 
 const wrappers: Array<ReturnType<typeof mount>> = []
 
@@ -54,6 +54,20 @@ describe('ResultEvaluationPanel', () => {
     expect(wrapper.text()).toContain('2.0 cm')
     expect(wrapper.text()).toContain('100%')
     expect(wrapper.get('.result-quality').text()).toBe('跟踪稳定')
+    expect(wrapper.get('[data-preset="source"]').attributes('aria-pressed')).toBe('false')
+    expect(wrapper.get('[data-preset="overlay"]').attributes('aria-pressed')).toBe('true')
+
+    window.dispatchEvent(new CustomEvent('hhtools:comparison-state', {
+      detail: { workflow: 'h2r', preset: 'target' },
+    }))
+    await nextTick()
+    expect(wrapper.get('[data-preset="target"]').classes()).toContain('active')
+
+    window.dispatchEvent(new CustomEvent('hhtools:comparison-state', {
+      detail: { workflow: 'h2r', preset: 'result' },
+    }))
+    await nextTick()
+    expect(wrapper.get('[data-preset="result"]').classes()).toContain('active')
 
     const commands: string[] = []
     const receive = (event: WindowEventMap['hhtools:comparison-command']): void => {

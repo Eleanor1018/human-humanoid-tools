@@ -6,7 +6,7 @@ import {
   calibrationJointMatches,
   classifyCalibrationJoint,
   formatCalibrationAngle,
-} from './calibration-editor'
+} from '../../src/runtime/calibration-editor'
 
 describe('calibration editor helpers', () => {
   it.each([

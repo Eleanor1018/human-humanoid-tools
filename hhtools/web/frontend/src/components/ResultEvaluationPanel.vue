@@ -111,6 +111,7 @@ onBeforeUnmount(() => {
         v-for="preset in presets"
         :key="preset.id"
         type="button"
+        :data-preset="preset.id"
         :class="{ active: comparisonPreset === preset.id }"
         :aria-pressed="comparisonPreset === preset.id"
         @click="setComparison(preset.id)"

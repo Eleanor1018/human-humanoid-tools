@@ -1,7 +1,7 @@
 import { mount } from '@vue/test-utils'
 import { afterEach, describe, expect, it } from 'vitest'
 
-import SidebarNavigation from './SidebarNavigation.vue'
+import SidebarNavigation from '../../src/components/SidebarNavigation.vue'
 
 const mountedWrappers: Array<ReturnType<typeof mount>> = []
 

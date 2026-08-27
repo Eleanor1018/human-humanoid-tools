@@ -2,8 +2,8 @@ import { mount } from '@vue/test-utils'
 import { afterEach, describe, expect, it } from 'vitest'
 import { nextTick } from 'vue'
 
-import type { WorkflowStateDetail } from '../runtime/types'
-import WorkflowPipeline from './WorkflowPipeline.vue'
+import type { WorkflowStateDetail } from '../../src/runtime/types'
+import WorkflowPipeline from '../../src/components/WorkflowPipeline.vue'
 
 const mountedWrappers: Array<ReturnType<typeof mount>> = []
 
