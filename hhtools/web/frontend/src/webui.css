@@ -171,7 +171,9 @@ button { font-family: inherit; cursor: pointer; }
 
 .workspace-shell #topbar {
   gap: 0;
-  padding: 0 12px;
+  /* Align the brand icon/text columns with the sidebar's icon/text columns:
+     12px sidebar-body inset + 13px navigation-item inset = 25px. */
+  padding: 0 12px 0 25px;
   z-index: 200;
 }
 .workspace-shell #topbar .logo {
