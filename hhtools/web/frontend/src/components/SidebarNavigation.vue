@@ -96,8 +96,13 @@ function disabledReason(item: NavigationItem): string | undefined {
 
 <template>
   <div class="nav-groups">
-    <section v-for="group in groups" :key="group.label" class="nav-group">
-      <h2 class="nav-group-label">{{ groupLabel(group) }}</h2>
+    <section
+      v-for="group in groups"
+      :key="group.label"
+      class="nav-group"
+      role="group"
+      :aria-label="groupLabel(group)"
+    >
       <button
         v-for="item in group.items"
         :key="item.id"
@@ -118,8 +123,11 @@ function disabledReason(item: NavigationItem): string | undefined {
       </button>
     </section>
 
-    <section class="nav-group nav-help-group">
-      <h2 class="nav-group-label">{{ workspace ? (locale === 'zh-CN' ? '帮助' : 'Help') : '帮助 Help' }}</h2>
+    <section
+      class="nav-group nav-help-group"
+      role="group"
+      :aria-label="workspace ? (locale === 'zh-CN' ? '帮助' : 'Help') : '帮助 Help'"
+    >
       <button
         id="nav-tour"
         type="button"

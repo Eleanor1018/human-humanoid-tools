@@ -22,7 +22,6 @@ const INSPECTOR_MAX = 640
 const HANDLE_WIDTH = 6
 const MIN_STAGE_WIDTH = 360
 const DOCKED_SIDEBAR_WIDTH = 208
-const DOCKED_SIDEBAR_RAIL_WIDTH = 52
 
 const DEFAULT_LAYOUT: PanelLayoutState = {
   sidebarWidth: 248,
@@ -65,9 +64,20 @@ export function usePanelLayout(options: PanelLayoutOptions = {}) {
   function constrain(preferred?: PanelSide): void {
     state.sidebarWidth = clamp(state.sidebarWidth, SIDEBAR_MIN, SIDEBAR_MAX)
     state.inspectorWidth = clamp(state.inspectorWidth, INSPECTOR_MIN, INSPECTOR_MAX)
-    if (state.sidebarHidden || state.inspectorHidden) return
-
     const available = availablePanelWidth()
+
+    // Keep the visible drawer from consuming the stage when its peer is
+    // collapsed, without overwriting the hidden drawer's remembered width.
+    if (state.sidebarHidden && state.inspectorHidden) return
+    if (state.sidebarHidden) {
+      state.inspectorWidth = Math.min(state.inspectorWidth, available)
+      return
+    }
+    if (state.inspectorHidden) {
+      state.sidebarWidth = Math.min(state.sidebarWidth, available)
+      return
+    }
+
     if (state.sidebarWidth + state.inspectorWidth <= available) return
 
     // Preserve the panel currently being dragged and shrink its peer first.
@@ -148,7 +158,7 @@ export function usePanelLayout(options: PanelLayoutOptions = {}) {
 
   const style = computed(() => ({
     '--sidebar-w': state.sidebarHidden
-      ? `${docked ? DOCKED_SIDEBAR_RAIL_WIDTH : 0}px`
+      ? '0px'
       : `${Math.round(state.sidebarWidth)}px`,
     '--inspector-w': state.inspectorHidden ? '0px' : `${Math.round(state.inspectorWidth)}px`,
     '--sidebar-handle-w': state.sidebarHidden ? '0px' : `${HANDLE_WIDTH}px`,

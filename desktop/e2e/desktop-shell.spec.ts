@@ -119,16 +119,78 @@ test('loads the existing WebUI and shuts down its Python sidecar', async ({}, te
     expect(expandedSidebar?.width).toBeCloseTo(208, 0)
     expect(expandedInspector?.width).toBeCloseTo(360, 0)
 
-    await page.locator('#hide-sidebar').click()
-    const collapsedSidebar = await page.locator('#sidebar').boundingBox()
-    expect(collapsedSidebar?.width).toBeCloseTo(52, 0)
-    await expect(page.locator('#sidebar .nav-item-label').first()).toBeHidden()
-    await page.locator('#hide-sidebar').click()
+    await expect(page.locator('.side-panel-head')).toHaveCount(0)
+    await expect(page.locator('.nav-group-label')).toHaveCount(0)
+    await expect(page.locator('#inspector-body .panel.active h2')).toHaveText('动作 Motion')
 
-    await page.locator('#hide-inspector').click()
-    await expect(page.locator('#inspector')).toBeHidden()
-    await page.locator('#show-inspector').click()
-    await expect(page.locator('#inspector')).toBeVisible()
+    const leftDrawerHandle = page.locator('#toggle-sidebar')
+    const rightDrawerHandle = page.locator('#toggle-inspector')
+    await expect(leftDrawerHandle).toHaveText('‹')
+    await expect(leftDrawerHandle).toHaveAttribute('aria-expanded', 'true')
+    await expect(rightDrawerHandle).toHaveText('›')
+    await expect(rightDrawerHandle).toHaveAttribute('aria-expanded', 'true')
+
+    const [topbarBounds, leftHandleBounds, rightHandleBounds, viewport] = await Promise.all([
+      page.locator('#topbar').boundingBox(),
+      leftDrawerHandle.boundingBox(),
+      rightDrawerHandle.boundingBox(),
+      page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight })),
+    ])
+    const drawerCenterY = ((topbarBounds?.y ?? 0) + (topbarBounds?.height ?? 0) + viewport.height) / 2
+    expect((leftHandleBounds?.y ?? 0) + (leftHandleBounds?.height ?? 0) / 2).toBeCloseTo(drawerCenterY, 0)
+    expect((rightHandleBounds?.y ?? 0) + (rightHandleBounds?.height ?? 0) / 2).toBeCloseTo(drawerCenterY, 0)
+
+    // The panel and its edge handle must track a resize without drawer-animation lag.
+    const sidebarResizer = page.locator('#resize-sidebar')
+    const sidebarResizerBounds = await sidebarResizer.boundingBox()
+    await page.mouse.move(
+      (sidebarResizerBounds?.x ?? 0) + (sidebarResizerBounds?.width ?? 0) / 2,
+      (sidebarResizerBounds?.y ?? 0) + 80,
+    )
+    await page.mouse.down()
+    await page.mouse.move((sidebarResizerBounds?.x ?? 0) + 20, (sidebarResizerBounds?.y ?? 0) + 80)
+    await expect.poll(async () => (await page.locator('#sidebar').boundingBox())?.width ?? 0).toBeGreaterThan(220)
+    await expect.poll(async () => (await leftDrawerHandle.boundingBox())?.x ?? 0).toBeGreaterThan(220)
+    await page.mouse.move((sidebarResizerBounds?.x ?? 0) + (sidebarResizerBounds?.width ?? 0) / 2, (sidebarResizerBounds?.y ?? 0) + 80)
+    await page.mouse.up()
+    await expect.poll(async () => (await page.locator('#sidebar').boundingBox())?.width ?? 0).toBeCloseTo(208, 0)
+
+    const stageBeforeLeftCollapse = await stage.boundingBox()
+    await leftDrawerHandle.click()
+    await expect(leftDrawerHandle).toHaveText('›')
+    await expect(leftDrawerHandle).toHaveAttribute('aria-expanded', 'false')
+    await expect(page.locator('#sidebar')).toHaveAttribute('aria-hidden', 'true')
+    await expect.poll(async () => (await page.locator('#sidebar').boundingBox())?.width ?? 0).toBeCloseTo(0, 0)
+    const [stageWithoutSidebar, collapsedLeftHandle] = await Promise.all([
+      stage.boundingBox(),
+      leftDrawerHandle.boundingBox(),
+    ])
+    expect(stageWithoutSidebar?.width).toBeGreaterThan((stageBeforeLeftCollapse?.width ?? 0) + 200)
+    expect(collapsedLeftHandle?.x).toBeGreaterThanOrEqual(0)
+    expect((collapsedLeftHandle?.x ?? 0) + (collapsedLeftHandle?.width ?? 0)).toBeLessThanOrEqual(viewport.width)
+    await page.screenshot({ path: testInfo.outputPath('desktop-left-drawer-collapsed.png'), fullPage: true })
+    await leftDrawerHandle.click()
+    await expect(leftDrawerHandle).toHaveText('‹')
+    await expect.poll(async () => (await page.locator('#sidebar').boundingBox())?.width ?? 0).toBeCloseTo(208, 0)
+
+    const stageBeforeRightCollapse = await stage.boundingBox()
+    await rightDrawerHandle.click()
+    await expect(rightDrawerHandle).toHaveText('‹')
+    await expect(rightDrawerHandle).toHaveAttribute('aria-expanded', 'false')
+    await expect(page.locator('#inspector')).toHaveAttribute('aria-hidden', 'true')
+    await expect.poll(async () => (await page.locator('#inspector').boundingBox())?.width ?? 0).toBeCloseTo(0, 0)
+    const [stageWithoutInspector, collapsedRightHandle] = await Promise.all([
+      stage.boundingBox(),
+      rightDrawerHandle.boundingBox(),
+    ])
+    expect(stageWithoutInspector?.width).toBeGreaterThan((stageBeforeRightCollapse?.width ?? 0) + 340)
+    expect(collapsedRightHandle?.x).toBeGreaterThanOrEqual(0)
+    expect((collapsedRightHandle?.x ?? 0) + (collapsedRightHandle?.width ?? 0)).toBeLessThanOrEqual(viewport.width)
+    await page.screenshot({ path: testInfo.outputPath('desktop-right-drawer-collapsed.png'), fullPage: true })
+    await rightDrawerHandle.click()
+    await expect(rightDrawerHandle).toHaveText('›')
+    await expect.poll(async () => (await page.locator('#inspector').boundingBox())?.width ?? 0).toBeCloseTo(360, 0)
+    await page.screenshot({ path: testInfo.outputPath('desktop-drawers.png'), fullPage: true })
 
     await page.locator('[data-menu-trigger="analysis"]').click()
     const pae = page.locator('.desktop-menu-item', { hasText: 'PAE Analysis' })
@@ -164,9 +226,13 @@ test('loads the existing WebUI and shuts down its Python sidecar', async ({}, te
       max_queued_jobs: 32,
     })
     await settings.locator('.workspace-language-select').selectOption('zh-CN')
-    await expect(page.locator('#sidebar .side-panel-title')).toHaveText('导航')
+    await expect(page.locator('#sidebar')).toHaveAttribute('aria-label', '导航')
+    await expect(page.locator('#inspector')).toHaveAttribute('aria-label', '控制面板')
+    await expect(page.locator('#sidebar .nav-item-label').first()).toHaveText('动作')
     await settings.locator('.workspace-language-select').selectOption('en')
-    await expect(page.locator('#sidebar .side-panel-title')).toHaveText('Navigation')
+    await expect(page.locator('#sidebar')).toHaveAttribute('aria-label', 'Navigation')
+    await expect(page.locator('#inspector')).toHaveAttribute('aria-label', 'Inspector')
+    await expect(page.locator('#sidebar .nav-item-label').first()).toHaveText('Motion')
     await page.screenshot({ path: testInfo.outputPath('desktop-settings.png'), fullPage: true })
     await settings.locator('.workspace-settings-reset').click()
     await settings.locator('.workspace-settings-done').click()

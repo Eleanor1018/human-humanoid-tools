@@ -128,7 +128,7 @@ button { font-family: inherit; cursor: pointer; }
 #app.inspector-hidden { --inspector-w: 0px; }
 #app.sidebar-hidden:not(.workspace-shell) #sidebar,
 #app.sidebar-hidden #resize-sidebar { display: none; }
-#app.inspector-hidden #inspector,
+#app.inspector-hidden:not(.workspace-shell) #inspector,
 #app.inspector-hidden #resize-inspector { display: none; }
 
 #app.workspace-shell {
@@ -137,6 +137,7 @@ button { font-family: inherit; cursor: pointer; }
     "topbar topbar topbar topbar topbar"
     "sidebar rz-sb stage rz-insp inspector"
     "sidebar rz-sb jobs rz-insp inspector";
+  transition: grid-template-columns 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 #topbar {
@@ -181,7 +182,7 @@ button { font-family: inherit; cursor: pointer; }
   /* End the brand slot at the stage's 12px floating-control inset.  Because
      the topbar itself starts at 25px, subtracting 13px makes the menubar and
      .stage-top-tools share the same global left edge as the sidebar resizes. */
-  flex: 0 0 calc(var(--sidebar-w) + var(--sidebar-handle-w) - 13px);
+  flex: 0 0 max(39px, calc(var(--sidebar-w) + var(--sidebar-handle-w) - 13px));
   gap: 8px;
   margin: 0;
   color: var(--ink);
@@ -194,8 +195,8 @@ button { font-family: inherit; cursor: pointer; }
   height: 24px;
 }
 .workspace-shell.sidebar-hidden #topbar .desktop-brand-name {
-  /* The collapsed 52px rail keeps only the mark, leaving the aligned navbar
-     enough room without overlapping the brand. */
+  /* A fully collapsed drawer keeps only the mark, leaving the navbar enough
+     room without overlapping the brand. */
   display: none;
 }
 .workspace-shell #topbar .pill {
@@ -464,28 +465,78 @@ button { font-family: inherit; cursor: pointer; }
 #resize-sidebar { grid-area: rz-sb; cursor: col-resize; }
 #resize-inspector { grid-area: rz-insp; cursor: col-resize; }
 
-.side-panel-head {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 10px 12px 8px; border-bottom: 1px solid var(--hairline);
-  flex-shrink: 0;
+/* Neutral drawer handles borrow the Figma reference's centered edge affordance,
+   while retaining hhtools surfaces and avoiding its light-blue treatment. */
+.workspace-drawer-handle {
+  position: fixed;
+  top: calc(50% + 20px);
+  z-index: 45;
+  width: 30px;
+  height: 90px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--hairline);
+  background: var(--panel-solid);
+  color: var(--ink-tertiary);
+  box-shadow: var(--shadow-sm);
+  transform: translateY(-50%);
+  transition:
+    left 200ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    right 200ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    color 150ms ease,
+    background 150ms ease,
+    border-color 150ms ease,
+    box-shadow 150ms ease;
 }
-.side-panel-title { font-size: var(--side-panel-option-font-size); font-weight: 600; color: var(--ink-tertiary);
-  text-transform: uppercase; letter-spacing: 0.04em; }
-.panel-hide-btn {
-  border: none; background: transparent; color: var(--ink-tertiary);
-  font-size: 12px; padding: 4px 8px; border-radius: var(--radius-sm);
+.workspace-drawer-handle.left {
+  left: calc(var(--sidebar-w) + var(--sidebar-handle-w));
+  border-left: 0;
+  border-radius: 0 12px 12px 0;
 }
-.panel-hide-btn:hover { background: var(--accent-soft); color: var(--ink); }
+.workspace-drawer-handle.right {
+  right: calc(var(--inspector-w) + var(--inspector-handle-w));
+  border-right: 0;
+  border-radius: 12px 0 0 12px;
+}
+.workspace-drawer-handle span {
+  font-size: 28px;
+  font-weight: 300;
+  line-height: 1;
+  transform: translateY(-1px);
+}
+.workspace-drawer-handle:hover {
+  border-color: color-mix(in srgb, var(--ink) 20%, var(--hairline));
+  background: var(--bg);
+  color: var(--ink);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+}
+.workspace-drawer-handle:focus-visible {
+  outline: 2px solid var(--ink-secondary);
+  outline-offset: -4px;
+}
 
-.panel-restore-btn {
-  position: fixed; z-index: 25; top: 64px;
-  border: 1px solid var(--hairline); background: var(--panel-solid);
-  color: var(--ink-secondary); font-size: 12px; font-weight: 600;
-  padding: 8px 10px; border-radius: var(--radius-sm); box-shadow: var(--shadow-sm);
+/* Resizing should follow the pointer directly; drawer easing is only for
+   explicit collapse and expand actions. */
+.workspace-shell:has(.col-resizer.dragging) {
+  transition: none;
 }
-.panel-restore-btn.left { left: 8px; }
-.panel-restore-btn.right { right: 8px; }
-.panel-restore-btn:hover { color: var(--accent); border-color: var(--accent); }
+.workspace-shell:has(.col-resizer.dragging) .workspace-drawer-handle {
+  transition:
+    color 150ms ease,
+    background 150ms ease,
+    border-color 150ms ease,
+    box-shadow 150ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #app.workspace-shell,
+  .workspace-drawer-handle,
+  #sidebar,
+  #inspector {
+    transition: none;
+  }
+}
 
 /* ----------------------------------------------------------------- sidebar */
 #sidebar {
@@ -498,12 +549,7 @@ button { font-family: inherit; cursor: pointer; }
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-}
-.workspace-shell #sidebar .side-panel-head {
-  padding-left: 25px;
-}
-.workspace-shell #inspector .side-panel-head {
-  padding-left: 18px;
+  transition: opacity 120ms ease;
 }
 #sidebar-body {
   flex: 1; min-width: 0; min-height: 0; overflow-y: auto;
@@ -511,15 +557,6 @@ button { font-family: inherit; cursor: pointer; }
 }
 .nav-groups { display: flex; flex-direction: column; gap: 14px; }
 .nav-group { display: flex; flex-direction: column; gap: 3px; }
-.nav-group-label {
-  padding: 0 13px 4px;
-  color: var(--ink-tertiary);
-  font-size: 10px;
-  font-weight: 650;
-  line-height: 1.25;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
 .nav-help-group { margin-top: 2px; }
 .nav-item-label {
   min-width: 0;
@@ -578,44 +615,10 @@ button { font-family: inherit; cursor: pointer; }
   container-type: inline-size;
 }
 
-.workspace-shell.sidebar-hidden #sidebar {
-  display: flex;
-}
-.workspace-shell.sidebar-hidden #sidebar .side-panel-head {
-  justify-content: center;
-  padding: 8px;
-}
-.workspace-shell.sidebar-hidden #sidebar .side-panel-title,
-.workspace-shell.sidebar-hidden #sidebar .nav-group-label,
-.workspace-shell.sidebar-hidden #sidebar .nav-item-label,
-.workspace-shell.sidebar-hidden #sidebar .nav-disabled-reason,
-.workspace-shell.sidebar-hidden #sidebar .nav-item .badge,
-.workspace-shell.sidebar-hidden #sidebar .sidebar-foot {
-  display: none;
-}
-.workspace-shell.sidebar-hidden #sidebar-body {
-  padding: 10px 8px;
-}
-.workspace-shell.sidebar-hidden #sidebar .nav-groups {
-  gap: 10px;
-}
-.workspace-shell.sidebar-hidden #sidebar .nav-group {
-  align-items: center;
-  gap: 4px;
-}
-.workspace-shell.sidebar-hidden #sidebar .nav-item {
-  width: 36px;
-  height: 36px;
-  justify-content: center;
-  gap: 0;
-  padding: 0;
-}
-.workspace-shell.sidebar-hidden #sidebar .nav-item .icon {
-  width: 20px;
-}
-.workspace-shell.sidebar-hidden #sidebar .panel-hide-btn {
-  width: 32px;
-  height: 28px;
+.workspace-shell.sidebar-hidden #sidebar,
+.workspace-shell.inspector-hidden #inspector {
+  opacity: 0;
+  pointer-events: none;
 }
 #three-canvas { width: 100%; height: 100%; display: block; }
 
@@ -1177,6 +1180,7 @@ button { font-family: inherit; cursor: pointer; }
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+  transition: opacity 120ms ease;
 }
 #inspector-body {
   flex: 1; min-width: 0; min-height: 0; width: 100%; overflow-y: auto;
@@ -1188,8 +1192,6 @@ button { font-family: inherit; cursor: pointer; }
 #inspector-body .card,
 #inspector-body .row,
 #inspector-body .panel { width: 100%; max-width: 100%; box-sizing: border-box; }
-
-.workspace-shell .panel-restore-btn.right { top: 48px; }
 
 /* Shared workspace and backend job-admission settings. */
 .workspace-settings-backdrop {

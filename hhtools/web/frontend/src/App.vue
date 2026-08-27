@@ -10,6 +10,7 @@ import JobDrawer from './components/JobDrawer.vue'
 import ResultEvaluationPanel from './components/ResultEvaluationPanel.vue'
 import SidebarNavigation from './components/SidebarNavigation.vue'
 import WorkflowPipeline from './components/WorkflowPipeline.vue'
+import WorkspaceDrawerHandle from './components/WorkspaceDrawerHandle.vue'
 import WorkspaceSettingsDialog from './components/WorkspaceSettingsDialog.vue'
 import type {
   ImportCommandTarget,
@@ -265,19 +266,13 @@ onBeforeUnmount(() => {
     </header>
 
     <!-- sidebar nav -->
-    <nav id="sidebar" class="side-panel">
-      <div class="side-panel-head">
-        <span class="side-panel-title">{{ workspaceText('Navigation', '导航') }}</span>
-        <button
-          type="button"
-          class="panel-hide-btn"
-          id="hide-sidebar"
-          :title="panelLayout.state.sidebarHidden
-            ? workspaceText('Expand navigation', '展开左栏')
-            : workspaceText('Collapse navigation', '折叠左栏')"
-          @click="panelLayout.setHidden('sidebar', !panelLayout.state.sidebarHidden)"
-        >{{ panelLayout.state.sidebarHidden ? '▶' : '◀' }}</button>
-      </div>
+    <nav
+      id="sidebar"
+      class="side-panel"
+      :aria-label="workspaceText('Navigation', '导航')"
+      :aria-hidden="panelLayout.state.sidebarHidden"
+      :inert="panelLayout.state.sidebarHidden"
+    >
       <div id="sidebar-body">
         <SidebarNavigation
           :active-panel="activePanel"
@@ -288,6 +283,12 @@ onBeforeUnmount(() => {
       </div>
     </nav>
     <div class="col-resizer" id="resize-sidebar" title="拖动调节左栏宽度" @pointerdown="panelLayout.startResize('sidebar', $event)"></div>
+    <WorkspaceDrawerHandle
+      side="left"
+      :expanded="!panelLayout.state.sidebarHidden"
+      :locale="workspaceLocale"
+      @toggle="panelLayout.setHidden('sidebar', !panelLayout.state.sidebarHidden)"
+    />
 
     <!-- 3D stage -->
     <main id="stage">
@@ -368,17 +369,13 @@ onBeforeUnmount(() => {
     <div class="col-resizer" id="resize-inspector" title="拖动调节右栏宽度" @pointerdown="panelLayout.startResize('inspector', $event)"></div>
 
     <!-- right inspector -->
-    <aside id="inspector" class="side-panel">
-      <div class="side-panel-head">
-        <span class="side-panel-title">{{ workspaceText('Inspector', '控制面板') }}</span>
-        <button
-          type="button"
-          class="panel-hide-btn"
-          id="hide-inspector"
-          :title="workspaceText('Hide inspector', '隐藏右栏')"
-          @click="panelLayout.setHidden('inspector', true)"
-        >▶</button>
-      </div>
+    <aside
+      id="inspector"
+      class="side-panel"
+      :aria-label="workspaceText('Inspector', '控制面板')"
+      :aria-hidden="panelLayout.state.inspectorHidden"
+      :inert="panelLayout.state.inspectorHidden"
+    >
       <div id="inspector-body">
       <!-- MOTION -->
       <section class="panel" :class="{ active: activePanel === 'motion' }" data-panel="motion">
@@ -1030,7 +1027,12 @@ onBeforeUnmount(() => {
       </div>
     </aside>
 
-    <button v-show="panelLayout.state.inspectorHidden" type="button" class="panel-restore-btn right" id="show-inspector" title="显示右栏" @click="panelLayout.setHidden('inspector', false)">◀ 面板</button>
+    <WorkspaceDrawerHandle
+      side="right"
+      :expanded="!panelLayout.state.inspectorHidden"
+      :locale="workspaceLocale"
+      @toggle="panelLayout.setHidden('inspector', !panelLayout.state.inspectorHidden)"
+    />
     <JobDrawer docked :locale="workspaceLocale" />
     <WorkspaceSettingsDialog
       :open="settingsOpen"

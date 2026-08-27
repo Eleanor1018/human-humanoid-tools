@@ -96,10 +96,8 @@ export type HHToolsKnownId =
   | 'ui-build'
 
 export type HHToolsButtonId =
-  | 'hide-sidebar'
-  | 'hide-inspector'
-  | 'show-sidebar'
-  | 'show-inspector'
+  | 'toggle-sidebar'
+  | 'toggle-inspector'
   | 'nav-tour'
   | 'view-reset-btn'
   | 'tg-skeleton'

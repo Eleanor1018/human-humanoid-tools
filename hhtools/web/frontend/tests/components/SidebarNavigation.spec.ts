@@ -16,7 +16,8 @@ describe('SidebarNavigation', () => {
     })
     mountedWrappers.push(wrapper)
 
-    expect(wrapper.findAll('.nav-group-label').map((item) => item.text())).toEqual([
+    expect(wrapper.findAll('.nav-group-label')).toHaveLength(0)
+    expect(wrapper.findAll('[role="group"]').map((item) => item.attributes('aria-label'))).toEqual([
       '资产 Assets',
       '工作流 Workflows',
       '分析 Analysis',
@@ -35,7 +36,8 @@ describe('SidebarNavigation', () => {
     mountedWrappers.push(wrapper)
 
     expect(wrapper.get('[data-panel="dataset-viz"]').text()).toContain('Manual Analysis')
-    expect(wrapper.findAll('.nav-group-label').map((item) => item.text())).toEqual([
+    expect(wrapper.findAll('.nav-group-label')).toHaveLength(0)
+    expect(wrapper.findAll('[role="group"]').map((item) => item.attributes('aria-label'))).toEqual([
       'Assets',
       'Workflows',
       'Analysis',
