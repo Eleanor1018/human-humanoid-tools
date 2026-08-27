@@ -165,7 +165,16 @@ _REFERENCE_FEET_DEFAULTS: dict[str, dict[str, Any]] = {
 
 
 def _reference_defaults(reference: str) -> dict[str, Any]:
-    return dict(_REFERENCE_FEET_DEFAULTS.get(reference, {}))
+    key = str(reference or "")
+    if key in _REFERENCE_FEET_DEFAULTS:
+        return dict(_REFERENCE_FEET_DEFAULTS[key])
+    # R2R source is already a planted robot trajectory.  Anti-float compares
+    # the solved ankle to the T-pose rest height; walking knee flexion then
+    # rate-limits a downward root pump every step — visible as Z jitter
+    # against the yellow overlay.  Keep penetration lift (default-on).
+    if key.startswith("robot_"):
+        return {"foot_clamp_anti_float": False}
+    return {}
 
 
 # Canonical slots that receive lateral IK narrowing when yaml scales drop.

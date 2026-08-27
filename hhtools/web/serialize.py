@@ -664,17 +664,20 @@ def _lowest_ik_link_z(
     return min(zs) if zs else None
 
 
-def _lowest_ground_contact_z(
+def _ground_contact_zs(
     model,
     ik_map: dict[str, Any],
     root_rot: np.ndarray,
     *,
     include_mesh: bool = True,
-) -> float | None:
-    """Lowest body contact height in the root frame (ankles, knees, mesh).
+) -> tuple[float | None, float | None]:
+    """Lowest ``(limb_origin_z, mesh_z)`` in the root frame.
 
-    Post-IK foot clamp used to watch ankles only, which misses kneeling /
-    prone contact where knees or shins touch the floor while feet stay raised.
+    Both cover kneeling / prone contact where knees or shins touch the floor
+    while feet stay raised, but they are returned separately because they need
+    different ground thresholds: an ankle / knee **link origin** sits a foot
+    thickness above the floor when planted, whereas the mesh minimum *is* the
+    contact surface.
     """
     limb_z = _lowest_ik_link_z(
         model,
@@ -685,11 +688,7 @@ def _lowest_ground_contact_z(
     mesh_z: float | None = None
     if include_mesh:
         mesh_z = _scene_min_mesh_z(model.trimesh_scene(), root_rot)
-    if limb_z is None:
-        return mesh_z
-    if mesh_z is None:
-        return limb_z
-    return min(limb_z, mesh_z)
+    return limb_z, mesh_z
 
 
 def _sole_depth_reference(model, ik_map: dict[str, Any]) -> float | None:
@@ -734,20 +733,33 @@ def _mesh_playback_z_lift(
     sole_depth_ref: float | None,
     ik_map: dict[str, Any],
     yellow_foot_z: float | None = None,
+    yellow_align: str = "sole",
 ) -> float:
     """Rigid Z lift on the browser ``group`` during trajectory playback.
 
-    When ``yellow_foot_z`` is supplied (from the scaled overlay), lift the mesh
-    so its lowest vertex matches that height — the yellow skeleton uses uniform
-    scaling while IK uses per-joint scale, so scheme-A ankle→sole alone leaves
-    a standing gap.  Because ``yellow_foot_z`` follows the clip, jumps stay in
-    the air (no per-frame snap to ``z=0``).
+    When ``yellow_foot_z`` is supplied (from the scaled overlay):
+
+    * ``yellow_align="sole"`` (human→robot): lift the **mesh sole** to that
+      height.  The yellow human foot joint is treated as the visual foot
+      bottom.
+    * ``yellow_align="ankle"`` (robot→robot): lift the **ankle link** to that
+      height.  The yellow overlay is the scaled source skeleton; its feet
+      are ankle keypoints.  Matching mesh soles to those keypoints floats
+      the whole target a sole-depth above the overlay.
+
+    Because ``yellow_foot_z`` follows the clip, jumps stay in the air (no
+    per-frame snap to ``z=0``).
 
     Without overlay data, fall back to scheme A (ankle→sole at ``cfg`` only).
     """
     _apply_retarget_dof(model, dof_names, dof_values)
-    scene = model.trimesh_scene()
     root_rot = _quat_xyzw_to_rotmat(root_xyzw[3:7])
+    align = str(yellow_align or "sole").strip().lower()
+    if yellow_foot_z is not None and align == "ankle":
+        ankle_z = _lowest_ankle_z(model, ik_map, root_rot)
+        if ankle_z is not None:
+            return float(yellow_foot_z - float(root_xyzw[2]) - ankle_z)
+    scene = model.trimesh_scene()
     min_mesh_z = _scene_min_mesh_z(scene, root_rot)
     if min_mesh_z is None:
         return 0.0
@@ -798,6 +810,7 @@ def constant_playback_mesh_z_lift(
     yellow_foot_z: float | None = None,
     preserve_absolute_z: bool = False,
     frame_index: int = 0,
+    yellow_align: str = "sole",
 ) -> float:
     """Constant browser ``mesh_z_lift`` used when ``ground_follow`` is off.
 
@@ -826,6 +839,7 @@ def constant_playback_mesh_z_lift(
         sole_depth_ref=sole_depth_ref,
         ik_map=ik_map,
         yellow_foot_z=yellow_foot_f0,
+        yellow_align=yellow_align,
     )
     if yellow_foot_f0 is not None:
         return float(lift0)
@@ -849,6 +863,7 @@ def bake_playback_mesh_z_lift_into_joint_q(
     scaled_preview: dict[str, Any] | None = None,
     yellow_foot_z: float | None = None,
     preserve_absolute_z: bool = False,
+    yellow_align: str = "sole",
 ) -> tuple[np.ndarray, float]:
     """Bake constant playback ``mesh_z_lift`` into ``joint_q[:, 2]`` (root_z).
 
@@ -870,6 +885,7 @@ def bake_playback_mesh_z_lift_into_joint_q(
             yellow_foot_z=yellow_foot_z,
             preserve_absolute_z=preserve_absolute_z,
             frame_index=0,
+            yellow_align=yellow_align,
         )
     except Exception:
         return q.copy() if q.flags.writeable else q, 0.0
@@ -888,6 +904,7 @@ def serialize_robot_trajectory(
     max_frames: int = _MAX_PLAYBACK_FRAMES,
     ground_follow: bool = False,
     preserve_absolute_z: bool = False,
+    yellow_align: str = "sole",
 ):
     """Per-frame root transform + DOF values + per-link world transforms.
 
@@ -934,6 +951,7 @@ def serialize_robot_trajectory(
             scaled_preview=scaled_preview,
             preserve_absolute_z=preserve_absolute_z,
             frame_index=int(idx[0]),
+            yellow_align=yellow_align,
         )
 
     frames: list[dict[str, Any]] = []
@@ -960,6 +978,7 @@ def serialize_robot_trajectory(
                 sole_depth_ref=sole_depth_ref,
                 ik_map=ik_map,
                 yellow_foot_z=yellow_foot,
+                yellow_align=yellow_align,
             )
         else:
             mesh_z_lift = const_lift

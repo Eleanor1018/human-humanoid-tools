@@ -3083,9 +3083,12 @@ def create_app(
 
             scaled = _compute_r2r_scaled_preview(src, tgt, motion, calib)
             traj = serialize_robot_trajectory(
-                tgt, ret, scaled_preview=scaled, ground_follow=False,
+                tgt,
+                ret,
+                scaled_preview=scaled,
+                ground_follow=False,
+                yellow_align="ankle",
             )
-            scaled = _align_scaled_preview_to_robot_playback(tgt, ret, scaled, traj)
             from hhtools.web.result_diagnostics import build_result_diagnostics
 
             diagnostics = build_result_diagnostics(
@@ -3570,15 +3573,11 @@ def _build_r2r_calibration_session(target_model, source_model) -> dict:
 
 
 def _compute_r2r_scaled_preview(source_model, target_model, motion, calibrated_joint_q) -> dict:
-    """Yellow scaled skeleton for R2R — uniform overlay + foot grounding (Viser parity)."""
-    import numpy as np
-
+    """Yellow scaled skeleton for R2R — uniform source→target scale, world Z kept."""
     from hhtools.retarget import robot_to_robot as r2r
     from hhtools.retarget.calibration.calibration import uniform_overlay_scale_for_motion
     from hhtools.retarget.newton_basic.scaler import HumanToRobotScaler
-    from hhtools.viewer.anatomy import motion_has_interaction_scene
     from hhtools.web.scaled_preview import (
-        _snap_scaled_overlay_positions_to_foot_floor,
         _uniform_scaled_preview_fallback,
         resolve_scaled_overlay_z_correction,
     )
@@ -3597,24 +3596,18 @@ def _compute_r2r_scaled_preview(source_model, target_model, motion, calibrated_j
         )
     )
     z_correction = resolve_scaled_overlay_z_correction(motion, scaler, ratio)
-    preview = _uniform_scaled_preview_fallback(
+    # Do **not** snap yellow ankles to z=0.  R2R source motions declare the
+    # mesh-sole plane (``source_floor_z_world``); after that subtract, ankles
+    # sit one sole-thickness above the ground.  Snapping them to z=0 then
+    # planting the target mesh on the same plane floats the robot above the
+    # overlay by that thickness.
+    return _uniform_scaled_preview_fallback(
         motion,
         cfg,
         human_height,
         ik_canons,
         z_correction=z_correction,
     )
-    # Uniform scale grounds the clip-wide lowest *joint* (often a wrist during
-    # get-up).  Snap feet/ankles to z=0 so playback ``mesh_z_lift`` does not
-    # float the robot.  Keep terrain/object clips co-aligned with scaled scene.
-    if not motion_has_interaction_scene(motion):
-        pos = _snap_scaled_overlay_positions_to_foot_floor(
-            np.asarray(preview["positions"], dtype=np.float32),
-            preview["bone_names"],
-        )
-        preview = dict(preview)
-        preview["positions"] = np.round(pos, 4).tolist()
-    return preview
 
 
 def _align_scaled_preview_to_robot_playback(
