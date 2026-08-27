@@ -50,6 +50,9 @@ _DIR_TO_ADAPTER: dict[str, str] = {
     "xsens": "xsens_mocap",
     "xsensmocap": "xsens_mocap",
     "origin_data": "xsens_mocap",
+    # 100STYLE (https://www.ianxmason.com/100style/) — Xsens MVN BVH dialect
+    "100style": "xsens_mocap",
+    "style100": "xsens_mocap",
     "gvhmr": "gvhmr",
     "kungfu": "kungfu_athlete",
     "kungfuathlete": "kungfu_athlete",

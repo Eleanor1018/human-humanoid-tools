@@ -7,6 +7,13 @@ import os
 from pathlib import Path
 
 
+def _non_negative_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must be a non-negative integer")
+    return parsed
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run the hhtools Electron sidecar")
     parser.add_argument("--source", type=Path, required=True)
@@ -15,6 +22,18 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--session-secret")
+    parser.add_argument(
+        "--max-running-jobs",
+        type=_non_negative_int,
+        default=os.environ.get("HHTOOLS_MAX_RUNNING_JOBS"),
+        help="Concurrent jobs; 0 means unlimited.",
+    )
+    parser.add_argument(
+        "--max-queued-jobs",
+        type=_non_negative_int,
+        default=os.environ.get("HHTOOLS_MAX_QUEUED_JOBS"),
+        help="Waiting jobs under a concurrency cap; 0 means unlimited.",
+    )
     return parser
 
 
@@ -41,6 +60,8 @@ def main(argv: list[str] | None = None) -> None:
         host=args.host,
         port=args.port,
         session_secret=session_secret,
+        max_running_jobs=args.max_running_jobs,
+        max_queued_jobs=args.max_queued_jobs,
     )
 
 

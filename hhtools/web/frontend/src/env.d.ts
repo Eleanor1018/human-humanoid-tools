@@ -1,10 +1,19 @@
 /// <reference types="vite/client" />
 
 import type {
+  CalibrationEditorCommandDetail,
+  CalibrationEditorStateDetail,
+  ComparisonCommandDetail,
+  ComparisonStateDetail,
   HhAppBridge,
+  ImportCommandDetail,
+  JobHistoryCommandDetail,
+  JobHistoryStateDetail,
   PlaybackCommandDetail,
   PlaybackUiState,
+  ResultDiagnosticsDetail,
   UploadFile,
+  WorkflowStateDetail,
 } from './runtime/types'
 import type { GuidedTour } from './runtime/tutorial'
 
@@ -165,10 +174,17 @@ declare global {
   }
 
   interface Window {
+    hhtoolsDesktop?: {
+      getRuntimeState: () => Promise<unknown>
+      restartBackend: () => Promise<unknown>
+      openExternal: (url: string) => Promise<void>
+      onRuntimeStateChanged: (listener: (state: unknown) => void) => () => void
+    }
     __hhtoolsReady?: boolean
     showBoot?: (message: string) => void
     __hhPanelLayout?: {
       revealBoth: () => void
+      reset: () => void
     }
     __hhUi?: {
       setActivePanel: (panel: string) => void
@@ -180,9 +196,19 @@ declare global {
   }
 
   interface WindowEventMap {
+    'hhtools:calibration-editor-command': CustomEvent<CalibrationEditorCommandDetail>
+    'hhtools:calibration-editor-state': CustomEvent<CalibrationEditorStateDetail>
+    'hhtools:comparison-command': CustomEvent<ComparisonCommandDetail>
+    'hhtools:comparison-state': CustomEvent<ComparisonStateDetail>
+    'hhtools:job-history-command': CustomEvent<JobHistoryCommandDetail>
+    'hhtools:job-history-state': CustomEvent<JobHistoryStateDetail>
+    'hhtools:import-command': CustomEvent<ImportCommandDetail>
+    'hhtools:job-spec-import-request': CustomEvent<void>
     'hhtools:panel-request': CustomEvent<string>
     'hhtools:playback-command': CustomEvent<PlaybackCommandDetail>
     'hhtools:playback-state': CustomEvent<Partial<PlaybackUiState>>
+    'hhtools:result-diagnostics': CustomEvent<ResultDiagnosticsDetail>
+    'hhtools:workflow-state': CustomEvent<WorkflowStateDetail>
   }
 }
 

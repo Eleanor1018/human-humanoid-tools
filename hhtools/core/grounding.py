@@ -31,6 +31,14 @@ _FOOT_NAME_RE = re.compile(
     re.IGNORECASE,
 )
 
+#: ``Motion.meta`` key carrying an authoritative contact plane (world Z, metres).
+#: Every floor helper below infers the plane from joint positions, which assumes
+#: the clip's lowest *joint* touches the ground.  That is wrong for sources whose
+#: real contact surface sits below its lowest joint — a robot clip's ankle joint
+#: is one sole thickness above the floor, and the skeleton carries no toe bone to
+#: reveal it.  Such producers measure their own contact plane and declare it here.
+SOURCE_FLOOR_META_KEY = "source_floor_z_world"
+
 
 def foot_contact_bone_indices(bone_names: tuple[str, ...]) -> NDArray[np.int64]:
     """Indices of bones likely at ground contact (feet / toes / ankles).
@@ -210,13 +218,38 @@ def parc_ms_shares_human_terrain_z(motion: "Motion") -> bool:
     return True
 
 
+def declared_source_floor_z_world(motion: "Motion") -> float | None:
+    """Contact plane declared via :data:`SOURCE_FLOOR_META_KEY`, if any.
+
+    Returns ``None`` when the clip makes no claim, so callers fall back to the
+    joint-minimum heuristics.
+    """
+
+    meta = getattr(motion, "meta", None)
+    if not isinstance(meta, dict):
+        return None
+    raw = meta.get(SOURCE_FLOOR_META_KEY)
+    if raw is None:
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if np.isfinite(value) else None
+
+
 def human_source_floor_z_world(motion: "Motion") -> float:
     """Minimum world Z over all joints across the full clip.
 
     Uses the clip-wide lowest point (toes, knees in kneeling, hands on floor,
     etc.) so poses where feet leave the ground still normalize correctly.
+
+    A clip that declares :data:`SOURCE_FLOOR_META_KEY` overrides the estimate.
     """
 
+    declared = declared_source_floor_z_world(motion)
+    if declared is not None:
+        return declared
     return clip_floor_z_in_positions(np.asarray(motion.positions, dtype=np.float32))
 
 
@@ -258,11 +291,16 @@ def motion_has_upright_stance(
 def retarget_source_floor_z_world(motion: "Motion") -> float:
     """Floor Z used to normalize a clip before IK / yellow overlay scale.
 
+    * Clips declaring :data:`SOURCE_FLOOR_META_KEY` → that plane verbatim.
     * Clips with upright stance frames → **foot** floor, so hand/finger contact
       during a prior lie-down does not float the standing feet.
     * Fully prone / crawl clips (no upright frame) → all-joint min, so body
       contact still reaches ``z=0``.
     """
+
+    declared = declared_source_floor_z_world(motion)
+    if declared is not None:
+        return declared
 
     names = tuple(motion.hierarchy.bone_names)
     pos = np.asarray(motion.positions, dtype=np.float32)
@@ -294,7 +332,9 @@ def terrain_heightfield_z_offset_world(motion: "Motion", z_human_floor_m: float)
 
 
 __all__ = [
+    "SOURCE_FLOOR_META_KEY",
     "clip_floor_z_in_positions",
+    "declared_source_floor_z_world",
     "foot_contact_bone_indices",
     "foot_floor_z_in_positions",
     "human_source_floor_z_world",

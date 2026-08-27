@@ -36,6 +36,10 @@ from pathlib import Path
 import numpy as np
 from numpy.typing import NDArray
 
+from hhtools.core.grounding import (
+    SOURCE_FLOOR_META_KEY,
+    foot_floor_z_in_positions,
+)
 from hhtools.core.hierarchy import Hierarchy
 from hhtools.core.math import quaternion as Q
 from hhtools.core.motion import Motion
@@ -60,6 +64,7 @@ __all__ = [
     "r2r_calibration_path",
     "retarget_robot_to_robot",
     "save_r2r_calibration",
+    "align_retargeted_ankles_to_scaled_source",
     "source_trajectory_to_motion",
     "suggested_r2r_backend",
     "trajectory_to_retargeted_motion",
@@ -266,6 +271,11 @@ def source_trajectory_to_motion(
             f"{7 + n_dof} (7 root + {n_dof} dof)"
         )
 
+    from hhtools.retarget.clip_ground_snap import (
+        _foot_link_parts,
+        _frame_min_foot_world_z,
+    )
+
     ik_pairs = _ik_map_pairs(source_model)
     model_dof = set(source_model.dof_names())
     usable = [n for n in dof_names if n in model_dof]
@@ -292,6 +302,14 @@ def source_trajectory_to_motion(
         quaternions = np.zeros((num_frames, n_bones, 4), dtype=np.float32)
         quaternions[..., 3] = 1.0
 
+        # The canonical skeleton stops at the ankles, so the downstream floor
+        # heuristics would read the ankle joints as the contact plane and bury
+        # the source robot's soles by one foot thickness.  ``ik_map``-driven FK
+        # already poses the model here, so measure the real sole plane in the
+        # same pass and declare it on the Motion.
+        foot_parts = _foot_link_parts(source_model)
+        sole_z_min: float | None = None
+
         for f in range(num_frames):
             cfg = {n: float(joint_q[f, 7 + i]) for i, n in enumerate(dof_names) if n in model_dof}
             link_tx = _collect_link_transforms_at_q(source_model, cfg)
@@ -301,10 +319,26 @@ def source_trajectory_to_motion(
                 p, q = kp.get(nm, (positions[f, j], quaternions[f, j]))
                 positions[f, j] = p
                 quaternions[f, j] = q
+            if foot_parts:
+                sole_z = _frame_min_foot_world_z(
+                    source_model, joint_q[f, :7], foot_parts=foot_parts,
+                )
+                if sole_z is not None and (sole_z_min is None or sole_z < sole_z_min):
+                    sole_z_min = float(sole_z)
             if progress_callback is not None and (f == 0 or f == num_frames - 1 or f % 20 == 0):
                 progress_callback(f + 1, num_frames)
     finally:
         source_model.apply_configuration(saved)
+
+    meta: dict[str, object] = {"robot_to_robot_source": source_model.preset.name}
+    if sole_z_min is not None:
+        # A sole can only ever sit below the ankles that carry it, so a reading
+        # above the ankle floor means the foot-mesh lookup produced garbage
+        # (corrupt geometry, unresolved scene node).  Fall back to the ankle
+        # heuristic rather than declaring a plane that would sink the clip.
+        ankle_floor = float(foot_floor_z_in_positions(positions, tuple(names)))
+        if sole_z_min <= ankle_floor + 1e-6:
+            meta[SOURCE_FLOOR_META_KEY] = sole_z_min
 
     return Motion(
         name=name,
@@ -314,7 +348,7 @@ def source_trajectory_to_motion(
         framerate=float(framerate),
         up_axis="Z",
         source_format="csv",
-        meta={"robot_to_robot_source": source_model.preset.name},
+        meta=meta,
     )
 
 
@@ -816,6 +850,111 @@ def _build_scaler_config(
     return cfg, ref
 
 
+def _lowest_canonical_foot_z(
+    bone_names: list[str] | tuple[str, ...],
+    positions_frame: NDArray,
+) -> float | None:
+    """Lowest ankle/foot Z in one skeleton frame (same keys as the yellow overlay)."""
+
+    def _norm(name: str) -> str:
+        return str(name).lower().replace("_", "").replace(" ", "")
+
+    name_to_i = {_norm(n): i for i, n in enumerate(bone_names)}
+    zs: list[float] = []
+    pos = np.asarray(positions_frame, dtype=np.float64)
+    for key in (
+        "leftankle",
+        "rightankle",
+        "leftfoot",
+        "rightfoot",
+        "leftleg",
+        "rightleg",
+    ):
+        idx = name_to_i.get(key)
+        if idx is not None and idx < pos.shape[0]:
+            zs.append(float(pos[idx, 2]))
+    return min(zs) if zs else None
+
+
+def align_retargeted_ankles_to_scaled_source(
+    target_model: URDFRobotModel,
+    source_model: URDFRobotModel,
+    source_motion: Motion,
+    retargeted: RetargetedMotion,
+    calibrated_joint_q: dict[str, float],
+    *,
+    frame_index: int = 0,
+) -> RetargetedMotion:
+    """Constant root-Z shift so target ankles match the scaled source overlay feet.
+
+    Clip-floor-snap plants the **target mesh sole** on ``z=0``.  The yellow
+    overlay uses source ankle keypoints after the declared sole-plane scale, so
+    those sit a sole-thickness above the ground.  Planting the mesh on the
+    overlay ankles (or snapping the overlay down to the mesh) leaves the robot
+    floating above the yellow skeleton.  This undoes that offset without a
+    second IK pass.
+    """
+    from dataclasses import replace
+
+    from hhtools.viewer.anatomy import motion_has_interaction_scene
+
+    if motion_has_interaction_scene(source_motion):
+        return retargeted
+
+    q = np.asarray(retargeted.joint_q, dtype=np.float32)
+    if q.ndim != 2 or q.shape[0] == 0 or q.shape[1] < 3:
+        return retargeted
+
+    from hhtools.core.grounding import retarget_source_floor_z_world
+    from hhtools.retarget.calibration.calibration import uniform_overlay_scale_for_motion
+
+    cfg, ref = _build_scaler_config(source_model, target_model, calibrated_joint_q)
+    ik_canons = (
+        frozenset(target_model.preset.ik_map.keys())
+        if target_model.preset.ik_map
+        else frozenset()
+    )
+    ratio = float(
+        uniform_overlay_scale_for_motion(
+            cfg, float(ref.height_m), source_motion, ik_map_keys=ik_canons,
+        )
+    )
+    names = list(source_motion.hierarchy.bone_names)
+    src_pos = np.asarray(source_motion.positions, dtype=np.float64)
+    f0 = int(np.clip(frame_index, 0, src_pos.shape[0] - 1))
+    z_min = float(retarget_source_floor_z_world(source_motion))
+    yellow_z = _lowest_canonical_foot_z(names, (src_pos[f0] - z_min) * ratio)
+    if yellow_z is None:
+        return retargeted
+
+    from hhtools.web.serialize import (
+        _apply_retarget_dof,
+        _lowest_ankle_z,
+        _quat_xyzw_to_rotmat,
+    )
+
+    f_ret = int(np.clip(f0, 0, q.shape[0] - 1))
+    root = np.asarray(retargeted.root_trajectory[f_ret], dtype=np.float64)
+    dof = np.asarray(retargeted.dof_trajectory[f_ret], dtype=np.float64)
+    _apply_retarget_dof(target_model, list(retargeted.dof_names), dof)
+    ik_map = dict(target_model.preset.ik_map) if target_model.preset.ik_map else {}
+    ankle_local = _lowest_ankle_z(
+        target_model, ik_map, _quat_xyzw_to_rotmat(root[3:7]),
+    )
+    if ankle_local is None:
+        return retargeted
+
+    delta = float(yellow_z) - (float(root[2]) + float(ankle_local))
+    if abs(delta) < 1e-4:
+        return retargeted
+
+    out = q.copy()
+    out[:, 2] = out[:, 2] + np.float32(delta)
+    meta = dict(getattr(retargeted, "meta", {}) or {})
+    meta["r2r_yellow_ankle_align_m"] = float(delta)
+    return replace(retargeted, joint_q=out, meta=meta)
+
+
 def suggested_r2r_backend(profile: str, *, has_scene: bool = False) -> str:
     """Default retarget backend for an R2R upload profile."""
     prof = (profile or "mimic").strip().lower()
@@ -876,9 +1015,9 @@ def retarget_robot_to_robot(
 
         try:
             try:
-                return pipe.run(source_motion, progress_callback=_im_cb)
+                ret = pipe.run(source_motion, progress_callback=_im_cb)
             except TypeError:
-                return pipe.run(source_motion)
+                ret = pipe.run(source_motion)
         except ModuleNotFoundError as err:
             if "osqp" in str(err).lower():
                 raise ValueError(
@@ -887,6 +1026,13 @@ def retarget_robot_to_robot(
                     "`uv sync --extra web`)."
                 ) from err
             raise
+        return align_retargeted_ankles_to_scaled_source(
+            target_model,
+            source_model,
+            source_motion,
+            ret,
+            calibrated_joint_q,
+        )
 
     from hhtools.retarget.newton_basic import NewtonBasicPipeline
     from hhtools.retarget.newton_basic._warp_config import configure as configure_warp
@@ -911,6 +1057,13 @@ def retarget_robot_to_robot(
         configure_warp=False,
     )
     try:
-        return pipeline.run(source_motion, progress_callback=progress_callback)
+        ret = pipeline.run(source_motion, progress_callback=progress_callback)
     except TypeError:
-        return pipeline.run(source_motion)
+        ret = pipeline.run(source_motion)
+    return align_retargeted_ankles_to_scaled_source(
+        target_model,
+        source_model,
+        source_motion,
+        ret,
+        calibrated_joint_q,
+    )

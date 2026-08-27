@@ -118,6 +118,13 @@ def rest_pose_from_bundled_reference(
     from hhtools.io.bvh import load_bvh
 
     motion = load_bvh(path)
+    # The bundled Xsens file is a stand-pose capture (arms hanging).  Frame 0
+    # is therefore not a T-pose; synthesise the BVH bind so calibration and
+    # scaler rest match T-pose robots / 100STYLE-style hang clips.
+    if reference == "xsens_mocap":
+        return rest_pose_from_motion_bind(
+            motion, source_tag=f"bundled_reference:{reference}"
+        )
     return rest_pose_from_motion(
         motion,
         frame=0,
@@ -159,9 +166,12 @@ def _bundled_reference_for_motion(motion: "Motion") -> str | None:
     from hhtools.retarget.newton_basic.human_aliases import (
         is_mixamo_cmu_like,
         is_mocap_spine3_bvh_like,
+        is_xsens_mocap_like,
     )
 
     names = tuple(motion.hierarchy.bone_names)
+    if is_xsens_mocap_like(names):
+        return "xsens_mocap"
     if is_mocap_spine3_bvh_like(names):
         return "mocap_bvh"
     if is_mixamo_cmu_like(names):
@@ -688,34 +698,26 @@ def rest_pose_from_motion_bind(
         )[0]
     local_quat = Q.normalize(local_quat)
 
-    # ---- Zero every non-root local rotation; keep root's when needed. ----
+    # ---- Zero every non-root local rotation; stand the root upright. ----
     # Non-root local quats at identity collapse the per-subject pose to a
     # canonical T-pose (arms stretched out, legs straight).
     #
-    # BVH-style loaders may bake an up-axis conversion into the root; keep
-    # that so the synthesized rest pose stays upright.
+    # Inverse-FK local translations are the source bone offsets (BVH
+    # ``OFFSET`` / SMPL rest).  Those offsets are authored in a Y-up frame;
+    # the loader has already turned *world* poses into Z-up.  Putting only
+    # the Y→Z conversion on the root stands the T-pose up without baking
+    # frame-0 body pitch/yaw into rest.
     #
-    # SMPL-family ``root_orient`` is always the *global body orientation*
-    # (standing, prone, lying AMASS stageii, HMR/GVHMR video estimates, …),
-    # not a rest-frame axis fix-up.  Keeping a lying frame-0 root makes the
-    # bind T-pose lie flat → ``height_m`` / pelvis-floor collapse → inflated
-    # ``root_z_offset`` and a floating retarget.  Synthesize an upright bind;
-    # calibration absorbs heading into ``q_offset``.
+    # Keeping the clip's frame-0 root (the old BVH path) is wrong for
+    # 100STYLE / Xsens: those clips open mid-stride with ~15° of pitch, so
+    # the bind T-pose leans, ``q_offset`` absorbs the lean, and the
+    # retargeted robot pitches forward on every frame.
     bind_local_quat = np.zeros_like(local_quat)
     bind_local_quat[:, 3] = 1.0  # identity by default
-    try:
-        from hhtools.retarget.newton_basic.human_aliases import is_smpl_like
-
-        smpl_like = is_smpl_like(hierarchy.bone_names)
-    except Exception:
-        smpl_like = False
-    if smpl_like:
-        if motion.up_axis == "Z":
-            bind_local_quat[root_idx] = rotate_y_up_to_z_up_quaternions(
-                bind_local_quat[root_idx][None, :]
-            )[0]
-    else:
-        bind_local_quat[root_idx] = local_quat[root_idx]
+    if motion.up_axis == "Z":
+        bind_local_quat[root_idx] = rotate_y_up_to_z_up_quaternions(
+            bind_local_quat[root_idx][None, :]
+        )[0]
 
     # ---- Zero the root's horizontal translation so rest lives at origin. --
     # This keeps ``height_m`` meaningful (no offset accumulated from an

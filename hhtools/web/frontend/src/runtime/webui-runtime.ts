@@ -72,6 +72,19 @@ function renderStatusChip(container: HTMLElement | null, text: unknown, classNam
   container.replaceChildren(chip);
 }
 
+type ValidationTone = "ok" | "warn" | "error";
+
+/** Render compact, text-only validation rows without introducing an HTML injection path. */
+function renderValidationSummary(
+  container: HTMLElement | null,
+  rows: ReadonlyArray<readonly [ValidationTone, string]>,
+): void {
+  if (!container) return;
+  container.replaceChildren(
+    ...rows.map(([tone, message]) => textElement("div", `validation-line ${tone}`, message)),
+  );
+}
+
 /** Playback timeline when long clips are downsampled for the browser payload. */
 function effectivePlaybackDuration(payload: PlaybackPayload | null | undefined): number {
   if (payload == null) return 1;
@@ -135,7 +148,18 @@ function updateRetargetFpsPlaceholder() {
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import {
+  angleForDisplay,
+  angleFromDisplay,
+  calibrationJointMatches,
+  classifyCalibrationJoint,
+  formatCalibrationAngle,
+} from "./calibration-editor";
 import { initTutorial } from "./tutorial";
+import {
+  loadWorkspacePreferences,
+  updateWorkspacePreferences,
+} from "./workspace-preferences";
 import type {
   ApiClient,
   ApiGetResponse,
@@ -144,7 +168,16 @@ import type {
   BatchFailure,
   BatchRetargetResult,
   BodyMeshPayload,
+  CalibrationAngleUnit,
+  CalibrationComparisonMode,
+  CalibrationEditorCommandDetail,
+  CalibrationEditorStateDetail,
+  CalibrationJointRegion,
   CalibrationReferencePayload,
+  ComparisonPreset,
+  JobConfigResponse,
+  JobHistoryStateDetail,
+  JobListResponse,
   JobResponse,
   JobResult,
   JobStartResponse,
@@ -158,6 +191,7 @@ import type {
   RobotPayload,
   RobotExportPreviewResult,
   RetargetResult,
+  ResultDiagnostics,
   R2rBasketUploadResult,
   R2rSourceTrajectoryResult,
   RobotJointLimit,
@@ -167,6 +201,10 @@ import type {
   TerrainPayload,
   UploadFile,
   Vec3,
+  WorkflowNodeState,
+  WorkflowNodeStatus,
+  WorkflowStateDetail,
+  WorkflowId,
 } from "./types";
 
 type ProgressCallback = (fraction: number | null, loaded: number, total: number) => void;
@@ -214,6 +252,7 @@ interface CalibrationSliderRow {
   num: HTMLInputElement;
   lo: number;
   hi: number;
+  region: CalibrationJointRegion;
 }
 
 interface AppState {
@@ -233,6 +272,7 @@ interface AppState {
   calibQ: Record<string, number>;
   calibSliderRows: Record<string, CalibrationSliderRow>;
   calibBaselineQ: Record<string, number> | null;
+  calibDraftQ: Record<string, number> | null;
   calibHasSaved: boolean;
   robotTrajectory: RobotTrajectoryPayload | null;
   robotPanelLocked: boolean;
@@ -331,6 +371,126 @@ function toast(msg: unknown, isErr = false): void {
   clearTimeout(t._timer);
   const hideMs = isErr ? TOAST_MS + TOAST_ERR_EXTRA_MS : TOAST_MS;
   t._timer = setTimeout(() => (t.className = isErr ? "err" : ""), hideMs);
+}
+
+// ---------------------------------------------------------- shared job drawer
+let jobHistoryState: JobHistoryStateDetail = {
+  jobs: [],
+  loading: false,
+  error: null,
+};
+let jobHistoryRefresh: Promise<void> | null = null;
+
+function publishJobHistoryState(): void {
+  window.dispatchEvent(
+    new CustomEvent<JobHistoryStateDetail>("hhtools:job-history-state", {
+      detail: {
+        jobs: [...jobHistoryState.jobs],
+        loading: jobHistoryState.loading,
+        error: jobHistoryState.error,
+      },
+    }),
+  );
+}
+
+function refreshJobHistory(): Promise<void> {
+  if (jobHistoryRefresh) return jobHistoryRefresh;
+  jobHistoryState = { ...jobHistoryState, loading: true, error: null };
+  publishJobHistoryState();
+  jobHistoryRefresh = (async () => {
+    try {
+      const response: JobListResponse = await API.get("/api/jobs");
+      jobHistoryState = { jobs: response.jobs, loading: false, error: null };
+    } catch (error) {
+      jobHistoryState = {
+        ...jobHistoryState,
+        loading: false,
+        error: errorMessage(error),
+      };
+    } finally {
+      jobHistoryRefresh = null;
+      publishJobHistoryState();
+    }
+  })();
+  return jobHistoryRefresh;
+}
+
+async function writeClipboardText(value: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand("copy");
+  textarea.remove();
+  if (!copied) throw new Error("浏览器未允许复制，请在开发者工具中查看配置");
+}
+
+async function handleJobHistoryCommand(
+  event: WindowEventMap["hhtools:job-history-command"],
+): Promise<void> {
+  const detail = event.detail;
+  if (detail.command === "refresh") {
+    await refreshJobHistory();
+    return;
+  }
+  if (detail.command === "copy-config") {
+    try {
+      const config: JobConfigResponse = await API.get(`/api/job/${detail.jobId}/config`);
+      await writeClipboardText(JSON.stringify(config, null, 2));
+      toast("任务有效配置已复制");
+    } catch (error) {
+      toast(`复制配置失败：${errorMessage(error)}`, true);
+    }
+    return;
+  }
+  if (detail.command === "copy-cli") {
+    try {
+      const cli = await API.get(`/api/job/${detail.jobId}/cli`);
+      if (!cli.available || !cli.command) {
+        throw new Error(cli.reason || "该任务没有等价 CLI 命令");
+      }
+      await writeClipboardText(cli.command);
+      toast("等价 CLI 命令已复制");
+    } catch (error) {
+      toast(`复制 CLI 失败：${errorMessage(error)}`, true);
+    }
+    return;
+  }
+  if (detail.command === "download-config") {
+    try {
+      await triggerBrowserDownload(
+        `/api/job/${detail.jobId}/config/download`,
+        `hhtools-job-${detail.jobId}.json`,
+      );
+      toast("任务配置已开始下载");
+    } catch (error) {
+      toast(`保存配置失败：${errorMessage(error)}`, true);
+    }
+    return;
+  }
+  try {
+    await triggerBrowserDownload(
+      `/api/job/${detail.jobId}/download`,
+      detail.filename || `hhtools-${detail.jobId}.zip`,
+    );
+    toast("任务结果已开始下载");
+  } catch (error) {
+    toast(`下载失败：${errorMessage(error)}`, true);
+  }
+}
+
+function installJobHistoryBridge(): void {
+  window.addEventListener("hhtools:job-history-command", (event) => {
+    void handleJobHistoryCommand(event);
+  });
+  void refreshJobHistory();
+  window.setInterval(() => void refreshJobHistory(), 2500);
 }
 
 // ----------------------------------------------------------------- loading bar
@@ -765,6 +925,7 @@ function animate(): void {
   }
   if ((state.calibrationMode || r2r.calibrating) && calibManip.active && !calibManip._hudCardDrag) {
     calibManip._positionTags();
+    refSkel.updateOverlay(r2r.calibrating ? r2rTgt : robot);
   }
   orbit.update();
   renderer.render(scene, camera);
@@ -875,75 +1036,337 @@ class SkeletonView implements PlaybackView {
   }
 }
 
+interface ReferenceLandmarkMapping {
+  semantic: string;
+  targetLink: string;
+  index: number;
+  label: HTMLElement;
+  line: SVGLineElement;
+}
+
+interface ReferenceAlignmentDiagnostic {
+  semantic: string;
+  targetLink: string;
+  positionResidualM: number;
+  verticalResidualM: number;
+  rotationResidualDeg: number | null;
+}
+
+const CANONICAL_LANDMARK_LABELS: Record<string, string> = {
+  hips: "髋部",
+  chest: "胸部",
+  neck: "颈部",
+  head: "头部",
+  left_hip: "左髋",
+  right_hip: "右髋",
+  left_knee: "左膝",
+  right_knee: "右膝",
+  left_ankle: "左踝",
+  right_ankle: "右踝",
+  left_shoulder: "左肩",
+  right_shoulder: "右肩",
+  left_elbow: "左肘",
+  right_elbow: "右肘",
+  left_wrist: "左腕",
+  right_wrist: "右腕",
+};
+
+function normalizedSemanticName(value: unknown): string {
+  return String(value ?? "").trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function ikMapTargetLink(value: unknown): string | null {
+  if (typeof value === "string") return value;
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Record<string, unknown>;
+  for (const key of ["t_body", "link", "body", "target"]) {
+    if (typeof candidate[key] === "string") return candidate[key] as string;
+  }
+  return null;
+}
+
 // Blue reference T-pose shown only during calibration (Viser ReferenceSkeletonRenderer).
 class ReferenceSkeletonView {
   readonly group: THREE.Group;
+  readonly labelRoot: HTMLElement;
+  readonly lineRoot: SVGSVGElement;
   spheres: Array<THREE.Mesh<THREE.SphereGeometry, THREE.MeshStandardMaterial>> = [];
   parents: number[] = [];
+  boneNames: string[] = [];
+  canonicalNames: string[] = [];
+  referenceQuaternions: Array<[number, number, number, number]> = [];
   exclude = new Set<number>();
+  mappings: ReferenceLandmarkMapping[] = [];
   lineGeom: THREE.BufferGeometry | null = null;
   lines: THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial> | null = null;
+  mappedMaterial: THREE.MeshStandardMaterial | null = null;
+  contextMaterial: THREE.MeshStandardMaterial | null = null;
+  mappedOnly = true;
+  labelsVisible = true;
+  mappingLinesVisible = true;
+  sourceOpacity = 0.82;
 
   constructor() {
     this.group = new THREE.Group();
     this.group.visible = false;
+    this.labelRoot = document.getElementById("calib-landmark-labels");
+    this.lineRoot = document.querySelector<SVGSVGElement>("#calib-mapping-overlay")!;
     world.add(this.group);
   }
+
   clear(): void {
     while (this.group.children.length) this.group.remove(this.group.children[0]);
+    this.labelRoot.replaceChildren();
+    this.lineRoot.replaceChildren();
     this.spheres = [];
     this.parents = [];
+    this.boneNames = [];
+    this.canonicalNames = [];
+    this.referenceQuaternions = [];
     this.exclude = new Set();
+    this.mappings = [];
     this.lineGeom = null;
     this.lines = null;
+    this.mappedMaterial = null;
+    this.contextMaterial = null;
+    this.group.visible = false;
   }
+
   load(ref: CalibrationReferencePayload | null | undefined): void {
     this.clear();
     if (!ref?.positions?.length) return;
     const color = ref.color != null ? ref.color : 0x5eb3ff;
     const fr = ref.positions[0];
     this.parents = ref.parent_indices;
+    this.boneNames = ref.bone_names?.slice() ?? this.parents.map((_, index) => `joint_${index}`);
+    this.canonicalNames = ref.canonical_names?.slice() ?? this.boneNames.slice();
+    this.referenceQuaternions = ref.quaternions?.[0]?.slice() ?? [];
     this.exclude = new Set(ref.exclude_joint_indices || []);
-    const J = this.parents.length;
-    const mat = new THREE.MeshStandardMaterial({
-      color, roughness: 0.4, metalness: 0.05, emissive: 0x1a3a66, emissiveIntensity: 0.35,
+    const jointCount = this.parents.length;
+    this.mappedMaterial = new THREE.MeshStandardMaterial({
+      color,
+      roughness: 0.34,
+      metalness: 0.03,
+      emissive: 0x0a4d92,
+      emissiveIntensity: 0.62,
+      transparent: true,
+      opacity: this.sourceOpacity,
     });
-    const sphereGeo = new THREE.SphereGeometry(0.032, 12, 12);
-    for (let j = 0; j < J; j++) {
-      const s = new THREE.Mesh(sphereGeo, mat);
-      if (this.exclude.has(j)) s.visible = false;
-      this.group.add(s);
-      this.spheres.push(s);
+    this.contextMaterial = new THREE.MeshStandardMaterial({
+      color,
+      roughness: 0.48,
+      metalness: 0.02,
+      emissive: 0x1a3a66,
+      emissiveIntensity: 0.18,
+      transparent: true,
+      opacity: this.sourceOpacity * 0.32,
+    });
+    const sphereGeo = new THREE.SphereGeometry(0.022, 12, 12);
+    for (let index = 0; index < jointCount; index++) {
+      const sphere = new THREE.Mesh(sphereGeo, this.contextMaterial);
+      if (this.exclude.has(index)) sphere.visible = false;
+      this.group.add(sphere);
+      this.spheres.push(sphere);
     }
-    let segCount = 0;
-    for (let j = 0; j < J; j++) {
-      const p = this.parents[j];
-      if (p < 0 || this.exclude.has(j) || this.exclude.has(p)) continue;
-      segCount++;
+    let segmentCount = 0;
+    for (let index = 0; index < jointCount; index++) {
+      const parent = this.parents[index];
+      if (parent < 0 || this.exclude.has(index) || this.exclude.has(parent)) continue;
+      segmentCount++;
     }
-    const positions = new Float32Array(segCount * 2 * 3);
+    const positions = new Float32Array(segmentCount * 2 * 3);
     this.lineGeom = new THREE.BufferGeometry();
     this.lineGeom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
     this.lines = new THREE.LineSegments(
       this.lineGeom,
-      new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.9 })
+      new THREE.LineBasicMaterial({
+        color,
+        transparent: true,
+        opacity: this.sourceOpacity * 0.38,
+      }),
     );
     this.group.add(this.lines);
-    for (let j = 0; j < J; j++) {
-      if (this.exclude.has(j)) continue;
-      this.spheres[j].position.set(fr[j][0], fr[j][1], fr[j][2]);
+    for (let index = 0; index < jointCount; index++) {
+      if (this.exclude.has(index)) continue;
+      this.spheres[index].position.set(fr[index][0], fr[index][1], fr[index][2]);
     }
     const position = this.lineGeom.getAttribute("position") as THREE.BufferAttribute;
-    const arr = position.array;
-    let k = 0;
-    for (let j = 0; j < J; j++) {
-      const p = this.parents[j];
-      if (p < 0 || this.exclude.has(j) || this.exclude.has(p)) continue;
-      arr[k++] = fr[j][0]; arr[k++] = fr[j][1]; arr[k++] = fr[j][2];
-      arr[k++] = fr[p][0]; arr[k++] = fr[p][1]; arr[k++] = fr[p][2];
+    const array = position.array;
+    let offset = 0;
+    for (let index = 0; index < jointCount; index++) {
+      const parent = this.parents[index];
+      if (parent < 0 || this.exclude.has(index) || this.exclude.has(parent)) continue;
+      array[offset++] = fr[index][0]; array[offset++] = fr[index][1]; array[offset++] = fr[index][2];
+      array[offset++] = fr[parent][0]; array[offset++] = fr[parent][1]; array[offset++] = fr[parent][2];
     }
     position.needsUpdate = true;
     this.group.visible = true;
+    this.applyDisplayOptions();
+  }
+
+  configureMappings(ikMap: Record<string, unknown> | null | undefined): number {
+    this.labelRoot.replaceChildren();
+    this.lineRoot.replaceChildren();
+    this.mappings = [];
+    const canonicalIndex = new Map<string, number>();
+    this.canonicalNames.forEach((name, index) => canonicalIndex.set(normalizedSemanticName(name), index));
+    this.boneNames.forEach((name, index) => {
+      const key = normalizedSemanticName(name);
+      if (!canonicalIndex.has(key)) canonicalIndex.set(key, index);
+    });
+
+    for (const [semantic, rawTarget] of Object.entries(ikMap ?? {})) {
+      const targetLink = ikMapTargetLink(rawTarget);
+      const index = canonicalIndex.get(normalizedSemanticName(semantic));
+      if (!targetLink || index == null || this.exclude.has(index)) continue;
+
+      const label = document.createElement("span");
+      label.className = "calib-landmark-label";
+      const primary = document.createElement("strong");
+      primary.textContent = CANONICAL_LANDMARK_LABELS[semantic] ?? semantic.replaceAll("_", " ");
+      label.append(primary, document.createTextNode(` · ${targetLink}`));
+      this.labelRoot.appendChild(label);
+
+      const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+      this.lineRoot.appendChild(line);
+      this.mappings.push({ semantic, targetLink, index, label, line });
+    }
+    this.applyDisplayOptions();
+    return this.mappings.length;
+  }
+
+  setDisplayOptions({
+    mappedOnly,
+    labels,
+    mappingLines,
+    sourceOpacity,
+  }: {
+    mappedOnly?: boolean;
+    labels?: boolean;
+    mappingLines?: boolean;
+    sourceOpacity?: number;
+  }): void {
+    if (mappedOnly != null) this.mappedOnly = mappedOnly;
+    if (labels != null) this.labelsVisible = labels;
+    if (mappingLines != null) this.mappingLinesVisible = mappingLines;
+    if (sourceOpacity != null) this.sourceOpacity = Math.min(1, Math.max(0.1, sourceOpacity));
+    this.applyDisplayOptions();
+  }
+
+  private applyDisplayOptions(): void {
+    const mappedIndices = new Set(this.mappings.map((mapping) => mapping.index));
+    this.spheres.forEach((sphere, index) => {
+      const mapped = mappedIndices.has(index);
+      sphere.material = mapped && this.mappedMaterial ? this.mappedMaterial : this.contextMaterial ?? sphere.material;
+      sphere.scale.setScalar(mapped ? 1.12 : 0.62);
+      sphere.visible = !this.exclude.has(index) && (mapped || !this.mappedOnly);
+    });
+    if (this.mappedMaterial) this.mappedMaterial.opacity = this.sourceOpacity;
+    if (this.contextMaterial) this.contextMaterial.opacity = this.sourceOpacity * 0.32;
+    if (this.lines) this.lines.material.opacity = this.sourceOpacity * 0.38;
+    this.labelRoot.style.display = this.labelsVisible ? "block" : "none";
+    this.lineRoot.style.display = this.mappingLinesVisible ? "block" : "none";
+  }
+
+  updateOverlay(robotView: RobotView): void {
+    const active = this.group.visible && this.mappings.length > 0;
+    const width = this.labelRoot.clientWidth;
+    const height = this.labelRoot.clientHeight;
+    if (!active || width <= 0 || height <= 0) {
+      for (const mapping of this.mappings) {
+        mapping.label.style.display = "none";
+        mapping.line.style.display = "none";
+      }
+      return;
+    }
+
+    const referencePoint = new THREE.Vector3();
+    const targetPoint = new THREE.Vector3();
+    for (const mapping of this.mappings) {
+      this.spheres[mapping.index].getWorldPosition(referencePoint);
+      if (!robotView.getLinkWorldPosition(mapping.targetLink, targetPoint)) {
+        mapping.label.style.display = "none";
+        mapping.line.style.display = "none";
+        continue;
+      }
+      const referenceNdc = referencePoint.clone().project(camera);
+      const targetNdc = targetPoint.clone().project(camera);
+      const visible = referenceNdc.z >= -1 && referenceNdc.z <= 1
+        && targetNdc.z >= -1 && targetNdc.z <= 1;
+      if (!visible) {
+        mapping.label.style.display = "none";
+        mapping.line.style.display = "none";
+        continue;
+      }
+      const rx = (referenceNdc.x * 0.5 + 0.5) * width;
+      const ry = (-referenceNdc.y * 0.5 + 0.5) * height;
+      const tx = (targetNdc.x * 0.5 + 0.5) * width;
+      const ty = (-targetNdc.y * 0.5 + 0.5) * height;
+      mapping.label.style.display = this.labelsVisible ? "block" : "none";
+      mapping.label.style.left = `${rx}px`;
+      mapping.label.style.top = `${ry}px`;
+      mapping.line.style.display = this.mappingLinesVisible ? "block" : "none";
+      mapping.line.setAttribute("x1", String(rx));
+      mapping.line.setAttribute("y1", String(ry));
+      mapping.line.setAttribute("x2", String(tx));
+      mapping.line.setAttribute("y2", String(ty));
+    }
+  }
+
+  alignmentDiagnostics(robotView: RobotView): ReferenceAlignmentDiagnostic[] {
+    const referencePosition = new THREE.Vector3();
+    const targetPosition = new THREE.Vector3();
+    const targetQuaternion = new THREE.Quaternion();
+    const worldQuaternion = new THREE.Quaternion();
+    world.getWorldQuaternion(worldQuaternion);
+    return this.mappings.flatMap((mapping) => {
+      this.spheres[mapping.index].getWorldPosition(referencePosition);
+      if (!robotView.getLinkWorldPosition(mapping.targetLink, targetPosition)) return [];
+      let rotationResidualDeg: number | null = null;
+      const rawQuaternion = this.referenceQuaternions[mapping.index];
+      if (rawQuaternion && robotView.getLinkWorldQuaternion(mapping.targetLink, targetQuaternion)) {
+        const referenceQuaternion = worldQuaternion.clone().multiply(
+          new THREE.Quaternion(rawQuaternion[0], rawQuaternion[1], rawQuaternion[2], rawQuaternion[3]),
+        );
+        const dot = Math.min(1, Math.abs(referenceQuaternion.dot(targetQuaternion)));
+        rotationResidualDeg = 2 * Math.acos(dot) * 180 / Math.PI;
+      }
+      return [{
+        semantic: mapping.semantic,
+        targetLink: mapping.targetLink,
+        positionResidualM: referencePosition.distanceTo(targetPosition),
+        verticalResidualM: Math.abs(referencePosition.z - targetPosition.z),
+        rotationResidualDeg,
+      }];
+    });
+  }
+
+  headingResidualDeg(robotView: RobotView): number | null {
+    const findMapping = (semantic: string) => this.mappings.find(
+      (mapping) => normalizedSemanticName(mapping.semantic) === normalizedSemanticName(semantic),
+    );
+    const candidates: Array<readonly [string, string]> = [
+      ["left_shoulder", "right_shoulder"],
+      ["left_hip", "right_hip"],
+    ];
+    const refLeft = new THREE.Vector3();
+    const refRight = new THREE.Vector3();
+    const targetLeft = new THREE.Vector3();
+    const targetRight = new THREE.Vector3();
+    for (const [leftName, rightName] of candidates) {
+      const left = findMapping(leftName);
+      const right = findMapping(rightName);
+      if (!left || !right) continue;
+      this.spheres[left.index].getWorldPosition(refLeft);
+      this.spheres[right.index].getWorldPosition(refRight);
+      if (!robotView.getLinkWorldPosition(left.targetLink, targetLeft)) continue;
+      if (!robotView.getLinkWorldPosition(right.targetLink, targetRight)) continue;
+      const referenceAxis = refRight.clone().sub(refLeft).setZ(0);
+      const targetAxis = targetRight.clone().sub(targetLeft).setZ(0);
+      if (referenceAxis.lengthSq() < 1e-8 || targetAxis.lengthSq() < 1e-8) continue;
+      return referenceAxis.angleTo(targetAxis) * 180 / Math.PI;
+    }
+    return null;
   }
 }
 
@@ -1506,6 +1929,7 @@ class BakedMeshView {
 const _robotLinkDelta = new THREE.Matrix4();
 const _robotMeshMat = new THREE.Matrix4();
 const _robotLinkMat = new THREE.Matrix4();
+const _robotWorldLinkMat = new THREE.Matrix4();
 const _robotRootQuatB = new THREE.Quaternion();
 const _robotMatB = new THREE.Matrix4();
 const _robotPosA = new THREE.Vector3();
@@ -1526,6 +1950,7 @@ class RobotView {
   meshToLink: Record<string, string> = {};
   zeroInv: Record<string, THREE.Matrix4> = {};
   zero: Record<string, Matrix4Data> = {};
+  currentLinkTransforms: Record<string, Matrix4Data> = {};
   links: string[] = [];
   trajectory: RobotTrajectoryPayload | null = null;
   frameIndices: number[] | null | undefined = null;
@@ -1543,6 +1968,7 @@ class RobotView {
     this.linkMeshes = {};
     this.meshToLink = {};
     this.zeroInv = {};
+    this.currentLinkTransforms = {};
     this.trajectory = null;
   }
   setVisible(v: boolean): void {
@@ -1557,12 +1983,15 @@ class RobotView {
       if (!entry) continue;
       for (const { mesh, baked } of entry) mesh.matrix.copy(baked);
     }
+    this.currentLinkTransforms = this.zero;
+    this.group.updateMatrixWorld(true);
   }
   async load(robot: RobotPayload): Promise<void> {
     this.clear();
     this.links = robot.links;
     this.meshToLink = robot.mesh_to_link || {};
     this.zero = robot.link_transforms_zero;
+    this.currentLinkTransforms = this.zero;
     this.groundOffset = robot.ground_offset_z || 0;
     for (const link of this.links) {
       const m = mat4(this.zero[link]);
@@ -1705,6 +2134,7 @@ class RobotView {
     nextTransforms: Record<string, Matrix4Data> | null = null,
     t = 0,
   ): void {
+    this.currentLinkTransforms = linkTransforms;
     const lerp = nextTransforms != null && t > 1e-5;
     for (const link of this.links) {
       const entry = this.linkMeshes[link];
@@ -1735,6 +2165,42 @@ class RobotView {
     this.group.position.set(0, 0, z);
     this.group.quaternion.identity();
     this._applyLinkTransforms(linkTransforms);
+  }
+
+  getLinkWorldPosition(link: string, out: THREE.Vector3): boolean {
+    const transform = this.currentLinkTransforms[link] ?? this.zero[link];
+    if (!transform) return false;
+    mat4Into(transform, _robotLinkMat);
+    this.group.updateMatrixWorld(true);
+    _robotWorldLinkMat.copy(this.group.matrixWorld).multiply(_robotLinkMat);
+    out.setFromMatrixPosition(_robotWorldLinkMat);
+    return true;
+  }
+
+  getLinkWorldQuaternion(link: string, out: THREE.Quaternion): boolean {
+    const transform = this.currentLinkTransforms[link] ?? this.zero[link];
+    if (!transform) return false;
+    mat4Into(transform, _robotLinkMat);
+    this.group.updateMatrixWorld(true);
+    _robotWorldLinkMat.copy(this.group.matrixWorld).multiply(_robotLinkMat);
+    _robotWorldLinkMat.decompose(_robotPosA, out, _robotScaleA);
+    return true;
+  }
+
+  setOpacity(value: number): void {
+    const opacity = Math.min(1, Math.max(0.1, value));
+    this.group.traverse((node) => {
+      const mesh = node as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      for (const material of materials) {
+        if (!(material instanceof THREE.MeshStandardMaterial)) continue;
+        material.opacity = opacity;
+        material.transparent = opacity < 0.999;
+        material.depthWrite = opacity >= 0.55;
+        material.needsUpdate = true;
+      }
+    });
   }
 
   /** Calibration pick/hover: tint link meshes (hover = soft blue, selected = accent). */
@@ -1796,6 +2262,10 @@ function mat4(flat: Matrix4Data): THREE.Matrix4 {
 }
 
 // =================================================================  PLAYER
+const initialWorkspacePreferences = loadWorkspacePreferences();
+const comparisonPresets: Record<WorkflowId, ComparisonPreset> = {
+  ...initialWorkspacePreferences.comparisonPresets,
+};
 const skel = new SkeletonView();
 const refSkel = new ReferenceSkeletonView();
 const mesh = new CapsuleMeshView();
@@ -1871,11 +2341,11 @@ function bodyIsVisible(): boolean {
 // can be shown together.
 const player: PlayerController = {
   playing: false,
-  loop: true,
+  loop: initialWorkspacePreferences.playbackLoop,
   t: 0,
   duration: 0,
   active: false,
-  speed: 1, // playback rate multiplier (0.1×–4×), independent of the timeline
+  speed: initialWorkspacePreferences.playbackSpeed,
   // Set by update() on a loop wrap; consumed by animate() to hard-snap the camera.
   _justLooped: false,
   ready(duration: number) {
@@ -1948,6 +2418,7 @@ const player: PlayerController = {
   setSpeed(mult: number) {
     const m = Math.min(4, Math.max(0.1, Number(mult) || 1));
     this.speed = m;
+    updateWorkspacePreferences({ playbackSpeed: m });
     publishPlaybackState();
   },
   // Re-pose whatever is currently visible at the current cursor (after a toggle).
@@ -1975,6 +2446,7 @@ window.addEventListener("hhtools:playback-command", (event) => {
   else if (action === "speed") player.setSpeed(value ?? 1);
   else if (action === "loop") {
     player.loop = !player.loop;
+    updateWorkspacePreferences({ playbackLoop: player.loop });
     publishPlaybackState();
   }
 });
@@ -2022,6 +2494,57 @@ function setViewVisible(view: PlaybackView, btnId: ViewToggleButtonId, on: boole
   if (btnId === "tg-env") syncEnvToggleButton();
   player.refreshFrame();
 }
+
+function emitResultDiagnostics(
+  workflow: WorkflowId,
+  diagnostics: ResultDiagnostics | null,
+): void {
+  window.dispatchEvent(new CustomEvent("hhtools:result-diagnostics", {
+    detail: {
+      workflow,
+      diagnostics,
+      comparisonPreset: comparisonPresets[workflow],
+    },
+  }));
+}
+
+function clearResultDiagnostics(workflow: WorkflowId): void {
+  emitResultDiagnostics(workflow, null);
+}
+
+function emitComparisonState(workflow: WorkflowId): void {
+  window.dispatchEvent(new CustomEvent("hhtools:comparison-state", {
+    detail: { workflow, preset: comparisonPresets[workflow] },
+  }));
+}
+
+/** Apply a repeatable H2R visibility preset without changing any trajectory data. */
+function applyH2rComparisonPreset(preset: ComparisonPreset): void {
+  comparisonPresets.h2r = preset;
+  const showSource = preset === "source" || preset === "overlay";
+  const showTarget = preset === "target" || preset === "overlay";
+  const showResult = preset === "result" || preset === "overlay";
+
+  setViewVisible(skel, "tg-skeleton", showSource && skel.numFrames > 0);
+  // The opaque body is useful by itself, but hides the diagnostic overlays.
+  setBodyVisible(preset === "source" && Boolean(state.motion));
+  setViewVisible(
+    envView,
+    "tg-env",
+    preset === "source" && motionHasEnvironment(state.motion),
+  );
+  setViewVisible(scaledSkel, "tg-scaled", showTarget && scaledSkel.numFrames > 0);
+  setViewVisible(
+    scaledEnv,
+    "tg-scaled-env",
+    (showTarget || showResult) && (
+      scaledEnv.numFrames > 0 || scaledEnv.group.children.length > 0
+    ),
+  );
+  setViewVisible(robot, "tg-robot", showResult && Boolean(robot.trajectory));
+  emitComparisonState("h2r");
+}
+
 document.getElementById("tg-skeleton").onclick = () =>
   setViewVisible(skel, "tg-skeleton", !skel.group.visible);
 document.getElementById("tg-mesh").onclick = () => setBodyVisible(!bodyIsVisible());
@@ -2103,12 +2626,234 @@ const state: AppState = {
   calibQ: {},
   calibSliderRows: {},
   calibBaselineQ: null,
+  calibDraftQ: null,
   calibHasSaved: false,
   exportSrcFps: null,
   exportHasScene: false,
   robotTrajectory: null,
   robotPanelLocked: false,
 };
+
+interface CalibrationEditorUiState {
+  query: string;
+  region: CalibrationJointRegion | "all";
+  unit: CalibrationAngleUnit;
+  comparison: CalibrationComparisonMode;
+  mappedOnly: boolean;
+  labels: boolean;
+  mappingLines: boolean;
+  sourceOpacity: number;
+  robotOpacity: number;
+}
+
+function createCalibrationEditorUiState(): CalibrationEditorUiState {
+  return {
+    query: "",
+    region: "all",
+    unit: "rad",
+    comparison: "current",
+    mappedOnly: true,
+    labels: true,
+    mappingLines: true,
+    sourceOpacity: 0.82,
+    robotOpacity: 0.72,
+  };
+}
+
+const calibrationEditorUi: Record<WorkflowId, CalibrationEditorUiState> = {
+  h2r: createCalibrationEditorUiState(),
+  r2r: createCalibrationEditorUiState(),
+};
+
+type WorkflowRunState = "idle" | "running" | "completed" | "failed";
+
+let h2rRunState: WorkflowRunState = "idle";
+
+function emitWorkflowState(detail: WorkflowStateDetail): void {
+  window.dispatchEvent(new CustomEvent("hhtools:workflow-state", { detail }));
+}
+
+function workflowNode(
+  id: string,
+  label: string,
+  stateName: WorkflowNodeState,
+  detail: string,
+  panel: WorkflowNodeStatus["panel"],
+): WorkflowNodeStatus {
+  return { id, label, state: stateName, detail, panel };
+}
+
+function h2rBlockedReason(): string | null {
+  if (!state.motion) return "缺少源 Motion：请先在“动作 Motion”中加载一个 clip。";
+  if (!state.robot) return "缺少目标机器人：请先在 Robot Registry 中加载 Robot Model。";
+  if (!state.reference) return "未识别源参考格式：请检查 Motion 格式或手动选择参考姿态。";
+  if (!state.calibration) {
+    return `缺少 ${state.robot.display_name} + ${referenceLabel(state.reference)} 标定配置。`;
+  }
+  if (state.robotPanelLocked || h2rRunState === "running") return "Retarget 正在运行，请等待当前任务完成。";
+  return null;
+}
+
+function publishH2rWorkflowState(): void {
+  const blockedReason = h2rBlockedReason();
+  const solverReady = blockedReason == null || h2rRunState === "running";
+  const solverState: WorkflowNodeState = h2rRunState === "running"
+    ? "running"
+    : h2rRunState === "failed"
+      ? "failed"
+      : state.exportToken
+        ? "completed"
+        : solverReady
+          ? "ready"
+          : "missing";
+  const resultState: WorkflowNodeState = state.exportToken
+    ? "completed"
+    : h2rRunState === "failed"
+      ? "failed"
+      : "missing";
+  const calibrationState: WorkflowNodeState = state.calibrationMode
+    ? "running"
+    : state.calibration
+      ? "ready"
+      : state.robot && state.reference
+        ? "warning"
+        : "missing";
+
+  const nodes: WorkflowNodeStatus[] = [
+    workflowNode(
+      "motion",
+      "动作",
+      state.motion ? "ready" : "missing",
+      state.motion?.name || "未选择",
+      "motion",
+    ),
+    workflowNode(
+      "robot",
+      "机器人",
+      state.robot ? "ready" : "missing",
+      state.robot?.display_name || "未选择",
+      "robot-assets",
+    ),
+    workflowNode(
+      "calibration",
+      "标定",
+      calibrationState,
+      state.calibrationMode
+        ? "正在编辑"
+        : state.calibration
+          ? referenceLabel(state.reference)
+          : "未就绪",
+      "h2r",
+    ),
+    workflowNode(
+      "solver",
+      "求解",
+      solverState,
+      h2rRunState === "running"
+        ? "运行中"
+        : state.exportToken
+          ? "已完成"
+          : solverReady
+            ? "可以运行"
+            : "等待输入",
+      "h2r",
+    ),
+    workflowNode(
+      "result",
+      "结果",
+      resultState,
+      state.exportToken ? "可预览/导出" : h2rRunState === "failed" ? "运行失败" : "尚无结果",
+      "h2r",
+    ),
+  ];
+
+  const runButton = document.getElementById("retarget-btn");
+  if (runButton) runButton.disabled = blockedReason != null;
+  const reason = document.getElementById("retarget-disabled-reason");
+  if (reason) reason.textContent = blockedReason || "";
+  emitWorkflowState({ workflow: "h2r", nodes, blockedReason });
+}
+
+function renderRobotValidation(robotPayload: RobotPayload): void {
+  const mappings = Object.entries(robotPayload.ik_map ?? {});
+  const mappedLinks = mappings
+    .map(([, target]) => ikMapTargetLink(target))
+    .filter((target): target is string => Boolean(target));
+  const knownLinks = new Set(robotPayload.links ?? []);
+  const unresolved = mappedLinks.filter((link) => !knownLinks.has(link));
+  const dofCount = robotPayload.num_dof ?? robotPayload.joints?.length ?? 0;
+  renderValidationSummary(document.getElementById("robot-validation-summary"), [
+    [dofCount > 0 ? "ok" : "error", `${dofCount} 个可控 DoF`],
+    [mappings.length > 0 ? "ok" : "warn", `ik_map：${mappings.length}/17 个语义槽位`],
+    [unresolved.length === 0 ? "ok" : "error", unresolved.length === 0
+      ? "ik_map 中的目标 link 均可解析"
+      : `${unresolved.length} 个 ik_map link 无法在 Robot Model 中解析`],
+  ]);
+}
+
+function renderMotionValidation(payload: MotionPayload): void {
+  const frameCount = payload.num_frames_total ?? payload.positions.length;
+  const frameRate = payload.framerate ?? payload.sample_rate ?? 0;
+  const boneCount = payload.bone_names?.length ?? payload.parent_indices.length;
+  const sceneParts: string[] = [];
+  if (payload.has_terrain || payload.terrain) sceneParts.push("地形");
+  if (payload.objects?.length) sceneParts.push(`${payload.objects.length} 个交互物体`);
+
+  renderValidationSummary(document.getElementById("motion-validation-summary"), [
+    [frameCount > 0 ? "ok" : "error", frameCount > 0
+      ? `轨迹可播放：${frameCount} 帧`
+      : "轨迹不包含可播放帧"],
+    [frameRate > 0 ? "ok" : "warn", frameRate > 0
+      ? `时间轴有效：${frameRate.toFixed(1)} FPS`
+      : "未识别帧率，将使用默认时间轴"],
+    [boneCount > 0 ? "ok" : "error", boneCount > 0
+      ? `骨架层级：${boneCount} 个节点`
+      : "未识别骨架层级"],
+    ["ok", sceneParts.length > 0
+      ? `场景附属数据：${sceneParts.join("、")}`
+      : "纯动作轨迹：无地形或交互物体"],
+  ]);
+}
+
+function updateH2rCalibrationValidation(): void {
+  const scope = document.getElementById("calibration-scope");
+  if (scope) {
+    scope.textContent = state.robot && state.reference
+      ? `配置范围：${state.robot.display_name} + ${referenceLabel(state.reference)}`
+      : "配置范围：目标机器人 + 源参考格式";
+  }
+  if (!state.robot) {
+    renderValidationSummary(document.getElementById("calibration-validation-summary"), []);
+    return;
+  }
+
+  const mappings = Object.entries(state.robot.ik_map ?? {});
+  const knownLinks = new Set(state.robot.links ?? []);
+  const unresolved = mappings.filter(([, target]) => {
+    const link = ikMapTargetLink(target);
+    return link != null && !knownLinks.has(link);
+  });
+  const limits = new Map((state.calibLimits ?? []).map((limit) => [limit.name, limit]));
+  const nearLimit = Object.entries(state.calibQ).filter(([joint, value]) => {
+    const limit = limits.get(joint);
+    if (limit?.lower == null || limit.upper == null || limit.upper <= limit.lower) return false;
+    const span = limit.upper - limit.lower;
+    return value - limit.lower < span * 0.03 || limit.upper - value < span * 0.03;
+  });
+  const changed = Object.values(state.calibQ).filter((value) => Math.abs(value) > 1e-4).length;
+
+  renderValidationSummary(document.getElementById("calibration-validation-summary"), [
+    [mappings.length > 0 ? "ok" : "warn", `语义映射：${mappings.length}/17 个 ik_map 槽位`],
+    [unresolved.length === 0 ? "ok" : "error", unresolved.length === 0
+      ? "映射的机器人 link 均可解析"
+      : `${unresolved.length} 个映射 link 无法解析`],
+    [nearLimit.length === 0 ? "ok" : "warn", nearLimit.length === 0
+      ? "当前关节均未接近限位"
+      : `${nearLimit.length} 个关节接近 URDF 限位`],
+    ["ok", `当前编辑：${changed} 个非零关节`],
+    ...calibrationDiagnosticRows(robot),
+  ]);
+}
 
 const REFERENCE_LABELS: Record<string, string> = {
   smpl: "SMPL",
@@ -2294,8 +3039,9 @@ let inspectorPanelSwitchHook: ((panelId: string) => void) | null = null;
 
 function switchInspectorPanel(panelId: string): void {
   if (!panelId) return;
-  window.__hhUi?.setActivePanel(panelId);
-  inspectorPanelSwitchHook?.(panelId);
+  const normalizedPanelId = panelId === "robot" ? "h2r" : panelId;
+  window.__hhUi?.setActivePanel(normalizedPanelId);
+  inspectorPanelSwitchHook?.(normalizedPanelId);
 }
 
 window.addEventListener("hhtools:panel-request", (event) => {
@@ -2305,11 +3051,11 @@ window.addEventListener("hhtools:panel-request", (event) => {
 /** After a robot is loaded, jump to the panel that matches the current workflow. */
 async function routeAfterRobotLoad(): Promise<void> {
   if (!state.motion) {
-    switchInspectorPanel("motion");
+    switchInspectorPanel("robot-assets");
     await refreshRetargetPanel();
     return;
   }
-  switchInspectorPanel("robot");
+  switchInspectorPanel("h2r");
   await refreshRetargetPanel();
 }
 
@@ -2320,6 +3066,9 @@ async function loadMotionPayload(payload: MotionPayload): Promise<void> {
   state.reference = payload.suggested_reference ?? null;
   syncRefSelect();
   state.exportToken = null;
+  clearResultDiagnostics("h2r");
+  state.calibration = false;
+  h2rRunState = "idle";
   // In calibration mode only the robot + blue reference T-pose should be visible.
   if (state.calibrationMode) {
     state.robotTrajectory = null;
@@ -2388,9 +3137,10 @@ async function loadMotionPayload(payload: MotionPayload): Promise<void> {
     payload.body_mesh?.available ? "SMPL/皮肤" : payload.body_mesh?.reason || "管状近似",
   ]);
   renderMetaRows(document.getElementById("motion-meta"), motionRows);
+  renderMotionValidation(payload);
   updatePills();
   updateRetargetFpsPlaceholder();
-  if (state.robot) switchInspectorPanel("robot");
+  if (state.robot) switchInspectorPanel("h2r");
   await refreshRetargetPanel();
   toast(`已加载 ${payload.name}`);
 }
@@ -2410,6 +3160,7 @@ async function loadRobotExportPreview(result: RobotExportPreviewResult): Promise
   state.motion = null;
   state.libraryEntry = null;
   state.exportToken = null;
+  clearResultDiagnostics("h2r");
   skel.clear();
   mesh.clear();
   skin.clear();
@@ -2803,7 +3554,14 @@ async function ingestMotionFiles(files: UploadFile[], profile = "mimic"): Promis
         renderLibrary();
       }
     }
-    const modeHint = materialize_mode === "symlink" ? "软链接" : "已复制";
+    const resolvedMaterializeMode = materialize_mode === "pending"
+      ? payload.materialize_mode
+      : materialize_mode;
+    const modeHint = resolvedMaterializeMode === "symlink"
+      ? "软链接"
+      : resolvedMaterializeMode === "hardlink"
+        ? "硬链接"
+        : "已复制";
     if (payload.library_entry) {
       addToBasket([payload.library_entry]);
       toast(`已${modeHint}并加载：${payload.name}（资源库 · ${folder_label || payload.linked_folder}）`);
@@ -2862,6 +3620,7 @@ function setRobotPanelLocked(locked: boolean): void {
   for (const id of ["robot-drop-urdf", "robot-drop-mesh"]) {
     document.getElementById(id)?.classList.toggle("disabled", busy);
   }
+  publishH2rWorkflowState();
 }
 
 async function applyRobot(robotData: RobotPayload): Promise<void> {
@@ -2870,6 +3629,12 @@ async function applyRobot(robotData: RobotPayload): Promise<void> {
     return;
   }
   state.robot = robotData;
+  state.exportToken = null;
+  state.robotTrajectory = null;
+  clearResultDiagnostics("h2r");
+  state.calibration = false;
+  h2rRunState = "idle";
+  document.getElementById("rt-export-card").style.display = "none";
   await robot.load(robotData);
   document.getElementById("robot-meta-card").style.display = "block";
   document.getElementById("robot-name").textContent = robotData.display_name;
@@ -2878,6 +3643,7 @@ async function applyRobot(robotData: RobotPayload): Promise<void> {
     ["自由度 DOF", robotData.num_dof ?? robotData.joints?.length ?? 0],
     ["ik_map 槽位", Object.keys(robotData.ik_map ?? {}).length],
   ]);
+  renderRobotValidation(robotData);
   document.getElementById("batch-robot").textContent = robotData.display_name;
   void syncBatchRefHint();
   renderBasket();
@@ -2889,7 +3655,7 @@ async function applyRobot(robotData: RobotPayload): Promise<void> {
   // Await so state.calibration is fresh; refreshRetargetPanel itself loads the
   // scaled skeleton/scene when a calibration already exists (no retarget needed).
   if (state.calibrationMode) {
-    switchInspectorPanel("robot");
+    switchInspectorPanel("h2r");
     await enterCalibrationMode(state.calibQ);
     toast(`机器人已加载（标定姿态）：${robotData.display_name}`);
     return;
@@ -2969,6 +3735,10 @@ document.getElementById("robot-delete-btn").onclick = async () => {
     await API.delete(`/api/robot/${encodeURIComponent(name)}`);
     if (state.robot?.name === name) {
       state.robot = null;
+      state.exportToken = null;
+      state.robotTrajectory = null;
+      clearResultDiagnostics("h2r");
+      h2rRunState = "idle";
       robot.group.visible = false;
       document.getElementById("robot-meta-card").style.display = "none";
       document.getElementById("robot-pill").textContent = "未加载机器人";
@@ -3158,6 +3928,7 @@ interface CalibrationHudTag {
   el: HTMLElement;
   input: HTMLInputElement;
   nameEl: HTMLElement;
+  unitEl: HTMLElement;
   loEl: HTMLElement;
   hiEl: HTMLElement;
   track: HTMLElement;
@@ -3204,6 +3975,7 @@ class CalibManipulator {
   hoveredLink: string | null = null;
   hoveredJoint: string | null = null;
   dragging = false;
+  angleUnit: CalibrationAngleUnit = "rad";
   _dragRef: THREE.Vector3 | null = null;
   _dragStartQ = 0;
   readonly _tags = new Map<string, CalibrationHudTag>();
@@ -3365,14 +4137,14 @@ class CalibManipulator {
       nameEl.title = name;
       const unit = document.createElement("span");
       unit.className = "joint-unit";
-      unit.textContent = "rad";
+      unit.textContent = this.angleUnit;
       head.append(grip, nameEl, unit);
 
       const limitRow = document.createElement("div");
       limitRow.className = "calib-limit-row";
       const loEl = document.createElement("span");
       loEl.className = "limit-end limit-lo";
-      loEl.textContent = meta.lower.toFixed(2);
+      loEl.textContent = formatCalibrationAngle(meta.lower, this.angleUnit, 2);
       const track = document.createElement("div");
       track.className = "limit-track";
       const fill = document.createElement("div");
@@ -3383,16 +4155,16 @@ class CalibManipulator {
       track.appendChild(thumb);
       const hiEl = document.createElement("span");
       hiEl.className = "limit-end limit-hi";
-      hiEl.textContent = meta.upper.toFixed(2);
+      hiEl.textContent = formatCalibrationAngle(meta.upper, this.angleUnit, 2);
       limitRow.append(loEl, track, hiEl);
 
       const input = document.createElement("input");
       input.type = "number";
       input.className = "calib-angle-input";
-      input.step = "0.001";
+      input.step = this.angleUnit === "deg" ? "0.1" : "0.001";
       input.value = "0.000";
-      input.min = String(meta.lower);
-      input.max = String(meta.upper);
+      input.min = String(angleForDisplay(meta.lower, this.angleUnit));
+      input.max = String(angleForDisplay(meta.upper, this.angleUnit));
       input.addEventListener("input", () => {
         this.context.jointChange(name, input.value, { from: "hud-input", live: true });
       });
@@ -3409,7 +4181,22 @@ class CalibManipulator {
       this.hud.appendChild(card);
       this._bindHudCardDrag(card, head);
       this._bindHudTrackDrag(name, track, thumb, meta);
-      this._tags.set(name, { el: card, input, nameEl, loEl, hiEl, track, thumb, fill });
+      this._tags.set(name, { el: card, input, nameEl, unitEl: unit, loEl, hiEl, track, thumb, fill });
+    }
+  }
+
+  setAngleUnit(unit: CalibrationAngleUnit): void {
+    this.angleUnit = unit;
+    for (const [joint, tag] of this._tags) {
+      const meta = this.jointMeta[joint];
+      if (!meta) continue;
+      tag.unitEl.textContent = unit;
+      tag.loEl.textContent = formatCalibrationAngle(meta.lower, unit, 2);
+      tag.hiEl.textContent = formatCalibrationAngle(meta.upper, unit, 2);
+      tag.input.min = String(angleForDisplay(meta.lower, unit));
+      tag.input.max = String(angleForDisplay(meta.upper, unit));
+      tag.input.step = unit === "deg" ? "0.1" : "0.001";
+      this.updateHudValue(joint, this.context.getQ()[joint] ?? 0);
     }
   }
 
@@ -3572,7 +4359,9 @@ class CalibManipulator {
     const x = parseFloat(String(value));
     if (!Number.isFinite(x)) return;
     const meta = this.jointMeta[jointName];
-    if (syncInput) tag.input.value = live ? x.toFixed(4) : x.toFixed(3);
+    if (syncInput) {
+      tag.input.value = formatCalibrationAngle(x, this.angleUnit, live ? 4 : 3);
+    }
     if (meta) {
       const span = meta.upper - meta.lower;
       const t = span > 1e-9 ? (x - meta.lower) / span : 0.5;
@@ -3934,6 +4723,7 @@ function updateR2rCalibBanner(): void {
 function _applyCalibSceneLayout(): void {
   state.robotTrajectory = null;
   robot.trajectory = null;
+  clearResultDiagnostics("h2r");
   scaledSkel.clear();
   scaledEnv.clear();
   setViewVisible(skel, "tg-skeleton", false);
@@ -3990,6 +4780,7 @@ async function enterCalibrationMode(
   updateCalibBanner(state.reference);
   document.getElementById("calib-banner")?.classList.remove("hidden");
   _applyCalibSceneLayout();
+  publishH2rWorkflowState();
   toast("已进入标定模式：请对齐蓝色参考骨架");
   if (player.active) player.seek(0);
 
@@ -4013,6 +4804,7 @@ async function enterCalibrationMode(
     const snap = state.calibRestore;
     state.calibRestore = null;
     _restoreVis(snap);
+    publishH2rWorkflowState();
     toast(errorMessage(e), true);
     return;
   }
@@ -4021,17 +4813,23 @@ async function enterCalibrationMode(
   robot.groundOffset = session.ground_offset_z ?? robot.groundOffset;
   if (!session.reference) throw new Error("Calibration session did not include a reference pose");
   refSkel.load(session.reference);
+  refSkel.configureMappings(state.robot.ik_map ?? {});
   if (session.reference_name) updateCalibBanner(session.reference_name);
   _applyCalibSceneLayout();
 
   const q = initialQ && typeof initialQ === "object"
     ? initialQ
     : (session.joint_q || {});
-  state.calibBaselineQ = { ...q };
   state.calibHasSaved = !!session.has_saved_calibration;
+  state.calibBaselineQ = state.calibHasSaved ? { ...q } : null;
+  state.calibDraftQ = { ...q };
+  calibrationEditorUi.h2r.comparison = "current";
   updateCalibRestoreButton();
   calibManip.start(state.calibLimits);
   await buildCalibSliders(q, state.calibLimits);
+  applyCalibrationVisualization("h2r");
+  updateH2rCalibrationValidation();
+  publishH2rWorkflowState();
   calCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
@@ -4054,11 +4852,14 @@ async function exitCalibrationMode(): Promise<void> {
     state.calibOrbitSaved = null;
   }
   calibManip.stop();
+  robot.setOpacity(1);
   state.calibSliderRows = {};
   document.getElementById("calib-banner")?.classList.add("hidden");
   state.calibLimits = null;
   state.calibBaselineQ = null;
+  state.calibDraftQ = null;
   state.calibHasSaved = false;
+  calibrationEditorUi.h2r.comparison = "current";
   const snap = state.calibRestore;
   state.calibRestore = null;
   _restoreVis(snap);
@@ -4067,6 +4868,8 @@ async function exitCalibrationMode(): Promise<void> {
   } else {
     robot.applyStatic();
   }
+  publishH2rWorkflowState();
+  emitCalibrationEditorState("h2r");
 }
 
 function setCalibJointValue(
@@ -4082,6 +4885,9 @@ function setCalibJointValue(
   if (hi <= lo) { lo = -Math.PI; hi = Math.PI; }
   let x = parseFloat(String(value));
   if (!Number.isFinite(x)) return;
+  if (from === "number" || from === "hud-input") {
+    x = angleFromDisplay(x, calibrationEditorUi.h2r.unit);
+  }
   x = Math.min(hi, Math.max(lo, x));
   state.calibQ[jointName] = x;
 
@@ -4090,14 +4896,16 @@ function setCalibJointValue(
   if (row) {
     if (from === "slider") {
       row.range.value = String(x);
-      row.num.value = x.toFixed(prec);
+      row.num.value = formatCalibrationAngle(x, calibrationEditorUi.h2r.unit, prec);
     } else if (from === "number") {
       row.range.value = String(x);
-      if (!live) row.num.value = x.toFixed(prec);
+      if (!live) row.num.value = formatCalibrationAngle(x, calibrationEditorUi.h2r.unit, prec);
     } else if (from !== "hud-input") {
       row.range.value = String(x);
-      row.num.value = x.toFixed(prec);
+      row.num.value = formatCalibrationAngle(x, calibrationEditorUi.h2r.unit, prec);
     }
+    const span = hi - lo;
+    row.row.classList.toggle("near-limit", span > 0 && (x - lo < span * 0.03 || hi - x < span * 0.03));
   }
   if (from === "hud-input") {
     calibManip.updateHudValue(jointName, x, { live, syncInput: false });
@@ -4105,6 +4913,8 @@ function setCalibJointValue(
     calibManip.updateHudValue(jointName, x, { live });
   }
   if (from === "slider" || from === "number") calibManip.setSelected(jointName);
+  markCalibrationEdited("h2r");
+  updateH2rCalibrationValidation();
   previewCalibPose({ live });
 }
 
@@ -4140,6 +4950,8 @@ async function buildCalibSliders(
 
     const row = document.createElement("div");
     row.className = "slider-row";
+    const region = classifyCalibrationJoint(j);
+    row.dataset.region = region;
     const label = textElement("label", "", j);
     label.title = j;
     const range = document.createElement("input");
@@ -4151,13 +4963,15 @@ async function buildCalibSliders(
     const num = document.createElement("input");
     num.type = "number";
     num.className = "calib-num";
-    num.min = String(lo);
-    num.max = String(hi);
-    num.step = "0.001";
-    num.value = v.toFixed(3);
+    num.min = String(angleForDisplay(lo, calibrationEditorUi.h2r.unit));
+    num.max = String(angleForDisplay(hi, calibrationEditorUi.h2r.unit));
+    num.step = calibrationEditorUi.h2r.unit === "deg" ? "0.1" : "0.001";
+    num.value = formatCalibrationAngle(v, calibrationEditorUi.h2r.unit);
     row.append(label, range, num);
 
-    state.calibSliderRows[j] = { row, range, num, lo, hi };
+    state.calibSliderRows[j] = { row, range, num, lo, hi, region };
+    const span = hi - lo;
+    row.classList.toggle("near-limit", span > 0 && (v - lo < span * 0.03 || hi - v < span * 0.03));
     calibManip.updateHudValue(j, v);
 
     range.oninput = () => setCalibJointValue(j, range.value, { from: "slider", live: true });
@@ -4174,6 +4988,10 @@ async function buildCalibSliders(
     };
     box.appendChild(row);
   }
+  if (calibrationEditorUi.h2r.comparison === "current") state.calibDraftQ = { ...state.calibQ };
+  syncCalibrationNumberInputs("h2r");
+  applyCalibrationRowFilter("h2r");
+  updateH2rCalibrationValidation();
   previewCalibPose();
 }
 
@@ -4213,9 +5031,11 @@ async function _runCalibFk(): Promise<void> {
       joint_q: state.calibQ,
     });
     robot.applyCalibPose(data.link_transforms, data.ground_offset_z);
+    refSkel.updateOverlay(robot);
     if (calibManip.active) {
       calibManip.updateJointWorld(data.joint_world);
     }
+    updateH2rCalibrationValidation();
     if (state.calibrationMode && state.calibNeedsCameraFocus) {
       state.calibNeedsCameraFocus = false;
       applyCalibOrbitLimits({ snapCamera: true });
@@ -4233,7 +5053,10 @@ async function refreshRetargetPanel(): Promise<void> {
   document.getElementById("rt-motion").textContent = state.motion ? state.motion.name : "未加载";
   document.getElementById("rt-robot").textContent = state.robot ? state.robot.display_name : "未加载";
   syncRefSelect();
-  if (state.calibrationMode) return;
+  if (state.calibrationMode) {
+    publishH2rWorkflowState();
+    return;
+  }
   const calCard = document.getElementById("calib-card");
   const btn = document.getElementById("retarget-btn");
   const recal = document.getElementById("recalib-btn");
@@ -4242,6 +5065,7 @@ async function refreshRetargetPanel(): Promise<void> {
     setCalChip("—", "");
     calCard.style.display = "none";
     btn.disabled = true;
+    publishH2rWorkflowState();
     return;
   }
   try {
@@ -4272,6 +5096,7 @@ async function refreshRetargetPanel(): Promise<void> {
       calCard.style.display = "none";
     }
   }
+  publishH2rWorkflowState();
 }
 
 document.getElementById("rt-ref-select")?.addEventListener("change", (ev) => {
@@ -4293,9 +5118,7 @@ document.getElementById("recalib-btn").onclick = async () => {
 };
 
 document.getElementById("calib-zero").onclick = async () => {
-  const zeros: Record<string, number> = {};
-  for (const j of Object.keys(state.calibQ)) zeros[j] = 0;
-  await buildCalibSliders(zeros, state.calibLimits);
+  await applyCalibrationComparison("h2r", "zero");
   toast("已归零（URDF 零位）");
 };
 
@@ -4304,7 +5127,7 @@ document.getElementById("calib-restore").onclick = async () => {
     toast("尚无已保存标定可恢复", true);
     return;
   }
-  await buildCalibSliders({ ...state.calibBaselineQ }, state.calibLimits);
+  await applyCalibrationComparison("h2r", "saved");
   toast("已恢复到上次保存的标定");
 };
 
@@ -4318,15 +5141,16 @@ document.getElementById("calib-cancel").onclick = async () => {
 document.getElementById("calib-save").onclick = async () => {
   if (!state.robot) return;
   try {
-    await API.post("/api/calibration/save", {
+    const savedQ = { ...state.calibQ };
+    const scope = `${state.robot.display_name} + ${referenceLabel(state.reference)}`;
+    const response = await API.post("/api/calibration/save", {
       robot: state.robot.name,
       reference: state.reference,
-      joint_q: state.calibQ,
+      joint_q: savedQ,
       motion_token: state.motion?.token || null,
     });
-    state.calibBaselineQ = { ...state.calibQ };
+    state.calibBaselineQ = { ...savedQ };
     state.calibHasSaved = true;
-    toast("标定已保存");
     await exitCalibrationMode();
     document.getElementById("calib-card").style.display = "none";
     state.calibration = true;
@@ -4337,7 +5161,11 @@ document.getElementById("calib-save").onclick = async () => {
     setViewVisible(scaledSkel, "tg-scaled", false);
     setViewVisible(scaledEnv, "tg-scaled-env", false);
     refreshRetargetPanel();
-    toast("标定已保存 — 请点击 Retarget 后再播放预览");
+    renderCalibrationSaveSummary("calibration-save-summary", scope, response.path ?? null, savedQ);
+    updateH2rCalibrationValidation();
+    publishH2rWorkflowState();
+    const changed = Object.values(savedQ).filter((value) => Math.abs(value) > 1e-4).length;
+    toast(`标定已保存：${changed} 个非零关节 — 请点击 Retarget 后再播放预览`);
   } catch (e) { toast(errorMessage(e), true); }
 };
 
@@ -4393,7 +5221,10 @@ document.getElementById("retarget-btn").onclick = async () => {
       : "正在 retarget…",
   );
   document.getElementById("retarget-btn").disabled = true;
+  h2rRunState = "running";
+  clearResultDiagnostics("h2r");
   setRobotPanelLocked(true);
+  publishH2rWorkflowState();
   try {
     const retargetFps = parseOptionalFps(document.getElementById("rt-retarget-fps"));
     const body: {
@@ -4420,6 +5251,7 @@ document.getElementById("retarget-btn").onclick = async () => {
     if (state.robot?.name !== retargetRobotName) {
       prog.classList.remove("indet");
       status.textContent = "";
+      h2rRunState = "failed";
       toast("Retarget 已完成，但过程中机器人已变更，结果已丢弃。请重新执行 Retarget。", true);
       return;
     }
@@ -4458,6 +5290,12 @@ document.getElementById("retarget-btn").onclick = async () => {
     setBodyVisible(true);
     setViewVisible(scaledSkel, "tg-scaled", true);
     setViewVisible(robot, "tg-robot", true);
+    applyH2rComparisonPreset(comparisonPresets.h2r);
+    emitResultDiagnostics("h2r", j.result.diagnostics ?? {
+      schema_version: 1,
+      available: false,
+      reason: "当前结果未返回可用的 tracking/contact 诊断。",
+    });
     player.setPlaying(true);
     robot.group.getWorldPosition(_camFocus);
     orbit.target.copy(_camFocus);
@@ -4498,14 +5336,17 @@ document.getElementById("retarget-btn").onclick = async () => {
       exportHint.append(document.createTextNode(" 含地形/物体时将打包为 ZIP（数据文件 + OBJ）。"));
     }
     document.getElementById("rt-export-srcfps").replaceChildren(exportHint);
+    h2rRunState = "completed";
+    publishH2rWorkflowState();
     toast("Retarget 完成，可导出");
   } catch (e) {
     status.textContent = "";
     prog.classList.remove("indet");
+    h2rRunState = "failed";
     toast(errorMessage(e), true);
   } finally {
     setRobotPanelLocked(false);
-    document.getElementById("retarget-btn").disabled = false;
+    publishH2rWorkflowState();
   }
 };
 function csvHeaderEnabled(elId: string): boolean {
@@ -4889,6 +5730,9 @@ interface R2rState {
   calibrating: boolean;
   calibrated: boolean;
   calibQ: Record<string, number>;
+  calibBaselineQ: Record<string, number> | null;
+  calibDraftQ: Record<string, number> | null;
+  calibHasSaved: boolean;
   calibLimits: RobotJointLimit[];
   calibRows: Record<string, CalibrationSliderRow>;
   calibNeedsCameraFocus: boolean;
@@ -4969,6 +5813,9 @@ const r2r: R2rState = {
   calibrating: false,
   calibrated: false,
   calibQ: {},
+  calibBaselineQ: null,
+  calibDraftQ: null,
+  calibHasSaved: false,
   calibLimits: [],
   calibRows: {},
   calibNeedsCameraFocus: false,
@@ -4978,6 +5825,377 @@ const r2r: R2rState = {
   scaledScene: null,
   tgtScaledScene: null,
 };
+
+function calibrationRows(workflow: WorkflowId): Record<string, CalibrationSliderRow> {
+  return workflow === "h2r" ? state.calibSliderRows : r2r.calibRows;
+}
+
+function calibrationQ(workflow: WorkflowId): Record<string, number> {
+  return workflow === "h2r" ? state.calibQ : r2r.calibQ;
+}
+
+function calibrationActive(workflow: WorkflowId): boolean {
+  return workflow === "h2r" ? state.calibrationMode : r2r.calibrating;
+}
+
+function calibrationCanUseSaved(workflow: WorkflowId): boolean {
+  return workflow === "h2r" ? state.calibHasSaved : r2r.calibHasSaved;
+}
+
+function calibrationRobotView(workflow: WorkflowId): RobotView {
+  return workflow === "h2r" ? robot : r2rTgt;
+}
+
+function emitCalibrationEditorState(workflow: WorkflowId): void {
+  const rows = Object.values(calibrationRows(workflow));
+  const ui = calibrationEditorUi[workflow];
+  const detail: CalibrationEditorStateDetail = {
+    workflow,
+    active: calibrationActive(workflow),
+    totalJoints: rows.length,
+    visibleJoints: rows.filter((row) => !row.row.hidden).length,
+    mappedLandmarks: refSkel.mappings.length,
+    canUseSaved: calibrationCanUseSaved(workflow),
+    ...ui,
+  };
+  window.dispatchEvent(new CustomEvent("hhtools:calibration-editor-state", { detail }));
+}
+
+function applyCalibrationRowFilter(workflow: WorkflowId): void {
+  const ui = calibrationEditorUi[workflow];
+  for (const [joint, row] of Object.entries(calibrationRows(workflow))) {
+    row.row.hidden = !calibrationJointMatches(joint, ui.query, ui.region);
+  }
+  emitCalibrationEditorState(workflow);
+}
+
+function syncCalibrationNumberInputs(workflow: WorkflowId): void {
+  const unit = calibrationEditorUi[workflow].unit;
+  const q = calibrationQ(workflow);
+  for (const [joint, row] of Object.entries(calibrationRows(workflow))) {
+    row.num.min = String(angleForDisplay(row.lo, unit));
+    row.num.max = String(angleForDisplay(row.hi, unit));
+    row.num.step = unit === "deg" ? "0.1" : "0.001";
+    row.num.value = formatCalibrationAngle(q[joint] ?? 0, unit);
+    row.num.title = unit === "deg" ? "角度（度）；内部仍以弧度保存" : "角度（弧度）";
+  }
+  calibManip.setAngleUnit(unit);
+}
+
+function applyCalibrationVisualization(workflow: WorkflowId): void {
+  if (!calibrationActive(workflow)) return;
+  const ui = calibrationEditorUi[workflow];
+  refSkel.setDisplayOptions({
+    mappedOnly: ui.mappedOnly,
+    labels: ui.labels,
+    mappingLines: ui.mappingLines,
+    sourceOpacity: ui.sourceOpacity,
+  });
+  const robotView = calibrationRobotView(workflow);
+  robotView.setOpacity(ui.robotOpacity);
+  refSkel.updateOverlay(robotView);
+  emitCalibrationEditorState(workflow);
+}
+
+function markCalibrationEdited(workflow: WorkflowId): void {
+  const ui = calibrationEditorUi[workflow];
+  ui.comparison = "current";
+  if (workflow === "h2r") state.calibDraftQ = { ...state.calibQ };
+  else r2r.calibDraftQ = { ...r2r.calibQ };
+  emitCalibrationEditorState(workflow);
+}
+
+async function applyCalibrationComparison(
+  workflow: WorkflowId,
+  comparison: CalibrationComparisonMode,
+): Promise<void> {
+  const ui = calibrationEditorUi[workflow];
+  if (ui.comparison === "current") {
+    if (workflow === "h2r") state.calibDraftQ = { ...state.calibQ };
+    else r2r.calibDraftQ = { ...r2r.calibQ };
+  }
+
+  const current = calibrationQ(workflow);
+  let target: Record<string, number> | null = null;
+  if (comparison === "zero") {
+    target = Object.fromEntries(Object.keys(current).map((joint) => [joint, 0]));
+  } else if (comparison === "saved") {
+    target = workflow === "h2r" ? state.calibBaselineQ : r2r.calibBaselineQ;
+    if (!target) {
+      toast("尚无已保存标定可用于对照", true);
+      return;
+    }
+  } else {
+    target = workflow === "h2r" ? state.calibDraftQ : r2r.calibDraftQ;
+  }
+  if (!target) target = { ...current };
+
+  ui.comparison = comparison;
+  if (workflow === "h2r") await buildCalibSliders({ ...target }, state.calibLimits);
+  else r2rBuildSliders({ ...target }, r2r.calibLimits);
+  emitCalibrationEditorState(workflow);
+}
+
+async function resetCalibrationRegion(workflow: WorkflowId): Promise<void> {
+  const ui = calibrationEditorUi[workflow];
+  const next = { ...calibrationQ(workflow) };
+  let changed = 0;
+  for (const joint of Object.keys(next)) {
+    if (!calibrationJointMatches(joint, "", ui.region)) continue;
+    if (Math.abs(next[joint]) > 1e-9) changed++;
+    next[joint] = 0;
+  }
+  ui.comparison = "current";
+  if (workflow === "h2r") {
+    state.calibDraftQ = { ...next };
+    await buildCalibSliders(next, state.calibLimits);
+  } else {
+    r2r.calibDraftQ = { ...next };
+    r2rBuildSliders(next, r2r.calibLimits);
+  }
+  toast(changed > 0 ? `当前关节分组已归零：${changed} 个关节` : "当前分组已经是零位");
+}
+
+function calibrationCommandValue<T extends string>(detail: CalibrationEditorCommandDetail): T {
+  return String(detail.value ?? "") as T;
+}
+
+async function handleCalibrationEditorCommand(
+  event: WindowEventMap["hhtools:calibration-editor-command"],
+): Promise<void> {
+  const { workflow, command, value } = event.detail;
+  if (!calibrationActive(workflow)) return;
+  const ui = calibrationEditorUi[workflow];
+  if (command === "search") ui.query = String(value ?? "");
+  else if (command === "region") ui.region = calibrationCommandValue(event.detail);
+  else if (command === "unit") {
+    ui.unit = calibrationCommandValue(event.detail);
+    syncCalibrationNumberInputs(workflow);
+  } else if (command === "comparison") {
+    await applyCalibrationComparison(workflow, calibrationCommandValue(event.detail));
+    return;
+  } else if (command === "reset-region") {
+    await resetCalibrationRegion(workflow);
+    return;
+  } else if (command === "mapped-only") ui.mappedOnly = Boolean(value);
+  else if (command === "labels") ui.labels = Boolean(value);
+  else if (command === "mapping-lines") ui.mappingLines = Boolean(value);
+  else if (command === "source-opacity") ui.sourceOpacity = Number(value);
+  else if (command === "robot-opacity") ui.robotOpacity = Number(value);
+
+  if (command === "search" || command === "region") applyCalibrationRowFilter(workflow);
+  else if (["mapped-only", "labels", "mapping-lines", "source-opacity", "robot-opacity"].includes(command)) {
+    applyCalibrationVisualization(workflow);
+  } else {
+    emitCalibrationEditorState(workflow);
+  }
+}
+
+function renderCalibrationSaveSummary(
+  elementId: string,
+  scope: string,
+  path: string | null,
+  q: Record<string, number>,
+): void {
+  const element = document.getElementById(elementId);
+  if (!element) return;
+  const changed = Object.values(q).filter((value) => Math.abs(value) > 1e-4).length;
+  const mapped = refSkel.mappings.length;
+  element.textContent = [
+    `已保存：${scope}`,
+    `${changed} 个非零关节，${mapped} 个映射效应器`,
+    path ? `文件：${path}` : "",
+  ].filter(Boolean).join(" · ");
+  element.classList.add("visible");
+}
+
+function calibrationDiagnosticRows(
+  robotView: RobotView,
+): Array<readonly [ValidationTone, string]> {
+  const diagnostics = refSkel.alignmentDiagnostics(robotView);
+  if (diagnostics.length === 0) return [];
+
+  const mean = (values: number[]): number => (
+    values.reduce((total, value) => total + value, 0) / Math.max(1, values.length)
+  );
+  const rows: Array<readonly [ValidationTone, string]> = [];
+  const positionCm = mean(diagnostics.map((item) => item.positionResidualM)) * 100;
+  rows.push(["ok", `映射位置残差（诊断值）：平均 ${positionCm.toFixed(1)} cm`]);
+
+  const rotations = diagnostics
+    .map((item) => item.rotationResidualDeg)
+    .filter((value): value is number => value != null && Number.isFinite(value));
+  if (rotations.length > 0) {
+    rows.push(["ok", `映射旋转残差（诊断值）：平均 ${mean(rotations).toFixed(1)}°`]);
+  }
+
+  const bySemantic = new Map(
+    diagnostics.map((item) => [normalizedSemanticName(item.semantic), item]),
+  );
+  const sideDifferences: number[] = [];
+  for (const [semantic, item] of bySemantic) {
+    if (!semantic.startsWith("left")) continue;
+    const counterpart = bySemantic.get(`right${semantic.slice(4)}`);
+    if (counterpart) {
+      sideDifferences.push(Math.abs(item.positionResidualM - counterpart.positionResidualM));
+    }
+  }
+  if (sideDifferences.length > 0) {
+    const asymmetryCm = mean(sideDifferences) * 100;
+    rows.push([asymmetryCm <= 8 ? "ok" : "warn", `左右映射差异：平均 ${asymmetryCm.toFixed(1)} cm`]);
+  }
+
+  const feet = diagnostics.filter((item) => {
+    const semantic = normalizedSemanticName(item.semantic);
+    return semantic.includes("ankle") || semantic.includes("foot");
+  });
+  if (feet.length > 0) {
+    const groundCm = mean(feet.map((item) => item.verticalResidualM)) * 100;
+    rows.push([groundCm <= 8 ? "ok" : "warn", `脚部高度差：平均 ${groundCm.toFixed(1)} cm`]);
+  }
+
+  const heading = refSkel.headingResidualDeg(robotView);
+  if (heading != null) {
+    rows.push([heading <= 15 ? "ok" : "warn", `躯干朝向差：${heading.toFixed(1)}°`]);
+  } else {
+    rows.push(["warn", "躯干朝向差：缺少可用的左右肩 / 髋映射基线"]);
+  }
+  return rows;
+}
+
+let r2rRunState: WorkflowRunState = "idle";
+let r2rTrajectoryState: "idle" | "validating" | "failed" = "idle";
+
+function r2rBlockedReason(): string | null {
+  if (!r2r.sourceName) return "缺少源机器人：请先加载轨迹所属的 Robot Model。";
+  if (!r2r.sourceToken) return "缺少源 Robot Trajectory：请上传 CSV、PKL 或 NPZ 轨迹。";
+  if (!r2r.targetName) return "缺少目标机器人：请选择要接收动作的 Robot Model。";
+  if (!r2r.calibrated) {
+    return `缺少 ${r2r.targetPayload?.display_name || r2r.targetName} + ${r2r.sourcePayload?.display_name || r2r.sourceName} R2R 标定配置。`;
+  }
+  if (r2rRunState === "running") return "R2R Retarget 正在运行，请等待当前任务完成。";
+  return null;
+}
+
+function publishR2rWorkflowState(): void {
+  const blockedReason = r2rBlockedReason();
+  const trajectoryState: WorkflowNodeState = r2rTrajectoryState === "validating"
+    ? "validating"
+    : r2rTrajectoryState === "failed"
+      ? "failed"
+      : r2r.sourceToken
+        ? "ready"
+        : "missing";
+  const calibrationState: WorkflowNodeState = r2r.calibrating
+    ? "running"
+    : r2r.calibrated
+      ? "ready"
+      : r2r.sourceName && r2r.targetName
+        ? "warning"
+        : "missing";
+  const resultState: WorkflowNodeState = r2r.exportToken
+    ? "completed"
+    : r2rRunState === "running"
+      ? "running"
+      : r2rRunState === "failed"
+        ? "failed"
+        : "missing";
+
+  const nodes: WorkflowNodeStatus[] = [
+    workflowNode(
+      "source",
+      "源机器人",
+      r2r.sourceName ? "ready" : "missing",
+      r2r.sourcePayload?.display_name || r2r.sourceName || "未选择",
+      "r2r",
+    ),
+    workflowNode(
+      "trajectory",
+      "源轨迹",
+      trajectoryState,
+      r2rTrajectoryState === "validating"
+        ? "正在验证"
+        : r2r.sourceToken
+          ? r2r.sourceStem || "已加载"
+          : r2rTrajectoryState === "failed" ? "验证失败" : "未上传",
+      "r2r",
+    ),
+    workflowNode(
+      "target",
+      "目标机器人",
+      r2r.targetName ? "ready" : "missing",
+      r2r.targetPayload?.display_name || r2r.targetName || "未选择",
+      "r2r",
+    ),
+    workflowNode(
+      "calibration",
+      "标定",
+      calibrationState,
+      r2r.calibrating ? "正在编辑" : r2r.calibrated ? "已匹配" : "未就绪",
+      "r2r",
+    ),
+    workflowNode(
+      "result",
+      "结果",
+      resultState,
+      r2r.exportToken
+        ? "可预览/导出"
+        : r2rRunState === "running"
+          ? "求解中"
+          : r2rRunState === "failed" ? "运行失败" : blockedReason == null ? "可以运行" : "尚无结果",
+      "r2r",
+    ),
+  ];
+
+  const runButton = document.getElementById("r2r-retarget-btn");
+  if (runButton) runButton.disabled = blockedReason != null;
+  const reason = document.getElementById("r2r-disabled-reason");
+  if (reason) reason.textContent = blockedReason || "";
+  emitWorkflowState({ workflow: "r2r", nodes, blockedReason });
+  updateR2rCalibrationValidation();
+}
+
+function updateR2rCalibrationValidation(): void {
+  const scope = document.getElementById("r2r-calibration-scope");
+  if (scope) {
+    const target = r2r.targetPayload?.display_name || r2r.targetName;
+    const source = r2r.sourcePayload?.display_name || r2r.sourceName;
+    scope.textContent = target && source
+      ? `配置范围：${target} + ${source}`
+      : "配置范围：目标机器人 + 源机器人";
+  }
+
+  const container = document.getElementById("r2r-calibration-validation-summary");
+  if (!r2r.sourceName && !r2r.targetName) {
+    renderValidationSummary(container, []);
+    return;
+  }
+
+  const limits = new Map(r2r.calibLimits.map((limit) => [limit.name, limit]));
+  const nearLimit = Object.entries(r2r.calibQ).filter(([joint, value]) => {
+    const limit = limits.get(joint);
+    if (limit?.lower == null || limit.upper == null || limit.upper <= limit.lower) return false;
+    const span = limit.upper - limit.lower;
+    return value - limit.lower < span * 0.03 || limit.upper - value < span * 0.03;
+  });
+  const changed = Object.values(r2r.calibQ).filter((value) => Math.abs(value) > 1e-4).length;
+
+  renderValidationSummary(container, [
+    [r2r.sourceName ? "ok" : "warn", r2r.sourceName
+      ? `源机器人：${r2r.sourcePayload?.display_name || r2r.sourceName}`
+      : "尚未选择源机器人"],
+    [r2r.targetName ? "ok" : "warn", r2r.targetName
+      ? `目标机器人：${r2r.targetPayload?.display_name || r2r.targetName}`
+      : "尚未选择目标机器人"],
+    [r2r.calibLimits.length > 0 ? "ok" : "warn", r2r.calibLimits.length > 0
+      ? `可编辑关节：${r2r.calibLimits.length} 个`
+      : "进入标定后显示目标机器人关节诊断"],
+    [nearLimit.length === 0 ? "ok" : "warn", nearLimit.length === 0
+      ? `当前编辑：${changed} 个非零关节，均未接近限位`
+      : `${nearLimit.length} 个关节接近 URDF 限位`],
+    ...calibrationDiagnosticRows(r2rTgt),
+  ]);
+}
 const r2rVis: Record<R2rVisibilityKey, boolean> = {
   srcRobot: true,
   srcSkel: false,
@@ -5130,6 +6348,35 @@ function r2rApplyStage(): void {
 
 }
 
+/** Apply a repeatable R2R visibility preset using the workflow's isolated views. */
+function applyR2rComparisonPreset(preset: ComparisonPreset): void {
+  comparisonPresets.r2r = preset;
+  r2rVis.srcRobot = preset === "source" || preset === "overlay";
+  r2rVis.srcSkel = false;
+  r2rVis.srcEnv = preset === "source";
+  r2rVis.tgtRobot = preset === "result" || preset === "overlay";
+  r2rVis.tgtSkel = preset === "target" || preset === "overlay";
+  r2rVis.tgtEnv = preset !== "source";
+  r2rApplyStage();
+  emitComparisonState("r2r");
+}
+
+const comparisonPresetIds = new Set<ComparisonPreset>([
+  "source",
+  "target",
+  "result",
+  "overlay",
+]);
+
+window.addEventListener("hhtools:comparison-command", (event) => {
+  const { workflow, preset } = event.detail;
+  if (!comparisonPresetIds.has(preset)) return;
+  comparisonPresets[workflow] = preset;
+  updateWorkspacePreferences({ comparisonPresets: { [workflow]: preset } });
+  if (workflow === "h2r") applyH2rComparisonPreset(preset);
+  else applyR2rComparisonPreset(preset);
+});
+
 function r2rEnterPanel(): void {
   if (r2r.active) { r2rApplyStage(); return; }
   r2r.active = true;
@@ -5212,6 +6459,7 @@ async function r2rUpdateRetargetBtn(): Promise<void> {
   if (!r2r.targetName || !r2r.sourceName) r2rSetCalChip("—", "");
   else r2rSetCalChip(calibrated ? "已标定" : "未标定 — 请先标定", calibrated ? "ok" : "warn");
   if (rtBtn) rtBtn.disabled = !(r2r.sourceToken && r2r.targetName && calibrated);
+  publishR2rWorkflowState();
 }
 
 // --------------------------------------------------------------- robot pickers
@@ -5281,7 +6529,9 @@ async function _r2rRunFk(): Promise<void> {
       joint_q: r2r.calibQ,
     });
     r2rTgt.applyCalibPose(data.link_transforms, data.ground_offset_z);
+    refSkel.updateOverlay(r2rTgt);
     if (calibManip.active) calibManip.updateJointWorld(data.joint_world);
+    updateR2rCalibrationValidation();
     if (r2r.calibrating && r2r.calibNeedsCameraFocus) {
       r2r.calibNeedsCameraFocus = false;
       applyCalibOrbitLimits({ snapCamera: true });
@@ -5308,6 +6558,9 @@ function r2rSetCalibJointValue(
   if (hi <= lo) { lo = -Math.PI; hi = Math.PI; }
   let x = parseFloat(String(value));
   if (!Number.isFinite(x)) return;
+  if (from === "number" || from === "hud-input") {
+    x = angleFromDisplay(x, calibrationEditorUi.r2r.unit);
+  }
   x = Math.min(hi, Math.max(lo, x));
   r2r.calibQ[jointName] = x;
 
@@ -5316,14 +6569,16 @@ function r2rSetCalibJointValue(
   if (row) {
     if (from === "slider") {
       row.range.value = String(x);
-      row.num.value = x.toFixed(prec);
+      row.num.value = formatCalibrationAngle(x, calibrationEditorUi.r2r.unit, prec);
     } else if (from === "number") {
       row.range.value = String(x);
-      if (!live) row.num.value = x.toFixed(prec);
+      if (!live) row.num.value = formatCalibrationAngle(x, calibrationEditorUi.r2r.unit, prec);
     } else if (from !== "hud-input") {
       row.range.value = String(x);
-      row.num.value = x.toFixed(prec);
+      row.num.value = formatCalibrationAngle(x, calibrationEditorUi.r2r.unit, prec);
     }
+    const span = hi - lo;
+    row.row.classList.toggle("near-limit", span > 0 && (x - lo < span * 0.03 || hi - x < span * 0.03));
   }
   if (from === "hud-input") {
     calibManip.updateHudValue(jointName, x, { live, syncInput: false });
@@ -5331,6 +6586,8 @@ function r2rSetCalibJointValue(
     calibManip.updateHudValue(jointName, x, { live });
   }
   if (from === "slider" || from === "number") calibManip.setSelected(jointName);
+  markCalibrationEdited("r2r");
+  updateR2rCalibrationValidation();
   r2rPreviewCalibPose({ live });
 }
 
@@ -5362,6 +6619,8 @@ function r2rBuildSliders(
     r2r.calibQ[j] = v;
     const rowEl = document.createElement("div");
     rowEl.className = "slider-row";
+    const region = classifyCalibrationJoint(j);
+    rowEl.dataset.region = region;
     const label = textElement("label", "", j);
     label.title = j;
     const range = document.createElement("input");
@@ -5373,12 +6632,14 @@ function r2rBuildSliders(
     const num = document.createElement("input");
     num.type = "number";
     num.className = "calib-num";
-    num.min = String(lo);
-    num.max = String(hi);
-    num.step = "0.001";
-    num.value = v.toFixed(3);
+    num.min = String(angleForDisplay(lo, calibrationEditorUi.r2r.unit));
+    num.max = String(angleForDisplay(hi, calibrationEditorUi.r2r.unit));
+    num.step = calibrationEditorUi.r2r.unit === "deg" ? "0.1" : "0.001";
+    num.value = formatCalibrationAngle(v, calibrationEditorUi.r2r.unit);
     rowEl.append(label, range, num);
-    r2r.calibRows[j] = { row: rowEl, range, num, lo, hi };
+    r2r.calibRows[j] = { row: rowEl, range, num, lo, hi, region };
+    const span = hi - lo;
+    rowEl.classList.toggle("near-limit", span > 0 && (v - lo < span * 0.03 || hi - v < span * 0.03));
     calibManip.updateHudValue(j, v);
     range.oninput = () => r2rSetCalibJointValue(j, range.value, { from: "slider", live: true });
     num.oninput = () => r2rSetCalibJointValue(j, num.value, { from: "number", live: true });
@@ -5394,6 +6655,10 @@ function r2rBuildSliders(
     };
     box.appendChild(rowEl);
   }
+  if (calibrationEditorUi.r2r.comparison === "current") r2r.calibDraftQ = { ...r2r.calibQ };
+  syncCalibrationNumberInputs("r2r");
+  applyCalibrationRowFilter("r2r");
+  updateR2rCalibrationValidation();
   r2rPreviewCalibPose();
 }
 
@@ -5431,6 +6696,7 @@ async function r2rStartCalib(
   document.getElementById("calib-banner")?.classList.remove("hidden");
   r2rSetCalChip("标定中…", "warn");
   document.getElementById("r2r-retarget-btn").disabled = true;
+  publishR2rWorkflowState();
 
   const targetPayload = r2r.targetPayload;
   const reference = session.reference ?? session.reference_pose;
@@ -5443,10 +6709,17 @@ async function r2rStartCalib(
   await r2rTgt.load(targetPayload);
   r2rTgt.groundOffset = session.ground_offset_z ?? r2rTgt.groundOffset;
   refSkel.load(reference);
+  refSkel.configureMappings(targetPayload.ik_map ?? {});
+  const initialQ = { ...(session.joint_q || {}) };
+  r2r.calibHasSaved = !!session.has_saved_calibration;
+  r2r.calibBaselineQ = r2r.calibHasSaved ? { ...initialQ } : null;
+  r2r.calibDraftQ = { ...initialQ };
+  calibrationEditorUi.r2r.comparison = "current";
   document.getElementById("r2r-calib-edit").style.display = "block";
   r2rApplyStage();
   calibManip.start(r2r.calibLimits, r2rCalibCtx());
-  r2rBuildSliders(session.joint_q || {}, r2r.calibLimits);
+  r2rBuildSliders(initialQ, r2r.calibLimits);
+  applyCalibrationVisualization("r2r");
   document.getElementById("r2r-calib-edit")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   r2rFocus(r2rTgt);
   toast(auto
@@ -5464,14 +6737,23 @@ function r2rExitCalib(): void {
     r2r.calibOrbitSaved = null;
   }
   calibManip.stop();
+  r2rTgt.setOpacity(1);
+  r2r.calibRows = {};
+  r2r.calibBaselineQ = null;
+  r2r.calibDraftQ = null;
+  r2r.calibHasSaved = false;
+  calibrationEditorUi.r2r.comparison = "current";
   document.getElementById("r2r-calib-edit").style.display = "none";
   document.getElementById("calib-banner")?.classList.add("hidden");
   refSkel.clear();
   refSkel.group.visible = false;
   r2rApplyStage();
+  publishR2rWorkflowState();
+  emitCalibrationEditorState("r2r");
 }
 
 async function r2rMaybeAutoCalib(): Promise<void> {
+  publishR2rWorkflowState();
   if (!r2r.targetName || !r2r.sourceName || r2r.calibrating) return;
   await r2rUpdateRetargetBtn();
   if (!r2r.calibrated) await r2rStartCalib({ auto: true });
@@ -5479,13 +6761,23 @@ async function r2rMaybeAutoCalib(): Promise<void> {
 
 async function r2rSaveCalib(): Promise<void> {
   try {
-    await API.post("/api/r2r/calibration/save", {
+    const savedQ = { ...r2r.calibQ };
+    const scope = `${r2r.targetPayload?.display_name || r2r.targetName} + ${r2r.sourcePayload?.display_name || r2r.sourceName}`;
+    const response = await API.post("/api/r2r/calibration/save", {
       target: r2r.targetName,
       source: r2r.sourceName,
-      joint_q: r2r.calibQ,
+      joint_q: savedQ,
     });
-    toast("R2R 标定已保存");
+    r2r.calibBaselineQ = { ...savedQ };
+    r2r.calibHasSaved = true;
     r2rExitCalib();
+    renderCalibrationSaveSummary(
+      "r2r-calibration-save-summary",
+      scope,
+      response.path ?? null,
+      savedQ,
+    );
+    toast("R2R 标定已保存");
     await r2rUpdateRetargetBtn();
   } catch (e) { toast(errorMessage(e), true); }
 }
@@ -5503,9 +6795,11 @@ async function r2rEnsureSourceLoaded(): Promise<boolean> {
     const sourcePayload = await API.post("/api/robot/select", { name });
     r2r.sourcePayload = sourcePayload;
     r2r.sourceName = name;
+    r2r.calibrated = false;
     await r2rSrc.load(sourcePayload);
     document.getElementById("r2r-source-status").textContent =
       `源机器人：${sourcePayload.display_name}`;
+    publishR2rWorkflowState();
     return true;
   } catch (e) {
     toast(errorMessage(e), true);
@@ -5530,6 +6824,11 @@ async function r2rUploadTraj(
     prog.classList.remove("indet");
     if (bar) bar.style.width = "0%";
   }
+  r2rTrajectoryState = "validating";
+  r2r.exportToken = null;
+  r2rRunState = "idle";
+  clearResultDiagnostics("r2r");
+  publishR2rWorkflowState();
   st.textContent = "上传中…";
   toast("上传源轨迹…");
   try {
@@ -5557,6 +6856,7 @@ async function r2rUploadTraj(
       st.textContent = sub;
     }, { uploadFrac: 0.18 });
     r2r.sourceToken = data.token;
+    r2rTrajectoryState = "idle";
     r2r.sourceStem = data.name || (files[0].name || "source").replace(/\.[^.]+$/, "");
     r2r.hasScene = !!data.has_scene;
     if (data.suggested_backend) r2rApplySuggestedBackend(data.suggested_backend);
@@ -5584,10 +6884,13 @@ async function r2rUploadTraj(
     st.textContent = `已加载：${data.num_frames} 帧 @ ${data.framerate.toFixed(1)} fps${prof}`;
     if (bar) bar.style.width = "100%";
     toast(`上传成功：${data.num_frames} 帧，正在播放源机器人轨迹`);
+    publishR2rWorkflowState();
     await r2rUpdateRetargetBtn();
   } catch (e) {
+    r2rTrajectoryState = "failed";
     st.textContent = "";
     if (prog) prog.style.display = "none";
+    publishR2rWorkflowState();
     toast(errorMessage(e), true);
   }
 }
@@ -5635,6 +6938,10 @@ async function r2rRunRetarget(): Promise<void> {
   bar.style.width = "0%";
   renderSpinnerStatus(status, "正在 retarget…（新机器人首次较慢）");
   document.getElementById("r2r-retarget-btn").disabled = true;
+  r2rRunState = "running";
+  r2r.exportToken = null;
+  clearResultDiagnostics("r2r");
+  publishR2rWorkflowState();
   try {
     const body: R2rRetargetRequest = {
       target: r2r.targetName,
@@ -5669,12 +6976,19 @@ async function r2rRunRetarget(): Promise<void> {
     r2rLoadTgtScene(j.result.scaled_scene, r2r.sourceToken, tgtDur);
     document.getElementById("r2r-tg-tgt-robot").disabled = false;
     r2r.exportToken = j.result.export_token;
+    r2rRunState = "completed";
     r2r.exportHasScene = !!j.result.has_scene;
     r2r.resultStem = j.result.stem || r2r.sourceStem || "r2r";
     r2rVis.tgtRobot = true;
     r2rVis.tgtSkel = !!j.result.scaled_preview;
     r2rVis.tgtEnv = !!j.result.scaled_scene;
     player.ready(r2rTgt.clipDuration || 1);
+    applyR2rComparisonPreset(comparisonPresets.r2r);
+    emitResultDiagnostics("r2r", j.result.diagnostics ?? {
+      schema_version: 1,
+      available: false,
+      reason: "当前结果未返回可用的 tracking/contact 诊断。",
+    });
     player.seek(0);
     r2rApplyStage();
     r2rFocus(r2rTgt);
@@ -5689,13 +7003,15 @@ async function r2rRunRetarget(): Promise<void> {
     if (r2rT1) r2rT1.value = "";
     const r2rBundleHint = document.getElementById("r2r-export-bundle-hint");
     if (r2rBundleHint) r2rBundleHint.style.display = j.result.has_scene ? "block" : "none";
+    publishR2rWorkflowState();
     toast("R2R Retarget 完成，正在播放目标机器人");
   } catch (e) {
     status.textContent = "";
     prog.classList.remove("indet");
+    r2rRunState = "failed";
     toast(errorMessage(e), true);
   } finally {
-    document.getElementById("r2r-retarget-btn").disabled = false;
+    publishR2rWorkflowState();
   }
 }
 
@@ -5796,8 +7112,17 @@ function r2rInit(): void {
     toast("加载源机器人…");
     try {
       const sourcePayload = await API.post("/api/robot/select", { name });
+      if (r2r.sourceName !== name) {
+        r2r.sourceToken = null;
+        r2r.sourceStem = null;
+        r2rTrajectoryState = "idle";
+      }
+      r2r.calibrated = false;
       r2r.sourcePayload = sourcePayload;
       r2r.sourceName = name;
+      r2r.exportToken = null;
+      r2rRunState = "idle";
+      clearResultDiagnostics("r2r");
       await r2rSrc.load(sourcePayload);
       switchInspectorPanel("r2r");
       if (!r2r.active) r2rEnterPanel();
@@ -5816,8 +7141,12 @@ function r2rInit(): void {
     toast("加载目标机器人…");
     try {
       const targetPayload = await API.post("/api/robot/select", { name });
+      r2r.calibrated = false;
       r2r.targetPayload = targetPayload;
       r2r.targetName = name;
+      r2r.exportToken = null;
+      r2rRunState = "idle";
+      clearResultDiagnostics("r2r");
       document.getElementById("r2r-target-status").textContent =
         `目标机器人：${targetPayload.display_name}`;
       toast(`目标机器人已加载：${targetPayload.display_name}`);
@@ -5827,9 +7156,7 @@ function r2rInit(): void {
   };
   document.getElementById("r2r-calib-btn").onclick = () => void r2rStartCalib();
   document.getElementById("r2r-calib-zero").onclick = () => {
-    const z: Record<string, number> = {};
-    for (const j of Object.keys(r2r.calibQ)) z[j] = 0;
-    r2rBuildSliders(z, r2r.calibLimits);
+    void applyCalibrationComparison("r2r", "zero");
     toast("已归零（URDF 零位）");
   };
   document.getElementById("r2r-calib-cancel").onclick = () => {
@@ -5912,6 +7239,9 @@ function r2rInit(): void {
 animate(); // start the render loop now that `player` is initialised
 window.__hh = { skel, mesh, skin, scaledSkel, robot, player, scene, world }; // debug handle
 window.__hhtoolsReady = true;
+window.addEventListener("hhtools:calibration-editor-command", (event) => {
+  void handleCalibrationEditorCommand(event);
+});
 
 // Bridge for the optional dataset-viz module (loaded after this file). Exposes
 // the few helpers it needs without making it depend on app.js internals.
@@ -5953,11 +7283,18 @@ async function verifyUiBuild() {
 
 (async function init() {
   wrapSelectDropdowns();
+  installJobHistoryBridge();
   // Vue owns panel dimensions and persistence; the runtime only consumes the resulting canvas size.
   document.getElementById("lib-link-path")?.addEventListener("click", () => linkLibraryPath());
   await verifyUiBuild();
   await Promise.all([loadReferenceCatalog(), refreshLibrary(), refreshRobotList()]);
   r2rInit();
+  switchInspectorPanel(initialWorkspacePreferences.activePanel);
+  publishPlaybackState();
+  emitComparisonState("h2r");
+  emitComparisonState("r2r");
+  publishH2rWorkflowState();
+  publishR2rWorkflowState();
   const tour = initTutorial(toast);
   tour.maybeAutoStart();
 })();

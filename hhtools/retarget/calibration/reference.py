@@ -818,7 +818,7 @@ def _mocap17_from_zero_bvh() -> HumanReferencePose | None:
 
 
 def _build_static_xsens_mocap() -> HumanReferencePose:
-    """Xsens calibration reference — extracted from bundled stand-pose BVH."""
+    """Xsens calibration reference — bind T-pose of the bundled stand-pose BVH."""
     from_bvh = _xsens17_from_zero_bvh()
     if from_bvh is not None:
         return from_bvh
@@ -848,11 +848,19 @@ def _build_static_xsens_mocap() -> HumanReferencePose:
 
 @lru_cache(maxsize=1)
 def _xsens17_from_zero_bvh() -> HumanReferencePose | None:
-    """17-joint subset of ``assets/reference_poses/xsens_mocap_zero_frame0.bvh``."""
+    """17-joint bind T-pose of ``assets/reference_poses/xsens_mocap_zero_frame0.bvh``.
+
+    The bundled file's frame 0 is a stand / arms-down pose.  Calibration
+    overlays and scaler rest must use the BVH bind (identity locals = T-pose)
+    or hang clips such as 100STYLE freeze the robot at the calibrated T-pose.
+    """
 
     try:
         from hhtools.io.bvh import load_bvh
-        from hhtools.retarget.newton_basic.rest_pose import bundled_reference_bvh_path
+        from hhtools.retarget.newton_basic.rest_pose import (
+            bundled_reference_bvh_path,
+            rest_pose_from_motion_bind,
+        )
     except ImportError:
         return None
 
@@ -864,7 +872,8 @@ def _xsens17_from_zero_bvh() -> HumanReferencePose | None:
     if motion.num_frames < 1:
         return None
 
-    bone_names = tuple(motion.hierarchy.bone_names)
+    bind = rest_pose_from_motion_bind(motion)
+    bone_names = tuple(bind.bone_names)
     name2i = {n: i for i, n in enumerate(bone_names)}
     if "Hips" not in name2i:
         return None
@@ -875,8 +884,8 @@ def _xsens17_from_zero_bvh() -> HumanReferencePose | None:
         return None
 
     hips_i = name2i["Hips"]
-    frame_pos = np.asarray(motion.positions[0], dtype=np.float32)
-    frame_quat = Q.normalize(np.asarray(motion.quaternions[0], dtype=np.float32))
+    frame_pos = np.asarray(bind.positions, dtype=np.float32)
+    frame_quat = Q.normalize(np.asarray(bind.quaternions, dtype=np.float32))
     anchor = frame_pos[hips_i].copy()
 
     pos = np.stack([frame_pos[name2i[n]] - anchor for n in names], axis=0)

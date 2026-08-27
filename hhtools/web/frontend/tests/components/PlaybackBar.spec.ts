@@ -2,8 +2,8 @@ import { mount } from '@vue/test-utils'
 import { afterEach, describe, expect, it } from 'vitest'
 import { nextTick } from 'vue'
 
-import type { PlaybackCommandDetail, PlaybackUiState } from '../runtime/types'
-import PlaybackBar from './PlaybackBar.vue'
+import type { PlaybackCommandDetail, PlaybackUiState } from '../../src/runtime/types'
+import PlaybackBar from '../../src/components/PlaybackBar.vue'
 
 const mountedWrappers: Array<ReturnType<typeof mount>> = []
 

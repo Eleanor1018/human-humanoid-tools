@@ -61,11 +61,11 @@ const STEPS: readonly TourStep[] = [
   },
   {
     id: "robot",
-    panel: "robot",
+    panel: "robot-assets",
     anchor: "#tour-robot-import",
     title: "③ 机器人来源",
     body:
-      "切换到 <b>机器人 · Retarget</b>：拖入 <code>.urdf</code>，再拖入 <code>meshes/</code> 网格文件夹。" +
+      "切换到 <b>Robot Registry</b>：拖入 <code>.urdf</code>，再拖入 <code>meshes/</code> 网格文件夹。" +
       "系统自动识别并生成配置，无需手调 <code>robot.yaml</code>。" +
       "也可在「已注册机器人」下拉框选择此前注册的机器人，点 <b>加载选中机器人</b>。" +
       "加载后中间舞台会显示机器人模型。",
@@ -73,7 +73,7 @@ const STEPS: readonly TourStep[] = [
   },
   {
     id: "calibration",
-    panel: "robot",
+    panel: "h2r",
     anchor: "#tour-calibration",
     title: "④ 标定 Calibration",
     body:
@@ -84,7 +84,7 @@ const STEPS: readonly TourStep[] = [
   },
   {
     id: "retarget",
-    panel: "robot",
+    panel: "h2r",
     anchor: "#tour-retarget",
     title: "⑤ Retarget 重映射",
     body:
@@ -111,7 +111,7 @@ const STEPS: readonly TourStep[] = [
   },
   {
     id: "export",
-    panel: "robot",
+    panel: "h2r",
     anchor: "#rt-export-card",
     title: "⑦ 导出保存",
     body:
@@ -200,7 +200,8 @@ export class GuidedTour {
     if (!hud.dataset.tourForced) return;
     const runtime = window.__hh as { player?: { active?: boolean } } | undefined;
     const motionLoaded = runtime?.player?.active;
-    if (!motionLoaded) hud.classList.add("hidden");
+    // The shared workspace keeps view controls available before a motion is loaded.
+    if (!motionLoaded) hud.classList.remove("hidden");
     delete hud.dataset.tourForced;
   }
 

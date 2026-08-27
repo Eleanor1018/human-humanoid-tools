@@ -23,7 +23,7 @@
 ## 亮点
 
 - **快速重映射**：Web UI 或 **CLI**（`hhtools retarget` / `scripts/batch_*_retarget.py`）；**Newton IK** + **MPC-SQP** 交互网格。
-- **多源人体数据**：BVH / GLB / SMPL 系；适配 AMASS、GVHMR、LAFAN、OMOMO、PHUMA、intermimic、meshmimic 等。
+- **多源人体数据**：BVH / GLB / SMPL 系；适配 AMASS、GVHMR、LAFAN、100STYLE、OMOMO、PHUMA、intermimic、meshmimic 等。
 - **任意 URDF**：Web 上传任意其他机器人。拖入 URDF，拖入 mesh，自动识别，无需调参。
 - **机器人→机器人（R2R）**：已有机器人 CSV/PKL 轨迹重映射到新 URDF。
 - **数据集分析**：Web 端扫描、打标、聚类、子集推荐。
@@ -55,6 +55,22 @@ npm run dev
 运行时覆盖、自动化测试和 Windows 打包说明见 [`desktop/README.md`](desktop/README.md)。
 
 浏览器打开 `http://127.0.0.1:8009`。
+
+Web 后台任务默认不限制并发。共享服务器或显存紧张时，可以显式启用 FIFO 调度：
+
+```bash
+uv run hhtools web --max-running-jobs 1 --max-queued-jobs 32
+```
+
+两个参数的 `0` 都表示不限；只有运行并发为正数时，等待队列设置才生效。也可以使用
+`HHTOOLS_MAX_RUNNING_JOBS` 和 `HHTOOLS_MAX_QUEUED_JOBS` 环境变量，Electron sidecar 同样支持。
+也可以从本机 Web/Electron 或 SSH 本地回环隧道，在 **设置 → 后台任务调度** 中直接修改；
+在未实现远程管理鉴权前，普通远程浏览器会显示为只读。保存会热更新调度器，无需重启 Python 或
+Electron：降低并发不会中断正在运行的任务，提高上限会立即按 FIFO 补跑等待任务。后端会将
+配置写入平台用户配置目录，也可用 `HHTOOLS_WEB_SETTINGS_PATH` 指定文件。显式 CLI/环境变量
+仍是启动覆盖项，只要保留这些覆盖项，下次启动时就会再次覆盖 GUI 保存值。
+该上限只约束调度器管理的 Web Job，不包含选择机器人时可选的 Warp/Newton 预热线程，
+因此它是任务准入控制，并非整个进程的严格 GPU 并发上限。
 
 | 面板 | 流程 |
 |------|------|
@@ -123,11 +139,17 @@ uv run hhtools retarget interaction-mesh run path/to/clip.pkl \
 **大批量离线脚本**（可断点续跑、子进程隔离；导出内容与 Web 一致，场景 clip 保留文件夹不打 zip）：
 
 ```bash
-# mimic（平坦 mocap → Newton IK）：amass | lafan | glb | …
+# mimic（平坦 mocap → Newton IK）：amass | lafan | xsens_mocap（100STYLE）| glb | …
 python scripts/batch_mimic_retarget.py \
   --robot rp1 --dataset amass \
   --in /path/to/AMASS --out /path/to/AMASS_rp1 \
   --skip-existing --limit 5
+
+# 100STYLE（Xsens MVN BVH，与 xsens_mocap 同一适配器 / 标定）
+python scripts/batch_mimic_retarget.py \
+  --robot rp1 --dataset xsens_mocap \
+  --in /path/to/100STYLE --out /path/to/100STYLE_rp1 \
+  --skip-existing
 
 # intermimic（人–物）：omomo
 python scripts/batch_intermimic_retarget.py \
@@ -199,12 +221,15 @@ smooth_joint_filter_masks:
 | mimic | AMASS | [arXiv](https://arxiv.org/abs/1904.03278) | [官网](https://amass.is.tue.mpg.de/) |
 | mimic | GVHMR | [arXiv](https://arxiv.org/abs/2409.06662) | [GitHub](https://github.com/zju3dv/GVHMR) |
 | mimic | LAFAN1 | [arXiv](https://arxiv.org/abs/2102.04942) | [GitHub](https://github.com/ubisoft/ubisoft-laforge-animation-dataset) |
+| mimic | [100STYLE](https://www.ianxmason.com/100style/) | [ACM](https://dl.acm.org/doi/10.1145/3522618) | [官网](https://www.ianxmason.com/100style/) |
 | mimic | Motion-X | [NeurIPS](https://proceedings.neurips.cc/paper_files/paper/2023/file/4f8e27f6036c1d8b4a66b5b3a947dd7b-Paper-Datasets_and_Benchmarks.pdf) | [GitHub](https://github.com/IDEA-Research/Motion-X) |
 | mimic | PHUMA | [arXiv](https://arxiv.org/abs/2510.26236) | [GitHub](https://github.com/DAVIAN-Robotics/PHUMA) |
 | mimic | SOMA | [arXiv](https://arxiv.org/abs/2603.16858) | [Hugging Face](https://huggingface.co/datasets/bones-studio/seed) |
 | intermimic | OMOMO | [arXiv](https://arxiv.org/abs/2309.16237) | [Hugging Face](https://huggingface.co/datasets/YaojieShen/hhtools_omomo) |
 | meshmimic | holosoma | [arXiv](https://arxiv.org/abs/2509.26633) | [GitHub](https://github.com/amazon-far/holosoma) |
 | meshmimic | PARC MS | [arXiv](https://arxiv.org/abs/2505.04002) | [Hugging Face](https://huggingface.co/datasets/YaojieShen/hhtools_parc_ms) |
+
+**100STYLE** 为 Xsens MVN 风格 BVH（60 fps 风格化步态）。将解压后的目录放到名为 `100STYLE`、`xsens` 或 `xsens_mocap` 的文件夹下（例如 `assets/motions/mimic/100STYLE/`），Web 动作库即可扫描到。机器人请用参考 `xsens_mocap` 标定一次——rest 是该格式的 T-pose，不是某条 clip 的第 0 帧。单独拖入 `.bvh` 时会按关节名自动识别。
 
 ---
 

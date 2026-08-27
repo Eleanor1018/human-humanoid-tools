@@ -62,6 +62,7 @@ export interface MotionPayload extends ScenePayload {
   body_mesh?: BodyMeshPayload
   library_entry?: LibraryEntry
   linked_folder?: string
+  materialize_mode?: 'symlink' | 'hardlink' | 'copy' | string
   meta?: Record<string, unknown>
 }
 
@@ -87,6 +88,107 @@ export interface PlaybackUiState {
 }
 
 export type PlaybackAction = 'toggle' | 'seek' | 'speed' | 'loop'
+
+export type WorkspacePanelId =
+  | 'motion'
+  | 'robot-assets'
+  | 'h2r'
+  | 'batch'
+  | 'r2r'
+  | 'dataset-viz'
+
+export type WorkflowId = 'h2r' | 'r2r'
+
+export type WorkspaceLocale = 'en' | 'zh-CN'
+
+export type WorkspaceTheme = 'light' | 'dark'
+
+export type ComparisonPreset = 'source' | 'target' | 'result' | 'overlay'
+
+export type ImportCommandTarget =
+  | 'motion-file'
+  | 'motion-folder'
+  | 'robot-urdf'
+  | 'robot-mesh-folder'
+  | 'robot-trajectory'
+  | 'dataset-folder'
+  | 'job-spec'
+
+export interface ImportCommandDetail {
+  target: ImportCommandTarget
+}
+
+export type CalibrationJointRegion =
+  | 'torso'
+  | 'left-arm'
+  | 'right-arm'
+  | 'left-leg'
+  | 'right-leg'
+  | 'head'
+  | 'hands'
+  | 'other'
+
+export type CalibrationAngleUnit = 'rad' | 'deg'
+export type CalibrationComparisonMode = 'current' | 'saved' | 'zero'
+
+export type CalibrationEditorCommand =
+  | 'search'
+  | 'region'
+  | 'unit'
+  | 'comparison'
+  | 'reset-region'
+  | 'mapped-only'
+  | 'labels'
+  | 'mapping-lines'
+  | 'source-opacity'
+  | 'robot-opacity'
+
+export interface CalibrationEditorCommandDetail {
+  workflow: WorkflowId
+  command: CalibrationEditorCommand
+  value?: string | number | boolean
+}
+
+export interface CalibrationEditorStateDetail {
+  workflow: WorkflowId
+  active: boolean
+  totalJoints: number
+  visibleJoints: number
+  mappedLandmarks: number
+  canUseSaved: boolean
+  query: string
+  region: CalibrationJointRegion | 'all'
+  unit: CalibrationAngleUnit
+  comparison: CalibrationComparisonMode
+  mappedOnly: boolean
+  labels: boolean
+  mappingLines: boolean
+  sourceOpacity: number
+  robotOpacity: number
+}
+
+export type WorkflowNodeState =
+  | 'missing'
+  | 'validating'
+  | 'ready'
+  | 'running'
+  | 'completed'
+  | 'warning'
+  | 'failed'
+
+export interface WorkflowNodeStatus {
+  id: string
+  label: string
+  state: WorkflowNodeState
+  detail: string
+  panel: WorkspacePanelId
+}
+
+export interface WorkflowStateDetail {
+  workflow: WorkflowId
+  nodes: WorkflowNodeStatus[]
+  blockedReason: string | null
+}
 
 export interface PlaybackCommandDetail {
   action: PlaybackAction
@@ -154,6 +256,8 @@ export interface RobotJointLimit {
   value?: number
   type?: string
   child_link?: string
+  parent_link?: string
+  axis?: Vec3
 }
 
 export interface CalibrationReferencePayload {
@@ -161,6 +265,9 @@ export interface CalibrationReferencePayload {
   parent_indices: number[]
   exclude_joint_indices?: number[]
   color?: number
+  bone_names?: string[]
+  canonical_names?: string[]
+  quaternions?: Quaternion[][]
 }
 
 export interface JointWorldPayload {
@@ -223,7 +330,7 @@ export interface JobStartResponse {
   job_id: string
   linked?: boolean
   folder_label?: string
-  materialize_mode?: 'symlink' | 'copy' | string
+  materialize_mode?: 'pending' | 'symlink' | 'hardlink' | 'copy' | string
 }
 
 export interface RobotExportPreviewResult {
@@ -236,6 +343,79 @@ export interface RobotExportPreviewResult {
   scaled_scene?: ScenePayload
 }
 
+export interface TrackingDiagnosticPoint {
+  frame: number
+  time_s: number
+  mean_error_m: number
+  max_error_m: number
+  source_contacts: number
+  target_contacts: number
+}
+
+export interface EffectorDiagnostic {
+  canonical: string
+  target_link: string
+  sample_count: number
+  mean_error_m: number
+  p95_error_m: number
+  max_error_m: number
+}
+
+export interface FootContactDiagnostic {
+  side: 'left' | 'right'
+  canonical: string
+  target_link: string
+  agreement_ratio: number
+  recall_ratio: number
+  source_contact_ratio: number
+  target_contact_ratio: number
+  target_slide_mean_mps: number
+  target_slide_p95_mps: number
+}
+
+export interface ContactDiagnostics {
+  available: boolean
+  reason?: string
+  agreement_ratio?: number
+  recall_ratio?: number
+  target_slide_mean_mps?: number
+  target_slide_p95_mps?: number
+  feet: FootContactDiagnostic[]
+}
+
+export interface ResultDiagnostics {
+  schema_version: number
+  available: boolean
+  reason?: string
+  frame_count?: number
+  mapped_effectors?: number
+  requested_effectors?: number
+  tracking?: {
+    mean_error_m: number
+    p95_error_m: number
+    max_error_m: number
+    effectors: EffectorDiagnostic[]
+    series: TrackingDiagnosticPoint[]
+  }
+  contact?: ContactDiagnostics
+}
+
+export interface ResultDiagnosticsDetail {
+  workflow: WorkflowId
+  diagnostics: ResultDiagnostics | null
+  comparisonPreset: ComparisonPreset
+}
+
+export interface ComparisonCommandDetail {
+  workflow: WorkflowId
+  preset: ComparisonPreset
+}
+
+export interface ComparisonStateDetail {
+  workflow: WorkflowId
+  preset: ComparisonPreset
+}
+
 export interface RetargetResult {
   motion_source_fps?: number
   retarget_fps?: number
@@ -244,6 +424,7 @@ export interface RetargetResult {
   trajectory: RobotTrajectoryPayload
   scaled_preview?: MotionPayload
   scaled_scene?: ScenePayload
+  diagnostics?: ResultDiagnostics
   export_token: string
   has_scene?: boolean
   stem?: string
@@ -285,6 +466,94 @@ export interface BatchRetargetResult {
 
 export type JobStatus = 'pending' | 'running' | 'done' | 'error'
 
+export type JobParameterValue = string | number | boolean
+
+export interface JobHistoryRecord {
+  id: string
+  kind: string
+  status: JobStatus
+  progress: number
+  clip_progress: number
+  message: string
+  error: string | null
+  created_at: number
+  finished_at: number | null
+  duration_seconds: number
+  parameters: Record<string, JobParameterValue>
+  result_summary: Record<string, JobParameterValue>
+  can_download: boolean
+  can_copy_cli: boolean
+  can_retry: boolean
+  retry_reason: string | null
+  can_retry_failed: boolean
+  failed_item_count: number
+  parent_job_id: string | null
+  scope: 'current_session' | 'persistent'
+}
+
+export interface JobListResponse {
+  jobs: JobHistoryRecord[]
+  session_only: boolean
+  persistence: 'disk'
+}
+
+export interface JobCliResponse {
+  available: boolean
+  command: string | null
+  reason: string | null
+}
+
+export interface JobReplayCapability {
+  available: boolean
+  reason: string | null
+  source_count: number
+}
+
+export interface JobSpec {
+  schema_version: number
+  kind: string
+  request: Record<string, unknown>
+}
+
+export interface JobSpecValidationResponse {
+  spec: JobSpec
+  replay: JobReplayCapability
+}
+
+export interface JobReplayResponse {
+  job_id: string
+  parent_job_id: string | null
+  spec: JobSpec
+}
+
+export interface JobConfigResponse {
+  schema_version: number
+  job_id: string
+  kind: string
+  status: JobStatus
+  created_at: number
+  finished_at: number | null
+  scope: 'current_session' | 'persistent'
+  request: Record<string, unknown>
+  cli: JobCliResponse
+  spec: JobSpec
+  replay: JobReplayCapability
+  parent_job_id: string | null
+}
+
+export interface JobHistoryStateDetail {
+  jobs: JobHistoryRecord[]
+  loading: boolean
+  error: string | null
+}
+
+export type JobHistoryCommandDetail =
+  | { command: 'refresh' }
+  | { command: 'copy-config'; jobId: string }
+  | { command: 'copy-cli'; jobId: string }
+  | { command: 'download-config'; jobId: string }
+  | { command: 'download'; jobId: string; filename?: string }
+
 export interface JobResult {
   motion?: MotionPayload
   payload?: MotionPayload
@@ -317,11 +586,31 @@ export interface JobResponse {
   message?: string
   result?: JobResult | null
   error?: string | null
+  created_at?: number
+  finished_at?: number | null
+  duration_seconds?: number
+  parameters?: Record<string, JobParameterValue>
+  result_summary?: Record<string, JobParameterValue>
+  can_download?: boolean
+}
+
+export interface JobAdmissionSettings {
+  max_running_jobs: number
+  max_queued_jobs: number
+}
+
+export interface JobAdmissionSnapshot extends JobAdmissionSettings {
+  running_jobs: number
+  queued_jobs: number
+  reserved_jobs: number
+  /** Whether this client satisfies the backend's local-admin boundary. */
+  editable?: boolean
 }
 
 export interface HealthResponse {
   ok: boolean
   ui_build?: string
+  job_scheduler?: JobAdmissionSnapshot
   source_root?: string
   save_dir?: string
   motions_library_root?: string
@@ -456,15 +745,19 @@ export interface BasicResponse {
 
 export type ApiGetResponse<Url extends string> =
   Url extends '/api/health' ? HealthResponse
+    : Url extends '/api/settings/job-admission' ? JobAdmissionSnapshot
     : Url extends '/api/library' ? LibraryResponse
       : Url extends '/api/robots' ? RobotsResponse
         : Url extends '/api/calibration/references' ? { references: string[] }
           : Url extends `/api/calibration/status${string}` ? CalibrationStatus
             : Url extends `/api/r2r/calibration/status${string}` ? CalibrationStatus
-              : Url extends `/api/job/${string}` ? JobResponse
-                : Url extends '/api/basket' ? BasketResponse
-                  : Url extends '/api/dataset/catalog' ? DatasetCatalog
-                    : Record<string, unknown>
+              : Url extends '/api/jobs' ? JobListResponse
+                : Url extends `/api/job/${string}/config` ? JobConfigResponse
+                  : Url extends `/api/job/${string}/cli` ? JobCliResponse
+                    : Url extends `/api/job/${string}` ? JobResponse
+                    : Url extends '/api/basket' ? BasketResponse
+                      : Url extends '/api/dataset/catalog' ? DatasetCatalog
+                        : Record<string, unknown>
 
 export type ApiPostResponse<Url extends string> =
   Url extends '/api/robot/select' ? RobotPayload
@@ -478,7 +771,9 @@ export type ApiPostResponse<Url extends string> =
                   : Url extends '/api/retarget' ? JobStartResponse
                     : Url extends '/api/batch/retarget' ? JobStartResponse
                       : Url extends '/api/r2r/retarget' ? JobStartResponse
-                        : Url extends '/api/r2r/batch/retarget' ? JobStartResponse
+                    : Url extends '/api/r2r/batch/retarget' ? JobStartResponse
+                      : Url extends '/api/jobs/spec/validate' ? JobSpecValidationResponse
+                        : Url extends '/api/jobs/replay' ? JobReplayResponse
                           : Url extends '/api/basket/add' ? BasketResponse
                             : Url extends '/api/basket/clear' ? BasketResponse
                               : Url extends '/api/library/link' ? BasicResponse
