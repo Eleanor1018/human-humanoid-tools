@@ -11,6 +11,8 @@ HHTOOLS_CACHE_ENV = "HHTOOLS_CACHE_DIR"
 HHTOOLS_ROBOT_DIR_ENV = "HHTOOLS_ROBOT_DIR"
 HHTOOLS_JOB_HISTORY_DIR_ENV = "HHTOOLS_JOB_HISTORY_DIR"
 HHTOOLS_WEB_SETTINGS_PATH_ENV = "HHTOOLS_WEB_SETTINGS_PATH"
+HHTOOLS_MOTION_LIBRARY_ROOT_ENV = "HHTOOLS_MOTION_LIBRARY_ROOT"
+HHTOOLS_MOTION_LIBRARY_SETTINGS_PATH_ENV = "HHTOOLS_MOTION_LIBRARY_SETTINGS_PATH"
 
 
 def hhtools_cache_dir() -> Path:
@@ -76,13 +78,59 @@ def user_web_settings_path() -> Path:
     return Path(user_config_dir("hhtools", "hhtools")) / "web-settings.json"
 
 
+def user_motion_library_root() -> Path:
+    """Return the configured or platform-standard Motion Library directory.
+
+    ``HHTOOLS_MOTION_LIBRARY_ROOT`` is an explicit process-level override.  An
+    XDG configuration root keeps existing Linux deployments and isolated test
+    environments on their historical ``$XDG_CONFIG_HOME/hhtools/motions``
+    path.  On hosts without XDG, an already populated legacy
+    ``~/.config/hhtools/motions`` directory wins so an upgrade never makes an
+    existing library appear to vanish.  New installations use the platform
+    data directory (LocalAppData on Windows, Application Support on macOS, and
+    the XDG data directory on Linux).
+
+    The directory is not created here.  Callers choosing a managed storage
+    root must validate/adopt it before performing writes.
+    """
+
+    override = os.environ.get(HHTOOLS_MOTION_LIBRARY_ROOT_ENV)
+    if override:
+        return Path(override).expanduser()
+
+    xdg_config = os.environ.get("XDG_CONFIG_HOME")
+    if xdg_config:
+        return Path(xdg_config).expanduser() / "hhtools" / "motions"
+
+    legacy = Path.home() / ".config" / "hhtools" / "motions"
+    if legacy.exists():
+        return legacy
+    return Path(user_data_dir("hhtools", "hhtools")) / "motions"
+
+
+def user_motion_library_settings_path() -> Path:
+    """Return the JSON file used for the persistent Motion Library setting."""
+
+    override = os.environ.get(HHTOOLS_MOTION_LIBRARY_SETTINGS_PATH_ENV)
+    if override:
+        return Path(override).expanduser()
+    xdg_config = os.environ.get("XDG_CONFIG_HOME")
+    if xdg_config:
+        return Path(xdg_config).expanduser() / "hhtools" / "motion-library-settings.json"
+    return Path(user_config_dir("hhtools", "hhtools")) / "motion-library-settings.json"
+
+
 __all__ = [
     "HHTOOLS_CACHE_ENV",
     "HHTOOLS_JOB_HISTORY_DIR_ENV",
+    "HHTOOLS_MOTION_LIBRARY_ROOT_ENV",
+    "HHTOOLS_MOTION_LIBRARY_SETTINGS_PATH_ENV",
     "HHTOOLS_ROBOT_DIR_ENV",
     "HHTOOLS_WEB_SETTINGS_PATH_ENV",
     "hhtools_cache_dir",
     "user_job_history_dir",
+    "user_motion_library_root",
+    "user_motion_library_settings_path",
     "user_robot_dir",
     "user_web_settings_path",
 ]

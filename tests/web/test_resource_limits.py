@@ -516,16 +516,26 @@ def test_manual_library_link_waits_for_motion_publish_lock(
         release_publish.wait(timeout=2.0)
         return library_dir, library_dir.name, "copy"
 
-    def fake_link(_path: str, *, folder_label: str | None = None) -> Path:
+    def fake_link(
+        _path: str,
+        *,
+        folder_label: str | None = None,
+        library_root: str | Path | None = None,
+    ) -> Path:
         link_entered.set()
-        destination = motions_library_root() / (folder_label or "manual-link")
+        assert library_root is not None
+        destination = Path(library_root) / (folder_label or "manual-link")
         destination.mkdir(parents=True, exist_ok=True)
         return destination
 
     monkeypatch.setattr(upload_resolve, "resolve_upload_drop", recording_resolver)
     monkeypatch.setattr(motion_library_links, "materialize_drop", blocking_materialize)
     monkeypatch.setattr(motion_library_links, "link_to_library", fake_link)
-    monkeypatch.setattr(motion_library_links, "scan_motions_library", lambda: [])
+    monkeypatch.setattr(
+        motion_library_links,
+        "scan_motions_library",
+        lambda _root=None: [],
+    )
     monkeypatch.setattr(
         server,
         "_matching_materialized_clip",

@@ -42,6 +42,9 @@ describe('resolveRuntime', () => {
       HHTOOLS_MAX_RUNNING_JOBS: '2',
       HHTOOLS_MAX_QUEUED_JOBS: '32',
       HHTOOLS_WEB_SETTINGS_PATH: 'C:\\config\\web-settings.json',
+      HHTOOLS_MOTION_LIBRARY_SETTINGS_PATH: 'C:\\config\\motion-library-settings.json',
+      XDG_CONFIG_HOME: 'C:\\config',
+      XDG_DATA_HOME: 'C:\\data',
       HHTOOLS_ARBITRARY_SECRET: 'do-not-copy-either'
     })
 
@@ -50,6 +53,11 @@ describe('resolveRuntime', () => {
     expect(environment.HHTOOLS_MAX_RUNNING_JOBS).toBe('2')
     expect(environment.HHTOOLS_MAX_QUEUED_JOBS).toBe('32')
     expect(environment.HHTOOLS_WEB_SETTINGS_PATH).toBe('C:\\config\\web-settings.json')
+    expect(environment.HHTOOLS_MOTION_LIBRARY_SETTINGS_PATH).toBe(
+      'C:\\config\\motion-library-settings.json'
+    )
+    expect(environment.XDG_CONFIG_HOME).toBe('C:\\config')
+    expect(environment.XDG_DATA_HOME).toBe('C:\\data')
     expect(environment.HHTOOLS_ARBITRARY_SECRET).toBeUndefined()
     expect(environment.AWS_SECRET_ACCESS_KEY).toBeUndefined()
     expect(environment.PYTHONUTF8).toBe('1')

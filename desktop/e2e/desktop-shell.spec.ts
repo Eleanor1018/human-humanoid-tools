@@ -30,6 +30,8 @@ test('loads the existing WebUI and shuts down its Python sidecar', async ({}, te
       ...process.env,
       HHTOOLS_REPO_ROOT: repositoryRoot,
       HHTOOLS_WEB_SETTINGS_PATH: testInfo.outputPath('web-settings.json'),
+      HHTOOLS_MOTION_LIBRARY_SETTINGS_PATH: testInfo.outputPath('motion-library-settings.json'),
+      XDG_CONFIG_HOME: testInfo.outputPath('config'),
       ELECTRON_DISABLE_SECURITY_WARNINGS: 'true'
     }
   })
@@ -122,7 +124,7 @@ test('loads the existing WebUI and shuts down its Python sidecar', async ({}, te
     await expect(page.locator('.side-panel-head')).toHaveCount(0)
     await expect(page.locator('.nav-group-label')).toHaveCount(0)
     const motionPanel = page.locator('#inspector-body .panel.active')
-    await expect(motionPanel.locator('h2')).toHaveText('动作 Motion')
+    await expect(motionPanel.locator(':scope > h2')).toHaveText('动作 Motion')
     await expect(motionPanel.locator(':scope > .lead')).toHaveCount(0)
     await expect(motionPanel.locator('#motion-assets-hint')).toHaveCount(0)
     await expect(motionPanel.locator('.motion-import-card')).toHaveCount(0)
@@ -140,6 +142,46 @@ test('loads the existing WebUI and shuts down its Python sidecar', async ({}, te
     await expect(motionPanel.locator('#motion-pick-file')).toBeVisible()
     await expect(motionPanel.locator('#motion-pick-folder')).toBeVisible()
     expect((await sharedMotionDropzone.boundingBox())?.height).toBeLessThan(180)
+
+    const motionLibrary = motionPanel.locator('#tour-motion-library')
+    await expect(motionLibrary).toHaveCount(1)
+    await expect(motionPanel.locator('.card#tour-motion-library')).toHaveCount(0)
+    await expect(motionLibrary.locator(':scope > h2')).toContainText('资源库 Library')
+    await expect(motionLibrary.locator('.motion-library-root-button')).toHaveText('选择资源库目录')
+    const libraryFilters = motionLibrary.locator('.motion-library-filter')
+    await expect(libraryFilters).toHaveText(['全部', '纯动作', '物体交互', '地形场景'])
+    await expect(libraryFilters.first()).toHaveAttribute('aria-pressed', 'true')
+    await expect(motionLibrary.locator('.motion-library-list-frame')).toBeVisible()
+    await expect(motionLibrary.locator('.lr-category').first()).toHaveText('动作')
+    const firstLibraryRow = motionLibrary.locator('.lib-row').first()
+    const firstLibraryLoad = firstLibraryRow.locator(':scope > .lr-load')
+    const firstLibraryAdd = firstLibraryRow.locator(':scope > .lr-add')
+    await expect(firstLibraryLoad).toHaveJSProperty('tagName', 'BUTTON')
+    await expect(firstLibraryAdd).toHaveJSProperty('tagName', 'BUTTON')
+    await firstLibraryLoad.focus()
+    await expect(firstLibraryLoad).toBeFocused()
+    await expect(firstLibraryAdd).toBeVisible()
+    const [motionHeadingStyle, libraryHeadingStyle] = await Promise.all([
+      motionPanel.locator(':scope > h2').evaluate((element) => getComputedStyle(element).fontSize),
+      motionLibrary.locator(':scope > h2').evaluate((element) => getComputedStyle(element).fontSize),
+    ])
+    expect(libraryHeadingStyle).toBe(motionHeadingStyle)
+    expect(await motionLibrary.locator('.motion-library-tools').evaluate((element) =>
+      element.scrollWidth <= element.clientWidth + 1
+    )).toBe(true)
+    const [libraryFrameBounds, inspectorBodyBounds] = await Promise.all([
+      motionLibrary.locator('.motion-library-list-frame').boundingBox(),
+      page.locator('#inspector-body').boundingBox(),
+    ])
+    expect(Math.abs(
+      ((inspectorBodyBounds?.y ?? 0) + (inspectorBodyBounds?.height ?? 0))
+      - ((libraryFrameBounds?.y ?? 0) + (libraryFrameBounds?.height ?? 0))
+    )).toBeLessThanOrEqual(20)
+    await libraryFilters.nth(2).click()
+    await expect(libraryFilters.nth(2)).toHaveAttribute('aria-pressed', 'true')
+    await expect(libraryFilters.first()).toHaveAttribute('aria-pressed', 'false')
+    await libraryFilters.first().click()
+    await page.screenshot({ path: testInfo.outputPath('desktop-motion-library.png'), fullPage: true })
     await page.screenshot({ path: testInfo.outputPath('desktop-motion-compact-default.png'), fullPage: true })
 
     await motionPanel.locator('.motion-profile-selector', { hasText: 'intermimic' }).click()
@@ -310,7 +352,9 @@ test('loads the existing WebUI and shuts down its Python sidecar', async ({}, te
     await page.locator('.desktop-menu-item', { hasText: 'Settings' }).click()
     const settings = page.locator('.workspace-settings-dialog')
     await expect(settings).toBeVisible()
-    await expect(settings.locator('.workspace-setting-row')).toHaveCount(5)
+    await expect(settings.locator('.workspace-setting-row')).toHaveCount(6)
+    await expect(settings.locator('.workspace-library-root')).not.toHaveText('—')
+    await expect(settings.locator('.workspace-library-select')).toBeEnabled()
     await expect(settings.locator('.workspace-language-select')).toHaveValue('en')
     const stateBeforeSettingsSave = await page.evaluate(() =>
       (window.hhtoolsDesktop as HHToolsDesktopApi).getRuntimeState()

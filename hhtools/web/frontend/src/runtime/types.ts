@@ -302,6 +302,8 @@ export interface CalibrationStatus {
   joint_q?: Record<string, number> | null
 }
 
+export type MotionCategory = 'motion' | 'object' | 'terrain'
+
 export interface LibraryEntry {
   dataset?: string
   folder_label?: string
@@ -317,6 +319,8 @@ export interface LibraryEntry {
   export_subdir?: string
   token?: string
   suggested_backend?: string
+  /** Stable backend-provided UX category; never infer it from dataset labels. */
+  motion_category?: MotionCategory
 }
 
 export interface LibraryResponse {
@@ -607,6 +611,16 @@ export interface JobAdmissionSnapshot extends JobAdmissionSettings {
   editable?: boolean
 }
 
+export interface MotionLibrarySettingsSnapshot {
+  root: string
+  default_root: string
+  editable: boolean
+  /** Optional server hint explaining why an otherwise valid root is read-only. */
+  readonly_reason?: string | null
+  /** Optional origin of the effective value, for example default/settings/environment. */
+  source?: string | null
+}
+
 export interface HealthResponse {
   ok: boolean
   ui_build?: string
@@ -746,6 +760,7 @@ export interface BasicResponse {
 export type ApiGetResponse<Url extends string> =
   Url extends '/api/health' ? HealthResponse
     : Url extends '/api/settings/job-admission' ? JobAdmissionSnapshot
+    : Url extends '/api/settings/motion-library' ? MotionLibrarySettingsSnapshot
     : Url extends '/api/library' ? LibraryResponse
       : Url extends '/api/robots' ? RobotsResponse
         : Url extends '/api/calibration/references' ? { references: string[] }
@@ -815,6 +830,7 @@ export interface HhAppBridge {
   addToBasket: (entries: LibraryEntry[], options?: { silent?: boolean }) => void
   switchInspectorPanel: (panelId: string) => void
   getLibrarySourceRoot: () => string
+  refreshLibrary: () => Promise<void>
   uploadFilesXHR: <Url extends string>(
     url: Url,
     files: Iterable<UploadFile>,

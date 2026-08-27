@@ -5,7 +5,15 @@ from fastapi.testclient import TestClient
 from hhtools.web.server import create_app
 
 
-def _client(tmp_path):
+def _client(tmp_path, monkeypatch):
+    monkeypatch.setenv(
+        "HHTOOLS_MOTION_LIBRARY_SETTINGS_PATH",
+        str(tmp_path / "motion-library-settings.json"),
+    )
+    monkeypatch.setenv(
+        "HHTOOLS_MOTION_LIBRARY_ROOT",
+        str(tmp_path / "motion-library"),
+    )
     app = create_app(
         source_root=tmp_path / "motions",
         save_dir=tmp_path / "save",
@@ -17,15 +25,15 @@ def _client(tmp_path):
     return TestClient(app, base_url="http://127.0.0.1:43123")
 
 
-def test_desktop_guard_requires_session_secret(tmp_path) -> None:
-    with _client(tmp_path) as client:
+def test_desktop_guard_requires_session_secret(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch) as client:
         response = client.get("/api/health")
 
     assert response.status_code == 401
 
 
-def test_desktop_guard_accepts_matching_session(tmp_path) -> None:
-    with _client(tmp_path) as client:
+def test_desktop_guard_accepts_matching_session(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch) as client:
         response = client.get(
             "/api/health",
             headers={
@@ -40,8 +48,8 @@ def test_desktop_guard_accepts_matching_session(tmp_path) -> None:
     assert response.headers["x-content-type-options"] == "nosniff"
 
 
-def test_desktop_guard_rejects_wrong_origin(tmp_path) -> None:
-    with _client(tmp_path) as client:
+def test_desktop_guard_rejects_wrong_origin(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch) as client:
         response = client.get(
             "/api/health",
             headers={

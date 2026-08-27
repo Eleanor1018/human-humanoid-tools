@@ -1,4 +1,4 @@
-import { ipcMain, shell, type BrowserWindow } from 'electron'
+import { dialog, ipcMain, shell, type BrowserWindow } from 'electron'
 
 import { DESKTOP_CHANNELS } from '../../shared/desktop-api'
 import type { RuntimeState } from '../../shared/runtime-state'
@@ -22,6 +22,13 @@ export function registerDesktopHandlers(options: {
     trusted(event)
     return options.restartBackend()
   })
+  ipcMain.handle(DESKTOP_CHANNELS.selectDirectory, async (event) => {
+    trusted(event)
+    const result = await dialog.showOpenDialog(options.mainWindow, {
+      properties: ['openDirectory', 'createDirectory']
+    })
+    return result.canceled ? null : (result.filePaths[0] ?? null)
+  })
   ipcMain.handle(DESKTOP_CHANNELS.openExternal, async (event, value: unknown) => {
     trusted(event)
     if (typeof value !== 'string' || value.length > 2_048) {
@@ -38,6 +45,7 @@ export function registerDesktopHandlers(options: {
   return () => {
     ipcMain.removeHandler(DESKTOP_CHANNELS.getRuntimeState)
     ipcMain.removeHandler(DESKTOP_CHANNELS.restartBackend)
+    ipcMain.removeHandler(DESKTOP_CHANNELS.selectDirectory)
     ipcMain.removeHandler(DESKTOP_CHANNELS.openExternal)
   }
 }

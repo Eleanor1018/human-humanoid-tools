@@ -183,6 +183,7 @@ import type {
   JobStartResponse,
   JointWorldPayload,
   LibraryEntry,
+  MotionCategory,
   Matrix4Data,
   MotionPayload,
   PlaybackUiState,
@@ -3294,13 +3295,12 @@ let libMotionsRoot = "";
 async function linkLibraryPath(): Promise<void> {
   const hint = libMotionsRoot
     ? `链接到资源库目录（${libMotionsRoot}）`
-    : "链接到资源库（~/.config/hhtools/motions）";
+    : "链接到当前资源库目录";
   const path = window.prompt(hint, "");
   if (!path?.trim()) return;
   try {
     const data = await API.post("/api/library/link", { path: path.trim() });
     if (data.motions_library_root) libMotionsRoot = data.motions_library_root;
-    updateMotionsLibraryHint();
     await refreshLibrary();
     const sel = document.getElementById("lib-folder");
     if (sel && data.folder_label) sel.value = data.folder_label;
@@ -3311,23 +3311,29 @@ async function linkLibraryPath(): Promise<void> {
   }
 }
 
-function updateMotionsLibraryHint(): void {
-  const el = document.getElementById("lib-motions-hint");
-  if (!el) return;
-  if (!libMotionsRoot) {
-    el.textContent = "";
-    return;
-  }
-  el.replaceChildren(
-    document.createTextNode("拖入数据集会自动软链接到 "),
-    textElement("code", "", libMotionsRoot),
-    document.createTextNode("；建议将常用数据集中放到该目录。"),
-  );
-}
-
 // library navigator
 let libEntries: LibraryEntry[] = [];
 let libSourceRoot = "";
+let libCategoryFilter: "all" | MotionCategory = "all";
+const libCategoryLabels: Record<MotionCategory, string> = {
+  motion: "动作",
+  object: "物体",
+  terrain: "地形",
+};
+
+function normalizedMotionCategory(entry: LibraryEntry): MotionCategory {
+  const category = entry.motion_category;
+  return category === "object" || category === "terrain" ? category : "motion";
+}
+
+function selectLibraryCategory(category: "all" | MotionCategory): void {
+  libCategoryFilter = category;
+  document.querySelectorAll<HTMLButtonElement>("[data-library-category]").forEach((button) => {
+    button.setAttribute("aria-pressed", String(button.dataset.libraryCategory === category));
+  });
+  renderLibrary();
+}
+
 async function refreshLibrary(): Promise<void> {
   const list = document.getElementById("lib-list");
   try {
@@ -3335,12 +3341,11 @@ async function refreshLibrary(): Promise<void> {
     libEntries = data.entries || [];
     libSourceRoot = data.source_root || "";
     if (data.motions_library_root) libMotionsRoot = data.motions_library_root;
-    updateMotionsLibraryHint();
     // populate folder dropdown
     const sel = document.getElementById("lib-folder");
     const allFolders = document.createElement("option");
     allFolders.value = "";
-    allFolders.textContent = `全部目录 (${(data.folders || []).length})`;
+    allFolders.textContent = `目录（${(data.folders || []).length}）`;
     sel.replaceChildren(allFolders);
     for (const f of data.folders || []) {
       const o = document.createElement("option");
@@ -3361,7 +3366,11 @@ function renderLibrary(): void {
   list.replaceChildren();
   const filtered = libEntries.filter((e) => {
     if (folder && e.folder_label !== folder) return false;
-    const hay = (e.folder_label + " " + e.stem).toLowerCase();
+    if (libCategoryFilter !== "all" && normalizedMotionCategory(e) !== libCategoryFilter) {
+      return false;
+    }
+    const category = libCategoryLabels[normalizedMotionCategory(e)];
+    const hay = `${e.folder_label || ""} ${e.stem || ""} ${category}`.toLowerCase();
     return tokens.every((t) => hay.includes(t));
   });
   document.getElementById("lib-count").textContent =
@@ -3370,7 +3379,7 @@ function renderLibrary(): void {
   if (!libEntries.length) {
     renderTextMessage(
       list,
-      `在 ${libSourceRoot || "assets/motions"} 未找到可识别的 clip。直接拖入文件夹，会自动软链接到 ${libMotionsRoot || "~/.config/hhtools/motions"}。`,
+      "资源库中还没有可识别的动作。请选择资源库目录，或链接一个外部数据集目录。",
     );
     return;
   }
@@ -3381,16 +3390,28 @@ function renderLibrary(): void {
   for (const e of filtered.slice(0, 300)) {
     const row = document.createElement("div");
     row.className = "lib-row";
+    const category = normalizedMotionCategory(e);
+    const categoryBadge = textElement("span", "lr-category", libCategoryLabels[category]);
+    categoryBadge.dataset.category = category;
+    const loadButton = document.createElement("button");
+    loadButton.type = "button";
+    loadButton.className = "lr-load";
+    loadButton.setAttribute(
+      "aria-label",
+      `加载动作 ${[e.folder_label, e.stem].filter(Boolean).join(" ")}`,
+    );
+    loadButton.append(
+      categoryBadge,
+      textElement("span", "lr-folder", e.folder_label),
+      textElement("span", "lr-stem", e.stem),
+    );
     const addButton = textElement("button", "lr-add", "＋");
     addButton.type = "button";
     addButton.title = "加入篮子";
-    row.append(
-      textElement("span", "lr-folder", e.folder_label),
-      textElement("span", "lr-stem", e.stem),
-      addButton,
-    );
-    row.onclick = () => loadLibraryEntry(e);
-    addButton.onclick = (ev) => { ev.stopPropagation(); addToBasket([e]); };
+    addButton.setAttribute("aria-label", `将 ${e.stem || "动作"} 加入篮子`);
+    row.append(loadButton, addButton);
+    loadButton.onclick = () => loadLibraryEntry(e);
+    addButton.onclick = () => addToBasket([e]);
     list.appendChild(row);
   }
   if (filtered.length > 300) {
@@ -3403,6 +3424,14 @@ function renderLibrary(): void {
 }
 document.getElementById("lib-search").oninput = () => renderLibrary();
 document.getElementById("lib-folder").onchange = () => renderLibrary();
+document.querySelectorAll<HTMLButtonElement>("[data-library-category]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const category = button.dataset.libraryCategory;
+    if (category === "all" || category === "motion" || category === "object" || category === "terrain") {
+      selectLibraryCategory(category);
+    }
+  });
+});
 
 // drag-drop helpers (folder-aware)
 function readAllDirectoryEntries(
@@ -7282,6 +7311,7 @@ window.__hhApp = {
   addToBasket,
   switchInspectorPanel,
   getLibrarySourceRoot: () => libSourceRoot,
+  refreshLibrary,
   uploadFilesXHR,
 };
 
@@ -7291,7 +7321,6 @@ async function verifyUiBuild() {
     const el = document.getElementById("ui-build");
     if (el) el.textContent = `UI·${h.ui_build || "?"}`;
     if (h.motions_library_root) libMotionsRoot = h.motions_library_root;
-    updateMotionsLibraryHint();
     const assetsHint = document.getElementById("motion-assets-hint");
     if (assetsHint && h.source_root) assetsHint.textContent = h.source_root;
     const missingFeatures =

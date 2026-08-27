@@ -17,6 +17,7 @@ import ipaddress
 import json
 import logging
 import math
+import os
 import shlex
 import shutil
 import tempfile
@@ -64,7 +65,7 @@ _log = logging.getLogger(__name__)
 
 # Bump when static/ front-end behaviour changes.  Injected into ``index.html``
 # at serve time so collaborators only need to pull + restart (no triple-sync).
-UI_BUILD_ID = "20260827-ux7"
+UI_BUILD_ID = "20260827-ux8"
 
 _UPLOAD_CHUNK_BYTES = 1024 * 1024
 # These are application-level resource controls, not transport tuning knobs.
@@ -180,6 +181,74 @@ def _safe_upload_directory_name(name: str | None, *, default: str) -> str:
     if len(relative.parts) != 1:
         raise ValueError("upload directory name must contain one path segment")
     return relative.name
+
+
+def _adopt_motion_library_root(
+    target: Path,
+    *,
+    current_root: Path | None = None,
+    trusted_roots: tuple[Path, ...] = (),
+) -> Path:
+    """Create or explicitly adopt one dedicated, managed library container.
+
+    Library publication can replace a same-named child directory, so silently
+    treating an arbitrary populated dataset directory as its managed root would
+    make later unlink/import actions destructive. New selections must therefore
+    be empty (or already carry our marker). The current historical root may be
+    marked in place because hhtools already owns its child namespace.
+    """
+
+    from hhtools.web.motion_library_settings import (
+        motion_library_marker_path,
+        motion_library_marker_payload,
+        validate_motion_library_marker,
+    )
+
+    root = Path(target).expanduser().resolve(strict=False)
+    if root.parent == root or root == Path.home().resolve(strict=False):
+        raise ValueError("请选择专用的资源库目录，不能使用文件系统根目录或用户主目录")
+    if root.exists() and not root.is_dir():
+        raise ValueError("资源库路径必须是目录")
+
+    marker = motion_library_marker_path(root)
+    known_roots = trusted_roots + (
+        (current_root,) if current_root is not None else ()
+    )
+    already_owned = any(
+        root == Path(candidate).expanduser().resolve(strict=False)
+        for candidate in known_roots
+    )
+    marker_is_valid = validate_motion_library_marker(root)
+    if root.is_dir() and not marker_is_valid and not already_owned:
+        try:
+            has_existing_content = next(root.iterdir(), None) is not None
+        except OSError as err:
+            raise ValueError(f"无法读取资源库目录：{err}") from err
+        if has_existing_content:
+            raise ValueError(
+                "所选目录不是空目录。请选择一个空的专用目录；"
+                "已有数据集请使用“链接目录”接入。"
+            )
+
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+        temporary = marker.with_name(f".{marker.name}.{time.time_ns()}.tmp")
+        try:
+            temporary.write_text(
+                json.dumps(
+                    motion_library_marker_payload(),
+                    ensure_ascii=False,
+                    indent=2,
+                    sort_keys=True,
+                ) + "\n",
+                encoding="utf-8",
+            )
+            temporary.replace(marker)
+        finally:
+            temporary.unlink(missing_ok=True)
+    except OSError as err:
+        raise ValueError(f"无法写入资源库目录：{err}") from err
+    return root
 
 
 def _is_loopback_address(value: str | None, *, allow_localhost: bool = False) -> bool:
@@ -1144,8 +1213,22 @@ def create_app(
             "parent_job_id": stored.get("parent_job_id"),
         }
 
+    from hhtools.utils.paths import (
+        HHTOOLS_MOTION_LIBRARY_ROOT_ENV,
+        user_motion_library_root,
+        user_motion_library_settings_path,
+    )
     from hhtools.web.motion_library_links import ensure_motions_library, motions_library_root
+    from hhtools.web.motion_library_settings import (
+        MotionLibrarySettingsStore,
+        effective_motion_library_root,
+        updated_motion_library_settings,
+    )
 
+    motion_library_settings_store = MotionLibrarySettingsStore(
+        user_motion_library_settings_path(),
+    )
+    app.state.motion_library_settings_store = motion_library_settings_store
     ensure_motions_library()
 
     def _render_index_html() -> str:
@@ -1312,6 +1395,92 @@ def create_app(
                 raise HTTPException(status_code=503, detail=str(err)) from err
             return _scheduler_payload(editable=True)
 
+    def _motion_library_settings_payload(
+        request: Request,
+    ) -> dict[str, str | bool | None]:
+        settings = motion_library_settings_store.load()
+        environment_override = bool(os.environ.get(HHTOOLS_MOTION_LIBRARY_ROOT_ENV))
+        local_request = _job_settings_editable(request)
+        editable = local_request and not environment_override
+        readonly_reason: str | None = None
+        if not editable:
+            readonly_reason = "environment_override" if environment_override else "remote"
+        return {
+            "root": str(effective_motion_library_root(settings)),
+            "default_root": str(user_motion_library_root().expanduser().resolve(strict=False)),
+            # An environment override is an administrator-owned launch setting;
+            # writing a lower-priority JSON value would misleadingly appear to
+            # succeed while leaving the effective root unchanged.
+            "editable": editable,
+            "readonly_reason": readonly_reason,
+        }
+
+    @app.get("/api/settings/motion-library")
+    def get_motion_library_settings(request: Request) -> dict[str, str | bool | None]:
+        """Return the effective server-side Motion Library root."""
+
+        return _motion_library_settings_payload(request)
+
+    @app.patch("/api/settings/motion-library")
+    def patch_motion_library_settings(
+        payload: dict[str, Any],
+        request: Request,
+    ) -> dict[str, str | bool | None]:
+        """Persist and hot-apply a dedicated managed library directory."""
+
+        if not _job_settings_editable(request):
+            raise HTTPException(
+                status_code=403,
+                detail="motion library settings can only be changed from a loopback client",
+            )
+        if os.environ.get(HHTOOLS_MOTION_LIBRARY_ROOT_ENV):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "HHTOOLS_MOTION_LIBRARY_ROOT overrides the saved directory; "
+                    "change or remove that environment setting first"
+                ),
+            )
+
+        # Switching the resolver while another thread publishes or scans a
+        # library would split one operation across two roots. The same lock used
+        # for materialization makes validation, persistence, and the next scan
+        # observe one complete root selection.
+        with motion_library_publish_lock:
+            current = motion_library_settings_store.load()
+            try:
+                updated = updated_motion_library_settings(current, payload)
+                selected_root = effective_motion_library_root(updated)
+                current_root = motions_library_root()
+                default_root = user_motion_library_root().expanduser().resolve(strict=False)
+                if selected_root != current_root:
+                    # Mark the root we are leaving before changing the resolver.
+                    # This preserves a safe return path even if platform-default
+                    # discovery changes while the custom root is active.
+                    _adopt_motion_library_root(
+                        current_root,
+                        current_root=current_root,
+                    )
+                _adopt_motion_library_root(
+                    selected_root,
+                    current_root=current_root,
+                    # The default/legacy location is owned by hhtools even when
+                    # it predates ownership markers. Trust it once so a populated
+                    # library can safely round-trip default -> custom -> default;
+                    # adoption writes the canonical marker before saving.
+                    trusted_roots=(default_root,),
+                )
+                motion_library_settings_store.save(updated)
+            except ValueError as err:
+                raise HTTPException(status_code=422, detail=str(err)) from err
+            except OSError as err:
+                _log.exception("failed to persist Motion Library settings")
+                raise HTTPException(
+                    status_code=500,
+                    detail="failed to persist Motion Library settings",
+                ) from err
+        return _motion_library_settings_payload(request)
+
     @app.get("/api/formats")
     def formats() -> dict:
         from hhtools.io.base import registered_loader_extensions
@@ -1342,7 +1511,6 @@ def create_app(
         from hhtools.web.motion_library_links import scan_motions_library
 
         root = Path(source) if source else state.source_root
-        lib_root = motions_library_root()
         merged: list[dict] = []
         seen: set[str] = set()
         for e in scan_library(root):
@@ -1361,7 +1529,8 @@ def create_app(
         # namespace is still only process-local; multi-worker deployments need
         # a cross-process file lock before they can offer this guarantee.
         with motion_library_publish_lock:
-            motion_entries = scan_motions_library()
+            lib_root = motions_library_root()
+            motion_entries = scan_motions_library(lib_root)
         for raw in motion_entries:
             sp = str(raw.get("source_path") or "")
             if not sp or sp in seen:
@@ -1395,10 +1564,15 @@ def create_app(
         if not path:
             raise HTTPException(status_code=400, detail="需要 path")
         with motion_library_publish_lock:
-            dest = link_to_library(path, folder_label=folder_label)
+            lib_root = motions_library_root()
+            dest = link_to_library(
+                path,
+                folder_label=folder_label,
+                library_root=lib_root,
+            )
             entries = [
                 entry
-                for entry in scan_motions_library()
+                for entry in scan_motions_library(lib_root)
                 if entry.get("folder_label") == dest.name
             ]
         return {
@@ -1406,7 +1580,7 @@ def create_app(
             "kind": "directory",
             "clip_count": len(entries),
             "path": str(dest),
-            "motions_library_root": str(motions_library_root()),
+            "motions_library_root": str(lib_root),
         }
 
     @app.delete("/api/library/link/{folder_label}")
@@ -1952,7 +2126,7 @@ def create_app(
         profile: str = "mimic",
         library_folder_label: str | None = None,
     ) -> dict:
-        """Upload motion clips; auto-symlink or copy into ``~/.config/hhtools/motions``."""
+        """Upload motion clips; auto-link or copy them into the managed library."""
 
         from hhtools.web.motion_library_links import motions_library_root
 
@@ -3564,10 +3738,15 @@ def create_app(
 
 
 def _enrich_basket_entry(entry: dict, fallback: str = "smpl") -> dict:
-    """Attach ``reference`` (calibration profile) inferred from dataset / path."""
+    """Attach stable calibration and Motion Library UX metadata."""
+    from hhtools.web.motion_library_categories import infer_motion_category
+
     out = dict(entry)
     if not (out.get("reference") or "").strip():
         out["reference"] = _entry_reference(out, fallback)
+    # Keep category semantics on the API boundary. The renderer must not infer
+    # object/terrain workflows from volatile adapter or folder display names.
+    out["motion_category"] = infer_motion_category(out)
     return out
 
 
@@ -3626,7 +3805,7 @@ def _library_entry_from_link(
     picked: Path,
     dataset: str | None,
 ) -> dict:
-    """Build a library-shaped entry for a clip under ``~/.config/hhtools/motions``."""
+    """Build a library-shaped entry for a clip under the managed library root."""
     from hhtools.web.motion_library_links import scan_motions_library
 
     picked = Path(picked).resolve()

@@ -16,6 +16,7 @@ import type {
   ImportCommandTarget,
   JobAdmissionSettings,
   JobAdmissionSnapshot,
+  MotionLibrarySettingsSnapshot,
   WorkspacePanelId,
   WorkspaceTheme,
 } from './runtime/types'
@@ -37,6 +38,11 @@ const jobAdmissionSaving = ref(false)
 const jobAdmissionError = ref<string | null>(null)
 const jobAdmissionErrorOperation = ref<'load' | 'save' | null>(null)
 const jobAdmissionSaved = ref(false)
+const motionLibrarySettings = ref<MotionLibrarySettingsSnapshot | null>(null)
+const motionLibrarySettingsLoading = ref(false)
+const motionLibrarySettingsSaving = ref(false)
+const motionLibrarySettingsError = ref<string | null>(null)
+const motionLibrarySettingsSaved = ref(false)
 type MotionUploadProfile = 'intermimic' | 'meshmimic' | 'mimic'
 const motionUploadProfiles: ReadonlyArray<{ id: MotionUploadProfile; label: string }> = [
   { id: 'mimic', label: 'mimic' },
@@ -117,6 +123,76 @@ async function jobAdmissionHttpError(response: Response): Promise<Error> {
   return new Error(`${response.status} ${response.statusText}`)
 }
 
+function parseMotionLibrarySettings(value: unknown): MotionLibrarySettingsSnapshot {
+  if (value === null || typeof value !== 'object') {
+    throw new Error('Invalid motion-library settings response')
+  }
+  const candidate = value as Partial<MotionLibrarySettingsSnapshot>
+  if (typeof candidate.root !== 'string' || !candidate.root) {
+    throw new Error('Invalid motion-library settings field: root')
+  }
+  if (typeof candidate.default_root !== 'string' || !candidate.default_root) {
+    throw new Error('Invalid motion-library settings field: default_root')
+  }
+  if (typeof candidate.editable !== 'boolean') {
+    throw new Error('Invalid motion-library settings field: editable')
+  }
+  for (const key of ['readonly_reason', 'source'] as const) {
+    if (candidate[key] !== undefined && candidate[key] !== null && typeof candidate[key] !== 'string') {
+      throw new Error(`Invalid motion-library settings field: ${key}`)
+    }
+  }
+  return candidate as MotionLibrarySettingsSnapshot
+}
+
+function motionLibraryReadOnlyMessage(settings: MotionLibrarySettingsSnapshot): string {
+  const reason = settings.readonly_reason?.trim().toLowerCase()
+  const source = settings.source?.trim().toLowerCase()
+  if (
+    reason === 'environment_override'
+    || reason === 'environment'
+    || source === 'environment_override'
+    || source === 'environment'
+  ) {
+    return workspaceText(
+      'The library directory is managed by HHTOOLS_MOTION_LIBRARY_ROOT. Change or remove that environment variable, then restart the service.',
+      '资源库目录由 HHTOOLS_MOTION_LIBRARY_ROOT 管理。请修改或移除该环境变量，然后重启服务。',
+    )
+  }
+  if (reason === 'remote' || reason === 'remote_client' || reason === 'non_loopback') {
+    return workspaceText(
+      'The library directory can only be changed on the server, in Electron, or through an SSH loopback tunnel.',
+      '资源库目录只能从服务器本机、Electron 或 SSH 本地回环连接修改。',
+    )
+  }
+  return workspaceText(
+    'The server has made the library directory read-only. Check the server launch configuration or connection permissions.',
+    '服务端已将资源库目录设为只读。请检查服务器启动配置或连接权限。',
+  )
+}
+
+function motionLibraryRootButtonTitle(): string {
+  const settings = motionLibrarySettings.value
+  if (settings?.editable === false) return motionLibraryReadOnlyMessage(settings)
+  return settings?.root || workspaceText(
+    'Choose the library directory managed by hhtools',
+    '选择 hhtools 管理的资源库目录',
+  )
+}
+
+async function requestMotionLibrarySettings(
+  method: 'GET' | 'PATCH',
+  root?: string,
+): Promise<MotionLibrarySettingsSnapshot> {
+  const response = await fetch('/api/settings/motion-library', {
+    method,
+    headers: method === 'PATCH' ? { 'Content-Type': 'application/json' } : undefined,
+    body: method === 'PATCH' ? JSON.stringify({ root }) : undefined,
+  })
+  if (!response.ok) throw await jobAdmissionHttpError(response)
+  return parseMotionLibrarySettings(await response.json())
+}
+
 async function requestJobAdmission(
   method: 'GET' | 'PATCH',
   settings?: JobAdmissionSettings,
@@ -167,9 +243,61 @@ async function saveJobAdmission(settings: JobAdmissionSettings): Promise<void> {
   }
 }
 
+async function loadMotionLibrarySettings(): Promise<void> {
+  if (motionLibrarySettingsLoading.value || motionLibrarySettingsSaving.value) return
+  motionLibrarySettingsLoading.value = true
+  motionLibrarySettingsError.value = null
+  motionLibrarySettingsSaved.value = false
+  try {
+    motionLibrarySettings.value = await requestMotionLibrarySettings('GET')
+  } catch (error) {
+    motionLibrarySettingsError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    motionLibrarySettingsLoading.value = false
+  }
+}
+
+async function chooseMotionLibraryRoot(): Promise<void> {
+  if (motionLibrarySettingsLoading.value || motionLibrarySettingsSaving.value) return
+  motionLibrarySettingsError.value = null
+  motionLibrarySettingsSaved.value = false
+  try {
+    if (!motionLibrarySettings.value) {
+      motionLibrarySettingsLoading.value = true
+      motionLibrarySettings.value = await requestMotionLibrarySettings('GET')
+      motionLibrarySettingsLoading.value = false
+    }
+    if (motionLibrarySettings.value.editable !== true) {
+      throw new Error(motionLibraryReadOnlyMessage(motionLibrarySettings.value))
+    }
+
+    // Electron can return a real host path. A normal browser cannot expose an
+    // absolute directory path, so local Web mode deliberately asks for the
+    // server-side path instead of pretending a webkitdirectory upload is one.
+    const selected = window.hhtoolsDesktop?.selectDirectory
+      ? await window.hhtoolsDesktop.selectDirectory()
+      : window.prompt('输入服务器上的资源库目录', motionLibrarySettings.value.root)
+    const root = selected?.trim()
+    if (!root) return
+
+    motionLibrarySettingsSaving.value = true
+    motionLibrarySettings.value = await requestMotionLibrarySettings('PATCH', root)
+    motionLibrarySettingsSaved.value = true
+    await window.__hhApp?.refreshLibrary()
+    window.__hhApp?.toast(`资源库目录已切换：${motionLibrarySettings.value.root}`)
+  } catch (error) {
+    motionLibrarySettingsError.value = error instanceof Error ? error.message : String(error)
+    window.__hhApp?.toast(motionLibrarySettingsError.value, true)
+  } finally {
+    motionLibrarySettingsLoading.value = false
+    motionLibrarySettingsSaving.value = false
+  }
+}
+
 function openWorkspaceSettings(): void {
   settingsOpen.value = true
   void loadJobAdmission()
+  void loadMotionLibrarySettings()
 }
 
 function setActivePanel(panel: string): void {
@@ -245,6 +373,9 @@ onMounted(async () => {
   window.addEventListener('hhtools:import-command', handleImportCommand)
   document.addEventListener('click', closeMotionUploadInfo)
   document.addEventListener('keydown', handleMotionUploadInfoKeydown)
+  // Load capability metadata up front so the always-visible library control
+  // cannot advertise a write action on a read-only server connection.
+  void loadMotionLibrarySettings()
 
   try {
     // The renderer owns UI markup; the runtime modules own Three.js and long-running workflows.
@@ -505,16 +636,37 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <div class="card" id="tour-motion-library">
-          <h3>资源库 <span id="lib-count" style="color:var(--ink-tertiary);font-weight:500"></span></h3>
-          <p class="hint" id="lib-motions-hint" style="margin:0 0 8px"></p>
-          <div class="row" style="margin-bottom:8px">
-            <select class="search" id="lib-folder" style="flex:0 0 36%"><option value="">全部目录</option></select>
-            <input class="search" id="lib-search" placeholder="搜索（如 kick kungfu）" style="flex:1" />
-            <button type="button" class="btn secondary small" id="lib-link-path" title="链接服务器上的数据集目录">链接目录</button>
+        <!-- The library is a peer workspace, not another card nested under
+             Motion. Only its scrollable result list owns a visual frame. -->
+        <section class="motion-library" id="tour-motion-library" aria-labelledby="motion-library-title">
+          <h2 id="motion-library-title">
+            资源库 Library
+            <span class="motion-library-count" id="lib-count"></span>
+          </h2>
+          <button
+            type="button"
+            class="btn secondary small motion-library-root-button"
+            :disabled="motionLibrarySettingsLoading || motionLibrarySettingsSaving || motionLibrarySettings?.editable === false"
+            :title="motionLibraryRootButtonTitle()"
+            @click="chooseMotionLibraryRoot"
+          >{{ motionLibrarySettingsSaving ? '正在切换…' : '选择资源库目录' }}</button>
+
+          <div class="motion-library-filters" role="group" aria-label="按动作类型筛选资源库">
+            <button type="button" class="motion-library-filter" data-library-category="all" aria-pressed="true">全部</button>
+            <button type="button" class="motion-library-filter" data-library-category="motion" aria-pressed="false">纯动作</button>
+            <button type="button" class="motion-library-filter" data-library-category="object" aria-pressed="false">物体交互</button>
+            <button type="button" class="motion-library-filter" data-library-category="terrain" aria-pressed="false">地形场景</button>
           </div>
-          <div class="lib-list" id="lib-list"></div>
-        </div>
+
+          <div class="motion-library-tools">
+            <select class="search" id="lib-folder" aria-label="筛选资源库目录"><option value="">全部目录</option></select>
+            <input class="search" id="lib-search" aria-label="搜索资源库动作" placeholder="搜索动作……" />
+            <button type="button" class="btn secondary small" id="lib-link-path" title="把服务器上的外部数据集链接到当前资源库">链接目录</button>
+          </div>
+          <div class="motion-library-list-frame">
+            <div class="lib-list" id="lib-list"></div>
+          </div>
+        </section>
 
         <div class="card" id="motion-meta-card" style="display:none">
           <h3 id="motion-name">—</h3>
@@ -1133,12 +1285,19 @@ onBeforeUnmount(() => {
       :job-admission-error="jobAdmissionError"
       :job-admission-error-operation="jobAdmissionErrorOperation"
       :job-admission-saved="jobAdmissionSaved"
+      :motion-library="motionLibrarySettings"
+      :motion-library-loading="motionLibrarySettingsLoading"
+      :motion-library-saving="motionLibrarySettingsSaving"
+      :motion-library-error="motionLibrarySettingsError"
+      :motion-library-saved="motionLibrarySettingsSaved"
       @close="settingsOpen = false"
       @set-locale="setWorkspaceLocale"
       @set-hidden="panelLayout.setHidden"
       @reset="panelLayout.reset"
       @refresh-job-admission="loadJobAdmission"
       @save-job-admission="saveJobAdmission"
+      @refresh-motion-library="loadMotionLibrarySettings"
+      @select-motion-library-root="chooseMotionLibraryRoot"
     />
   </div>
 

@@ -4,6 +4,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type {
   JobAdmissionSettings,
   JobAdmissionSnapshot,
+  MotionLibrarySettingsSnapshot,
   WorkspaceLocale,
 } from '../runtime/types'
 
@@ -18,6 +19,11 @@ const props = defineProps<{
   jobAdmissionError: string | null
   jobAdmissionErrorOperation: 'load' | 'save' | null
   jobAdmissionSaved: boolean
+  motionLibrary: MotionLibrarySettingsSnapshot | null
+  motionLibraryLoading: boolean
+  motionLibrarySaving: boolean
+  motionLibraryError: string | null
+  motionLibrarySaved: boolean
 }>()
 
 const emit = defineEmits<{
@@ -27,6 +33,8 @@ const emit = defineEmits<{
   reset: []
   refreshJobAdmission: []
   saveJobAdmission: [settings: JobAdmissionSettings]
+  refreshMotionLibrary: []
+  selectMotionLibraryRoot: []
 }>()
 
 const maxRunningJobsDraft = ref('0')
@@ -83,6 +91,21 @@ const queuedLimitDormant = computed(() => (
   props.jobAdmission !== null && parsedMaxRunningJobs.value === 0
 ))
 
+type MotionLibraryReadOnlyKind = 'environment' | 'remote' | 'generic'
+
+const motionLibraryReadOnlyKind = computed<MotionLibraryReadOnlyKind>(() => {
+  const reason = props.motionLibrary?.readonly_reason?.trim().toLowerCase()
+  const source = props.motionLibrary?.source?.trim().toLowerCase()
+  if (
+    reason === 'environment_override'
+    || reason === 'environment'
+    || source === 'environment_override'
+    || source === 'environment'
+  ) return 'environment'
+  if (reason === 'remote' || reason === 'remote_client' || reason === 'non_loopback') return 'remote'
+  return 'generic'
+})
+
 const copy = computed(() => props.locale === 'zh-CN'
   ? {
       title: '工作区设置',
@@ -95,6 +118,17 @@ const copy = computed(() => props.locale === 'zh-CN'
       leftDetail: '保持工作区导航栏展开。',
       right: '右侧控制面板',
       rightDetail: '显示工作流控制与参数。',
+      librarySection: '动作资源库',
+      librarySectionDetail: '选择 hhtools 管理的资源库容器；保存后立即生效，原目录内容不会被移动。',
+      libraryRoot: '资源库目录',
+      librarySelect: '选择目录',
+      librarySelecting: '选择中…',
+      libraryLoading: '正在读取资源库设置…',
+      librarySaved: '资源库目录已切换，无需重启。',
+      libraryReadOnly: '服务端已将资源库目录设为只读。请检查服务器启动配置或连接权限。',
+      libraryReadOnlyRemote: '当前为远程只读连接。请在服务器本机、Electron，或 SSH 本地回环隧道中修改目录。',
+      libraryReadOnlyEnvironment: '当前目录由 HHTOOLS_MOTION_LIBRARY_ROOT 管理。请修改或移除该环境变量，然后重启服务。',
+      libraryRetry: '重新读取',
       jobsSection: '后台任务调度',
       jobsSectionDetail: '本机 Web/Electron（或 SSH 本地回环隧道）保存后立即生效，不会中断正在运行的任务，也无需重启。',
       running: '最大并发任务数',
@@ -124,6 +158,17 @@ const copy = computed(() => props.locale === 'zh-CN'
       leftDetail: 'Keep the workspace navigation expanded.',
       right: 'Right inspector',
       rightDetail: 'Show workflow controls and parameters.',
+      librarySection: 'Motion library',
+      librarySectionDetail: 'Choose the hhtools-managed library container. Changes apply immediately; existing files are not moved.',
+      libraryRoot: 'Library directory',
+      librarySelect: 'Choose directory',
+      librarySelecting: 'Choosing…',
+      libraryLoading: 'Loading motion-library settings…',
+      librarySaved: 'Library directory changed. No restart is required.',
+      libraryReadOnly: 'The server has made this directory read-only. Check the server launch configuration or connection permissions.',
+      libraryReadOnlyRemote: 'This remote connection is read-only. Change the directory on the server, in Electron, or through an SSH loopback tunnel.',
+      libraryReadOnlyEnvironment: 'This directory is managed by HHTOOLS_MOTION_LIBRARY_ROOT. Change or remove that environment variable, then restart the service.',
+      libraryRetry: 'Reload',
       jobsSection: 'Background-job scheduling',
       jobsSectionDetail: 'Local Web/Electron (or an SSH loopback tunnel) applies saved limits immediately without interrupting active jobs; no restart is required.',
       running: 'Maximum running jobs',
@@ -142,6 +187,12 @@ const copy = computed(() => props.locale === 'zh-CN'
       reset: '↺ Reset layout',
       done: 'Done',
     })
+
+const motionLibraryReadOnlyCopy = computed(() => {
+  if (motionLibraryReadOnlyKind.value === 'environment') return copy.value.libraryReadOnlyEnvironment
+  if (motionLibraryReadOnlyKind.value === 'remote') return copy.value.libraryReadOnlyRemote
+  return copy.value.libraryReadOnly
+})
 
 function saveJobAdmission(): void {
   if (!canSaveJobAdmission.value) return
@@ -201,6 +252,35 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleKeydown))
             </span>
             <input type="checkbox" :checked="!inspectorHidden" @change="emit('setHidden', 'inspector', !($event.target as HTMLInputElement).checked)" />
           </label>
+
+          <div class="workspace-settings-section-head workspace-settings-library-head">
+            <span>{{ copy.librarySection }}</span>
+            <small>{{ copy.librarySectionDetail }}</small>
+          </div>
+          <div class="workspace-setting-row workspace-library-setting-row">
+            <span>
+              <strong>{{ copy.libraryRoot }}</strong>
+              <code class="workspace-library-root" :title="motionLibrary?.root || undefined">{{ motionLibrary?.root || '—' }}</code>
+            </span>
+            <button
+              type="button"
+              class="workspace-library-select"
+              :disabled="motionLibraryLoading || motionLibrarySaving || motionLibrary === null || motionLibrary.editable !== true"
+              @click="emit('selectMotionLibraryRoot')"
+            >{{ motionLibrarySaving ? copy.librarySelecting : copy.librarySelect }}</button>
+          </div>
+          <p v-if="motionLibrary && motionLibrary.editable !== true" class="workspace-settings-note">{{ motionLibraryReadOnlyCopy }}</p>
+          <p v-if="motionLibraryLoading" class="workspace-settings-message" role="status">{{ copy.libraryLoading }}</p>
+          <div v-else-if="motionLibraryError" class="workspace-settings-message error" role="alert">
+            <span>{{ motionLibraryError }}</span>
+            <button
+              type="button"
+              class="workspace-settings-retry"
+              :disabled="motionLibrarySaving"
+              @click="emit('refreshMotionLibrary')"
+            >{{ copy.libraryRetry }}</button>
+          </div>
+          <p v-else-if="motionLibrarySaved" class="workspace-settings-message success" role="status">{{ copy.librarySaved }}</p>
 
           <div class="workspace-settings-section-head workspace-settings-jobs-head">
             <span>{{ copy.jobsSection }}</span>

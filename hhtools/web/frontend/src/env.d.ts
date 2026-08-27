@@ -175,6 +175,7 @@ declare global {
     hhtoolsDesktop?: {
       getRuntimeState: () => Promise<unknown>
       restartBackend: () => Promise<unknown>
+      selectDirectory: () => Promise<string | null>
       openExternal: (url: string) => Promise<void>
       onRuntimeStateChanged: (listener: (state: unknown) => void) => () => void
     }
