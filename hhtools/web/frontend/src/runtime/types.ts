@@ -594,9 +594,23 @@ export interface JobResponse {
   can_download?: boolean
 }
 
+export interface JobAdmissionSettings {
+  max_running_jobs: number
+  max_queued_jobs: number
+}
+
+export interface JobAdmissionSnapshot extends JobAdmissionSettings {
+  running_jobs: number
+  queued_jobs: number
+  reserved_jobs: number
+  /** Whether this client satisfies the backend's local-admin boundary. */
+  editable?: boolean
+}
+
 export interface HealthResponse {
   ok: boolean
   ui_build?: string
+  job_scheduler?: JobAdmissionSnapshot
   source_root?: string
   save_dir?: string
   motions_library_root?: string
@@ -731,6 +745,7 @@ export interface BasicResponse {
 
 export type ApiGetResponse<Url extends string> =
   Url extends '/api/health' ? HealthResponse
+    : Url extends '/api/settings/job-admission' ? JobAdmissionSnapshot
     : Url extends '/api/library' ? LibraryResponse
       : Url extends '/api/robots' ? RobotsResponse
         : Url extends '/api/calibration/references' ? { references: string[] }

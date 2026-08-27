@@ -32,16 +32,16 @@ def launch(
     ),
     host: str = typer.Option("127.0.0.1", "--host"),
     port: int = typer.Option(8009, "--port"),
-    max_running_jobs: int = typer.Option(
-        0,
+    max_running_jobs: int | None = typer.Option(
+        None,
         "--max-running-jobs",
         min=0,
         envvar="HHTOOLS_MAX_RUNNING_JOBS",
         show_envvar=True,
-        help="Concurrent background jobs; 0 keeps the default unlimited mode.",
+        help="Concurrent background jobs; 0 selects unlimited mode.",
     ),
-    max_queued_jobs: int = typer.Option(
-        0,
+    max_queued_jobs: int | None = typer.Option(
+        None,
         "--max-queued-jobs",
         min=0,
         envvar="HHTOOLS_MAX_QUEUED_JOBS",

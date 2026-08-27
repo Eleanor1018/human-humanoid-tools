@@ -211,3 +211,141 @@ def test_thread_start_failure_cancellation_is_part_of_shutdown(
 
     release_cancel.set()
     assert scheduler.shutdown(wait=True, timeout=1.0)
+
+
+def test_reconfigure_higher_running_limit_promotes_fifo_immediately() -> None:
+    scheduler = JobScheduler(max_running_jobs=1, max_queued_jobs=3)
+    releases = [threading.Event() for _ in range(3)]
+    started: list[int] = []
+    lock = threading.Lock()
+
+    def run(index: int) -> None:
+        with lock:
+            started.append(index)
+        releases[index].wait(timeout=2.0)
+
+    for index in range(3):
+        scheduler.submit(partial(run, index))
+    _wait_until(lambda: started == [0])
+
+    snapshot = scheduler.reconfigure(max_running_jobs=2, max_queued_jobs=3)
+
+    _wait_until(lambda: started == [0, 1])
+    assert snapshot.max_running_jobs == 2
+    assert scheduler.snapshot().queued_jobs == 1
+    for release in releases:
+        release.set()
+    assert scheduler.shutdown(wait=True, timeout=2.0)
+
+
+def test_reconfigure_lower_limit_grandfathers_running_jobs() -> None:
+    scheduler = JobScheduler(max_running_jobs=3, max_queued_jobs=2)
+    releases = [threading.Event() for _ in range(4)]
+    started: list[int] = []
+    lock = threading.Lock()
+
+    def run(index: int) -> None:
+        with lock:
+            started.append(index)
+        releases[index].wait(timeout=2.0)
+
+    for index in range(4):
+        scheduler.submit(partial(run, index))
+    _wait_until(lambda: started == [0, 1, 2])
+
+    scheduler.reconfigure(max_running_jobs=1, max_queued_jobs=2)
+    releases[0].set()
+    _wait_until(lambda: scheduler.snapshot().running_jobs == 2)
+    assert started == [0, 1, 2]
+    releases[1].set()
+    _wait_until(lambda: scheduler.snapshot().running_jobs == 1)
+    assert started == [0, 1, 2]
+    releases[2].set()
+    _wait_until(lambda: started == [0, 1, 2, 3])
+    releases[3].set()
+    assert scheduler.shutdown(wait=True, timeout=2.0)
+
+
+def test_reconfigure_unlimited_starts_every_waiting_job() -> None:
+    scheduler = JobScheduler(max_running_jobs=1, max_queued_jobs=3)
+    release = threading.Event()
+    started = 0
+    lock = threading.Lock()
+
+    def run() -> None:
+        nonlocal started
+        with lock:
+            started += 1
+        release.wait(timeout=2.0)
+
+    for _ in range(4):
+        scheduler.submit(run)
+    _wait_until(lambda: started == 1)
+
+    scheduler.reconfigure(max_running_jobs=0, max_queued_jobs=1)
+
+    _wait_until(lambda: started == 4)
+    assert scheduler.snapshot().queued_jobs == 0
+    release.set()
+    assert scheduler.shutdown(wait=True, timeout=2.0)
+
+
+def test_reconfigure_smaller_queue_keeps_admitted_waiters() -> None:
+    scheduler = JobScheduler(max_running_jobs=1, max_queued_jobs=3)
+    release = threading.Event()
+    scheduler.submit(lambda: release.wait(timeout=2.0))
+    for _ in range(3):
+        scheduler.submit(lambda: None)
+    _wait_until(lambda: scheduler.snapshot().queued_jobs == 3)
+
+    scheduler.reconfigure(max_running_jobs=1, max_queued_jobs=1)
+
+    assert scheduler.snapshot().queued_jobs == 3
+    with pytest.raises(JobQueueFullError, match="waiting limit: 1"):
+        scheduler.reserve()
+    release.set()
+    assert scheduler.shutdown(wait=True, timeout=2.0)
+
+
+def test_reconfigure_does_not_start_a_promoted_call_after_shutdown(
+    monkeypatch,
+) -> None:
+    scheduler = JobScheduler(max_running_jobs=1, max_queued_jobs=1)
+    release_running = threading.Event()
+    promotion_claimed = threading.Event()
+    allow_start = threading.Event()
+    promoted_ran = threading.Event()
+    promoted_cancelled = threading.Event()
+
+    scheduler.submit(lambda: release_running.wait(timeout=2.0))
+    scheduler.submit(
+        promoted_ran.set,
+        on_cancel=lambda _reason: promoted_cancelled.set(),
+    )
+    _wait_until(lambda: scheduler.snapshot().queued_jobs == 1)
+
+    original_start = scheduler._start
+
+    def gated_start(call, *, propagate_failure: bool) -> None:
+        promotion_claimed.set()
+        allow_start.wait(timeout=2.0)
+        original_start(call, propagate_failure=propagate_failure)
+
+    monkeypatch.setattr(scheduler, "_start", gated_start)
+    reconfigure_thread = threading.Thread(
+        target=lambda: scheduler.reconfigure(
+            max_running_jobs=2,
+            max_queued_jobs=1,
+        ),
+    )
+    reconfigure_thread.start()
+    assert promotion_claimed.wait(timeout=1.0)
+
+    assert not scheduler.shutdown(wait=False)
+    allow_start.set()
+    reconfigure_thread.join(timeout=1.0)
+
+    assert promoted_cancelled.wait(timeout=1.0)
+    assert not promoted_ran.is_set()
+    release_running.set()
+    assert scheduler.shutdown(wait=True, timeout=2.0)

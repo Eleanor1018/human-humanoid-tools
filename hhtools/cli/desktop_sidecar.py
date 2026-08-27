@@ -25,14 +25,14 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--max-running-jobs",
         type=_non_negative_int,
-        default=os.environ.get("HHTOOLS_MAX_RUNNING_JOBS", "0"),
-        help="Concurrent jobs; 0 means unlimited (default).",
+        default=os.environ.get("HHTOOLS_MAX_RUNNING_JOBS"),
+        help="Concurrent jobs; 0 means unlimited.",
     )
     parser.add_argument(
         "--max-queued-jobs",
         type=_non_negative_int,
-        default=os.environ.get("HHTOOLS_MAX_QUEUED_JOBS", "0"),
-        help="Waiting jobs under a concurrency cap; 0 means unlimited (default).",
+        default=os.environ.get("HHTOOLS_MAX_QUEUED_JOBS"),
+        help="Waiting jobs under a concurrency cap; 0 means unlimited.",
     )
     return parser
 

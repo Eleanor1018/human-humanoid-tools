@@ -29,6 +29,7 @@ test('loads the existing WebUI and shuts down its Python sidecar', async ({}, te
     env: {
       ...process.env,
       HHTOOLS_REPO_ROOT: repositoryRoot,
+      HHTOOLS_WEB_SETTINGS_PATH: testInfo.outputPath('web-settings.json'),
       ELECTRON_DISABLE_SECURITY_WARNINGS: 'true'
     }
   })
@@ -140,8 +141,28 @@ test('loads the existing WebUI and shuts down its Python sidecar', async ({}, te
     await page.locator('.desktop-menu-item', { hasText: 'Settings' }).click()
     const settings = page.locator('.workspace-settings-dialog')
     await expect(settings).toBeVisible()
-    await expect(settings.locator('.workspace-setting-row')).toHaveCount(3)
+    await expect(settings.locator('.workspace-setting-row')).toHaveCount(5)
     await expect(settings.locator('.workspace-language-select')).toHaveValue('en')
+    const stateBeforeSettingsSave = await page.evaluate(() =>
+      (window.hhtoolsDesktop as HHToolsDesktopApi).getRuntimeState()
+    )
+    await expect(settings.locator('.workspace-max-running-jobs')).toBeEnabled()
+    await settings.locator('.workspace-max-running-jobs').fill('2')
+    await settings.locator('.workspace-max-queued-jobs').fill('32')
+    await settings.locator('.workspace-settings-save').click()
+    await expect(settings.getByText('Saved and applied immediately. No restart is required.')).toBeVisible()
+    const appliedSettings = await page.evaluate(async () => {
+      const [runtimeState, response] = await Promise.all([
+        (window.hhtoolsDesktop as HHToolsDesktopApi).getRuntimeState(),
+        fetch('/api/settings/job-admission'),
+      ])
+      return { runtimeState, scheduler: await response.json() }
+    })
+    expect(appliedSettings.runtimeState.backendPid).toBe(stateBeforeSettingsSave.backendPid)
+    expect(appliedSettings.scheduler).toMatchObject({
+      max_running_jobs: 2,
+      max_queued_jobs: 32,
+    })
     await settings.locator('.workspace-language-select').selectOption('zh-CN')
     await expect(page.locator('#sidebar .side-panel-title')).toHaveText('导航')
     await settings.locator('.workspace-language-select').selectOption('en')
@@ -150,6 +171,12 @@ test('loads the existing WebUI and shuts down its Python sidecar', async ({}, te
     await settings.locator('.workspace-settings-reset').click()
     await settings.locator('.workspace-settings-done').click()
     await expect(settings).toBeHidden()
+
+    await page.locator('[data-menu-trigger="settings"]').click()
+    await page.locator('.desktop-menu-item', { hasText: 'Settings' }).click()
+    await expect(settings.locator('.workspace-max-running-jobs')).toHaveValue('2')
+    await expect(settings.locator('.workspace-max-queued-jobs')).toHaveValue('32')
+    await settings.locator('.workspace-settings-done').click()
 
     await page.locator('[data-menu-trigger="settings"]').click()
     await page.locator('.desktop-menu-item', { hasText: 'Dark Mode' }).click()

@@ -11,7 +11,13 @@ import ResultEvaluationPanel from './components/ResultEvaluationPanel.vue'
 import SidebarNavigation from './components/SidebarNavigation.vue'
 import WorkflowPipeline from './components/WorkflowPipeline.vue'
 import WorkspaceSettingsDialog from './components/WorkspaceSettingsDialog.vue'
-import type { ImportCommandTarget, WorkspacePanelId, WorkspaceTheme } from './runtime/types'
+import type {
+  ImportCommandTarget,
+  JobAdmissionSettings,
+  JobAdmissionSnapshot,
+  WorkspacePanelId,
+  WorkspaceTheme,
+} from './runtime/types'
 import {
   loadWorkspacePreferences,
   updateWorkspacePreferences,
@@ -24,6 +30,12 @@ const activePanel = ref<WorkspacePanelId>(initialWorkspacePreferences.activePane
 const workspaceLocale = ref(initialWorkspacePreferences.locale)
 const workspaceTheme = ref<WorkspaceTheme>(initialWorkspacePreferences.theme)
 const settingsOpen = ref(false)
+const jobAdmission = ref<JobAdmissionSnapshot | null>(null)
+const jobAdmissionLoading = ref(false)
+const jobAdmissionSaving = ref(false)
+const jobAdmissionError = ref<string | null>(null)
+const jobAdmissionErrorOperation = ref<'load' | 'save' | null>(null)
+const jobAdmissionSaved = ref(false)
 
 document.documentElement.lang = workspaceLocale.value
 document.documentElement.dataset.theme = workspaceTheme.value
@@ -46,6 +58,101 @@ function setWorkspaceTheme(theme: WorkspaceTheme): void {
 
 function toggleWorkspaceTheme(): void {
   setWorkspaceTheme(workspaceTheme.value === 'light' ? 'dark' : 'light')
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+}
+
+function parseJobAdmissionSnapshot(value: unknown): JobAdmissionSnapshot {
+  if (value === null || typeof value !== 'object') {
+    throw new Error('Invalid job-admission response')
+  }
+  const candidate = value as Partial<JobAdmissionSnapshot>
+  for (const key of [
+    'max_running_jobs',
+    'max_queued_jobs',
+    'running_jobs',
+    'queued_jobs',
+    'reserved_jobs',
+  ] as const) {
+    if (!isNonNegativeInteger(candidate[key])) {
+      throw new Error(`Invalid job-admission field: ${key}`)
+    }
+  }
+  if (typeof candidate.editable !== 'boolean') {
+    throw new Error('Invalid job-admission field: editable')
+  }
+  return candidate as JobAdmissionSnapshot
+}
+
+async function jobAdmissionHttpError(response: Response): Promise<Error> {
+  let detail: unknown
+  try {
+    detail = (await response.json() as { detail?: unknown }).detail
+  } catch {
+    detail = null
+  }
+  if (typeof detail === 'string' && detail) return new Error(detail)
+  if (detail && typeof detail === 'object' && 'msg' in detail) {
+    return new Error(String((detail as { msg: unknown }).msg))
+  }
+  return new Error(`${response.status} ${response.statusText}`)
+}
+
+async function requestJobAdmission(
+  method: 'GET' | 'PATCH',
+  settings?: JobAdmissionSettings,
+): Promise<JobAdmissionSnapshot> {
+  const response = await fetch('/api/settings/job-admission', {
+    method,
+    headers: method === 'PATCH' ? { 'Content-Type': 'application/json' } : undefined,
+    body: method === 'PATCH' ? JSON.stringify(settings) : undefined,
+  })
+  if (!response.ok) throw await jobAdmissionHttpError(response)
+  return parseJobAdmissionSnapshot(await response.json())
+}
+
+async function loadJobAdmission(): Promise<void> {
+  if (jobAdmissionLoading.value || jobAdmissionSaving.value) return
+  jobAdmissionLoading.value = true
+  jobAdmissionError.value = null
+  jobAdmissionErrorOperation.value = null
+  jobAdmissionSaved.value = false
+  try {
+    jobAdmission.value = await requestJobAdmission('GET')
+  } catch (error) {
+    jobAdmissionError.value = error instanceof Error ? error.message : String(error)
+    jobAdmissionErrorOperation.value = 'load'
+  } finally {
+    jobAdmissionLoading.value = false
+  }
+}
+
+async function saveJobAdmission(settings: JobAdmissionSettings): Promise<void> {
+  // The dialog also disables its button, but this guard protects against fast
+  // double clicks and programmatic duplicate events reaching the HTTP boundary.
+  if (jobAdmissionSaving.value || jobAdmissionLoading.value) return
+  jobAdmissionSaving.value = true
+  jobAdmissionError.value = null
+  jobAdmissionErrorOperation.value = null
+  jobAdmissionSaved.value = false
+  try {
+    jobAdmission.value = await requestJobAdmission('PATCH', settings)
+    jobAdmissionSaved.value = true
+  } catch (error) {
+    // Keep the last effective snapshot; the dialog owns its draft values, so a
+    // failed save can be corrected and retried without losing either input.
+    jobAdmissionError.value = error instanceof Error ? error.message : String(error)
+    jobAdmissionErrorOperation.value = 'save'
+  } finally {
+    jobAdmissionSaving.value = false
+  }
+}
+
+function openWorkspaceSettings(): void {
+  settingsOpen.value = true
+  void loadJobAdmission()
 }
 
 function setActivePanel(panel: string): void {
@@ -141,7 +248,7 @@ onBeforeUnmount(() => {
         :active-panel="activePanel"
         :locale="workspaceLocale"
         :theme="workspaceTheme"
-        @open-settings="settingsOpen = true"
+        @open-settings="openWorkspaceSettings"
         @toggle-theme="toggleWorkspaceTheme"
       />
       <div class="spacer"></div>
@@ -150,7 +257,7 @@ onBeforeUnmount(() => {
         :locale="workspaceLocale"
         :theme="workspaceTheme"
         application-mode
-        @open-settings="settingsOpen = true"
+        @open-settings="openWorkspaceSettings"
         @toggle-theme="toggleWorkspaceTheme"
       />
       <span v-show="false" class="pill" id="motion-pill">未加载动作</span>
@@ -930,10 +1037,18 @@ onBeforeUnmount(() => {
       :locale="workspaceLocale"
       :sidebar-hidden="panelLayout.state.sidebarHidden"
       :inspector-hidden="panelLayout.state.inspectorHidden"
+      :job-admission="jobAdmission"
+      :job-admission-loading="jobAdmissionLoading"
+      :job-admission-saving="jobAdmissionSaving"
+      :job-admission-error="jobAdmissionError"
+      :job-admission-error-operation="jobAdmissionErrorOperation"
+      :job-admission-saved="jobAdmissionSaved"
       @close="settingsOpen = false"
       @set-locale="setWorkspaceLocale"
       @set-hidden="panelLayout.setHidden"
       @reset="panelLayout.reset"
+      @refresh-job-admission="loadJobAdmission"
+      @save-job-admission="saveJobAdmission"
     />
   </div>
 

@@ -9,15 +9,15 @@ from hhtools.cli import desktop_sidecar, web
 from hhtools.web import server
 
 
-def test_web_cli_defaults_to_unlimited_job_settings(monkeypatch) -> None:
+def test_web_cli_defers_default_job_settings_to_persistent_backend_config(monkeypatch) -> None:
     captured: dict = {}
     monkeypatch.setattr(server, "run_web", lambda **kwargs: captured.update(kwargs))
 
     result = CliRunner().invoke(web.app, [])
 
     assert result.exit_code == 0, result.output
-    assert captured["max_running_jobs"] == 0
-    assert captured["max_queued_jobs"] == 0
+    assert captured["max_running_jobs"] is None
+    assert captured["max_queued_jobs"] is None
 
 
 def test_web_cli_reads_env_and_explicit_options_override_it(monkeypatch) -> None:

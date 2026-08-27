@@ -1175,7 +1175,7 @@ button { font-family: inherit; cursor: pointer; }
 
 .workspace-shell .panel-restore-btn.right { top: 48px; }
 
-/* Workspace settings stay limited to shell language and panel layout. */
+/* Shared workspace and backend job-admission settings. */
 .workspace-settings-backdrop {
   position: fixed;
   z-index: 1100;
@@ -1188,7 +1188,10 @@ button { font-family: inherit; cursor: pointer; }
   -webkit-backdrop-filter: blur(5px);
 }
 .workspace-settings-dialog {
-  width: min(480px, 100%);
+  width: min(560px, 100%);
+  max-height: min(760px, calc(100vh - 40px));
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
   border: 1px solid var(--hairline);
   border-radius: 8px;
@@ -1219,7 +1222,29 @@ button { font-family: inherit; cursor: pointer; }
   font-size: 20px;
 }
 .workspace-settings-close:hover { background: var(--accent-soft); color: var(--ink); }
-.workspace-settings-body { padding: 4px 20px; }
+.workspace-settings-body { padding: 4px 20px 14px; overflow-y: auto; }
+.workspace-settings-section-head {
+  padding: 14px 0 6px;
+  color: var(--ink-tertiary);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.workspace-settings-jobs-head {
+  display: grid;
+  gap: 4px;
+  margin-top: 6px;
+  border-top: 1px solid var(--hairline);
+}
+.workspace-settings-jobs-head small {
+  color: var(--ink-secondary);
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: normal;
+  line-height: 1.45;
+  text-transform: none;
+}
 .workspace-setting-row {
   min-height: 68px;
   display: flex;
@@ -1232,11 +1257,29 @@ button { font-family: inherit; cursor: pointer; }
 .workspace-setting-row > span { display: grid; gap: 3px; }
 .workspace-setting-row strong { font-size: 13px; }
 .workspace-setting-row small { color: var(--ink-secondary); font-size: 11px; }
-.workspace-setting-row input {
+.workspace-setting-row input[type="checkbox"] {
   width: 17px;
   height: 17px;
   accent-color: var(--accent);
 }
+.workspace-number-input {
+  width: 112px;
+  height: 32px;
+  flex: 0 0 auto;
+  padding: 0 8px;
+  border: 1px solid var(--hairline);
+  border-radius: 5px;
+  background: var(--panel-solid);
+  color: var(--ink);
+  font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  text-align: right;
+}
+.workspace-number-input:focus-visible {
+  outline: 2px solid var(--accent-soft);
+  border-color: var(--accent);
+}
+.workspace-number-input[aria-invalid="true"] { border-color: var(--red); }
+.workspace-number-input:disabled { opacity: 0.55; cursor: wait; }
 .workspace-language-select {
   min-width: 132px;
   height: 32px;
@@ -1251,6 +1294,40 @@ button { font-family: inherit; cursor: pointer; }
   outline: 2px solid var(--accent-soft);
   border-color: var(--accent);
 }
+.workspace-settings-note,
+.workspace-settings-message {
+  margin-top: 8px;
+  color: var(--ink-secondary);
+  font-size: 11px;
+  line-height: 1.45;
+}
+.workspace-settings-note {
+  padding: 8px 10px;
+  border-radius: 5px;
+  background: var(--accent-soft);
+}
+.workspace-settings-message {
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: 5px;
+  background: var(--panel);
+}
+.workspace-settings-message.error { border-color: color-mix(in srgb, var(--red) 38%, var(--hairline)); color: var(--red); }
+.workspace-settings-message.success { border-color: color-mix(in srgb, var(--green) 38%, var(--hairline)); color: var(--green); }
+.workspace-settings-retry {
+  flex: 0 0 auto;
+  border: 0;
+  background: transparent;
+  color: currentColor;
+  font-size: 11px;
+  font-weight: 700;
+  text-decoration: underline;
+}
 .workspace-settings-actions {
   display: flex;
   justify-content: space-between;
@@ -1258,6 +1335,7 @@ button { font-family: inherit; cursor: pointer; }
   padding: 14px 20px;
   border-top: 1px solid var(--hairline);
 }
+.workspace-settings-primary-actions { display: flex; gap: 8px; }
 .workspace-settings-actions button {
   min-height: 32px;
   padding: 0 12px;
@@ -1270,6 +1348,12 @@ button { font-family: inherit; cursor: pointer; }
   background: var(--panel);
   color: var(--ink-secondary);
 }
+.workspace-settings-save {
+  border: 1px solid var(--accent);
+  background: var(--panel-solid);
+  color: var(--accent);
+}
+.workspace-settings-save:disabled { opacity: 0.45; cursor: not-allowed; }
 .workspace-settings-done {
   border: 1px solid var(--accent);
   background: var(--accent);

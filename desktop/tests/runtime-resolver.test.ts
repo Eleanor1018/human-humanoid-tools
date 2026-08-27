@@ -41,6 +41,7 @@ describe('resolveRuntime', () => {
       CUDA_PATH: 'C:\\cuda',
       HHTOOLS_MAX_RUNNING_JOBS: '2',
       HHTOOLS_MAX_QUEUED_JOBS: '32',
+      HHTOOLS_WEB_SETTINGS_PATH: 'C:\\config\\web-settings.json',
       HHTOOLS_ARBITRARY_SECRET: 'do-not-copy-either'
     })
 
@@ -48,6 +49,7 @@ describe('resolveRuntime', () => {
     expect(environment.CUDA_PATH).toBe('C:\\cuda')
     expect(environment.HHTOOLS_MAX_RUNNING_JOBS).toBe('2')
     expect(environment.HHTOOLS_MAX_QUEUED_JOBS).toBe('32')
+    expect(environment.HHTOOLS_WEB_SETTINGS_PATH).toBe('C:\\config\\web-settings.json')
     expect(environment.HHTOOLS_ARBITRARY_SECRET).toBeUndefined()
     expect(environment.AWS_SECRET_ACCESS_KEY).toBeUndefined()
     expect(environment.PYTHONUTF8).toBe('1')

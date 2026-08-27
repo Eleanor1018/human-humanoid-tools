@@ -64,6 +64,11 @@ uv run hhtools web --max-running-jobs 1 --max-queued-jobs 32
 
 两个参数的 `0` 都表示不限；只有运行并发为正数时，等待队列设置才生效。也可以使用
 `HHTOOLS_MAX_RUNNING_JOBS` 和 `HHTOOLS_MAX_QUEUED_JOBS` 环境变量，Electron sidecar 同样支持。
+也可以从本机 Web/Electron 或 SSH 本地回环隧道，在 **设置 → 后台任务调度** 中直接修改；
+在未实现远程管理鉴权前，普通远程浏览器会显示为只读。保存会热更新调度器，无需重启 Python 或
+Electron：降低并发不会中断正在运行的任务，提高上限会立即按 FIFO 补跑等待任务。后端会将
+配置写入平台用户配置目录，也可用 `HHTOOLS_WEB_SETTINGS_PATH` 指定文件。显式 CLI/环境变量
+仍是启动覆盖项，只要保留这些覆盖项，下次启动时就会再次覆盖 GUI 保存值。
 该上限只约束调度器管理的 Web Job，不包含选择机器人时可选的 Warp/Newton 预热线程，
 因此它是任务准入控制，并非整个进程的严格 GPU 并发上限。
 

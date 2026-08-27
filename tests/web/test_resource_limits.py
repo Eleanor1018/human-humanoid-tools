@@ -189,6 +189,134 @@ def test_zero_job_limits_enable_unlimited_defaults(tmp_path: Path, monkeypatch) 
     assert snapshot.max_queued_jobs == 0
 
 
+def test_job_admission_settings_patch_applies_without_restart_and_persists(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    settings_path = tmp_path / "settings" / "web-settings.json"
+    app = _create_test_app(
+        tmp_path,
+        monkeypatch,
+        max_running_jobs=0,
+        max_queued_jobs=0,
+        job_settings_path=settings_path,
+    )
+    scheduler_identity = id(app.state.job_scheduler)
+
+    with TestClient(
+        app,
+        base_url="http://127.0.0.1",
+        client=("127.0.0.1", 50000),
+    ) as client:
+        before = client.get("/api/settings/job-admission")
+        response = client.patch(
+            "/api/settings/job-admission",
+            json={"max_running_jobs": 2, "max_queued_jobs": 32},
+        )
+        health = client.get("/api/health")
+
+    assert before.status_code == 200
+    assert before.json()["max_running_jobs"] == 0
+    assert before.json()["editable"] is True
+    assert response.status_code == 200
+    assert response.json()["max_running_jobs"] == 2
+    assert response.json()["max_queued_jobs"] == 32
+    assert health.json()["job_scheduler"]["max_running_jobs"] == 2
+    assert id(app.state.job_scheduler) == scheduler_identity
+    assert app.state.job_settings_store.load().as_payload() == {
+        "max_running_jobs": 2,
+        "max_queued_jobs": 32,
+    }
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"max_running_jobs": -1},
+        {"max_running_jobs": 1.5},
+        {"max_running_jobs": True},
+        {"max_queued_jobs": "32"},
+        {"unexpected": 1},
+    ],
+)
+def test_job_admission_settings_reject_invalid_updates(
+    tmp_path: Path,
+    monkeypatch,
+    payload: dict,
+) -> None:
+    app = _create_test_app(
+        tmp_path,
+        monkeypatch,
+        max_running_jobs=1,
+        max_queued_jobs=8,
+        job_settings_path=tmp_path / "web-settings.json",
+    )
+
+    with TestClient(
+        app,
+        base_url="http://127.0.0.1",
+        client=("127.0.0.1", 50000),
+    ) as client:
+        response = client.patch("/api/settings/job-admission", json=payload)
+
+    assert response.status_code == 422
+    snapshot = app.state.job_scheduler.snapshot()
+    assert snapshot.max_running_jobs == 1
+    assert snapshot.max_queued_jobs == 8
+
+
+def test_job_admission_settings_reject_non_loopback_mutation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    app = _create_test_app(
+        tmp_path,
+        monkeypatch,
+        job_settings_path=tmp_path / "web-settings.json",
+    )
+
+    with TestClient(
+        app,
+        base_url="http://127.0.0.1",
+        client=("192.0.2.10", 50000),
+    ) as client:
+        settings = client.get("/api/settings/job-admission")
+        response = client.patch(
+            "/api/settings/job-admission",
+            json={"max_running_jobs": 1, "max_queued_jobs": 8},
+        )
+
+    assert settings.status_code == 200
+    assert settings.json()["editable"] is False
+    assert response.status_code == 403
+    assert not (tmp_path / "web-settings.json").exists()
+
+
+def test_job_admission_settings_reject_dns_rebinding_host(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    app = _create_test_app(
+        tmp_path,
+        monkeypatch,
+        job_settings_path=tmp_path / "web-settings.json",
+    )
+
+    with TestClient(
+        app,
+        base_url="http://attacker.example",
+        client=("127.0.0.1", 50000),
+    ) as client:
+        response = client.patch(
+            "/api/settings/job-admission",
+            json={"max_running_jobs": 1, "max_queued_jobs": 8},
+        )
+
+    assert response.status_code == 403
+    assert not (tmp_path / "web-settings.json").exists()
+
+
 def test_full_queue_rejects_motion_before_upload_or_library_write(
     tmp_path: Path,
     monkeypatch,

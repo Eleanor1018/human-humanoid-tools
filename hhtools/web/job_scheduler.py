@@ -139,6 +139,50 @@ class JobScheduler:
                 closed=self._closed,
             )
 
+    def reconfigure(
+        self,
+        *,
+        max_running_jobs: int,
+        max_queued_jobs: int,
+    ) -> SchedulerSnapshot:
+        """Apply new admission limits without interrupting active work.
+
+        Lowering the running limit grandfathers calls that already hold a slot;
+        later completions stop promoting queued work until the new limit has
+        room.  Raising the limit (or switching to unlimited mode) promotes the
+        oldest waiting calls immediately.  A smaller queue limit never cancels
+        work that was already admitted; it only affects future reservations.
+        """
+
+        running_limit = int(max_running_jobs)
+        queued_limit = int(max_queued_jobs)
+        if running_limit < 0 or queued_limit < 0:
+            raise ValueError("job scheduler limits must be non-negative")
+
+        promoted: list[_ScheduledCall] = []
+        with self._condition:
+            if self._closed:
+                raise JobSchedulerClosedError("job scheduler is shutting down")
+            self.max_running_jobs = running_limit
+            self.max_queued_jobs = queued_limit
+
+            available = (
+                len(self._pending)
+                if running_limit == 0
+                else max(0, running_limit - self._running)
+            )
+            for _ in range(min(available, len(self._pending))):
+                promoted.append(self._pending.popleft())
+                self._running += 1
+            self._condition.notify_all()
+
+        # Starting threads outside the scheduler lock keeps submit/snapshot
+        # responsive.  The slots are already counted, so concurrent completions
+        # cannot over-promote beyond the new limit.
+        for call in promoted:
+            self._start(call, propagate_failure=False)
+        return self.snapshot()
+
     def shutdown(
         self,
         *,
@@ -228,42 +272,68 @@ class JobScheduler:
                 name="hhtools-web-job",
                 daemon=True,
             )
+            start_error: BaseException | None = None
+            cancelled_by_shutdown = False
             with self._condition:
-                self._threads.add(thread)
-            try:
-                thread.start()
-            except BaseException as err:
-                if first_error is None:
-                    first_error = err
-                with self._condition:
-                    self._threads.discard(thread)
+                if self._closed:
+                    # A call can be claimed for immediate or promoted execution
+                    # just before shutdown closes admission.  Return its slot and
+                    # cancel it instead of starting new work after that boundary.
                     self._running -= 1
-                    # Terminal persistence performed by on_cancel is part of
-                    # shutdown.  Track it before exposing running == 0 so a
-                    # concurrent cleanup cannot delete files beneath it.
                     self._cancelling += 1
+                    cancelled_by_shutdown = True
                     self._condition.notify_all()
-                try:
-                    self._notify_cancel(current, "无法启动后台任务线程。")
-                finally:
-                    with self._condition:
-                        self._cancelling -= 1
-                        # Choose the replacement only after cancellation.  If
-                        # shutdown began meanwhile, pending calls have already
-                        # been removed and no new worker may start.
-                        next_call = self._take_next_locked()
+                else:
+                    self._threads.add(thread)
+                    try:
+                        # Starting while holding the condition linearizes this
+                        # transition against shutdown.  The new worker can run
+                        # user code immediately, but its final accounting waits
+                        # for this short critical section to finish.
+                        thread.start()
+                    except BaseException as err:
+                        start_error = err
+                        self._threads.discard(thread)
+                        self._running -= 1
+                        # Terminal persistence performed by on_cancel is part of
+                        # shutdown.  Track it before exposing running == 0 so a
+                        # concurrent cleanup cannot delete files beneath it.
+                        self._cancelling += 1
                         self._condition.notify_all()
-                current = next_call
-                continue
 
-            if first_error is not None and propagate_failure:
-                raise first_error
-            if first_error is not None:
-                _log.error(
-                    "one or more queued Web job threads failed to start: %s",
-                    first_error,
+            if start_error is None and not cancelled_by_shutdown:
+                if first_error is not None and propagate_failure:
+                    raise first_error
+                if first_error is not None:
+                    _log.error(
+                        "one or more queued Web job threads failed to start: %s",
+                        first_error,
+                    )
+                return
+
+            if cancelled_by_shutdown:
+                current_error: BaseException = JobSchedulerClosedError(
+                    "job scheduler is shutting down",
                 )
-            return
+                reason = "Web 服务关闭，任务尚未开始。"
+            else:
+                assert start_error is not None
+                current_error = start_error
+                reason = "无法启动后台任务线程。"
+            if first_error is None:
+                first_error = current_error
+            try:
+                self._notify_cancel(current, reason)
+            finally:
+                with self._condition:
+                    self._cancelling -= 1
+                    # Choose the replacement only after cancellation.  If
+                    # shutdown began meanwhile, pending calls have already
+                    # been removed and no new worker may start.
+                    next_call = self._take_next_locked()
+                    self._condition.notify_all()
+            current = next_call
+            continue
 
         if first_error is not None and propagate_failure:
             raise first_error
@@ -287,6 +357,8 @@ class JobScheduler:
 
     def _take_next_locked(self) -> _ScheduledCall | None:
         if self._closed or not self._pending:
+            return None
+        if self.max_running_jobs > 0 and self._running >= self.max_running_jobs:
             return None
         call = self._pending.popleft()
         self._running += 1

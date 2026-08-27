@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import atexit
 import hmac
+import ipaddress
 import json
 import logging
 import math
@@ -34,6 +35,12 @@ from hhtools.web.job_scheduler import (
     JobScheduler,
     JobSchedulerClosedError,
 )
+from hhtools.web.job_settings import (
+    JobAdmissionSettings,
+    JobAdmissionSettingsStore,
+    updated_job_admission_settings,
+    validate_job_admission_settings,
+)
 from hhtools.web.job_specs import (
     JobSpecError,
     build_job_spec,
@@ -48,15 +55,16 @@ from hhtools.web.job_specs import (
 # absent — and fail.  Importing them here (guarded, so the module still loads
 # without the optional ``web`` extra) makes the forward refs resolvable.
 try:  # pragma: no cover - depends on optional extra being installed
-    from fastapi import UploadFile
+    from fastapi import Request, UploadFile
 except ImportError:  # fastapi not installed; routes are never defined either
+    Request = Any  # type: ignore[assignment,misc]
     UploadFile = Any  # type: ignore[assignment,misc]
 
 _log = logging.getLogger(__name__)
 
 # Bump when static/ front-end behaviour changes.  Injected into ``index.html``
 # at serve time so collaborators only need to pull + restart (no triple-sync).
-UI_BUILD_ID = "20260826-ux6"
+UI_BUILD_ID = "20260827-ux7"
 
 _UPLOAD_CHUNK_BYTES = 1024 * 1024
 # These are application-level resource controls, not transport tuning knobs.
@@ -172,6 +180,22 @@ def _safe_upload_directory_name(name: str | None, *, default: str) -> str:
     if len(relative.parts) != 1:
         raise ValueError("upload directory name must contain one path segment")
     return relative.name
+
+
+def _is_loopback_address(value: str | None, *, allow_localhost: bool = False) -> bool:
+    """Recognize loopback literals without trusting arbitrary DNS resolution."""
+
+    if value is None:
+        return False
+    if allow_localhost and value.lower() == "localhost":
+        return True
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError:
+        return False
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        return address.ipv4_mapped.is_loopback
+    return address.is_loopback
 
 
 def _robot_library_root() -> Path:
@@ -341,6 +365,7 @@ def create_app(
     max_retained_jobs: int = _DEFAULT_MAX_RETAINED_JOBS,
     job_ttl_seconds: float = _DEFAULT_JOB_TTL_SECONDS,
     job_history_dir: Path | None = None,
+    job_settings_path: Path | None = None,
 ):
     """Build the FastAPI application."""
     from fastapi import FastAPI, File, HTTPException
@@ -391,6 +416,11 @@ def create_app(
             max_running_jobs=max_running_jobs,
             max_queued_jobs=max_queued_jobs,
         )
+        job_settings_store = (
+            JobAdmissionSettingsStore(job_settings_path)
+            if job_settings_path is not None
+            else None
+        )
     except Exception:
         _cleanup_session_state(state)
         raise
@@ -398,6 +428,7 @@ def create_app(
     # the shared label namespace is short and serialized so same-label imports
     # cannot interleave delete/copy operations.
     motion_library_publish_lock = threading.Lock()
+    job_settings_update_lock = threading.Lock()
     cleanup_lock = threading.Lock()
     cleanup_complete = False
 
@@ -428,7 +459,10 @@ def create_app(
         try:
             yield
         finally:
-            drained = scheduler.shutdown(wait=True, timeout=5.0)
+            # Do not close admission between a settings file write and its live
+            # reconfiguration; one lock makes Save and graceful shutdown linear.
+            with job_settings_update_lock:
+                drained = scheduler.shutdown(wait=True, timeout=5.0)
             if drained:
                 _cleanup_session_once()
             else:
@@ -449,6 +483,7 @@ def create_app(
     # Exposed for diagnostics and lifecycle regression tests, not as an HTTP API.
     app.state.session_state = state
     app.state.job_scheduler = scheduler
+    app.state.job_settings_store = job_settings_store
 
     def _validated_uploads(
         files: list[UploadFile],
@@ -773,9 +808,9 @@ def create_app(
         except JobSchedulerClosedError as err:
             raise HTTPException(status_code=503, detail=str(err)) from err
 
-    def _scheduler_payload() -> dict[str, int | bool | str]:
+    def _scheduler_payload(*, editable: bool | None = None) -> dict[str, int | bool | str]:
         snapshot = scheduler.snapshot()
-        return {
+        payload: dict[str, int | bool | str] = {
             "mode": "unlimited" if snapshot.max_running_jobs == 0 else "queued",
             "max_running_jobs": snapshot.max_running_jobs,
             "max_queued_jobs": snapshot.max_queued_jobs,
@@ -785,6 +820,18 @@ def create_app(
             "cancelling_jobs": snapshot.cancelling_jobs,
             "closed": snapshot.closed,
         }
+        if editable is not None:
+            payload["editable"] = editable
+        return payload
+
+    def _job_settings_editable(request: Request) -> bool:
+        """Expose the same local-admin boundary enforced by the PATCH route."""
+
+        client_host = request.client.host if request.client is not None else None
+        return _is_loopback_address(client_host) and _is_loopback_address(
+            request.url.hostname,
+            allow_localhost=True,
+        )
 
     def _schedule_job(
         kind: str,
@@ -1208,6 +1255,62 @@ def create_app(
             "motions_library_root": str(motions_library_root()),
             "job_scheduler": _scheduler_payload(),
         }
+
+    @app.get("/api/settings/job-admission")
+    def get_job_admission_settings(request: Request) -> dict[str, int | bool | str]:
+        """Return live scheduler settings, counters, and edit capability."""
+
+        return _scheduler_payload(editable=_job_settings_editable(request))
+
+    @app.patch("/api/settings/job-admission")
+    def patch_job_admission_settings(
+        payload: dict[str, Any],
+        request: Request,
+    ) -> dict[str, int | bool | str]:
+        """Persist and hot-apply job limits without stopping active work."""
+
+        if not _job_settings_editable(request):
+            # Browser mode has no administrator authentication yet.  Keep this
+            # persistent, resource-affecting mutation local; SSH loopback tunnels
+            # and the authenticated Electron sidecar still satisfy this boundary.
+            # Requiring a literal loopback Host also blocks DNS-rebinding pages.
+            raise HTTPException(
+                status_code=403,
+                detail="job admission settings can only be changed from a loopback client",
+            )
+
+        # Serialize the complete read/validate/write/apply transaction so two
+        # settings tabs cannot leave the JSON file and live scheduler disagreeing.
+        with job_settings_update_lock:
+            snapshot = scheduler.snapshot()
+            current = JobAdmissionSettings(
+                max_running_jobs=snapshot.max_running_jobs,
+                max_queued_jobs=snapshot.max_queued_jobs,
+            )
+            try:
+                updated = updated_job_admission_settings(current, payload)
+            except ValueError as err:
+                raise HTTPException(status_code=422, detail=str(err)) from err
+
+            # Persist first: if the filesystem rejects the write, the live runtime
+            # remains unchanged and the UI can truthfully report that Save failed.
+            if job_settings_store is not None:
+                try:
+                    job_settings_store.save(updated)
+                except OSError as err:
+                    _log.exception("failed to persist Web job admission settings")
+                    raise HTTPException(
+                        status_code=500,
+                        detail="failed to persist job admission settings",
+                    ) from err
+            try:
+                scheduler.reconfigure(
+                    max_running_jobs=updated.max_running_jobs,
+                    max_queued_jobs=updated.max_queued_jobs,
+                )
+            except JobSchedulerClosedError as err:
+                raise HTTPException(status_code=503, detail=str(err)) from err
+            return _scheduler_payload(editable=True)
 
     @app.get("/api/formats")
     def formats() -> dict:
@@ -5709,6 +5812,25 @@ def _retarget_single(
         return pipeline.run(motion)
 
 
+def _effective_job_admission_settings(
+    *,
+    max_running_jobs: int | None,
+    max_queued_jobs: int | None,
+    job_settings_path: Path | None,
+) -> tuple[JobAdmissionSettings, Path]:
+    """Merge persistent settings with explicit CLI/environment overrides."""
+
+    from hhtools.utils.paths import user_web_settings_path
+
+    path = Path(job_settings_path or user_web_settings_path())
+    persisted = JobAdmissionSettingsStore(path).load()
+    settings = validate_job_admission_settings(
+        persisted.max_running_jobs if max_running_jobs is None else max_running_jobs,
+        persisted.max_queued_jobs if max_queued_jobs is None else max_queued_jobs,
+    )
+    return settings, path
+
+
 def run_web(
     *,
     source_root: Path,
@@ -5716,18 +5838,25 @@ def run_web(
     cache_dir: Path | None = None,
     host: str = "127.0.0.1",
     port: int = 8009,
-    max_running_jobs: int = _DEFAULT_MAX_RUNNING_JOBS,
-    max_queued_jobs: int = _DEFAULT_MAX_QUEUED_JOBS,
+    max_running_jobs: int | None = None,
+    max_queued_jobs: int | None = None,
+    job_settings_path: Path | None = None,
 ) -> None:
     """Launch the uvicorn server (blocking)."""
     import uvicorn
 
+    job_settings, resolved_settings_path = _effective_job_admission_settings(
+        max_running_jobs=max_running_jobs,
+        max_queued_jobs=max_queued_jobs,
+        job_settings_path=job_settings_path,
+    )
     app = create_app(
         source_root=source_root,
         save_dir=save_dir,
         cache_dir=cache_dir,
-        max_running_jobs=max_running_jobs,
-        max_queued_jobs=max_queued_jobs,
+        max_running_jobs=job_settings.max_running_jobs,
+        max_queued_jobs=job_settings.max_queued_jobs,
+        job_settings_path=resolved_settings_path,
     )
     url = f"http://{host}:{port}"
     static_dir = Path(__file__).parent / "static"
@@ -5738,9 +5867,13 @@ def run_web(
         "  jobs         →  "
         + (
             "unlimited concurrency"
-            if max_running_jobs == 0
-            else f"{max_running_jobs} running, "
-            + ("unlimited waiting" if max_queued_jobs == 0 else f"{max_queued_jobs} waiting")
+            if job_settings.max_running_jobs == 0
+            else f"{job_settings.max_running_jobs} running, "
+            + (
+                "unlimited waiting"
+                if job_settings.max_queued_jobs == 0
+                else f"{job_settings.max_queued_jobs} waiting"
+            )
         )
     )
     print(
@@ -5766,8 +5899,9 @@ def run_desktop_sidecar(
     host: str,
     port: int,
     session_secret: str,
-    max_running_jobs: int = _DEFAULT_MAX_RUNNING_JOBS,
-    max_queued_jobs: int = _DEFAULT_MAX_QUEUED_JOBS,
+    max_running_jobs: int | None = None,
+    max_queued_jobs: int | None = None,
+    job_settings_path: Path | None = None,
 ) -> None:
     """Run the secured localhost server without opening a browser."""
     # The sidecar is a private desktop implementation detail and must never listen on the LAN.
@@ -5778,6 +5912,11 @@ def run_desktop_sidecar(
 
     import uvicorn
 
+    job_settings, resolved_settings_path = _effective_job_admission_settings(
+        max_running_jobs=max_running_jobs,
+        max_queued_jobs=max_queued_jobs,
+        job_settings_path=job_settings_path,
+    )
     allowed_host = f"{host}:{port}"
     origin = f"http://{allowed_host}"
     app = create_app(
@@ -5787,8 +5926,9 @@ def run_desktop_sidecar(
         desktop_session_secret=session_secret,
         desktop_allowed_host=allowed_host,
         desktop_allowed_origin=origin,
-        max_running_jobs=max_running_jobs,
-        max_queued_jobs=max_queued_jobs,
+        max_running_jobs=job_settings.max_running_jobs,
+        max_queued_jobs=job_settings.max_queued_jobs,
+        job_settings_path=resolved_settings_path,
     )
     _log.info("Starting hhtools desktop sidecar on %s", origin)
     uvicorn.run(app, host=host, port=port, log_level="info", access_log=False)

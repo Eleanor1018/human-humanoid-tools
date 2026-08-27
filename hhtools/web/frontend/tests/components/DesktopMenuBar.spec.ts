@@ -74,6 +74,7 @@ describe('DesktopMenuBar', () => {
       expect.stringContaining('Settings'),
       expect.stringContaining('Dark Mode'),
     ])
+    expect(settingsItems[0]?.text()).toContain('background jobs')
     await settingsItems[0]?.trigger('click')
     expect(wrapper.emitted('openSettings')).toHaveLength(1)
 

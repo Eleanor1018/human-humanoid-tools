@@ -1,21 +1,21 @@
 # hhtools Fork 与 Roboparty Upstream 变更审计清单
 
 > 审计日期：2026-08-27  
-> 我方审计对象：`origin/style/inspector1` / `213a3b8`  
+> 我方审计对象：`origin/style/inspector1` / `630c427`
 > 上游基线：`upstream/main` / `ee493e3`  
 > 历史分叉点：`320bf1f`  
-> 统计口径：只统计已提交的 Git 树；不包含工作区中的并发未提交改动。
-> Review 跟进：RP0 删除、B03 队列化和 B04 上传预检是本轮尚未提交的修订，故不计入上面的历史提交/文件统计。
+> 统计口径：只统计截至 `630c427` 的 Git 树；不包含当前工作区尚未提交的设置可视化、持久化与热更新改动。
+> Review 跟进：RP0 删除、B03 队列化和 B04 上传预检已进入当前 `HEAD`；本轮未提交工作另见第 10 节。
 
 ## 1. 必须优先 Review：我方非 UI/UX 后台业务改动
 
-这一节必须先于界面改动 review。我们的 18 个独有内容提交中，有 **9 个提交会影响生产后台行为**；按可独立评审的业务边界拆成下面 **11 组生产改动（6 组 Bugfix/安全可靠性修复、4 组后台能力、1 组机器人资产）**。其中上传安全、资源回收、任务重放、文件物化和导出 schema 都不只是界面配套代码。
+这一节必须先于界面改动 review。我们的 22 个独有内容提交中，有 **10 个提交会影响生产后台/运行时行为**；按可独立评审的业务边界拆成下面 **11 组生产改动（6 组 Bugfix/安全可靠性修复、4 组后台能力、1 组机器人资产）**。其中上传安全、资源回收、任务重放、文件物化和导出 schema 都不只是界面配套代码。
 
 先划清算法边界：我方相对当前 `upstream/main` **没有净修改** `hhtools/core/**`、`hhtools/retarget/**`、`hhtools/robot/**` 或 `hhtools/io/**`，所以没有额外改变 IK、scaler、grounding 或 solver 算法。当前分支里的 100STYLE/Xsens 和 R2R ground 算法变化来自已同步的 Roboparty 提交，见第 2 节。
 
 ### Review 前必须知道的四项高优先级发现
 
-1. **[已处理] RP0 URDF 是未完成的孤立资产。** 它没有被 preset、registry 或生产代码引用；其 24 个唯一 STL 引用在当前仓库中全部缺失，因此不能独立加载。人工 review 已决定删除，工作区中现已删除该文件。
+1. **[已处理] RP0 URDF 是未完成的孤立资产。** 它没有被 preset、registry 或生产代码引用；其 24 个唯一 STL 引用在当前仓库中全部缺失，因此不能独立加载。该文件已由 `630c427` 删除。
 2. **[中高] JobSpec 目前不是严格“实验复现”。** v1 没有记录输入哈希、代码 commit、robot preset/标定内容版本、依赖和设备信息；同一路径文件被替换后会静默重跑新内容。准确称呼应是“按路径与参数重放”。
 3. **[中] 多文件上传不是请求级事务。** 全部文件先通过尺寸校验，然后每个 destination 分别原子 `replace`；如果发布循环中发生 I/O 故障，仍可能留下已发布的子集。
 4. **[中] Motion Library 目录 fallback 会先删除同名旧目录再复制。** 复制中断可能丢失旧 library；hard link 还会和源文件共享同一份内容。
@@ -82,7 +82,10 @@
 
 - Web CLI：`--max-running-jobs N`、`--max-queued-jobs N`。
 - Web/Electron 环境变量：`HHTOOLS_MAX_RUNNING_JOBS`、`HHTOOLS_MAX_QUEUED_JOBS`；显式 CLI 参数优先。
-- Electron 只精确放行这两个非敏感变量，不放行任意 `HHTOOLS_*`，避免未来 token/secret 意外进入 sidecar。
+- 本机 Web/Electron 或 SSH loopback 隧道的 **设置 → 后台任务调度**：后端原子持久化并热更新，无需重启；降低上限不终止 active job，提高上限或切换不限会立即按 FIFO 补跑。普通 remote browser 仅可查看。
+- 持久配置默认位于平台用户配置目录，可用 `HHTOOLS_WEB_SETTINGS_PATH` 改写；CLI/环境变量是每次启动时的覆盖项，仍存在时会在下次启动重新覆盖 GUI 保存值。
+- 持久写接口只接受 loopback peer + loopback literal/`localhost` Host；Electron 还叠加 session secret 与精确 Host/Origin 检查。真正的 Remote GUI 需要管理 token，不能放宽这一边界。
+- Electron 只精确放行上述三个非敏感 `HHTOOLS_*` 变量，不放行任意前缀变量，避免未来 token/secret 意外进入 sidecar。
 - `/api/health` 和 `/api/jobs` 会返回调度模式、配置以及 running/queued/reserved/cancelling/closed 状态。
 
 单卡 4090 的部署建议是从 `1/32` 开始，轻作业混跑可实测 `2/32`；H200、多 GPU 或充足 CPU-only 工作负载可以自行配置 8、16 或更高。它们只是建议值，项目默认仍为 `0/0`，不强制限制专业用户。
@@ -260,13 +263,13 @@ FastAPI lifespan 退出时先关闭 admission：未形成 Job 的 reservation �
 
 主要入口：[`hhtools/web/frontend/src/App.vue`](../hhtools/web/frontend/src/App.vue)、[`hhtools/web/frontend/src/components`](../hhtools/web/frontend/src/components)、[`hhtools/web/frontend/src/runtime`](../hhtools/web/frontend/src/runtime)、[`hhtools/web/frontend/src/webui.css`](../hhtools/web/frontend/src/webui.css)。
 
-前端相关净规模（仍以已提交 `213a3b8` 为准）：
+前端相关净规模（`upstream/main..630c427`，不含当前工作区）：
 
 | 范围 | 文件 | 净变化 | 说明 |
 |---|---:|---:|---|
-| Vue frontend | 40 | `+20,008/-0` | 含 21 个产品源文件、11 个集中测试及 lock/config |
+| Vue frontend | 40 | `+20,041/-0` | 含 21 个产品源文件、11 个集中测试及 lock/config |
 | Python 包内编译 static | 10 | `+4,158/-811` | bundle、CSS、source map 与入口清单 |
-| Electron | 27 | `+7,900/-0` | 其中 `package-lock.json` 约 6,175 行 |
+| Electron | 27 | `+7,924/-0` | 其中 `package-lock.json` 约 6,175 行 |
 | Remote 方案 | 1 | `+460/-0` | 仅设计文档 |
 
 前端 Review 风险：
@@ -294,7 +297,9 @@ FastAPI lifespan 退出时先关闭 admission：未形成 Job 的 reservation �
 - 当前 CSP 仍允许 `script-src/style-src 'unsafe-inline'`；本地 secret、sandbox 和 loopback 降低了风险，但 Remote 上线前应收紧并补 threat model。
 - `architecture.html` 没有仓库引用，而且仍把 Electron 描述为候选方案，已经落后于现有 Local Alpha；应更新或删除，避免误导。
 
-## 6. 我方 18 个独有内容提交逐项清单
+## 6. 我方 22 个独有内容提交逐项清单
+
+`upstream/main..HEAD` 共有 23 个提交；下表列出 22 个 non-merge 内容提交，另有 `213a3b8` 用于同步 upstream 的 merge commit。
 
 | # | Commit | 分类 | 实际内容 |
 |---:|---|---|---|
@@ -316,6 +321,10 @@ FastAPI lifespan 退出时先关闭 admission：未形成 Job 的 reservation �
 | 16 | `41f039a` | 前后台混合 Feature | 结果诊断、评估区、菜单和命令面板 |
 | 17 | `bd22a99` | 前端 Refactor | 集中测试目录并统一 layer 颜色 |
 | 18 | `fb64e1a` | Docs | Remote GPU 轻客户端方案 |
+| 19 | `c0b6707` | 前端 Refactor | Web/Electron 共用工作区 shell |
+| 20 | `f54be6d` | 后台 Feature | 可配置的任务准入、FIFO 队列与资源回收 |
+| 21 | `f997920` | Docs | 记录 fork 行为、安全边界与资源限制 |
+| 22 | `630c427` | 资产 Chore | 删除不完整且无法加载的 RP0 模型 |
 
 ## 7. 测试与验证记录
 
@@ -323,15 +332,16 @@ FastAPI lifespan 退出时先关闭 admission：未形成 Job 的 reservation �
 
 | 验证 | 结果 |
 |---|---|
-| Python `uv run pytest -q` | `112 passed, 4 skipped` |
-| Scheduler stress repeat | 9 项测试连续运行 10 次通过 |
-| Vue `npm test` | `11 files / 29 tests passed` |
+| Python `uv run pytest -q` | `130 passed, 4 skipped` |
+| Scheduler concurrency audit | 14 项 scheduler 测试通过；额外 20 轮 `submit + reconfigure` 压力检查通过，终态计数归零 |
+| Vue `npm test` | `11 files / 34 tests passed` |
 | Vue `npm run typecheck` | 通过 |
 | Vue `npm run build` | 通过；FastAPI/Electron 实际入口已引用新 hash，旧 stale bundle 已移除 |
 | Electron `npm test` | `4 files / 11 tests passed` |
 | Electron `npm run typecheck` | 通过 |
+| Electron Playwright E2E | `1 passed`；保存 `2/32` 后 API 更新、sidecar PID 不变且重开设置仍保留 |
 
-需要保留证据边界：以上结果覆盖当前未提交 review 工作树，包括新的调度器、CLI/Electron 配置透传、motion 预检、测试与解释性注释；它们证明当前组合可通过，**不能替代提交后的 CI 证据**。
+需要保留证据边界：以上结果覆盖当前未提交的设置可视化、后端持久化/热更新、Remote 只读能力检测、测试与解释性注释；它们证明当前组合可通过，**不能替代提交后的 CI 证据**。
 
 新增调度器、CLI 和测试文件的 Ruff 检查通过。`server.py` 全文件仍有 9 项既存 lint 债务（包括未使用 import/local、一个未定义 annotation、复杂度和格式项）；应另开整理 PR，避免把历史静态检查修复混入本轮业务 review。
 
@@ -340,7 +350,7 @@ FastAPI lifespan 退出时先关闭 admission：未形成 Job 的 reservation �
 本轮根据人工 review 继续做了以下行为修改：
 
 - 新增 [`hhtools/web/job_scheduler.py`](../hhtools/web/job_scheduler.py)：默认不限；可选 running cap、FIFO waiting queue、上传前 reservation、pending 取消与运行快照；thread-start failure 的终态回写同样计入 shutdown 等待。
-- Web CLI、Electron sidecar 和 Electron 环境白名单增加两个精确配置项；未放宽任意 `HHTOOLS_*`。
+- Web CLI、Electron sidecar 和 Electron 环境白名单增加三个精确配置项：两个并发/等待上限与 `HHTOOLS_WEB_SETTINGS_PATH`；未放宽任意 `HHTOOLS_*`。
 - motion upload 在发布 Motion Library 前先验证临时 drop，保持原 HTTP 400 JSON，同时保护同名旧 library。
 - 排队 motion 从各自独立 drop 解析；实际 label/mode 在发布后、grounding/serialization 前立即持久化。
 - Motion Library 的进程内 scan/link/unlink/upload 共用读写锁；手工 link 路由改为 sync endpoint，锁等待和文件 I/O 不阻塞 FastAPI event loop。
@@ -371,8 +381,8 @@ FastAPI lifespan 退出时先关闭 admission：未形成 Job 的 reservation �
 10. [ ] UI/UX、Electron 壳和测试目录结构。
 11. [ ] 最后决定哪些 commit 适合整理后提交给 Roboparty；不要把 U01/U02 再作为我方 PR 内容。
 
-## 10. 审计边界与未提交工作区
+## 10. 审计边界与当前工作区
 
 - `upstream/main` 在 2026-08-27 13:39:31 +08:00 成功 fetch 到 `ee493e3`；本次审计期间再次联网复核遇到 GitHub 连接 reset，因此基线是该次已成功获取的远端状态。
-- 根据本次 review 决定，孤立 RP0 URDF 已在工作区删除；历史统计仍以 `213a3b8` 为基线，因此提交/文件统计暂未重算。
-- 本文、第 8 节的代码、RP0 删除与相关测试均保留为未提交状态，等待人工 review；没有推送到 `origin` 或 `upstream`。
+- `HEAD` 相对 `upstream/main` 领先 23 个提交（22 个 non-merge）；`630c427` 已与 `origin/style/inspector1` 同步，本文第 6 节已按该 `HEAD` 重算。
+- 本轮的设置可视化、持久配置、热更新、Remote 只读能力和相关测试仍在工作区，尚未 commit/push；`upstream` 始终未写入。

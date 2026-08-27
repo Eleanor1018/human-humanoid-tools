@@ -66,6 +66,12 @@ uv run hhtools web --max-running-jobs 1 --max-queued-jobs 32
 `0` means unlimited for both options; the queue setting only applies when running concurrency is
 limited. The same settings are available as `HHTOOLS_MAX_RUNNING_JOBS` and
 `HHTOOLS_MAX_QUEUED_JOBS` (including in the Electron sidecar).
+They can also be edited under **Settings → Background-job scheduling** from local Web/Electron
+or an SSH loopback tunnel; ordinary remote-browser sessions are shown read-only until authenticated
+remote administration is implemented. Saving hot-applies the limits without restarting Python or Electron: lower running limits grandfather active jobs,
+while higher limits immediately promote FIFO waiters. The backend persists the values in the
+platform user-config directory; `HHTOOLS_WEB_SETTINGS_PATH` selects another file. Explicit CLI
+or environment values remain startup overrides and will win again on the next launch.
 The cap applies to scheduled Web jobs, not the optional Warp/Newton robot prewarm thread, so it
 is admission control rather than a process-wide GPU concurrency guarantee.
 
