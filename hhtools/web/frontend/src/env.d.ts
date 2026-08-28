@@ -50,7 +50,7 @@ export type HHToolsInputId =
   | 'dv-subset-alpha'
 
 export type HHToolsSelectId =
-  | 'lib-folder'
+  | 'lib-category'
   | 'robot-select'
   | 'rt-ref-select'
   | 'rt-backend'

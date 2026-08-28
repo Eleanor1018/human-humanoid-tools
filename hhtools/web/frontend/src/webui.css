@@ -2020,52 +2020,53 @@ button { font-family: inherit; cursor: pointer; }
   align-items: baseline;
   gap: 7px;
 }
-.motion-library-count {
-  color: var(--ink-tertiary);
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0;
+.motion-library-root-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(110px, 42%);
+  gap: 6px;
 }
 .motion-library-root-button {
   width: 100%;
-  min-height: 30px;
-  border-radius: var(--radius-sm);
-}
-.motion-library-filters {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 4px;
-}
-.motion-library-filter {
   min-width: 0;
-  min-height: 29px;
-  padding: 5px 3px;
+  min-height: 30px;
   overflow: hidden;
-  border: 1px solid var(--hairline);
   border-radius: var(--radius-sm);
-  background: var(--panel-solid);
-  color: var(--ink-secondary);
-  font: 600 10.5px/1.1 var(--font);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.motion-library-filter:hover { border-color: color-mix(in srgb, var(--accent) 38%, var(--hairline)); }
-.motion-library-filter[aria-pressed="true"] {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-  color: var(--accent);
+.motion-library-category-select-wrap {
+  position: relative;
+  min-width: 0;
 }
-.motion-library-filter:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
+.motion-library-category-select-wrap > svg {
+  position: absolute;
+  top: 50%;
+  right: 9px;
+  width: 14px;
+  height: 14px;
+  transform: translateY(-50%);
+  pointer-events: none;
+  color: var(--ink-tertiary);
+}
+.motion-library-category-select {
+  height: 100%;
+  min-height: 30px;
+  padding: 6px 27px 6px 10px;
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.motion-library-category-select-wrap:focus-within > svg {
+  color: var(--accent);
 }
 .motion-library-tools {
   display: grid;
-  grid-template-columns: minmax(88px, 0.75fr) minmax(0, 1.25fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 6px;
 }
 .motion-library-tools > * { min-width: 0; }
-.motion-library-tools .search { padding-right: 8px; padding-left: 8px; }
 .motion-library-tools .btn { white-space: nowrap; }
 .motion-library-list-frame {
   flex: 1 1 220px;
@@ -2075,11 +2076,6 @@ button { font-family: inherit; cursor: pointer; }
   border-radius: var(--radius-sm);
   background: var(--panel-solid);
 }
-@container (max-width: 300px) {
-  .motion-library-tools { grid-template-columns: minmax(82px, 0.8fr) minmax(0, 1.2fr); }
-  .motion-library-tools #lib-link-path { grid-column: 1 / -1; width: 100%; }
-}
-
 .dropzone {
   border: 1.5px dashed var(--hairline);
   border-radius: var(--radius);
@@ -2123,6 +2119,54 @@ button { font-family: inherit; cursor: pointer; }
   background: var(--panel-solid); color: var(--ink); outline: none;
 }
 .search:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.search-field {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  color: var(--ink-tertiary);
+}
+.search-field.disabled { opacity: 0.55; }
+.search-field-leading-icon {
+  position: absolute;
+  z-index: 1;
+  top: 50%;
+  left: 10px;
+  width: 15px;
+  height: 15px;
+  transform: translateY(-50%);
+  pointer-events: none;
+  transition: color 0.15s;
+}
+.search-field:focus-within { color: var(--accent); }
+.search-field > .search-field-input {
+  min-height: 32px;
+  padding: 7px 32px;
+  line-height: 1.25;
+}
+.search-field-input::-webkit-search-cancel-button { display: none; }
+.search-field-clear {
+  position: absolute;
+  z-index: 1;
+  top: 50%;
+  right: 6px;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  transform: translateY(-50%);
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ink-tertiary);
+}
+.search-field-clear:hover { background: var(--accent-soft); color: var(--accent); }
+.search-field-clear:active { transform: translateY(-50%) scale(0.94); }
+.search-field-clear:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 0;
+}
+.search-field-clear svg { width: 14px; height: 14px; }
 .lib-list {
   height: 100%;
   min-height: 0;

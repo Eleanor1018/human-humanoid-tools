@@ -8,6 +8,7 @@ import CommandPalette from './components/CommandPalette.vue'
 import DesktopMenuBar from './components/DesktopMenuBar.vue'
 import JobDrawer from './components/JobDrawer.vue'
 import ResultEvaluationPanel from './components/ResultEvaluationPanel.vue'
+import SearchField from './components/SearchField.vue'
 import SidebarNavigation from './components/SidebarNavigation.vue'
 import WorkflowPipeline from './components/WorkflowPipeline.vue'
 import WorkspaceDrawerHandle from './components/WorkspaceDrawerHandle.vue'
@@ -43,6 +44,7 @@ const motionLibrarySettingsLoading = ref(false)
 const motionLibrarySettingsSaving = ref(false)
 const motionLibrarySettingsError = ref<string | null>(null)
 const motionLibrarySettingsSaved = ref(false)
+const motionLibrarySearch = ref('')
 type MotionUploadProfile = 'intermimic' | 'meshmimic' | 'mimic'
 const motionUploadProfiles: ReadonlyArray<{ id: MotionUploadProfile; label: string }> = [
   { id: 'mimic', label: 'mimic' },
@@ -51,11 +53,24 @@ const motionUploadProfiles: ReadonlyArray<{ id: MotionUploadProfile; label: stri
 ]
 const motionUploadProfileMeta: Record<MotionUploadProfile, {
   glyph: string
-  dropHint: string
+  dropHintEn: string
+  dropHintZh: string
 }> = {
-  mimic: { glyph: '🎞', dropHint: '拖入动作文件或文件夹' },
-  intermimic: { glyph: '📦', dropHint: '拖入完整的物体交互动作文件夹' },
-  meshmimic: { glyph: '⛰', dropHint: '拖入完整的地形动作文件夹' },
+  mimic: {
+    glyph: '🎞',
+    dropHintEn: 'Drop a motion file or folder',
+    dropHintZh: '拖入动作文件或文件夹',
+  },
+  intermimic: {
+    glyph: '📦',
+    dropHintEn: 'Drop a complete object-interaction motion folder',
+    dropHintZh: '拖入完整的物体交互动作文件夹',
+  },
+  meshmimic: {
+    glyph: '⛰',
+    dropHintEn: 'Drop a complete terrain-motion folder',
+    dropHintZh: '拖入完整的地形动作文件夹',
+  },
 }
 const activeMotionUploadProfile = ref<MotionUploadProfile>('mimic')
 const motionUploadInfoOpen = ref(false)
@@ -71,6 +86,10 @@ function setWorkspaceLocale(locale: typeof workspaceLocale.value): void {
   workspaceLocale.value = locale
   document.documentElement.lang = locale
   updateWorkspacePreferences({ locale })
+  // Most workspace copy is rendered by Vue, while library rows are rendered
+  // by the legacy runtime. Notify that runtime so both layers switch language
+  // immediately without refreshing the library or restarting Electron.
+  window.dispatchEvent(new Event('hhtools:workspace-locale-change'))
 }
 
 function setWorkspaceTheme(theme: WorkspaceTheme): void {
@@ -276,7 +295,10 @@ async function chooseMotionLibraryRoot(): Promise<void> {
     // server-side path instead of pretending a webkitdirectory upload is one.
     const selected = window.hhtoolsDesktop?.selectDirectory
       ? await window.hhtoolsDesktop.selectDirectory()
-      : window.prompt('输入服务器上的资源库目录', motionLibrarySettings.value.root)
+      : window.prompt(
+          workspaceText('Enter the library directory on the server', '输入服务器上的资源库目录'),
+          motionLibrarySettings.value.root,
+        )
     const root = selected?.trim()
     if (!root) return
 
@@ -284,7 +306,10 @@ async function chooseMotionLibraryRoot(): Promise<void> {
     motionLibrarySettings.value = await requestMotionLibrarySettings('PATCH', root)
     motionLibrarySettingsSaved.value = true
     await window.__hhApp?.refreshLibrary()
-    window.__hhApp?.toast(`资源库目录已切换：${motionLibrarySettings.value.root}`)
+    window.__hhApp?.toast(workspaceText(
+      `Library directory changed: ${motionLibrarySettings.value.root}`,
+      `资源库目录已切换：${motionLibrarySettings.value.root}`,
+    ))
   } catch (error) {
     motionLibrarySettingsError.value = error instanceof Error ? error.message : String(error)
     window.__hhApp?.toast(motionLibrarySettingsError.value, true)
@@ -526,12 +551,21 @@ onBeforeUnmount(() => {
       <div class="stage-empty" id="stage-empty">
         <div>
           <div class="glyph">🎞</div>
-          <div class="big">把动作拖到这里预览</div>
-          <div class="sub">支持 BVH / GLB / NPZ 以及 AMASS · Motion-X · OMOMO · holosoma 等数据集。可拖到此舞台、在右侧「导入本地动作」选择文件 / 文件夹，或直接从下方资源库点选。</div>
+          <div class="big">{{ workspaceText('Drop a motion here to preview', '把动作拖到这里预览') }}</div>
+          <div class="sub">{{ workspaceText(
+            'Supports BVH / GLB / NPZ and datasets such as AMASS, Motion-X, OMOMO, and holosoma. Drop content on the stage, choose a file or folder from the Motion panel, or select a clip from the Library.',
+            '支持 BVH / GLB / NPZ 以及 AMASS、Motion-X、OMOMO、holosoma 等数据集。可拖到此舞台、在右侧「动作」面板选择文件或文件夹，或直接从资源库点选。',
+          ) }}</div>
         </div>
       </div>
       <div class="stage-overlay">
-        <button type="button" class="view-reset-btn hidden" id="view-reset-btn" title="回到默认视角" aria-label="回到默认视角">
+        <button
+          type="button"
+          class="view-reset-btn hidden"
+          id="view-reset-btn"
+          :title="workspaceText('Reset view', '回到默认视角')"
+          :aria-label="workspaceText('Reset view', '回到默认视角')"
+        >
           <svg class="view-reset-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
             <circle cx="12" cy="12" r="3.25"/>
             <path d="M12 3v3.5M12 17.5V21M3 12h3.5M17.5 12H21"/>
@@ -540,7 +574,12 @@ onBeforeUnmount(() => {
         <PlaybackBar />
       </div>
     </main>
-    <div class="col-resizer" id="resize-inspector" title="拖动调节右栏宽度" @pointerdown="panelLayout.startResize('inspector', $event)"></div>
+    <div
+      class="col-resizer"
+      id="resize-inspector"
+      :title="workspaceText('Drag to resize the inspector', '拖动调节右栏宽度')"
+      @pointerdown="panelLayout.startResize('inspector', $event)"
+    ></div>
 
     <!-- right inspector -->
     <aside
@@ -553,12 +592,16 @@ onBeforeUnmount(() => {
       <div id="inspector-body">
       <!-- MOTION -->
       <section class="panel" :class="{ active: activePanel === 'motion' }" data-panel="motion">
-        <h2>动作 Motion</h2>
+        <h2>{{ workspaceText('Motion', '动作') }}</h2>
 
         <div class="motion-import-control" id="tour-motion-import">
           <!-- Native radios keep the compact profile switcher keyboard-friendly.
                The selected profile drives one shared dropzone and both pickers. -->
-          <div class="motion-profile-switcher" role="radiogroup" aria-label="动作上传类型">
+          <div
+            class="motion-profile-switcher"
+            role="radiogroup"
+            :aria-label="workspaceText('Motion import type', '动作上传类型')"
+          >
             <label
               v-for="profile in motionUploadProfiles"
               :key="profile.id"
@@ -581,13 +624,19 @@ onBeforeUnmount(() => {
             id="motion-drop-shared"
             :data-profile="activeMotionUploadProfile"
             role="group"
-            :aria-label="`${activeMotionUploadProfile} 上传区`"
+            :aria-label="workspaceText(
+              `${activeMotionUploadProfile} import area`,
+              `${activeMotionUploadProfile} 上传区`,
+            )"
           >
             <div class="motion-import-info">
               <button
                 type="button"
                 class="motion-import-info-trigger"
-                :aria-label="`查看 ${activeMotionUploadProfile} 上传说明`"
+                :aria-label="workspaceText(
+                  `View ${activeMotionUploadProfile} import instructions`,
+                  `查看 ${activeMotionUploadProfile} 上传说明`,
+                )"
                 aria-controls="motion-upload-info"
                 :aria-expanded="motionUploadInfoOpen"
                 :aria-describedby="motionUploadInfoOpen ? 'motion-upload-info' : undefined"
@@ -601,21 +650,33 @@ onBeforeUnmount(() => {
                 @click.stop
               >
                 <template v-if="activeMotionUploadProfile === 'intermimic'">
-                  <strong>物体交互动作 · OMOMO</strong>
-                  <span>请选择完整 clip 文件夹或整个数据集目录。需要 <code>&lt;clip&gt;/&lt;clip&gt;.pkl</code>，交互物体通常为 <code>*_cleaned_simplified.obj</code>。</span>
+                  <strong>{{ workspaceText('Object-interaction motion · OMOMO', '物体交互动作 · OMOMO') }}</strong>
+                  <span>
+                    {{ workspaceText('Choose a complete clip folder or an entire dataset directory. Requires ', '请选择完整 clip 文件夹或整个数据集目录。需要 ') }}
+                    <code>&lt;clip&gt;/&lt;clip&gt;.pkl</code>{{ workspaceText('; interaction objects are usually ', '，交互物体通常为 ') }}<code>*_cleaned_simplified.obj</code>{{ workspaceText('.', '。') }}
+                  </span>
                 </template>
                 <template v-else-if="activeMotionUploadProfile === 'meshmimic'">
-                  <strong>地形动作 · parc_ms</strong>
-                  <span>请选择完整 clip 文件夹或整个数据集目录。需要 <code>&lt;clip&gt;/&lt;clip&gt;.pkl</code> 或 <code>.npz</code>，地形通常为 <code>*_terrain.obj</code>。</span>
+                  <strong>{{ workspaceText('Terrain motion · parc_ms', '地形动作 · parc_ms') }}</strong>
+                  <span>
+                    {{ workspaceText('Choose a complete clip folder or an entire dataset directory. Requires ', '请选择完整 clip 文件夹或整个数据集目录。需要 ') }}
+                    <code>&lt;clip&gt;/&lt;clip&gt;.pkl</code>{{ workspaceText(' or ', ' 或 ') }}<code>.npz</code>{{ workspaceText('; terrain meshes are usually ', '，地形通常为 ') }}<code>*_terrain.obj</code>{{ workspaceText('.', '。') }}
+                  </span>
                 </template>
                 <template v-else>
-                  <strong>通用人体动作</strong>
-                  <span>支持单个文件或多级数据集文件夹。可识别 <code>.bvh</code>、<code>.glb</code>、<code>.gltf</code>、<code>.npz</code>、<code>.npy</code>、<code>.pkl</code>、<code>.pt</code>。</span>
+                  <strong>{{ workspaceText('General human motion', '通用人体动作') }}</strong>
+                  <span>
+                    {{ workspaceText('Supports a single file or a nested dataset folder. Recognized formats: ', '支持单个文件或多级数据集文件夹。可识别 ') }}
+                    <code>.bvh</code>, <code>.glb</code>, <code>.gltf</code>, <code>.npz</code>, <code>.npy</code>, <code>.pkl</code>, <code>.pt</code>{{ workspaceText('.', '。') }}
+                  </span>
                 </template>
               </div>
             </div>
             <div class="dz-glyph">{{ motionUploadProfileMeta[activeMotionUploadProfile].glyph }}</div>
-            <div class="dz-title">{{ motionUploadProfileMeta[activeMotionUploadProfile].dropHint }}</div>
+            <div class="dz-title">{{ workspaceText(
+              motionUploadProfileMeta[activeMotionUploadProfile].dropHintEn,
+              motionUploadProfileMeta[activeMotionUploadProfile].dropHintZh,
+            ) }}</div>
             <div class="row" style="margin-top:10px">
               <button
                 v-show="activeMotionUploadProfile === 'mimic'"
@@ -624,14 +685,14 @@ onBeforeUnmount(() => {
                 class="btn secondary small"
                 :data-pick="activeMotionUploadProfile"
                 data-accept=".bvh,.glb,.gltf,.npz,.npy,.pkl,.pt"
-              >选择文件</button>
+              >{{ workspaceText('Choose file', '选择文件') }}</button>
               <button
                 id="motion-pick-folder"
                 type="button"
                 class="btn secondary small"
                 :data-pick="activeMotionUploadProfile"
                 data-folder="1"
-              >选择文件夹</button>
+              >{{ workspaceText('Choose folder', '选择文件夹') }}</button>
             </div>
           </div>
         </div>
@@ -639,29 +700,50 @@ onBeforeUnmount(() => {
         <!-- The library is a peer workspace, not another card nested under
              Motion. Only its scrollable result list owns a visual frame. -->
         <section class="motion-library" id="tour-motion-library" aria-labelledby="motion-library-title">
-          <h2 id="motion-library-title">
-            资源库 Library
-            <span class="motion-library-count" id="lib-count"></span>
-          </h2>
-          <button
-            type="button"
-            class="btn secondary small motion-library-root-button"
-            :disabled="motionLibrarySettingsLoading || motionLibrarySettingsSaving || motionLibrarySettings?.editable === false"
-            :title="motionLibraryRootButtonTitle()"
-            @click="chooseMotionLibraryRoot"
-          >{{ motionLibrarySettingsSaving ? '正在切换…' : '选择资源库目录' }}</button>
+          <h2 id="motion-library-title">{{ workspaceText('Library', '资源库') }}</h2>
 
-          <div class="motion-library-filters" role="group" aria-label="按动作类型筛选资源库">
-            <button type="button" class="motion-library-filter" data-library-category="all" aria-pressed="true">全部</button>
-            <button type="button" class="motion-library-filter" data-library-category="motion" aria-pressed="false">纯动作</button>
-            <button type="button" class="motion-library-filter" data-library-category="object" aria-pressed="false">物体交互</button>
-            <button type="button" class="motion-library-filter" data-library-category="terrain" aria-pressed="false">地形场景</button>
+          <div class="motion-library-root-row">
+            <button
+              type="button"
+              class="btn secondary small motion-library-root-button"
+              :disabled="motionLibrarySettingsLoading || motionLibrarySettingsSaving || motionLibrarySettings?.editable === false"
+              :title="motionLibraryRootButtonTitle()"
+              @click="chooseMotionLibraryRoot"
+            >{{ motionLibrarySettingsSaving
+              ? workspaceText('Switching…', '正在切换…')
+              : workspaceText('Choose library directory', '选择资源库目录') }}</button>
+            <div class="motion-library-category-select-wrap">
+              <select
+                class="search motion-library-category-select"
+                id="lib-category"
+                :aria-label="workspaceText('Filter the library by motion type', '按动作类型筛选资源库')"
+              >
+                <option value="all">{{ workspaceText('All', '全部') }}</option>
+                <option value="motion">{{ workspaceText('Motion', '纯动作') }}</option>
+                <option value="object">{{ workspaceText('Object interaction', '物体交互') }}</option>
+                <option value="terrain">{{ workspaceText('Terrain scene', '地形场景') }}</option>
+              </select>
+              <!-- Heroicons "chevron-down" outline path, MIT licensed. -->
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="m6 9 6 6 6-6" />
+              </svg>
+            </div>
           </div>
 
           <div class="motion-library-tools">
-            <select class="search" id="lib-folder" aria-label="筛选资源库目录"><option value="">全部目录</option></select>
-            <input class="search" id="lib-search" aria-label="搜索资源库动作" placeholder="搜索动作……" />
-            <button type="button" class="btn secondary small" id="lib-link-path" title="把服务器上的外部数据集链接到当前资源库">链接目录</button>
+            <SearchField
+              v-model="motionLibrarySearch"
+              id="lib-search"
+              :label="workspaceText('Search the Motion Library', '搜索资源库动作')"
+              :placeholder="workspaceText('Search motions…', '搜索动作……')"
+              :clear-label="workspaceText('Clear library search', '清除资源库搜索')"
+            />
+            <button
+              type="button"
+              class="btn secondary small"
+              id="lib-link-path"
+              :title="workspaceText('Link an external server directory to the current library', '把服务器上的外部数据集链接到当前资源库')"
+            >{{ workspaceText('Link directory', '链接目录') }}</button>
           </div>
           <div class="motion-library-list-frame">
             <div class="lib-list" id="lib-list"></div>
@@ -673,7 +755,9 @@ onBeforeUnmount(() => {
           <div id="motion-meta"></div>
           <div class="validation-summary" id="motion-validation-summary" aria-live="polite"></div>
           <div class="divider"></div>
-          <button class="btn secondary small" id="add-to-basket">＋ 加入批量篮子</button>
+          <button class="btn secondary small" id="add-to-basket">
+            {{ workspaceText('＋ Add to batch basket', '＋ 加入批量篮子') }}
+          </button>
         </div>
       </section>
 

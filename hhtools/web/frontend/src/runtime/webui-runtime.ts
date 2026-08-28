@@ -43,6 +43,10 @@ function renderTextMessage(container: HTMLElement, message: unknown): void {
   if (messageElement) messageElement.style.padding = "12px";
 }
 
+function runtimeText(en: string, zh: string): string {
+  return document.documentElement.lang.toLowerCase().startsWith("zh") ? zh : en;
+}
+
 function renderSpinnerStatus(container: HTMLElement | null, message: unknown): void {
   if (!container) return;
   const spinner = document.createElement("span");
@@ -2811,23 +2815,64 @@ function renderMotionValidation(payload: MotionPayload): void {
   const frameRate = payload.framerate ?? payload.sample_rate ?? 0;
   const boneCount = payload.bone_names?.length ?? payload.parent_indices.length;
   const sceneParts: string[] = [];
-  if (payload.has_terrain || payload.terrain) sceneParts.push("地形");
-  if (payload.objects?.length) sceneParts.push(`${payload.objects.length} 个交互物体`);
+  if (payload.has_terrain || payload.terrain) sceneParts.push(runtimeText("terrain", "地形"));
+  if (payload.objects?.length) {
+    sceneParts.push(runtimeText(
+      `${payload.objects.length} interaction object${payload.objects.length === 1 ? "" : "s"}`,
+      `${payload.objects.length} 个交互物体`,
+    ));
+  }
 
   renderValidationSummary(document.getElementById("motion-validation-summary"), [
     [frameCount > 0 ? "ok" : "error", frameCount > 0
-      ? `轨迹可播放：${frameCount} 帧`
-      : "轨迹不包含可播放帧"],
+      ? runtimeText(`Playable trajectory: ${frameCount} frames`, `轨迹可播放：${frameCount} 帧`)
+      : runtimeText("The trajectory has no playable frames", "轨迹不包含可播放帧")],
     [frameRate > 0 ? "ok" : "warn", frameRate > 0
-      ? `时间轴有效：${frameRate.toFixed(1)} FPS`
-      : "未识别帧率，将使用默认时间轴"],
+      ? runtimeText(`Valid timeline: ${frameRate.toFixed(1)} FPS`, `时间轴有效：${frameRate.toFixed(1)} FPS`)
+      : runtimeText(
+        "Frame rate was not detected; the default timeline will be used",
+        "未识别帧率，将使用默认时间轴",
+      )],
     [boneCount > 0 ? "ok" : "error", boneCount > 0
-      ? `骨架层级：${boneCount} 个节点`
-      : "未识别骨架层级"],
+      ? runtimeText(`Skeleton hierarchy: ${boneCount} nodes`, `骨架层级：${boneCount} 个节点`)
+      : runtimeText("Skeleton hierarchy was not detected", "未识别骨架层级")],
     ["ok", sceneParts.length > 0
-      ? `场景附属数据：${sceneParts.join("、")}`
-      : "纯动作轨迹：无地形或交互物体"],
+      ? runtimeText(`Scene data: ${sceneParts.join(", ")}`, `场景附属数据：${sceneParts.join("、")}`)
+      : runtimeText(
+        "Motion only: no terrain or interaction objects",
+        "纯动作轨迹：无地形或交互物体",
+      )],
   ]);
+}
+
+function renderMotionDetails(payload: MotionPayload): void {
+  document.getElementById("motion-meta-card").style.display = "block";
+  document.getElementById("motion-name").textContent = payload.name;
+  const previewNote = isPlaybackPreview(payload)
+    ? runtimeText(
+      ` (preview: ${payload.playback_frames ?? payload.positions.length} frames / ${effectivePlaybackDuration(payload).toFixed(1)} s)`,
+      `（预览 ${payload.playback_frames ?? payload.positions.length} 帧 / ${effectivePlaybackDuration(payload).toFixed(1)} s）`,
+    )
+    : "";
+  const motionRows: Array<[string, unknown]> = [
+    [runtimeText("Format", "格式"), payload.source_format],
+    [runtimeText("Frames", "帧数"), payload.num_frames_total],
+    [runtimeText("Frame rate", "帧率"), `${(payload.framerate ?? payload.sample_rate ?? 30).toFixed(1)}`],
+    [runtimeText("Duration", "时长"), `${effectivePlaybackDuration(payload).toFixed(2)} s${previewNote}`],
+    [runtimeText("Skeleton", "骨骼"), payload.bone_names?.length ?? payload.parent_indices.length],
+  ];
+  if (payload.objects?.length) {
+    motionRows.push([runtimeText("Interaction objects", "交互物体"), payload.objects.length]);
+  }
+  if (payload.has_terrain) motionRows.push([runtimeText("Terrain", "地形"), runtimeText("Yes", "有")]);
+  motionRows.push([
+    runtimeText("Body mesh", "身体 mesh"),
+    payload.body_mesh?.available
+      ? runtimeText("SMPL / skin", "SMPL / 皮肤")
+      : payload.body_mesh?.reason || runtimeText("Tubular approximation", "管状近似"),
+  ]);
+  renderMetaRows(document.getElementById("motion-meta"), motionRows);
+  renderMotionValidation(payload);
 }
 
 function updateH2rCalibrationValidation(): void {
@@ -3093,7 +3138,10 @@ async function loadMotionPayload(payload: MotionPayload): Promise<void> {
     player.setPlaying(false);
     await refreshRetargetPanel();
     _applyCalibSceneLayout();
-    toast(`已加载 ${payload.name}（标定模式）`);
+    toast(runtimeText(
+      `Loaded ${payload.name} (calibration mode)`,
+      `已加载 ${payload.name}（标定模式）`,
+    ));
     updatePills();
     return;
   }
@@ -3132,32 +3180,12 @@ async function loadMotionPayload(payload: MotionPayload): Promise<void> {
   setViewVisible(robot, "tg-robot", false);
   player.ready(effectivePlaybackDuration(payload));
   player.setPlaying(true);
-  // meta card
-  document.getElementById("motion-meta-card").style.display = "block";
-  document.getElementById("motion-name").textContent = payload.name;
-  const previewNote = isPlaybackPreview(payload)
-    ? `（预览 ${payload.playback_frames ?? payload.positions.length} 帧 / ${effectivePlaybackDuration(payload).toFixed(1)} s）`
-    : "";
-  const motionRows: Array<[string, unknown]> = [
-    ["格式", payload.source_format],
-    ["帧数", payload.num_frames_total],
-    ["帧率", `${(payload.framerate ?? payload.sample_rate ?? 30).toFixed(1)}`],
-    ["时长", `${effectivePlaybackDuration(payload).toFixed(2)} s${previewNote}`],
-    ["骨骼", payload.bone_names?.length ?? payload.parent_indices.length],
-  ];
-  if (payload.objects?.length) motionRows.push(["交互物体", payload.objects.length]);
-  if (payload.has_terrain) motionRows.push(["地形", "有"]);
-  motionRows.push([
-    "身体 mesh",
-    payload.body_mesh?.available ? "SMPL/皮肤" : payload.body_mesh?.reason || "管状近似",
-  ]);
-  renderMetaRows(document.getElementById("motion-meta"), motionRows);
-  renderMotionValidation(payload);
+  renderMotionDetails(payload);
   updatePills();
   updateRetargetFpsPlaceholder();
   if (state.robot) switchInspectorPanel("h2r");
   await refreshRetargetPanel();
-  toast(`已加载 ${payload.name}`);
+  toast(runtimeText(`Loaded ${payload.name}`, `已加载 ${payload.name}`));
 }
 
 function datasetSceneGlbUrl(token: string | null | undefined, o: SceneObjectPayload): string | null {
@@ -3274,13 +3302,13 @@ async function populateDvRobotSelect(preferred?: string): Promise<string> {
 
 async function loadLibraryEntry(entry: LibraryEntry): Promise<void> {
   const label = entry.stem || entry.sequence_id || "";
-  showLoading(`加载动作中… ${label}`.trim());
+  showLoading(runtimeText(`Loading motion… ${label}`, `加载动作中… ${label}`).trim());
   try {
     const { job_id } = await API.post("/api/motion/load_library", entry);
     const payload = await waitMotionJob<MotionPayload>(job_id, (frac, sub) => {
       setLoadingProgress(frac, sub);
     });
-    setLoadingProgress(1, "构建场景…");
+    setLoadingProgress(1, runtimeText("Building scene…", "构建场景…"));
     await loadMotionPayload(payload);
   } catch (e) {
     toast(errorMessage(e), true);
@@ -3294,18 +3322,22 @@ let libMotionsRoot = "";
 
 async function linkLibraryPath(): Promise<void> {
   const hint = libMotionsRoot
-    ? `链接到资源库目录（${libMotionsRoot}）`
-    : "链接到当前资源库目录";
+    ? runtimeText(
+      `Link to the library directory (${libMotionsRoot})`,
+      `链接到资源库目录（${libMotionsRoot}）`,
+    )
+    : runtimeText("Link to the current library directory", "链接到当前资源库目录");
   const path = window.prompt(hint, "");
   if (!path?.trim()) return;
   try {
     const data = await API.post("/api/library/link", { path: path.trim() });
     if (data.motions_library_root) libMotionsRoot = data.motions_library_root;
     await refreshLibrary();
-    const sel = document.getElementById("lib-folder");
-    if (sel && data.folder_label) sel.value = data.folder_label;
-    renderLibrary();
-    toast(`已链接：${data.folder_label}（${data.clip_count} clip）`);
+    if (data.folder_label) setLibrarySearch(data.folder_label);
+    toast(runtimeText(
+      `Linked: ${data.folder_label} (${data.clip_count} clips)`,
+      `已链接：${data.folder_label}（${data.clip_count} 个动作）`,
+    ));
   } catch (e) {
     toast(errorMessage(e), true);
   }
@@ -3315,11 +3347,16 @@ async function linkLibraryPath(): Promise<void> {
 let libEntries: LibraryEntry[] = [];
 let libSourceRoot = "";
 let libCategoryFilter: "all" | MotionCategory = "all";
-const libCategoryLabels: Record<MotionCategory, string> = {
-  motion: "动作",
-  object: "物体",
-  terrain: "地形",
+const libCategoryCopy: Record<MotionCategory, { en: string; zh: string }> = {
+  motion: { en: "Motion", zh: "动作" },
+  object: { en: "Object", zh: "物体" },
+  terrain: { en: "Terrain", zh: "地形" },
 };
+
+function libraryCategoryLabel(category: MotionCategory): string {
+  const copy = libCategoryCopy[category];
+  return runtimeText(copy.en, copy.zh);
+}
 
 function normalizedMotionCategory(entry: LibraryEntry): MotionCategory {
   const category = entry.motion_category;
@@ -3328,10 +3365,19 @@ function normalizedMotionCategory(entry: LibraryEntry): MotionCategory {
 
 function selectLibraryCategory(category: "all" | MotionCategory): void {
   libCategoryFilter = category;
-  document.querySelectorAll<HTMLButtonElement>("[data-library-category]").forEach((button) => {
-    button.setAttribute("aria-pressed", String(button.dataset.libraryCategory === category));
-  });
   renderLibrary();
+}
+
+function setLibrarySearch(value: string): void {
+  const input = document.getElementById("lib-search");
+  if (input.value === value) {
+    renderLibrary();
+    return;
+  }
+  // Dispatching a real input event keeps the Vue SearchField v-model, its
+  // clear affordance, and the imperative library renderer in one state.
+  input.value = value;
+  input.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
 async function refreshLibrary(): Promise<void> {
@@ -3341,64 +3387,69 @@ async function refreshLibrary(): Promise<void> {
     libEntries = data.entries || [];
     libSourceRoot = data.source_root || "";
     if (data.motions_library_root) libMotionsRoot = data.motions_library_root;
-    // populate folder dropdown
-    const sel = document.getElementById("lib-folder");
-    const allFolders = document.createElement("option");
-    allFolders.value = "";
-    allFolders.textContent = `目录（${(data.folders || []).length}）`;
-    sel.replaceChildren(allFolders);
-    for (const f of data.folders || []) {
-      const o = document.createElement("option");
-      o.value = f; o.textContent = f;
-      sel.appendChild(o);
-    }
     renderLibrary();
   } catch (e) {
-    document.getElementById("lib-count").textContent = "加载失败";
-    renderTextMessage(list, `无法读取资源库：${errorMessage(e)}`);
+    renderTextMessage(list, runtimeText(
+      `Unable to read the library: ${errorMessage(e)}`,
+      `无法读取资源库：${errorMessage(e)}`,
+    ));
   }
 }
 function renderLibrary(): void {
   const query = document.getElementById("lib-search").value || "";
-  const folder = document.getElementById("lib-folder").value || "";
   const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
   const list = document.getElementById("lib-list");
   list.replaceChildren();
   const filtered = libEntries.filter((e) => {
-    if (folder && e.folder_label !== folder) return false;
     if (libCategoryFilter !== "all" && normalizedMotionCategory(e) !== libCategoryFilter) {
       return false;
     }
-    const category = libCategoryLabels[normalizedMotionCategory(e)];
-    const hay = `${e.folder_label || ""} ${e.stem || ""} ${category}`.toLowerCase();
+    const category = normalizedMotionCategory(e);
+    const categoryCopy = libCategoryCopy[category];
+    // Search both languages so switching the workspace locale never changes
+    // which rows match an existing query.
+    const hay = [
+      e.folder_label || "",
+      e.stem || "",
+      category,
+      categoryCopy.en,
+      categoryCopy.zh,
+    ].join(" ").toLowerCase();
     return tokens.every((t) => hay.includes(t));
   });
-  document.getElementById("lib-count").textContent =
-    libEntries.length ? `${filtered.length} / ${libEntries.length} clip` : "";
 
   if (!libEntries.length) {
     renderTextMessage(
       list,
-      "资源库中还没有可识别的动作。请选择资源库目录，或链接一个外部数据集目录。",
+      runtimeText(
+        "No recognizable motions are available. Choose a library directory or link an external dataset directory.",
+        "资源库中还没有可识别的动作。请选择资源库目录，或链接一个外部数据集目录。",
+      ),
     );
     return;
   }
   if (!filtered.length) {
-    renderTextMessage(list, `没有匹配「${query}${folder ? " @" + folder : ""}」的结果`);
+    renderTextMessage(list, runtimeText(
+      `No results match “${query}”`,
+      `没有匹配「${query}」的结果`,
+    ));
     return;
   }
   for (const e of filtered.slice(0, 300)) {
     const row = document.createElement("div");
     row.className = "lib-row";
     const category = normalizedMotionCategory(e);
-    const categoryBadge = textElement("span", "lr-category", libCategoryLabels[category]);
+    const categoryBadge = textElement("span", "lr-category", libraryCategoryLabel(category));
     categoryBadge.dataset.category = category;
     const loadButton = document.createElement("button");
     loadButton.type = "button";
     loadButton.className = "lr-load";
     loadButton.setAttribute(
       "aria-label",
-      `加载动作 ${[e.folder_label, e.stem].filter(Boolean).join(" ")}`,
+      runtimeText(
+        `Load motion ${[e.folder_label, e.stem].filter(Boolean).join(" ")}`,
+        `加载动作 ${[e.folder_label, e.stem].filter(Boolean).join(" ")}`,
+      ),
     );
     loadButton.append(
       categoryBadge,
@@ -3407,8 +3458,11 @@ function renderLibrary(): void {
     );
     const addButton = textElement("button", "lr-add", "＋");
     addButton.type = "button";
-    addButton.title = "加入篮子";
-    addButton.setAttribute("aria-label", `将 ${e.stem || "动作"} 加入篮子`);
+    addButton.title = runtimeText("Add to basket", "加入篮子");
+    addButton.setAttribute("aria-label", runtimeText(
+      `Add ${e.stem || "motion"} to basket`,
+      `将 ${e.stem || "动作"} 加入篮子`,
+    ));
     row.append(loadButton, addButton);
     loadButton.onclick = () => loadLibraryEntry(e);
     addButton.onclick = () => addToBasket([e]);
@@ -3418,19 +3472,28 @@ function renderLibrary(): void {
     const more = document.createElement("div");
     more.className = "hint";
     more.style.padding = "8px 10px";
-    more.textContent = `… 还有 ${filtered.length - 300} 条，继续输入以缩小范围`;
+    more.textContent = runtimeText(
+      `… ${filtered.length - 300} more. Keep typing to narrow the results.`,
+      `… 还有 ${filtered.length - 300} 条，继续输入以缩小范围`,
+    );
     list.appendChild(more);
   }
 }
 document.getElementById("lib-search").oninput = () => renderLibrary();
-document.getElementById("lib-folder").onchange = () => renderLibrary();
-document.querySelectorAll<HTMLButtonElement>("[data-library-category]").forEach((button) => {
-  button.addEventListener("click", () => {
-    const category = button.dataset.libraryCategory;
-    if (category === "all" || category === "motion" || category === "object" || category === "terrain") {
-      selectLibraryCategory(category);
-    }
-  });
+document.getElementById("lib-category").onchange = (event) => {
+  const category = (event.currentTarget as HTMLSelectElement).value;
+  if (category === "all" || category === "motion" || category === "object" || category === "terrain") {
+    selectLibraryCategory(category);
+  }
+};
+window.addEventListener("hhtools:workspace-locale-change", () => {
+  renderLibrary();
+  const motionMetaCard = document.getElementById("motion-meta-card");
+  // Calibration-only loads intentionally keep the details card hidden. A
+  // locale change should translate visible details, not alter that UI state.
+  if (state.motion && motionMetaCard?.style.display !== "none") {
+    renderMotionDetails(state.motion);
+  }
 });
 
 // drag-drop helpers (folder-aware)
@@ -3583,7 +3646,10 @@ function inferLibraryFolderLabel(files: UploadFile[]): string | undefined {
 async function ingestMotionFiles(files: UploadFile[], profile = "mimic"): Promise<void> {
   if (!files || !files.length) return;
   const libraryFolderLabel = inferLibraryFolderLabel(files);
-  showLoading(`链接并解析中… (${files.length} 个文件)`);
+  showLoading(runtimeText(
+    `Linking and parsing… (${files.length} files)`,
+    `链接并解析中…（${files.length} 个文件）`,
+  ));
   try {
     const uploadResp = await uploadFilesXHR(
       "/api/motion/upload",
@@ -3595,30 +3661,32 @@ async function ingestMotionFiles(files: UploadFile[], profile = "mimic"): Promis
     const payload = await waitMotionJob<MotionPayload>(job_id, (frac, sub) => {
       setLoadingProgress(frac, sub);
     }, { uploadFrac: 0 });
-    setLoadingProgress(1, "构建场景…");
+    setLoadingProgress(1, runtimeText("Building scene…", "构建场景…"));
     await loadMotionPayload(payload);
     if (linked || folder_label || payload.linked_folder) {
       await refreshLibrary();
       const label = folder_label || payload.linked_folder;
-      if (label) {
-        const sel = document.getElementById("lib-folder");
-        if (sel) sel.value = label;
-        renderLibrary();
-      }
+      if (label) setLibrarySearch(label);
     }
     const resolvedMaterializeMode = materialize_mode === "pending"
       ? payload.materialize_mode
       : materialize_mode;
     const modeHint = resolvedMaterializeMode === "symlink"
-      ? "软链接"
+      ? { en: "Symlinked", zh: "软链接" }
       : resolvedMaterializeMode === "hardlink"
-        ? "硬链接"
-        : "已复制";
+        ? { en: "Hard-linked", zh: "硬链接" }
+        : { en: "Copied", zh: "已复制" };
     if (payload.library_entry) {
       addToBasket([payload.library_entry]);
-      toast(`已${modeHint}并加载：${payload.name}（资源库 · ${folder_label || payload.linked_folder}）`);
+      toast(runtimeText(
+        `${modeHint.en} and loaded: ${payload.name} (Library · ${folder_label || payload.linked_folder})`,
+        `已${modeHint.zh}并加载：${payload.name}（资源库 · ${folder_label || payload.linked_folder}）`,
+      ));
     } else if (linked || payload.linked_folder) {
-      toast(`已${modeHint}到资源库：${payload.linked_folder || folder_label}，已加载首条 clip`);
+      toast(runtimeText(
+        `${modeHint.en} to the Library: ${payload.linked_folder || folder_label}; loaded the first clip`,
+        `已${modeHint.zh}到资源库：${payload.linked_folder || folder_label}，已加载首条 clip`,
+      ));
     }
   } catch (e) {
     toast(errorMessage(e), true);
@@ -3653,7 +3721,10 @@ document.getElementById("add-to-basket").onclick = () => {
     addToBasket([state.libraryEntry]);
     return;
   }
-  toast("请从资源库加载动作后再加入篮子，或使用资源库列表行的 ＋", true);
+  toast(runtimeText(
+    "Load a motion from the Library before adding it to the basket, or use ＋ on a library row.",
+    "请从资源库加载动作后再加入篮子，或使用资源库列表行的 ＋",
+  ), true);
 };
 
 // =================================================================  ROBOT
