@@ -1,0 +1,19 @@
+{
+  "domain": "box",
+  "normalized_case": "case1_carry",
+  "capture_id": "20260330000166_1_1775009756",
+  "human_motion_file": "motion_actor.bvh",
+  "human_timestamps_file": "motion_actor.csv",
+  "fps": 90,
+  "frame_count": 5590,
+  "objects": [
+    {
+      "object_name": "prop_Box_H_1",
+      "source_file": "prop_Box_H_1.csv",
+      "published_file": "prop_Box_H_1.csv",
+      "published_path": "raw_mocap/box/case1_carry/20260330000166_1_1775009756/prop_Box_H_1.csv",
+      "fps": 90,
+      "frame_count": 5590
+    }
+  ]
+}
