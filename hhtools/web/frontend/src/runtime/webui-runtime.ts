@@ -179,6 +179,7 @@ import type {
   CalibrationJointRegion,
   CalibrationReferencePayload,
   ComparisonPreset,
+  GvhmrRuntimeStatus,
   JobConfigResponse,
   JobHistoryStateDetail,
   JobListResponse,
@@ -206,6 +207,8 @@ import type {
   TerrainPayload,
   UploadFile,
   Vec3,
+  VideoToMotionResultSummary,
+  VideoToMotionStateDetail,
   WorkflowNodeState,
   WorkflowNodeStatus,
   WorkflowStateDetail,
@@ -220,6 +223,8 @@ interface UploadFilesXhrOptions {
   appendTo?: string;
   libraryFolderLabel?: string;
   userSourceRoot?: string;
+  staticCam?: boolean;
+  fMm?: number;
 }
 
 type UploadFilesXhrResponse<Url extends string> =
@@ -611,6 +616,8 @@ function uploadFilesXHR<Url extends string>(
     appendTo,
     libraryFolderLabel,
     userSourceRoot,
+    staticCam,
+    fMm,
   }: UploadFilesXhrOptions = {},
   onUploadProgress?: ProgressCallback,
 ): Promise<UploadFilesXhrResponse<Url>> {
@@ -622,6 +629,8 @@ function uploadFilesXHR<Url extends string>(
     if (appendTo) qs.set("append_to", appendTo);
     if (libraryFolderLabel) qs.set("library_folder_label", libraryFolderLabel);
     if (userSourceRoot) qs.set("user_source_root", userSourceRoot);
+    if (staticCam !== undefined) qs.set("static_cam", String(staticCam));
+    if (fMm !== undefined) qs.set("f_mm", String(fMm));
     const q = qs.toString() ? `?${qs.toString()}` : "";
     const xhr = new XMLHttpRequest();
     xhr.upload.onprogress = (e) => {
@@ -3714,6 +3723,328 @@ function initMotionImportZone(): void {
   });
 }
 initMotionImportZone();
+
+const GVHMR_VIDEO_ACCEPT =
+  "video/mp4,video/quicktime,video/x-matroska,video/x-msvideo,video/webm,.m4v";
+const GVHMR_VIDEO_EXTENSIONS = new Set([".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v"]);
+
+interface GvhmrWorkspaceState {
+  file: UploadFile | null;
+  previewUrl: string | null;
+  previewDuration: number | null;
+  runtimeState: VideoToMotionStateDetail["runtimeState"];
+  runtimeMissing: string[];
+  runtimeError: string | null;
+  stage: VideoToMotionStateDetail["stage"];
+  progress: number;
+  message: string;
+  result: VideoToMotionResultSummary | null;
+}
+
+const gvhmrWorkspace: GvhmrWorkspaceState = {
+  file: null,
+  previewUrl: null,
+  previewDuration: null,
+  runtimeState: "checking",
+  runtimeMissing: [],
+  runtimeError: null,
+  stage: "idle",
+  progress: 0,
+  message: "",
+  result: null,
+};
+
+function gvhmrText(en: string, zh: string): string {
+  return document.documentElement.lang === "zh-CN" ? zh : en;
+}
+
+function gvhmrRuntimeMessage(): string {
+  if (gvhmrWorkspace.runtimeState === "checking") {
+    return gvhmrText("Checking…", "检查中……");
+  }
+  if (gvhmrWorkspace.runtimeState === "ready") {
+    return gvhmrText("Ready · official weights", "已就绪 · 官方权重");
+  }
+  return gvhmrWorkspace.runtimeMissing[0]
+    || gvhmrWorkspace.runtimeError
+    || gvhmrText("GVHMR runtime is unavailable", "GVHMR 推理环境不可用");
+}
+
+function gvhmrPublicState(): VideoToMotionStateDetail {
+  return {
+    videoName: gvhmrWorkspace.file?.name ?? null,
+    runtimeState: gvhmrWorkspace.runtimeState,
+    runtimeMessage: gvhmrRuntimeMessage(),
+    stage: gvhmrWorkspace.stage,
+    progress: gvhmrWorkspace.progress,
+    message: gvhmrWorkspace.message,
+    result: gvhmrWorkspace.result,
+  };
+}
+
+function renderGvhmrWorkspace(): void {
+  const isBusy = gvhmrWorkspace.stage === "uploading" || gvhmrWorkspace.stage === "running";
+  const canRun = Boolean(gvhmrWorkspace.file)
+    && gvhmrWorkspace.runtimeState === "ready"
+    && !isBusy;
+  const runtimeMessage = gvhmrRuntimeMessage();
+
+  const runtimeStatus = document.getElementById("gvhmr-runtime-status");
+  if (runtimeStatus) {
+    runtimeStatus.textContent = gvhmrWorkspace.runtimeState === "ready"
+      ? gvhmrText(
+        "Official pretrained weights are ready · inference only, no training",
+        "官方预训练权重已就绪 · 仅推理，不训练",
+      )
+      : runtimeMessage;
+    runtimeStatus.classList.toggle("error", gvhmrWorkspace.runtimeState === "unavailable");
+    runtimeStatus.title = gvhmrWorkspace.runtimeMissing.join("\n") || gvhmrWorkspace.runtimeError || "";
+  }
+
+  const selection = document.getElementById("gvhmr-video-selection");
+  if (selection) selection.style.display = gvhmrWorkspace.file ? "flex" : "none";
+  const videoName = document.getElementById("gvhmr-video-name");
+  if (videoName) videoName.textContent = gvhmrWorkspace.file?.name ?? "—";
+  const videoMeta = document.getElementById("gvhmr-video-meta");
+  if (videoMeta) {
+    const parts = gvhmrWorkspace.file
+      ? [fmtBytes(gvhmrWorkspace.file.size), gvhmrWorkspace.file.type || gvhmrText("Video", "视频")]
+      : [];
+    if (gvhmrWorkspace.previewDuration != null) {
+      parts.push(`${gvhmrWorkspace.previewDuration.toFixed(1)} s`);
+    }
+    videoMeta.textContent = parts.join(" · ");
+  }
+
+  const workflowVideo = document.getElementById("gvhmr-workflow-video");
+  if (workflowVideo) {
+    workflowVideo.textContent = gvhmrWorkspace.file?.name
+      ?? gvhmrText("Not selected", "未选择");
+  }
+  const workflowRuntime = document.getElementById("gvhmr-workflow-runtime");
+  if (workflowRuntime) {
+    workflowRuntime.textContent = runtimeMessage;
+    workflowRuntime.classList.toggle("error", gvhmrWorkspace.runtimeState === "unavailable");
+  }
+
+  const runButton = document.getElementById("gvhmr-run") as HTMLButtonElement | null;
+  if (runButton) {
+    runButton.disabled = !canRun;
+    runButton.textContent = isBusy
+      ? gvhmrText("Generating…", "生成中……")
+      : gvhmrText("Start GVHMR", "开始 GVHMR 推理");
+  }
+  const disabledReason = document.getElementById("gvhmr-disabled-reason");
+  if (disabledReason) {
+    let reason = "";
+    if (gvhmrWorkspace.runtimeState === "checking") {
+      reason = gvhmrText("Checking the GVHMR runtime.", "正在检查 GVHMR 推理环境。");
+    } else if (gvhmrWorkspace.runtimeState === "unavailable") {
+      reason = runtimeMessage;
+    } else if (!gvhmrWorkspace.file) {
+      reason = gvhmrText("Select a video first.", "请先选择视频。");
+    }
+    disabledReason.textContent = reason;
+    disabledReason.style.display = reason && !isBusy ? "block" : "none";
+  }
+
+  const progress = document.getElementById("gvhmr-progress");
+  if (progress) {
+    progress.style.display = gvhmrWorkspace.stage === "idle" ? "none" : "block";
+    const bar = progress.querySelector<HTMLElement>(".bar");
+    if (bar) bar.style.width = `${Math.round(Math.max(0, Math.min(1, gvhmrWorkspace.progress)) * 100)}%`;
+  }
+  const status = document.getElementById("gvhmr-status");
+  if (status) {
+    status.textContent = gvhmrWorkspace.message;
+    status.classList.toggle("error", gvhmrWorkspace.stage === "failed");
+  }
+
+  const resultCard = document.getElementById("gvhmr-result-card");
+  if (resultCard) resultCard.style.display = gvhmrWorkspace.result ? "block" : "none";
+  const resultName = document.getElementById("gvhmr-result-name");
+  if (resultName) resultName.textContent = gvhmrWorkspace.result?.name ?? "—";
+  const resultFrames = document.getElementById("gvhmr-result-frames");
+  if (resultFrames) {
+    resultFrames.textContent = gvhmrWorkspace.result?.frames == null
+      ? "—"
+      : String(gvhmrWorkspace.result.frames);
+  }
+  const resultDuration = document.getElementById("gvhmr-result-duration");
+  if (resultDuration) {
+    const result = gvhmrWorkspace.result;
+    const parts = result?.duration == null ? [] : [`${result.duration.toFixed(2)} s`];
+    if (result?.framerate != null) parts.push(`${result.framerate.toFixed(2)} fps`);
+    resultDuration.textContent = parts.join(" · ") || "—";
+  }
+
+  window.dispatchEvent(new CustomEvent("hhtools:video-to-motion-state", {
+    detail: gvhmrPublicState(),
+  }));
+}
+
+function selectGvhmrVideo(files: UploadFile[]): void {
+  if (!files.length) return;
+  if (files.length !== 1) {
+    toast(gvhmrText("Select one video at a time.", "GVHMR 每次只处理一个视频。"), true);
+    return;
+  }
+  const file = files[0];
+  const suffix = file.name.slice(file.name.lastIndexOf(".")).toLowerCase();
+  if (!GVHMR_VIDEO_EXTENSIONS.has(suffix)) {
+    toast(gvhmrText(
+      "Supported formats: MP4, MOV, MKV, AVI, WebM, and M4V.",
+      "支持 MP4、MOV、MKV、AVI、WebM 和 M4V 视频。",
+    ), true);
+    return;
+  }
+
+  if (gvhmrWorkspace.previewUrl) URL.revokeObjectURL(gvhmrWorkspace.previewUrl);
+  gvhmrWorkspace.file = file;
+  gvhmrWorkspace.previewUrl = URL.createObjectURL(file);
+  gvhmrWorkspace.previewDuration = null;
+  gvhmrWorkspace.stage = "idle";
+  gvhmrWorkspace.progress = 0;
+  gvhmrWorkspace.message = "";
+  gvhmrWorkspace.result = null;
+
+  const preview = document.getElementById("gvhmr-video-preview") as HTMLVideoElement | null;
+  if (preview) {
+    preview.src = gvhmrWorkspace.previewUrl;
+    preview.onloadedmetadata = () => {
+      gvhmrWorkspace.previewDuration = Number.isFinite(preview.duration) ? preview.duration : null;
+      renderGvhmrWorkspace();
+    };
+    preview.load();
+  }
+  renderGvhmrWorkspace();
+}
+
+async function refreshGvhmrRuntime(): Promise<void> {
+  gvhmrWorkspace.runtimeState = "checking";
+  gvhmrWorkspace.runtimeError = null;
+  renderGvhmrWorkspace();
+  try {
+    const runtime: GvhmrRuntimeStatus = await API.get("/api/video-to-motion/status");
+    gvhmrWorkspace.runtimeState = runtime.ready ? "ready" : "unavailable";
+    gvhmrWorkspace.runtimeMissing = runtime.missing ?? [];
+  } catch (error) {
+    gvhmrWorkspace.runtimeState = "unavailable";
+    gvhmrWorkspace.runtimeMissing = [];
+    gvhmrWorkspace.runtimeError = errorMessage(error);
+  }
+  renderGvhmrWorkspace();
+}
+
+function gvhmrFocalLength(): number | undefined {
+  const input = document.getElementById("gvhmr-f-mm") as HTMLInputElement | null;
+  const raw = input?.value.trim() ?? "";
+  if (!raw) return undefined;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(gvhmrText(
+      "Focal length must be a positive integer.",
+      "焦距必须是正整数。",
+    ));
+  }
+  return value;
+}
+
+async function runGvhmrVideoToMotion(): Promise<void> {
+  const file = gvhmrWorkspace.file;
+  if (!file || gvhmrWorkspace.runtimeState !== "ready") {
+    renderGvhmrWorkspace();
+    return;
+  }
+
+  let fMm: number | undefined;
+  try {
+    fMm = gvhmrFocalLength();
+  } catch (error) {
+    toast(errorMessage(error), true);
+    return;
+  }
+  const staticCam = (document.getElementById("gvhmr-static-cam") as HTMLInputElement | null)?.checked ?? true;
+
+  gvhmrWorkspace.stage = "uploading";
+  gvhmrWorkspace.progress = 0;
+  gvhmrWorkspace.message = gvhmrText(`Uploading ${file.name}…`, `正在上传 ${file.name}……`);
+  gvhmrWorkspace.result = null;
+  renderGvhmrWorkspace();
+  showLoading(gvhmrWorkspace.message);
+
+  try {
+    const { job_id } = await uploadFilesXHR(
+      "/api/video-to-motion/upload",
+      [file],
+      { staticCam, fMm },
+      (fraction, loaded, total) => {
+        gvhmrWorkspace.progress = (fraction ?? 0) * 0.08;
+        gvhmrWorkspace.message = total > 0
+          ? gvhmrText(
+            `Uploading ${fmtBytes(loaded)} / ${fmtBytes(total)}`,
+            `上传 ${fmtBytes(loaded)} / ${fmtBytes(total)}`,
+          )
+          : gvhmrText("Uploading video…", "正在上传视频……");
+        setLoadingProgress(gvhmrWorkspace.progress, gvhmrWorkspace.message);
+        renderGvhmrWorkspace();
+      },
+    );
+    gvhmrWorkspace.stage = "running";
+    renderGvhmrWorkspace();
+    const payload = await waitMotionJob<MotionPayload>(job_id, (fraction, message) => {
+      gvhmrWorkspace.stage = "running";
+      gvhmrWorkspace.progress = 0.08 + fraction * 0.92;
+      gvhmrWorkspace.message = message;
+      setLoadingProgress(gvhmrWorkspace.progress, message);
+      renderGvhmrWorkspace();
+    }, { uploadFrac: 0 });
+    setLoadingProgress(1, gvhmrText("Building the motion preview…", "正在构建动作预览……"));
+    await loadMotionPayload(payload);
+    await refreshLibrary();
+    if (payload.library_entry) addToBasket([payload.library_entry], { silent: true });
+
+    gvhmrWorkspace.stage = "completed";
+    gvhmrWorkspace.progress = 1;
+    gvhmrWorkspace.message = gvhmrText("Motion generated successfully.", "视频动作生成完成。");
+    gvhmrWorkspace.result = {
+      name: payload.name,
+      frames: payload.playback_frames ?? payload.num_frames_total ?? payload.positions.length ?? null,
+      duration: payload.playback_duration ?? payload.duration ?? null,
+      framerate: payload.framerate ?? payload.sample_rate ?? null,
+    };
+    renderGvhmrWorkspace();
+    toast(gvhmrText(
+      `GVHMR motion generated and loaded: ${payload.name}`,
+      `GVHMR 动作已生成并加载：${payload.name}`,
+    ));
+  } catch (error) {
+    gvhmrWorkspace.stage = "failed";
+    gvhmrWorkspace.message = errorMessage(error);
+    renderGvhmrWorkspace();
+    toast(gvhmrWorkspace.message, true);
+  } finally {
+    hideLoading();
+  }
+}
+
+function initGvhmrWorkspace(): void {
+  const pickButton = document.getElementById("video-pick-file") as HTMLButtonElement | null;
+  const runButton = document.getElementById("gvhmr-run") as HTMLButtonElement | null;
+  const dropzone = document.getElementById("video-drop-shared");
+  if (!pickButton || !runButton || !dropzone) return;
+
+  pickButton.onclick = async () => {
+    selectGvhmrVideo(await pickFiles({ accept: GVHMR_VIDEO_ACCEPT }));
+  };
+  runButton.onclick = () => void runGvhmrVideoToMotion();
+  setupDropzone(dropzone, (files) => selectGvhmrVideo(files));
+  window.addEventListener("hhtools:workspace-locale-change", renderGvhmrWorkspace);
+  renderGvhmrWorkspace();
+  void refreshGvhmrRuntime();
+}
+
+initGvhmrWorkspace();
 setupDropzone(document.getElementById("stage"), (files) => ingestMotionFiles(files, "mimic"));
 
 document.getElementById("add-to-basket").onclick = () => {

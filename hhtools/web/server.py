@@ -86,6 +86,7 @@ _UPLOAD_ENDPOINTS = frozenset(
         "/api/dataset/upload",
         "/api/basket/upload",
         "/api/motion/upload",
+        "/api/video-to-motion/upload",
         "/api/robot/upload",
         "/api/r2r/source/upload",
         "/api/r2r/basket/upload",
@@ -2080,6 +2081,166 @@ def create_app(
             _log.exception("motion library dir job failed")
             job.error = str(err)
             job.mark_terminal("error")
+
+    def _run_gvhmr_video_job(
+        job: Job,
+        drop: Path,
+        video_path: Path,
+        static_cam: bool,
+        f_mm: int | None,
+    ) -> None:
+        """Convert one uploaded video with the isolated official GVHMR runtime."""
+
+        from hhtools.integrations.gvhmr import GvhmrConfig, run_gvhmr
+        from hhtools.web.motion_library_links import materialize_drop
+        from hhtools.web.motion_progress import MotionLoadProgress
+        from hhtools.web.upload_resolve import load_clip_at_path
+
+        try:
+            config = GvhmrConfig.from_environment()
+            # GVHMR and hhtools can use the same licensed SMPL-X directory. An
+            # explicit hhtools override always wins; this only supplies the
+            # integration default for the generated .pt adapter.
+            os.environ.setdefault(
+                "HHTOOLS_BODY_MODELS", str(config.body_models_root),
+            )
+
+            def inference_progress(fraction: float, message: str) -> None:
+                job.progress = 0.03 + 0.67 * max(0.0, min(1.0, fraction))
+                job.message = message
+                _persist_job(job)
+
+            result_path = run_gvhmr(
+                video_path,
+                drop,
+                static_cam=static_cam,
+                f_mm=f_mm,
+                config=config,
+                progress=inference_progress,
+            )
+
+            job.progress = 0.72
+            job.message = "正在转换 GVHMR 参数为 hhtools Motion…"
+            load_progress = MotionLoadProgress(job, base=0.72, span=0.13)
+            motion, dataset = load_clip_at_path(
+                result_path,
+                "mimic",
+                load_motion_file=_load_motion_file,
+                load_via_adapter=_load_via_adapter,
+                progress=load_progress,
+            )
+
+            relative_result = result_path.resolve().relative_to(drop.resolve())
+            folder_label_hint = _safe_upload_directory_name(
+                f"gvhmr-{video_path.stem}",
+                default=f"gvhmr-{job.id}",
+            )
+            job.progress = 0.87
+            job.message = "正在发布到 Motion Library…"
+            with motion_library_publish_lock:
+                lib_dir, folder_label, materialize_mode = materialize_drop(
+                    [relative_result.as_posix()],
+                    folder_label=folder_label_hint,
+                    upload_drop=drop,
+                )
+                library_picked = _matching_materialized_clip(
+                    lib_dir,
+                    snapshot_root=drop,
+                    snapshot_picked=result_path,
+                    profile="mimic",
+                )
+                library_entry = _library_entry_from_link(
+                    folder_label,
+                    lib_dir,
+                    library_picked,
+                    dataset or "gvhmr",
+                )
+
+            job.progress = 0.93
+            job.message = "正在构建动作预览…"
+            payload = _register_motion(
+                motion,
+                dataset or "gvhmr",
+                "gvhmr",
+                library_entry=library_entry,
+                extra={
+                    "video_name": video_path.name,
+                    "gvhmr_static_cam": static_cam,
+                    "materialize_mode": materialize_mode,
+                    "linked_folder": folder_label,
+                },
+            )
+            job.result = payload
+            job.progress = 1.0
+            job.message = "视频动作生成完成"
+            job.mark_terminal("done")
+        except Exception as err:  # noqa: BLE001
+            _log.exception("GVHMR video-to-motion job failed")
+            job.error = str(err)
+            job.mark_terminal("error")
+
+    @app.get("/api/video-to-motion/status")
+    def video_to_motion_status() -> dict:
+        """Report whether the isolated official GVHMR runtime is ready."""
+
+        from hhtools.integrations.gvhmr import gvhmr_status
+
+        return gvhmr_status()
+
+    @app.post("/api/video-to-motion/upload")
+    async def upload_video_to_motion(
+        files: list[UploadFile] = File(...),
+        static_cam: bool = True,
+        f_mm: int | None = None,
+    ) -> dict:
+        """Upload one video and schedule official GVHMR inference."""
+
+        from hhtools.integrations.gvhmr import gvhmr_status
+
+        if len(files) != 1:
+            raise HTTPException(status_code=400, detail="请选择一个视频文件")
+        if f_mm is not None and f_mm <= 0:
+            raise HTTPException(status_code=400, detail="f_mm 必须为正整数")
+        runtime = gvhmr_status()
+        if not runtime["ready"]:
+            missing = "; ".join(runtime["missing"])
+            raise HTTPException(status_code=503, detail=f"GVHMR 尚未就绪：{missing}")
+
+        admission = _reserve_job_slot()
+        drop = state.upload_root / f"gvhmr_{uuid.uuid4().hex[:8]}"
+        scheduled = False
+        try:
+            drop.mkdir(parents=True, exist_ok=True)
+            stored = await _store_uploads(files, drop)
+            if len(stored) != 1:
+                raise HTTPException(status_code=400, detail="视频上传为空")
+            relative, video_path = stored[0]
+            if video_path.suffix.lower() not in {
+                ".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v",
+            }:
+                raise HTTPException(
+                    status_code=400,
+                    detail="支持 MP4、MOV、MKV、AVI、WebM 和 M4V 视频",
+                )
+            job = _schedule_job(
+                "video_to_motion",
+                {
+                    "file": relative.as_posix(),
+                    "static_cam": static_cam,
+                    "f_mm": f_mm,
+                    "engine": "official_gvhmr",
+                    "training": False,
+                },
+                _run_gvhmr_video_job,
+                args=(drop, video_path, static_cam, f_mm),
+                reservation=admission,
+            )
+            scheduled = True
+            return {"job_id": job.id}
+        finally:
+            if not scheduled:
+                admission.cancel()
+                shutil.rmtree(drop, ignore_errors=True)
 
     @app.post("/api/motion/load_library")
     async def load_library(body: dict) -> dict:

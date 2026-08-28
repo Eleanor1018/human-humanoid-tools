@@ -40,6 +40,7 @@ const groups: NavigationGroup[] = [
     zhLabel: '资产',
     items: [
       { id: 'motion', label: '动作 Motion', enLabel: 'Motion', zhLabel: '动作', icon: '🎞' },
+      { id: 'video', label: '视频 Video', enLabel: 'Video', zhLabel: '视频', icon: '🎥' },
       { id: 'robot-assets', label: '机器人 Robot', enLabel: 'Robot', zhLabel: '机器人', icon: '🤖' },
     ],
   },
@@ -48,6 +49,13 @@ const groups: NavigationGroup[] = [
     enLabel: 'Workflows',
     zhLabel: '工作流',
     items: [
+      {
+        id: 'video-to-motion',
+        label: '视频 → 动作 Video to Motion',
+        enLabel: 'Video → Motion',
+        zhLabel: '视频 → 动作',
+        icon: '🎥',
+      },
       { id: 'h2r', label: '人体 → 机器人 H2R', enLabel: 'Human → Robot H2R', zhLabel: '人体 → 机器人 H2R', icon: '↗' },
       { id: 'r2r', label: '机器人 → 机器人 R2R', enLabel: 'Robot → Robot R2R', zhLabel: '机器人 → 机器人 R2R', icon: '🔁' },
       { id: 'batch', label: '批量 Batch', enLabel: 'Batch', zhLabel: '批量处理', icon: '🧺', badgeId: 'basket-badge' },

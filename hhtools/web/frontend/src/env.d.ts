@@ -13,6 +13,7 @@ import type {
   PlaybackUiState,
   ResultDiagnosticsDetail,
   UploadFile,
+  VideoToMotionStateDetail,
   WorkflowStateDetail,
 } from './runtime/types'
 import type { GuidedTour } from './runtime/tutorial'
@@ -81,6 +82,7 @@ export type HHToolsKnownId =
   | `lib-${string}`
   | `load-${string}`
   | `motion-${string}`
+  | `gvhmr-${string}`
   | `r2r-${string}`
   | `robot-${string}`
   | `rt-${string}`
@@ -207,6 +209,7 @@ declare global {
     'hhtools:playback-command': CustomEvent<PlaybackCommandDetail>
     'hhtools:playback-state': CustomEvent<Partial<PlaybackUiState>>
     'hhtools:result-diagnostics': CustomEvent<ResultDiagnosticsDetail>
+    'hhtools:video-to-motion-state': CustomEvent<VideoToMotionStateDetail>
     'hhtools:workflow-state': CustomEvent<WorkflowStateDetail>
   }
 }

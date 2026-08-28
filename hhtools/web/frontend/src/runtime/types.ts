@@ -91,7 +91,9 @@ export type PlaybackAction = 'toggle' | 'seek' | 'speed' | 'loop'
 
 export type WorkspacePanelId =
   | 'motion'
+  | 'video'
   | 'robot-assets'
+  | 'video-to-motion'
   | 'h2r'
   | 'batch'
   | 'r2r'
@@ -108,6 +110,7 @@ export type ComparisonPreset = 'source' | 'target' | 'result' | 'overlay'
 export type ImportCommandTarget =
   | 'motion-file'
   | 'motion-folder'
+  | 'video-file'
   | 'robot-urdf'
   | 'robot-mesh-folder'
   | 'robot-trajectory'
@@ -188,6 +191,31 @@ export interface WorkflowStateDetail {
   workflow: WorkflowId
   nodes: WorkflowNodeStatus[]
   blockedReason: string | null
+}
+
+export type VideoToMotionStage =
+  | 'idle'
+  | 'uploading'
+  | 'running'
+  | 'completed'
+  | 'failed'
+
+export interface VideoToMotionResultSummary {
+  name: string
+  frames: number | null
+  duration: number | null
+  framerate: number | null
+}
+
+/** Renderer-safe state for the GVHMR workflow; the selected File stays private. */
+export interface VideoToMotionStateDetail {
+  videoName: string | null
+  runtimeState: 'checking' | 'ready' | 'unavailable'
+  runtimeMessage: string
+  stage: VideoToMotionStage
+  progress: number
+  message: string
+  result: VideoToMotionResultSummary | null
 }
 
 export interface PlaybackCommandDetail {
@@ -757,8 +785,20 @@ export interface BasicResponse {
   [key: string]: unknown
 }
 
+export interface GvhmrRuntimeStatus {
+  ready: boolean
+  missing: string[]
+  checks: Record<string, boolean>
+  root: string
+  body_models_root: string
+  image: string
+  uses_official_weights: boolean
+  training_enabled: boolean
+}
+
 export type ApiGetResponse<Url extends string> =
   Url extends '/api/health' ? HealthResponse
+    : Url extends '/api/video-to-motion/status' ? GvhmrRuntimeStatus
     : Url extends '/api/settings/job-admission' ? JobAdmissionSnapshot
     : Url extends '/api/settings/motion-library' ? MotionLibrarySettingsSnapshot
     : Url extends '/api/library' ? LibraryResponse

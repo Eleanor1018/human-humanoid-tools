@@ -1432,6 +1432,9 @@ button { font-family: inherit; cursor: pointer; }
   list-style: none;
   min-height: 76px;
 }
+.workflow-pipeline-nodes.video-to-motion-pipeline-nodes {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
 .workflow-pipeline-node {
   position: relative;
   min-width: 0;
@@ -1950,6 +1953,69 @@ button { font-family: inherit; cursor: pointer; }
   margin-bottom: 0;
   font-size: 13px;
 }
+.video-upload-shared { padding-right: 36px; }
+.video-runtime-status {
+  margin: -6px 2px 0;
+  line-height: 1.45;
+}
+.video-runtime-status.error,
+#gvhmr-workflow-runtime.error,
+#gvhmr-status.error { color: var(--red); }
+.video-selection {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.video-selection video {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: var(--radius-sm);
+  background: #080b12;
+  object-fit: contain;
+}
+.video-selection-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.video-selection-copy strong,
+.video-selection-copy span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.video-workflow-option {
+  align-items: flex-start;
+  gap: 9px;
+  margin-bottom: 12px;
+  cursor: pointer;
+}
+.video-workflow-option input {
+  flex: 0 0 auto;
+  margin-top: 3px;
+}
+.video-workflow-option span {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  color: var(--ink-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.video-workflow-option b { color: var(--ink); font-size: 12px; }
+.video-workflow-option small { color: var(--ink-secondary); font-size: 11px; }
+.video-workflow-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 12px;
+}
+.video-workflow-progress { margin-top: 12px; }
 .motion-import-info { position: static; }
 .motion-import-info-trigger {
   position: absolute;

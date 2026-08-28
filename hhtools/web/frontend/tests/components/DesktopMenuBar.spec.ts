@@ -48,6 +48,26 @@ describe('DesktopMenuBar', () => {
     expect(pae?.text()).toContain('Coming soon')
   })
 
+  it('routes the enabled video-to-motion workflow', async () => {
+    const wrapper = mount(DesktopMenuBar, { props: { activePanel: 'motion' } })
+    wrappers.push(wrapper)
+
+    const panels: string[] = []
+    const receive = (event: WindowEventMap['hhtools:panel-request']): void => {
+      panels.push(event.detail)
+    }
+    window.addEventListener('hhtools:panel-request', receive)
+
+    await wrapper.get('[data-menu-trigger="workflows"]').trigger('click')
+    const videoToMotion = wrapper.findAll<HTMLButtonElement>('.desktop-menu-item')
+      .find((item) => item.text().includes('Video to Motion'))
+    await videoToMotion?.trigger('click')
+    window.removeEventListener('hhtools:panel-request', receive)
+
+    expect(videoToMotion?.attributes('disabled')).toBeUndefined()
+    expect(panels).toEqual(['video-to-motion'])
+  })
+
   it('routes File imports and keeps workspace and theme settings in their own menu', async () => {
     const wrapper = mount(DesktopMenuBar, {
       props: { activePanel: 'motion', theme: 'light' },
@@ -62,6 +82,7 @@ describe('DesktopMenuBar', () => {
     await wrapper.get('[data-menu-trigger="file"]').trigger('click')
     const items = wrapper.findAll('.desktop-menu-item')
     expect(items.some((item) => item.text().includes('Settings'))).toBe(false)
+    expect(items.some((item) => item.text().includes('Import Video'))).toBe(true)
     const motionFile = items.find((item) => item.text().includes('Import Motion File'))
     await motionFile?.trigger('click')
     window.removeEventListener('hhtools:import-command', receive)

@@ -10,6 +10,7 @@ import JobDrawer from './components/JobDrawer.vue'
 import ResultEvaluationPanel from './components/ResultEvaluationPanel.vue'
 import SearchField from './components/SearchField.vue'
 import SidebarNavigation from './components/SidebarNavigation.vue'
+import VideoToMotionPipeline from './components/VideoToMotionPipeline.vue'
 import WorkflowPipeline from './components/WorkflowPipeline.vue'
 import WorkspaceDrawerHandle from './components/WorkspaceDrawerHandle.vue'
 import WorkspaceSettingsDialog from './components/WorkspaceSettingsDialog.vue'
@@ -349,6 +350,7 @@ const importTargets: Record<Exclude<ImportCommandTarget, 'job-spec'>, {
 }> = {
   'motion-file': { panel: 'motion', selector: '#motion-pick-file', motionProfile: 'mimic' },
   'motion-folder': { panel: 'motion', selector: '#motion-pick-folder', motionProfile: 'mimic' },
+  'video-file': { panel: 'video', selector: '#video-pick-file' },
   'robot-urdf': { panel: 'robot-assets', selector: '#robot-pick-urdf' },
   'robot-mesh-folder': { panel: 'robot-assets', selector: '#robot-pick-mesh-folder' },
   'robot-trajectory': { panel: 'r2r', selector: '[data-r2r-pick="mimic"]:not([data-folder])' },
@@ -758,6 +760,131 @@ onBeforeUnmount(() => {
           <button class="btn secondary small" id="add-to-basket">
             {{ workspaceText('＋ Add to batch basket', '＋ 加入批量篮子') }}
           </button>
+        </div>
+      </section>
+
+      <!-- VIDEO -->
+      <section class="panel" :class="{ active: activePanel === 'video' }" data-panel="video">
+        <h2>{{ workspaceText('Video', '视频') }}</h2>
+        <p class="lead">
+          {{ workspaceText(
+            'Select and preview one local source video. The file is uploaded only when you start Video → Motion.',
+            '选择并预览一个本地源视频。只有在启动“视频 → 动作”后才会上传。',
+          ) }}
+        </p>
+
+        <div class="motion-import-control">
+          <div
+            class="dropzone motion-upload-shared video-upload-shared"
+            id="video-drop-shared"
+            role="group"
+            :aria-label="workspaceText('Video import area', '视频上传区')"
+          >
+            <div class="dz-glyph">🎥</div>
+            <div class="dz-title">{{ workspaceText('Drop a video file here', '拖入一个视频文件') }}</div>
+            <div class="dz-sub">MP4, MOV, MKV, AVI, WebM, M4V</div>
+            <div class="row" style="margin-top:10px">
+              <button id="video-pick-file" type="button" class="btn secondary small">
+                {{ workspaceText('Choose video', '选择视频') }}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <p id="gvhmr-runtime-status" class="hint video-runtime-status" role="status">
+          {{ workspaceText('Checking the GVHMR runtime…', '正在检查 GVHMR 推理环境……') }}
+        </p>
+
+        <section id="gvhmr-video-selection" class="video-selection" style="display:none">
+          <video id="gvhmr-video-preview" controls preload="metadata"></video>
+          <div class="video-selection-copy">
+            <strong id="gvhmr-video-name">—</strong>
+            <span id="gvhmr-video-meta" class="hint"></span>
+          </div>
+          <button type="button" class="btn" @click="requestPanel('video-to-motion')">
+            {{ workspaceText('Continue to Video → Motion', '继续到视频 → 动作') }}
+          </button>
+        </section>
+      </section>
+
+      <!-- VIDEO TO MOTION -->
+      <section
+        class="panel"
+        :class="{ active: activePanel === 'video-to-motion' }"
+        data-panel="video-to-motion"
+      >
+        <div class="panel-stack">
+          <h2>{{ workspaceText('Video → Motion', '视频 → 动作') }}</h2>
+          <p class="lead">
+            {{ workspaceText(
+              'Run the official pretrained GVHMR model to recover a reusable human motion from one video.',
+              '使用 GVHMR 官方预训练模型，从单个视频中恢复可复用的人体动作。',
+            ) }}
+          </p>
+          <VideoToMotionPipeline :locale="workspaceLocale" />
+
+          <div class="card">
+            <h3>{{ workspaceText('1 · Status', '1 · 状态') }}</h3>
+            <div class="meta-row">
+              <span class="k">{{ workspaceText('Video', '视频') }}</span>
+              <span class="v" id="gvhmr-workflow-video">{{ workspaceText('Not selected', '未选择') }}</span>
+            </div>
+            <div class="meta-row">
+              <span class="k">GVHMR</span>
+              <span class="v" id="gvhmr-workflow-runtime">{{ workspaceText('Checking…', '检查中……') }}</span>
+            </div>
+            <button type="button" class="btn secondary small" @click="requestPanel('video')">
+              {{ workspaceText('Choose or replace video', '选择或替换视频') }}
+            </button>
+          </div>
+
+          <div class="card">
+            <h3>{{ workspaceText('2 · Generate motion', '2 · 生成动作') }}</h3>
+            <label class="row video-workflow-option">
+              <input id="gvhmr-static-cam" type="checkbox" checked />
+              <span>
+                <b>{{ workspaceText('Static camera', '静态相机') }}</b>
+                <small>{{ workspaceText('Use when the recording camera does not move.', '录制相机没有移动时启用。') }}</small>
+              </span>
+            </label>
+            <label class="video-workflow-field">
+              <span class="k">{{ workspaceText('Focal length (optional, mm)', '焦距（可选，mm）') }}</span>
+              <input
+                id="gvhmr-f-mm"
+                class="search"
+                type="number"
+                min="1"
+                step="1"
+                :placeholder="workspaceText('Auto estimate', '自动估计')"
+              />
+            </label>
+            <button id="gvhmr-run" type="button" class="btn" disabled>
+              {{ workspaceText('Start GVHMR', '开始 GVHMR 推理') }}
+            </button>
+            <p id="gvhmr-disabled-reason" class="disabled-action-reason" role="status">
+              {{ workspaceText('Select a video first.', '请先选择视频。') }}
+            </p>
+            <div id="gvhmr-progress" class="progress video-workflow-progress" style="display:none">
+              <div class="bar"></div>
+            </div>
+            <p id="gvhmr-status" class="hint" role="status"></p>
+          </div>
+
+          <div id="gvhmr-result-card" class="card" style="display:none">
+            <h3>{{ workspaceText('3 · Result', '3 · 结果') }}</h3>
+            <div class="meta-row"><span class="k">{{ workspaceText('Motion', '动作') }}</span><span class="v" id="gvhmr-result-name">—</span></div>
+            <div class="meta-row"><span class="k">{{ workspaceText('Frames', '帧数') }}</span><span class="v" id="gvhmr-result-frames">—</span></div>
+            <div class="meta-row"><span class="k">{{ workspaceText('Duration', '时长') }}</span><span class="v" id="gvhmr-result-duration">—</span></div>
+            <p class="hint">
+              {{ workspaceText(
+                'The generated clip is loaded into the 3D stage and published to the Motion Library.',
+                '生成结果已加载到 3D 舞台，并发布到 Motion Library。',
+              ) }}
+            </p>
+            <button type="button" class="btn secondary" @click="requestPanel('motion')">
+              {{ workspaceText('Open Motion Library', '打开动作资源库') }}
+            </button>
+          </div>
         </div>
       </section>
 

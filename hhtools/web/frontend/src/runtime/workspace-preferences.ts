@@ -31,7 +31,9 @@ const DEFAULT_PREFERENCES: WorkspacePreferences = {
 
 const PANELS = new Set<WorkspacePanelId>([
   'motion',
+  'video',
   'robot-assets',
+  'video-to-motion',
   'h2r',
   'batch',
   'r2r',
