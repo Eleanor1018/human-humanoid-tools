@@ -36,6 +36,7 @@ _PUBLIC_CHECKPOINTS = {
     "YOLOv8": Path("yolo/yolov8x.pt"),
 }
 _VIDEO_SUFFIXES = frozenset({".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v"})
+_CHECKPOINT_SUFFIXES = frozenset({".ckpt", ".pt", ".pth"})
 _PROGRESS_RE = re.compile(r"^HHTOOLS_PROGRESS\s+([0-9.]+)\s+(.*)$")
 _RESULT_PREFIX = "HHTOOLS_RESULT "
 
@@ -149,6 +150,7 @@ def gvhmr_status(config: GvhmrConfig | None = None) -> dict[str, Any]:
         "body_models_root": str(cfg.body_models_root),
         "image": cfg.image,
         "uses_official_weights": True,
+        "supports_custom_weights": True,
         "training_enabled": False,
     }
 
@@ -173,6 +175,7 @@ def build_gvhmr_command(
     *,
     video_path: Path,
     job_root: Path,
+    checkpoint_path: Path | None = None,
     static_cam: bool = True,
     f_mm: int | None = None,
 ) -> list[str]:
@@ -185,6 +188,16 @@ def build_gvhmr_command(
     video.relative_to(work)
     if video.suffix.lower() not in _VIDEO_SUFFIXES:
         raise ValueError(f"unsupported video extension: {video.suffix or '<none>'}")
+    checkpoint: Path | None = None
+    if checkpoint_path is not None:
+        checkpoint = checkpoint_path.resolve()
+        checkpoint.relative_to(work)
+        if not checkpoint.is_file():
+            raise FileNotFoundError(f"custom checkpoint does not exist: {checkpoint}")
+        if checkpoint.suffix.lower() not in _CHECKPOINT_SUFFIXES:
+            raise ValueError(
+                f"unsupported checkpoint extension: {checkpoint.suffix or '<none>'}"
+            )
 
     output = work / "output"
     output.mkdir(parents=True, exist_ok=True)
@@ -222,6 +235,10 @@ def build_gvhmr_command(
             "/work/output",
         ]
     )
+    if checkpoint is not None:
+        command.extend(
+            ["--checkpoint", _container_path(checkpoint, work, "/work")]
+        )
     if static_cam:
         command.append("--static-cam")
     if f_mm is not None:
@@ -235,6 +252,7 @@ def run_gvhmr(
     video_path: Path,
     job_root: Path,
     *,
+    checkpoint_path: Path | None = None,
     static_cam: bool = True,
     f_mm: int | None = None,
     config: GvhmrConfig | None = None,
@@ -247,6 +265,7 @@ def run_gvhmr(
         cfg,
         video_path=video_path,
         job_root=job_root,
+        checkpoint_path=checkpoint_path,
         static_cam=static_cam,
         f_mm=f_mm,
     )

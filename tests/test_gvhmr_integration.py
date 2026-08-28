@@ -35,6 +35,7 @@ def test_status_requires_licensed_smplx_model(tmp_path: Path, monkeypatch) -> No
     assert status["checks"]["smplx_neutral"] is False
     assert any("SMPL-X" in item for item in status["missing"])
     assert status["uses_official_weights"] is True
+    assert status["supports_custom_weights"] is True
     assert status["training_enabled"] is False
 
 
@@ -108,4 +109,48 @@ def test_command_rejects_non_video_extension(tmp_path: Path) -> None:
             gvhmr.GvhmrConfig(root=root, body_models_root=body_models),
             video_path=source,
             job_root=job_root,
+        )
+
+
+def test_command_passes_custom_checkpoint_from_isolated_job_root(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "GVHMR"
+    body_models = tmp_path / "body-models"
+    _runtime_tree(root, body_models)
+    job_root = tmp_path / "job"
+    checkpoint_dir = job_root / "checkpoint"
+    checkpoint_dir.mkdir(parents=True)
+    video = job_root / "source.mp4"
+    checkpoint = checkpoint_dir / "custom.ckpt"
+    video.touch()
+    checkpoint.touch()
+
+    command = gvhmr.build_gvhmr_command(
+        gvhmr.GvhmrConfig(root=root, body_models_root=body_models),
+        video_path=video,
+        job_root=job_root,
+        checkpoint_path=checkpoint,
+    )
+
+    assert command[command.index("--checkpoint") + 1] == "/work/checkpoint/custom.ckpt"
+
+
+def test_command_rejects_custom_checkpoint_outside_job_root(tmp_path: Path) -> None:
+    root = tmp_path / "GVHMR"
+    body_models = tmp_path / "body-models"
+    _runtime_tree(root, body_models)
+    job_root = tmp_path / "job"
+    job_root.mkdir()
+    video = job_root / "source.mp4"
+    checkpoint = tmp_path / "outside.ckpt"
+    video.touch()
+    checkpoint.touch()
+
+    with pytest.raises(ValueError):
+        gvhmr.build_gvhmr_command(
+            gvhmr.GvhmrConfig(root=root, body_models_root=body_models),
+            video_path=video,
+            job_root=job_root,
+            checkpoint_path=checkpoint,
         )

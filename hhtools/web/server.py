@@ -2086,6 +2086,7 @@ def create_app(
         job: Job,
         drop: Path,
         video_path: Path,
+        checkpoint_path: Path | None,
         static_cam: bool,
         f_mm: int | None,
     ) -> None:
@@ -2113,6 +2114,7 @@ def create_app(
             result_path = run_gvhmr(
                 video_path,
                 drop,
+                checkpoint_path=checkpoint_path,
                 static_cam=static_cam,
                 f_mm=f_mm,
                 config=config,
@@ -2165,6 +2167,9 @@ def create_app(
                 library_entry=library_entry,
                 extra={
                     "video_name": video_path.name,
+                    "gvhmr_checkpoint": (
+                        checkpoint_path.name if checkpoint_path else "official"
+                    ),
                     "gvhmr_static_cam": static_cam,
                     "materialize_mode": materialize_mode,
                     "linked_folder": folder_label,
@@ -2190,6 +2195,7 @@ def create_app(
     @app.post("/api/video-to-motion/upload")
     async def upload_video_to_motion(
         files: list[UploadFile] = File(...),
+        checkpoint: UploadFile | None = File(None),
         static_cam: bool = True,
         f_mm: int | None = None,
     ) -> dict:
@@ -2222,6 +2228,21 @@ def create_app(
                     status_code=400,
                     detail="支持 MP4、MOV、MKV、AVI、WebM 和 M4V 视频",
                 )
+            checkpoint_path: Path | None = None
+            if checkpoint is not None:
+                stored_checkpoint = await _store_uploads(
+                    [checkpoint],
+                    drop / "checkpoint",
+                    default="custom.ckpt",
+                )
+                if len(stored_checkpoint) != 1:
+                    raise HTTPException(status_code=400, detail="自定义权重上传为空")
+                _checkpoint_relative, checkpoint_path = stored_checkpoint[0]
+                if checkpoint_path.suffix.lower() not in {".ckpt", ".pt", ".pth"}:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="自定义 GVHMR 权重仅支持 CKPT、PT 和 PTH 文件",
+                    )
             job = _schedule_job(
                 "video_to_motion",
                 {
@@ -2229,10 +2250,12 @@ def create_app(
                     "static_cam": static_cam,
                     "f_mm": f_mm,
                     "engine": "official_gvhmr",
+                    "weights": "custom" if checkpoint_path else "official",
+                    "checkpoint_name": checkpoint_path.name if checkpoint_path else None,
                     "training": False,
                 },
                 _run_gvhmr_video_job,
-                args=(drop, video_path, static_cam, f_mm),
+                args=(drop, video_path, checkpoint_path, static_cam, f_mm),
                 reservation=admission,
             )
             scheduled = True

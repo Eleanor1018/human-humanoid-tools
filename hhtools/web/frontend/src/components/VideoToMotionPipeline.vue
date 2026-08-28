@@ -16,6 +16,8 @@ const props = withDefaults(defineProps<{
 
 const state = ref<VideoToMotionStateDetail>({
   videoName: null,
+  weightSource: 'official',
+  checkpointName: null,
   runtimeState: 'checking',
   runtimeMessage: 'Checking GVHMR runtime',
   stage: 'idle',
@@ -37,6 +39,7 @@ const nodes = computed<Array<{
 }>>(() => {
   const hasVideo = state.value.videoName !== null
   const runtimeReady = state.value.runtimeState === 'ready'
+  const weightsReady = state.value.weightSource === 'official' || state.value.checkpointName !== null
   const processing = state.value.stage === 'uploading' || state.value.stage === 'running'
 
   return [
@@ -49,11 +52,13 @@ const nodes = computed<Array<{
     },
     {
       id: 'runtime',
-      label: text('Runtime', '推理环境'),
-      detail: state.value.runtimeMessage,
+      label: text('Runtime / Weights', '环境 / 权重'),
+      detail: state.value.weightSource === 'official'
+        ? `${state.value.runtimeMessage} · ${text('Official', '官方')}`
+        : state.value.checkpointName ?? text('Custom checkpoint not selected', '尚未选择自定义权重'),
       state: state.value.runtimeState === 'checking'
         ? 'validating'
-        : runtimeReady ? 'ready' : 'failed',
+        : !runtimeReady ? 'failed' : weightsReady ? 'ready' : 'missing',
       panel: 'video-to-motion',
     },
     {
@@ -72,7 +77,7 @@ const nodes = computed<Array<{
           ? 'completed'
           : state.value.stage === 'failed'
             ? 'failed'
-            : hasVideo && runtimeReady ? 'ready' : 'missing',
+            : hasVideo && runtimeReady && weightsReady ? 'ready' : 'missing',
       panel: 'video-to-motion',
     },
     {
@@ -90,6 +95,9 @@ const nodes = computed<Array<{
 const blockedReason = computed(() => {
   if (state.value.runtimeState === 'unavailable') return state.value.runtimeMessage
   if (!state.value.videoName) return text('Select a video before generating motion.', '请先选择待处理视频。')
+  if (state.value.weightSource === 'custom' && !state.value.checkpointName) {
+    return text('Import a compatible custom checkpoint.', '请导入兼容的自定义权重。')
+  }
   if (state.value.stage === 'failed') return state.value.message
   return null
 })

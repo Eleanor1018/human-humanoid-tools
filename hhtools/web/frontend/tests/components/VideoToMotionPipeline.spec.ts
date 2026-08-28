@@ -16,6 +16,8 @@ describe('VideoToMotionPipeline', () => {
     window.dispatchEvent(new CustomEvent('hhtools:video-to-motion-state', {
       detail: {
         videoName: 'run.mp4',
+        weightSource: 'official',
+        checkpointName: null,
         runtimeState: 'ready',
         runtimeMessage: 'Ready · official weights',
         stage: 'completed',
@@ -38,5 +40,29 @@ describe('VideoToMotionPipeline', () => {
     window.removeEventListener('hhtools:panel-request', receive)
 
     expect(panels).toEqual(['motion'])
+  })
+
+  it('blocks generation until a selected custom checkpoint is available', async () => {
+    const wrapper = mount(VideoToMotionPipeline, { props: { locale: 'en' } })
+    wrappers.push(wrapper)
+
+    window.dispatchEvent(new CustomEvent('hhtools:video-to-motion-state', {
+      detail: {
+        videoName: 'run.mp4',
+        weightSource: 'custom',
+        checkpointName: null,
+        runtimeState: 'ready',
+        runtimeMessage: 'Ready · select custom weights',
+        stage: 'idle',
+        progress: 0,
+        message: '',
+        result: null,
+      },
+    }))
+    await nextTick()
+
+    expect(wrapper.text()).toContain('Custom checkpoint not selected')
+    expect(wrapper.text()).toContain('Import a compatible custom checkpoint.')
+    expect(wrapper.findAll('.state-missing').length).toBeGreaterThanOrEqual(2)
   })
 })

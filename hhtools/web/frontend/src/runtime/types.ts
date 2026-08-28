@@ -200,6 +200,8 @@ export type VideoToMotionStage =
   | 'completed'
   | 'failed'
 
+export type GvhmrWeightSource = 'official' | 'custom'
+
 export interface VideoToMotionResultSummary {
   name: string
   frames: number | null
@@ -210,6 +212,8 @@ export interface VideoToMotionResultSummary {
 /** Renderer-safe state for the GVHMR workflow; the selected File stays private. */
 export interface VideoToMotionStateDetail {
   videoName: string | null
+  weightSource: GvhmrWeightSource
+  checkpointName: string | null
   runtimeState: 'checking' | 'ready' | 'unavailable'
   runtimeMessage: string
   stage: VideoToMotionStage
@@ -793,6 +797,7 @@ export interface GvhmrRuntimeStatus {
   body_models_root: string
   image: string
   uses_official_weights: boolean
+  supports_custom_weights: boolean
   training_enabled: boolean
 }
 

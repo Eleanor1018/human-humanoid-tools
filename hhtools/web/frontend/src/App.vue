@@ -817,8 +817,8 @@ onBeforeUnmount(() => {
           <h2>{{ workspaceText('Video → Motion', '视频 → 动作') }}</h2>
           <p class="lead">
             {{ workspaceText(
-              'Run the official pretrained GVHMR model to recover a reusable human motion from one video.',
-              '使用 GVHMR 官方预训练模型，从单个视频中恢复可复用的人体动作。',
+              'Recover a reusable human motion from one video with the official GVHMR checkpoint or a compatible custom checkpoint.',
+              '使用 GVHMR 官方权重或兼容的自定义权重，从单个视频中恢复可复用的人体动作。',
             ) }}
           </p>
           <VideoToMotionPipeline :locale="workspaceLocale" />
@@ -833,6 +833,12 @@ onBeforeUnmount(() => {
               <span class="k">GVHMR</span>
               <span class="v" id="gvhmr-workflow-runtime">{{ workspaceText('Checking…', '检查中……') }}</span>
             </div>
+            <div class="meta-row">
+              <span class="k">{{ workspaceText('Model weights', '模型权重') }}</span>
+              <span class="v" id="gvhmr-workflow-checkpoint">
+                {{ workspaceText('Official GVHMR (default)', 'GVHMR 官方权重（默认）') }}
+              </span>
+            </div>
             <button type="button" class="btn secondary small" @click="requestPanel('video')">
               {{ workspaceText('Choose or replace video', '选择或替换视频') }}
             </button>
@@ -840,6 +846,31 @@ onBeforeUnmount(() => {
 
           <div class="card">
             <h3>{{ workspaceText('2 · Generate motion', '2 · 生成动作') }}</h3>
+            <label class="video-workflow-field">
+              <span class="k">{{ workspaceText('Model weights', '模型权重') }}</span>
+              <select id="gvhmr-weight-source" class="search">
+                <option value="official">
+                  {{ workspaceText('Official GVHMR (default)', 'GVHMR 官方权重（默认）') }}
+                </option>
+                <option value="custom">
+                  {{ workspaceText('Custom compatible checkpoint', '自定义兼容权重') }}
+                </option>
+              </select>
+            </label>
+            <div id="gvhmr-custom-checkpoint" class="video-checkpoint-control" style="display:none">
+              <button id="gvhmr-pick-checkpoint" type="button" class="btn secondary small">
+                {{ workspaceText('Import checkpoint', '导入权重') }}
+              </button>
+              <span id="gvhmr-checkpoint-name" class="video-checkpoint-name">
+                {{ workspaceText('No checkpoint selected', '尚未选择权重') }}
+              </span>
+            </div>
+            <p class="hint video-checkpoint-hint">
+              {{ workspaceText(
+                'Custom CKPT, PT, or PTH files must match the GVHMR architecture. Only import checkpoints you trust.',
+                '自定义 CKPT、PT 或 PTH 文件必须兼容 GVHMR 架构，并且只应导入可信权重。',
+              ) }}
+            </p>
             <label class="row video-workflow-option">
               <input id="gvhmr-static-cam" type="checkbox" checked />
               <span>

@@ -180,6 +180,7 @@ import type {
   CalibrationReferencePayload,
   ComparisonPreset,
   GvhmrRuntimeStatus,
+  GvhmrWeightSource,
   JobConfigResponse,
   JobHistoryStateDetail,
   JobListResponse,
@@ -225,6 +226,7 @@ interface UploadFilesXhrOptions {
   userSourceRoot?: string;
   staticCam?: boolean;
   fMm?: number;
+  checkpoint?: UploadFile;
 }
 
 type UploadFilesXhrResponse<Url extends string> =
@@ -618,12 +620,14 @@ function uploadFilesXHR<Url extends string>(
     userSourceRoot,
     staticCam,
     fMm,
+    checkpoint,
   }: UploadFilesXhrOptions = {},
   onUploadProgress?: ProgressCallback,
 ): Promise<UploadFilesXhrResponse<Url>> {
   return new Promise<UploadFilesXhrResponse<Url>>((resolve, reject) => {
     const fd = new FormData();
     for (const f of files) fd.append("files", f, f._relpath || f.name);
+    if (checkpoint) fd.append("checkpoint", checkpoint, checkpoint.name);
     const qs = new URLSearchParams();
     if (profile) qs.set("profile", profile);
     if (appendTo) qs.set("append_to", appendTo);
@@ -3727,11 +3731,15 @@ initMotionImportZone();
 const GVHMR_VIDEO_ACCEPT =
   "video/mp4,video/quicktime,video/x-matroska,video/x-msvideo,video/webm,.m4v";
 const GVHMR_VIDEO_EXTENSIONS = new Set([".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v"]);
+const GVHMR_CHECKPOINT_ACCEPT = ".ckpt,.pt,.pth";
+const GVHMR_CHECKPOINT_EXTENSIONS = new Set([".ckpt", ".pt", ".pth"]);
 
 interface GvhmrWorkspaceState {
   file: UploadFile | null;
   previewUrl: string | null;
   previewDuration: number | null;
+  weightSource: GvhmrWeightSource;
+  checkpoint: UploadFile | null;
   runtimeState: VideoToMotionStateDetail["runtimeState"];
   runtimeMissing: string[];
   runtimeError: string | null;
@@ -3745,6 +3753,8 @@ const gvhmrWorkspace: GvhmrWorkspaceState = {
   file: null,
   previewUrl: null,
   previewDuration: null,
+  weightSource: "official",
+  checkpoint: null,
   runtimeState: "checking",
   runtimeMissing: [],
   runtimeError: null,
@@ -3763,6 +3773,11 @@ function gvhmrRuntimeMessage(): string {
     return gvhmrText("Checking…", "检查中……");
   }
   if (gvhmrWorkspace.runtimeState === "ready") {
+    if (gvhmrWorkspace.weightSource === "custom") {
+      return gvhmrWorkspace.checkpoint?.name
+        ? gvhmrText("Ready · custom weights", "已就绪 · 自定义权重")
+        : gvhmrText("Ready · select custom weights", "已就绪 · 请选择自定义权重");
+    }
     return gvhmrText("Ready · official weights", "已就绪 · 官方权重");
   }
   return gvhmrWorkspace.runtimeMissing[0]
@@ -3773,6 +3788,8 @@ function gvhmrRuntimeMessage(): string {
 function gvhmrPublicState(): VideoToMotionStateDetail {
   return {
     videoName: gvhmrWorkspace.file?.name ?? null,
+    weightSource: gvhmrWorkspace.weightSource,
+    checkpointName: gvhmrWorkspace.checkpoint?.name ?? null,
     runtimeState: gvhmrWorkspace.runtimeState,
     runtimeMessage: gvhmrRuntimeMessage(),
     stage: gvhmrWorkspace.stage,
@@ -3786,6 +3803,7 @@ function renderGvhmrWorkspace(): void {
   const isBusy = gvhmrWorkspace.stage === "uploading" || gvhmrWorkspace.stage === "running";
   const canRun = Boolean(gvhmrWorkspace.file)
     && gvhmrWorkspace.runtimeState === "ready"
+    && (gvhmrWorkspace.weightSource === "official" || Boolean(gvhmrWorkspace.checkpoint))
     && !isBusy;
   const runtimeMessage = gvhmrRuntimeMessage();
 
@@ -3793,8 +3811,8 @@ function renderGvhmrWorkspace(): void {
   if (runtimeStatus) {
     runtimeStatus.textContent = gvhmrWorkspace.runtimeState === "ready"
       ? gvhmrText(
-        "Official pretrained weights are ready · inference only, no training",
-        "官方预训练权重已就绪 · 仅推理，不训练",
+        "GVHMR runtime ready · official weights are the default",
+        "GVHMR 推理环境已就绪 · 默认使用官方权重",
       )
       : runtimeMessage;
     runtimeStatus.classList.toggle("error", gvhmrWorkspace.runtimeState === "unavailable");
@@ -3826,6 +3844,24 @@ function renderGvhmrWorkspace(): void {
     workflowRuntime.textContent = runtimeMessage;
     workflowRuntime.classList.toggle("error", gvhmrWorkspace.runtimeState === "unavailable");
   }
+  const weightSource = document.getElementById("gvhmr-weight-source") as HTMLSelectElement | null;
+  if (weightSource) weightSource.value = gvhmrWorkspace.weightSource;
+  const customCheckpoint = document.getElementById("gvhmr-custom-checkpoint");
+  if (customCheckpoint) {
+    customCheckpoint.style.display = gvhmrWorkspace.weightSource === "custom" ? "flex" : "none";
+  }
+  const checkpointName = document.getElementById("gvhmr-checkpoint-name");
+  if (checkpointName) {
+    checkpointName.textContent = gvhmrWorkspace.checkpoint?.name
+      ?? gvhmrText("No checkpoint selected", "尚未选择权重");
+  }
+  const workflowCheckpoint = document.getElementById("gvhmr-workflow-checkpoint");
+  if (workflowCheckpoint) {
+    workflowCheckpoint.textContent = gvhmrWorkspace.weightSource === "official"
+      ? gvhmrText("Official GVHMR (default)", "GVHMR 官方权重（默认）")
+      : gvhmrWorkspace.checkpoint?.name
+        ?? gvhmrText("Custom checkpoint not selected", "尚未选择自定义权重");
+  }
 
   const runButton = document.getElementById("gvhmr-run") as HTMLButtonElement | null;
   if (runButton) {
@@ -3843,6 +3879,11 @@ function renderGvhmrWorkspace(): void {
       reason = runtimeMessage;
     } else if (!gvhmrWorkspace.file) {
       reason = gvhmrText("Select a video first.", "请先选择视频。");
+    } else if (gvhmrWorkspace.weightSource === "custom" && !gvhmrWorkspace.checkpoint) {
+      reason = gvhmrText(
+        "Import a compatible custom checkpoint or switch back to official weights.",
+        "请导入兼容的自定义权重，或切回官方权重。",
+      );
     }
     disabledReason.textContent = reason;
     disabledReason.style.display = reason && !isBusy ? "block" : "none";
@@ -3881,6 +3922,30 @@ function renderGvhmrWorkspace(): void {
   window.dispatchEvent(new CustomEvent("hhtools:video-to-motion-state", {
     detail: gvhmrPublicState(),
   }));
+}
+
+function selectGvhmrCheckpoint(files: UploadFile[]): void {
+  if (!files.length) return;
+  if (files.length !== 1) {
+    toast(gvhmrText("Select one checkpoint at a time.", "每次只能选择一个权重文件。"), true);
+    return;
+  }
+  const file = files[0];
+  const suffix = file.name.slice(file.name.lastIndexOf(".")).toLowerCase();
+  if (!GVHMR_CHECKPOINT_EXTENSIONS.has(suffix)) {
+    toast(gvhmrText(
+      "Custom GVHMR weights must be a CKPT, PT, or PTH file.",
+      "自定义 GVHMR 权重必须是 CKPT、PT 或 PTH 文件。",
+    ), true);
+    return;
+  }
+  gvhmrWorkspace.checkpoint = file;
+  gvhmrWorkspace.weightSource = "custom";
+  gvhmrWorkspace.stage = "idle";
+  gvhmrWorkspace.progress = 0;
+  gvhmrWorkspace.message = "";
+  gvhmrWorkspace.result = null;
+  renderGvhmrWorkspace();
 }
 
 function selectGvhmrVideo(files: UploadFile[]): void {
@@ -3956,6 +4021,14 @@ async function runGvhmrVideoToMotion(): Promise<void> {
     renderGvhmrWorkspace();
     return;
   }
+  if (gvhmrWorkspace.weightSource === "custom" && !gvhmrWorkspace.checkpoint) {
+    toast(gvhmrText(
+      "Import a compatible custom checkpoint or switch back to official weights.",
+      "请导入兼容的自定义权重，或切回官方权重。",
+    ), true);
+    renderGvhmrWorkspace();
+    return;
+  }
 
   let fMm: number | undefined;
   try {
@@ -3977,7 +4050,13 @@ async function runGvhmrVideoToMotion(): Promise<void> {
     const { job_id } = await uploadFilesXHR(
       "/api/video-to-motion/upload",
       [file],
-      { staticCam, fMm },
+      {
+        staticCam,
+        fMm,
+        checkpoint: gvhmrWorkspace.weightSource === "custom"
+          ? gvhmrWorkspace.checkpoint ?? undefined
+          : undefined,
+      },
       (fraction, loaded, total) => {
         gvhmrWorkspace.progress = (fraction ?? 0) * 0.08;
         gvhmrWorkspace.message = total > 0
@@ -4031,13 +4110,26 @@ async function runGvhmrVideoToMotion(): Promise<void> {
 function initGvhmrWorkspace(): void {
   const pickButton = document.getElementById("video-pick-file") as HTMLButtonElement | null;
   const runButton = document.getElementById("gvhmr-run") as HTMLButtonElement | null;
+  const weightSource = document.getElementById("gvhmr-weight-source") as HTMLSelectElement | null;
+  const pickCheckpoint = document.getElementById("gvhmr-pick-checkpoint") as HTMLButtonElement | null;
   const dropzone = document.getElementById("video-drop-shared");
-  if (!pickButton || !runButton || !dropzone) return;
+  if (!pickButton || !runButton || !weightSource || !pickCheckpoint || !dropzone) return;
 
   pickButton.onclick = async () => {
     selectGvhmrVideo(await pickFiles({ accept: GVHMR_VIDEO_ACCEPT }));
   };
   runButton.onclick = () => void runGvhmrVideoToMotion();
+  weightSource.onchange = () => {
+    gvhmrWorkspace.weightSource = weightSource.value === "custom" ? "custom" : "official";
+    gvhmrWorkspace.stage = "idle";
+    gvhmrWorkspace.progress = 0;
+    gvhmrWorkspace.message = "";
+    gvhmrWorkspace.result = null;
+    renderGvhmrWorkspace();
+  };
+  pickCheckpoint.onclick = async () => {
+    selectGvhmrCheckpoint(await pickFiles({ accept: GVHMR_CHECKPOINT_ACCEPT }));
+  };
   setupDropzone(dropzone, (files) => selectGvhmrVideo(files));
   window.addEventListener("hhtools:workspace-locale-change", renderGvhmrWorkspace);
   renderGvhmrWorkspace();

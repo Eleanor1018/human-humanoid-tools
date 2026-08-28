@@ -24,6 +24,11 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--video", required=True)
     parser.add_argument("--output-root", required=True)
+    parser.add_argument(
+        "--checkpoint",
+        default=None,
+        help="Optional trusted GVHMR checkpoint. Defaults to the official release weights.",
+    )
     parser.add_argument("--static-cam", action="store_true")
     parser.add_argument("--f-mm", type=int, default=None)
     return parser.parse_args()
@@ -105,9 +110,17 @@ def _install_inference_only_pytorch3d_stubs(torch: object) -> None:
 def main() -> int:
     args = _parse_args()
     video = Path(args.video)
+    checkpoint = Path(args.checkpoint) if args.checkpoint else None
     output_root = Path(args.output_root)
     if not video.is_file():
         raise FileNotFoundError(f"input video does not exist: {video}")
+    if checkpoint is not None:
+        if not checkpoint.is_file():
+            raise FileNotFoundError(f"custom checkpoint does not exist: {checkpoint}")
+        if checkpoint.suffix.lower() not in {".ckpt", ".pt", ".pth"}:
+            raise ValueError(
+                f"unsupported checkpoint extension: {checkpoint.suffix or '<none>'}"
+            )
     output_root.mkdir(parents=True, exist_ok=True)
 
     # Executing this worker by absolute path makes Python use the worker's
@@ -146,6 +159,11 @@ def main() -> int:
     from tools.demo.demo import load_data_dict, parse_args_to_cfg, run_preprocess
 
     cfg = parse_args_to_cfg()
+    if checkpoint is not None:
+        # ``ckpt_path`` is part of the official demo config. Replacing only
+        # this value preserves the official architecture and preprocessing
+        # stack while allowing a compatible user-trained GVHMR state dict.
+        cfg.ckpt_path = str(checkpoint)
     paths = cfg.paths
     _progress(0.08, "preprocessing video")
     run_preprocess(cfg)
@@ -154,7 +172,8 @@ def main() -> int:
 
     result_path = Path(paths.hmr4d_results)
     if not result_path.exists():
-        _progress(0.72, "running official GVHMR checkpoint")
+        checkpoint_label = "custom" if checkpoint is not None else "official"
+        _progress(0.72, f"running {checkpoint_label} GVHMR checkpoint")
         model = hydra.utils.instantiate(cfg.model, _recursive_=False)
         model.load_pretrained_model(cfg.ckpt_path)
         model = model.eval().cuda()

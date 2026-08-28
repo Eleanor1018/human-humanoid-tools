@@ -2015,6 +2015,25 @@ button { font-family: inherit; cursor: pointer; }
   gap: 5px;
   margin-bottom: 12px;
 }
+
+.video-checkpoint-control {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 2px 0 6px;
+}
+
+.video-checkpoint-name {
+  color: var(--muted);
+  font-size: 12px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.video-checkpoint-hint {
+  margin: 0 0 12px;
+}
 .video-workflow-progress { margin-top: 12px; }
 .motion-import-info { position: static; }
 .motion-import-info-trigger {

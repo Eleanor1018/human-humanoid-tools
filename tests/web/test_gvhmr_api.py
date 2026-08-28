@@ -34,6 +34,7 @@ def _status(*, ready: bool) -> dict:
         "body_models_root": "C:/GVHMR/inputs/checkpoints/body_models",
         "image": "hhtools-gvhmr:cu128",
         "uses_official_weights": True,
+        "supports_custom_weights": True,
         "training_enabled": False,
     }
 
@@ -80,3 +81,53 @@ def test_video_upload_rejects_non_video_extension(tmp_path: Path, monkeypatch) -
 
     assert response.status_code == 400
     assert not list(app.state.session_state.upload_root.rglob("clip.txt"))
+
+
+def test_video_upload_rejects_unsupported_custom_checkpoint(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(gvhmr, "gvhmr_status", lambda: _status(ready=True))
+    app = _create_test_app(tmp_path, monkeypatch)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/video-to-motion/upload",
+            files=[
+                ("files", ("clip.mp4", b"video", "video/mp4")),
+                ("checkpoint", ("weights.zip", b"weights", "application/zip")),
+            ],
+        )
+
+    assert response.status_code == 400
+    assert "CKPT" in response.json()["detail"]
+    assert not list(app.state.session_state.upload_root.rglob("weights.zip"))
+
+
+def test_video_upload_records_custom_checkpoint_for_the_job(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(gvhmr, "gvhmr_status", lambda: _status(ready=True))
+
+    def stop_after_dispatch(*_args, **_kwargs):
+        raise RuntimeError("stop after dispatch")
+
+    monkeypatch.setattr(gvhmr, "run_gvhmr", stop_after_dispatch)
+    app = _create_test_app(tmp_path, monkeypatch)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/video-to-motion/upload",
+            files=[
+                ("files", ("clip.mp4", b"video", "video/mp4")),
+                (
+                    "checkpoint",
+                    ("trained.ckpt", b"weights", "application/octet-stream"),
+                ),
+            ],
+        )
+        assert response.status_code == 200
+        job = app.state.session_state.jobs[response.json()["job_id"]]
+        assert job.request["weights"] == "custom"
+        assert job.request["checkpoint_name"] == "trained.ckpt"
