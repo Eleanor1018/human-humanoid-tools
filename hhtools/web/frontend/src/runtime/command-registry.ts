@@ -57,11 +57,6 @@ const PANEL_COMMANDS: ReadonlyArray<{
     zhLabel: '动作', zhDetail: '导入与检查人体动作', shortcut: 'Alt+1',
   },
   {
-    panel: 'video', label: '视频 Video', detail: '选择并预览待处理视频',
-    enLabel: 'Video', enDetail: 'Select and preview a source video',
-    zhLabel: '视频', zhDetail: '选择并预览待处理视频', shortcut: 'Alt+7',
-  },
-  {
     panel: 'robot-assets', label: '机器人 Robot', detail: '管理机器人模型',
     enLabel: 'Robot', enDetail: 'Manage robot models and assets',
     zhLabel: '机器人', zhDetail: '管理机器人模型与资产', shortcut: 'Alt+2',
@@ -70,7 +65,7 @@ const PANEL_COMMANDS: ReadonlyArray<{
     panel: 'video-to-motion', label: 'Video to Motion', detail: '使用 GVHMR 从视频生成人体动作',
     enLabel: 'Video to Motion', enDetail: 'Generate human motion from a video with GVHMR',
     zhLabel: '视频生成动作', zhDetail: '使用 GVHMR 从视频生成人体动作',
-    shortcut: 'Alt+8', menu: 'workflows',
+    shortcut: 'Alt+7', menu: 'workflows',
   },
   {
     panel: 'h2r', label: 'Human to Robot (H2R)', detail: '人体动作重映射到机器人',
@@ -153,7 +148,6 @@ export function createApplicationCommands(
         label: localize(locale, 'Import Motion File', '导入动作文件'),
         detail: localize(locale, 'Import BVH, GLB, NPZ, and other motion files', '导入 BVH、GLB、NPZ 等动作文件'),
         target: 'motion-file',
-        dividerBefore: true,
       }, locale),
       importCommand({
         id: 'import-motion-folder',

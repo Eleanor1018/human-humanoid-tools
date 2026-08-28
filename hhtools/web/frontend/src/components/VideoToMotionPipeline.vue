@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 
 import type {
   VideoToMotionStateDetail,
@@ -36,6 +36,7 @@ const nodes = computed<Array<{
   detail: string
   state: WorkflowNodeState
   panel: WorkspacePanelId
+  target: string
 }>>(() => {
   const hasVideo = state.value.videoName !== null
   const runtimeReady = state.value.runtimeState === 'ready'
@@ -45,14 +46,15 @@ const nodes = computed<Array<{
   return [
     {
       id: 'video',
-      label: text('Video', '视频'),
+      label: text('Select Video', '选择视频'),
       detail: state.value.videoName ?? text('Not selected', '未选择'),
-      state: hasVideo ? 'ready' : 'missing',
-      panel: 'video',
+      state: hasVideo ? 'completed' : 'missing',
+      panel: 'video-to-motion',
+      target: 'gvhmr-step-video',
     },
     {
       id: 'runtime',
-      label: text('Runtime / Weights', '环境 / 权重'),
+      label: text('Environment', '选择环境'),
       detail: state.value.weightSource === 'official'
         ? `${state.value.runtimeMessage} · ${text('Official', '官方')}`
         : state.value.checkpointName ?? text('Custom checkpoint not selected', '尚未选择自定义权重'),
@@ -60,6 +62,7 @@ const nodes = computed<Array<{
         ? 'validating'
         : !runtimeReady ? 'failed' : weightsReady ? 'ready' : 'missing',
       panel: 'video-to-motion',
+      target: 'gvhmr-step-environment',
     },
     {
       id: 'generate',
@@ -79,15 +82,17 @@ const nodes = computed<Array<{
             ? 'failed'
             : hasVideo && runtimeReady && weightsReady ? 'ready' : 'missing',
       panel: 'video-to-motion',
+      target: 'gvhmr-step-generate',
     },
     {
       id: 'result',
-      label: text('Motion', '动作结果'),
+      label: text('Motion Result', '动作结果'),
       detail: state.value.result?.name ?? text('No result', '尚无结果'),
       state: state.value.result
         ? 'completed'
         : state.value.stage === 'failed' ? 'failed' : 'missing',
-      panel: state.value.result ? 'motion' : 'video-to-motion',
+      panel: 'video-to-motion',
+      target: 'gvhmr-step-result',
     },
   ]
 })
@@ -106,8 +111,12 @@ function receive(event: WindowEventMap['hhtools:video-to-motion-state']): void {
   state.value = event.detail
 }
 
-function openPanel(panel: WorkspacePanelId): void {
+async function openPanel(panel: WorkspacePanelId, target: string): Promise<void> {
   window.dispatchEvent(new CustomEvent('hhtools:panel-request', { detail: panel }))
+  await nextTick()
+  const element = document.getElementById(target)
+  if (element instanceof HTMLDetailsElement) element.open = true
+  element?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' })
 }
 
 onMounted(() => window.addEventListener('hhtools:video-to-motion-state', receive))
@@ -127,7 +136,7 @@ onBeforeUnmount(() => window.removeEventListener('hhtools:video-to-motion-state'
           class="workflow-node-button"
           :class="`state-${node.state}`"
           :title="node.detail"
-          @click="openPanel(node.panel)"
+          @click="openPanel(node.panel, node.target)"
         >
           <span class="workflow-node-dot" aria-hidden="true"></span>
           <span class="workflow-node-label">{{ node.label }}</span>

@@ -188,7 +188,6 @@ onBeforeUnmount(() => {
           >
             <span class="desktop-menu-item-copy">
               <span>{{ command.label }}</span>
-              <small>{{ command.detail }}</small>
             </span>
             <kbd v-if="command.shortcut">{{ command.shortcut }}</kbd>
             <small v-else-if="command.disabledReason" class="desktop-menu-disabled">{{ command.disabledReason }}</small>

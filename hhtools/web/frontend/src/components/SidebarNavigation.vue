@@ -40,7 +40,6 @@ const groups: NavigationGroup[] = [
     zhLabel: '资产',
     items: [
       { id: 'motion', label: '动作 Motion', enLabel: 'Motion', zhLabel: '动作', icon: '🎞' },
-      { id: 'video', label: '视频 Video', enLabel: 'Video', zhLabel: '视频', icon: '🎥' },
       { id: 'robot-assets', label: '机器人 Robot', enLabel: 'Robot', zhLabel: '机器人', icon: '🤖' },
     ],
   },

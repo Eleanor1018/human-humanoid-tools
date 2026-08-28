@@ -65,7 +65,7 @@ _log = logging.getLogger(__name__)
 
 # Bump when static/ front-end behaviour changes.  Injected into ``index.html``
 # at serve time so collaborators only need to pull + restart (no triple-sync).
-UI_BUILD_ID = "20260827-ux8"
+UI_BUILD_ID = "20260828-robot-library"
 
 _UPLOAD_CHUNK_BYTES = 1024 * 1024
 # These are application-level resource controls, not transport tuning knobs.
@@ -80,6 +80,15 @@ _DEFAULT_MAX_RETAINED_JOBS = 64
 _DEFAULT_JOB_TTL_SECONDS = 60 * 60.0
 
 _ACTIVE_JOB_STATUSES = frozenset({"pending", "running"})
+
+# The installer provisions these curated models in the local robot library.
+# They remain read-only in the UI even when their files live under the same
+# per-user root as imported models.
+_BUILTIN_ROBOT_PRESET_NAMES = frozenset({"g1_29dof", "agibot_x2_ultra"})
+
+
+def _is_builtin_robot_preset(name: str) -> bool:
+    return str(name).strip().lower() in _BUILTIN_ROBOT_PRESET_NAMES
 
 _UPLOAD_ENDPOINTS = frozenset(
     {
@@ -2395,13 +2404,15 @@ def create_app(
         refresh()
         out = []
         for p in list_presets():
+            builtin = _is_builtin_robot_preset(p.name)
             out.append(
                 {
                     "name": p.name,
                     "display_name": p.display_name,
                     "has_urdf": p.has_urdf,
                     "num_dof": len(p.dof_order),
-                    "deletable": is_user_installed(p, state.robot_root),
+                    "builtin": builtin,
+                    "deletable": is_user_installed(p, state.robot_root) and not builtin,
                 }
             )
         return {
@@ -2547,6 +2558,11 @@ def create_app(
             preset = get_preset(name)
         except KeyError as err:
             raise HTTPException(status_code=404, detail=f"unknown robot: {name}") from err
+        if _is_builtin_robot_preset(preset.name):
+            raise HTTPException(
+                status_code=403,
+                detail=f"robot {name!r} is a built-in preset and cannot be deleted",
+            )
         if not is_user_installed(preset, state.robot_root):
             raise HTTPException(
                 status_code=403,

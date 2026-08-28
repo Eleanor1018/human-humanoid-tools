@@ -81,9 +81,13 @@ describe('DesktopMenuBar', () => {
 
     await wrapper.get('[data-menu-trigger="file"]').trigger('click')
     const items = wrapper.findAll('.desktop-menu-item')
+    const fileMenu = wrapper.get('[data-menu-popup="file"]')
     expect(items.some((item) => item.text().includes('Settings'))).toBe(false)
     expect(items.some((item) => item.text().includes('Import Video'))).toBe(true)
+    expect(fileMenu.element.firstElementChild?.classList.contains('desktop-menu-separator')).toBe(false)
+    expect(fileMenu.findAll('.desktop-menu-item-copy small')).toHaveLength(0)
     const motionFile = items.find((item) => item.text().includes('Import Motion File'))
+    expect(motionFile?.attributes('title')).toContain('BVH, GLB, NPZ')
     await motionFile?.trigger('click')
     window.removeEventListener('hhtools:import-command', receive)
 
@@ -95,7 +99,8 @@ describe('DesktopMenuBar', () => {
       expect.stringContaining('Settings'),
       expect.stringContaining('Dark Mode'),
     ])
-    expect(settingsItems[0]?.text()).toContain('background jobs')
+    expect(settingsItems[0]?.text()).toBe('Settings')
+    expect(settingsItems[0]?.attributes('title')).toContain('background jobs')
     await settingsItems[0]?.trigger('click')
     expect(wrapper.emitted('openSettings')).toHaveLength(1)
 

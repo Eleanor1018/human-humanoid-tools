@@ -20,6 +20,7 @@ import type { GuidedTour } from './runtime/tutorial'
 
 export type HHToolsInputId =
   | 'lib-search'
+  | 'robot-library-search'
   | 'rt-retarget-fps'
   | 'rt-export-fps'
   | 'rt-export-t-start'
@@ -52,7 +53,6 @@ export type HHToolsInputId =
 
 export type HHToolsSelectId =
   | 'lib-category'
-  | 'robot-select'
   | 'rt-ref-select'
   | 'rt-backend'
   | 'rt-export-format'
@@ -118,8 +118,6 @@ export type HHToolsButtonId =
   | 'add-to-basket'
   | 'robot-pick-urdf'
   | 'robot-pick-mesh-folder'
-  | 'robot-load-btn'
-  | 'robot-delete-btn'
   | 'recalib-btn'
   | 'calib-zero'
   | 'calib-restore'

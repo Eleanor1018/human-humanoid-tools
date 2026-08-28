@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 
 import { usePanelLayout } from './composables/usePanelLayout'
 import PlaybackBar from './components/PlaybackBar.vue'
@@ -46,6 +46,7 @@ const motionLibrarySettingsSaving = ref(false)
 const motionLibrarySettingsError = ref<string | null>(null)
 const motionLibrarySettingsSaved = ref(false)
 const motionLibrarySearch = ref('')
+const robotLibrarySearch = ref('')
 type MotionUploadProfile = 'intermimic' | 'meshmimic' | 'mimic'
 const motionUploadProfiles: ReadonlyArray<{ id: MotionUploadProfile; label: string }> = [
   { id: 'mimic', label: 'mimic' },
@@ -75,6 +76,8 @@ const motionUploadProfileMeta: Record<MotionUploadProfile, {
 }
 const activeMotionUploadProfile = ref<MotionUploadProfile>('mimic')
 const motionUploadInfoOpen = ref(false)
+type RobotUploadInfo = 'urdf' | 'mesh'
+const robotUploadInfoOpen = ref<RobotUploadInfo | null>(null)
 
 document.documentElement.lang = workspaceLocale.value
 document.documentElement.dataset.theme = workspaceTheme.value
@@ -89,8 +92,8 @@ function setWorkspaceLocale(locale: typeof workspaceLocale.value): void {
   updateWorkspacePreferences({ locale })
   // Most workspace copy is rendered by Vue, while library rows are rendered
   // by the legacy runtime. Notify that runtime so both layers switch language
-  // immediately without refreshing the library or restarting Electron.
-  window.dispatchEvent(new Event('hhtools:workspace-locale-change'))
+  // after Vue patches the DOM, otherwise its patch can overwrite runtime text.
+  void nextTick(() => window.dispatchEvent(new Event('hhtools:workspace-locale-change')))
 }
 
 function setWorkspaceTheme(theme: WorkspaceTheme): void {
@@ -327,13 +330,22 @@ function openWorkspaceSettings(): void {
 }
 
 function setActivePanel(panel: string): void {
-  // Keep the old runtime/tutorial panel id working while the workspace is split.
-  activePanel.value = panel === 'robot' ? 'h2r' : panel as WorkspacePanelId
+  // Keep old deep links and saved commands working after workspace consolidation.
+  const normalizedPanel = panel === 'robot'
+    ? 'h2r'
+    : panel === 'video' ? 'video-to-motion' : panel
+  activePanel.value = normalizedPanel as WorkspacePanelId
   updateWorkspacePreferences({ activePanel: activePanel.value })
 }
 
 function requestPanel(panel: string): void {
   window.dispatchEvent(new CustomEvent('hhtools:panel-request', { detail: panel }))
+}
+
+function requestVideoImport(): void {
+  window.dispatchEvent(new CustomEvent('hhtools:import-command', {
+    detail: { target: 'video-file' },
+  }))
 }
 
 function showBoot(message: string): void {
@@ -350,7 +362,7 @@ const importTargets: Record<Exclude<ImportCommandTarget, 'job-spec'>, {
 }> = {
   'motion-file': { panel: 'motion', selector: '#motion-pick-file', motionProfile: 'mimic' },
   'motion-folder': { panel: 'motion', selector: '#motion-pick-folder', motionProfile: 'mimic' },
-  'video-file': { panel: 'video', selector: '#video-pick-file' },
+  'video-file': { panel: 'video-to-motion', selector: '#video-pick-file' },
   'robot-urdf': { panel: 'robot-assets', selector: '#robot-pick-urdf' },
   'robot-mesh-folder': { panel: 'robot-assets', selector: '#robot-pick-mesh-folder' },
   'robot-trajectory': { panel: 'r2r', selector: '[data-r2r-pick="mimic"]:not([data-folder])' },
@@ -382,24 +394,31 @@ function toggleMotionUploadInfo(): void {
   motionUploadInfoOpen.value = !motionUploadInfoOpen.value
 }
 
-function closeMotionUploadInfo(event: Event): void {
+function toggleRobotUploadInfo(target: RobotUploadInfo): void {
+  robotUploadInfoOpen.value = robotUploadInfoOpen.value === target ? null : target
+}
+
+function closeImportInfo(event: Event): void {
   const target = event.target
   // Keep the popover open while its trigger or content is being used; any
   // click elsewhere in the workspace dismisses it without adding a modal.
   if (target instanceof Element && target.closest('.motion-import-info')) return
   motionUploadInfoOpen.value = false
+  robotUploadInfoOpen.value = null
 }
 
-function handleMotionUploadInfoKeydown(event: KeyboardEvent): void {
-  if (event.key === 'Escape') motionUploadInfoOpen.value = false
+function handleImportInfoKeydown(event: KeyboardEvent): void {
+  if (event.key !== 'Escape') return
+  motionUploadInfoOpen.value = false
+  robotUploadInfoOpen.value = null
 }
 
 onMounted(async () => {
   window.showBoot = showBoot
   window.__hhUi = { setActivePanel, requestPanel }
   window.addEventListener('hhtools:import-command', handleImportCommand)
-  document.addEventListener('click', closeMotionUploadInfo)
-  document.addEventListener('keydown', handleMotionUploadInfoKeydown)
+  document.addEventListener('click', closeImportInfo)
+  document.addEventListener('keydown', handleImportInfoKeydown)
   // Load capability metadata up front so the always-visible library control
   // cannot advertise a write action on a read-only server connection.
   void loadMotionLibrarySettings()
@@ -421,8 +440,8 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('hhtools:import-command', handleImportCommand)
-  document.removeEventListener('click', closeMotionUploadInfo)
-  document.removeEventListener('keydown', handleMotionUploadInfoKeydown)
+  document.removeEventListener('click', closeImportInfo)
+  document.removeEventListener('keydown', handleImportInfoKeydown)
   delete window.__hhUi
 })
 </script>
@@ -763,50 +782,6 @@ onBeforeUnmount(() => {
         </div>
       </section>
 
-      <!-- VIDEO -->
-      <section class="panel" :class="{ active: activePanel === 'video' }" data-panel="video">
-        <h2>{{ workspaceText('Video', '视频') }}</h2>
-        <p class="lead">
-          {{ workspaceText(
-            'Select and preview one local source video. The file is uploaded only when you start Video → Motion.',
-            '选择并预览一个本地源视频。只有在启动“视频 → 动作”后才会上传。',
-          ) }}
-        </p>
-
-        <div class="motion-import-control">
-          <div
-            class="dropzone motion-upload-shared video-upload-shared"
-            id="video-drop-shared"
-            role="group"
-            :aria-label="workspaceText('Video import area', '视频上传区')"
-          >
-            <div class="dz-glyph">🎥</div>
-            <div class="dz-title">{{ workspaceText('Drop a video file here', '拖入一个视频文件') }}</div>
-            <div class="dz-sub">MP4, MOV, MKV, AVI, WebM, M4V</div>
-            <div class="row" style="margin-top:10px">
-              <button id="video-pick-file" type="button" class="btn secondary small">
-                {{ workspaceText('Choose video', '选择视频') }}
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <p id="gvhmr-runtime-status" class="hint video-runtime-status" role="status">
-          {{ workspaceText('Checking the GVHMR runtime…', '正在检查 GVHMR 推理环境……') }}
-        </p>
-
-        <section id="gvhmr-video-selection" class="video-selection" style="display:none">
-          <video id="gvhmr-video-preview" controls preload="metadata"></video>
-          <div class="video-selection-copy">
-            <strong id="gvhmr-video-name">—</strong>
-            <span id="gvhmr-video-meta" class="hint"></span>
-          </div>
-          <button type="button" class="btn" @click="requestPanel('video-to-motion')">
-            {{ workspaceText('Continue to Video → Motion', '继续到视频 → 动作') }}
-          </button>
-        </section>
-      </section>
-
       <!-- VIDEO TO MOTION -->
       <section
         class="panel"
@@ -823,99 +798,148 @@ onBeforeUnmount(() => {
           </p>
           <VideoToMotionPipeline :locale="workspaceLocale" />
 
-          <div class="card">
-            <h3>{{ workspaceText('1 · Status', '1 · 状态') }}</h3>
-            <div class="meta-row">
-              <span class="k">{{ workspaceText('Video', '视频') }}</span>
-              <span class="v" id="gvhmr-workflow-video">{{ workspaceText('Not selected', '未选择') }}</span>
-            </div>
-            <div class="meta-row">
-              <span class="k">GVHMR</span>
-              <span class="v" id="gvhmr-workflow-runtime">{{ workspaceText('Checking…', '检查中……') }}</span>
-            </div>
-            <div class="meta-row">
-              <span class="k">{{ workspaceText('Model weights', '模型权重') }}</span>
-              <span class="v" id="gvhmr-workflow-checkpoint">
-                {{ workspaceText('Official GVHMR (default)', 'GVHMR 官方权重（默认）') }}
-              </span>
-            </div>
-            <button type="button" class="btn secondary small" @click="requestPanel('video')">
-              {{ workspaceText('Choose or replace video', '选择或替换视频') }}
-            </button>
-          </div>
+          <details id="gvhmr-step-video" class="video-workflow-step" open>
+            <summary class="video-workflow-step-summary">
+              <span>{{ workspaceText('1. Select video', '1. 选择视频') }}</span>
+            </summary>
+            <div class="video-workflow-step-body">
+              <div class="motion-import-control">
+                <div
+                  class="dropzone motion-upload-shared video-upload-shared"
+                  id="video-drop-shared"
+                  role="group"
+                  :aria-label="workspaceText('Video import area', '视频上传区')"
+                >
+                  <div class="dz-glyph">🎥</div>
+                  <div class="dz-title">{{ workspaceText('Drop a video file here', '拖入一个视频文件') }}</div>
+                  <div class="dz-sub">MP4, MOV, MKV, AVI, WebM, M4V</div>
+                  <div class="row" style="margin-top:10px">
+                    <button id="video-pick-file" type="button" class="btn secondary small">
+                      {{ workspaceText('Choose video', '选择视频') }}
+                    </button>
+                  </div>
+                </div>
+              </div>
 
-          <div class="card">
-            <h3>{{ workspaceText('2 · Generate motion', '2 · 生成动作') }}</h3>
-            <label class="video-workflow-field">
-              <span class="k">{{ workspaceText('Model weights', '模型权重') }}</span>
-              <select id="gvhmr-weight-source" class="search">
-                <option value="official">
-                  {{ workspaceText('Official GVHMR (default)', 'GVHMR 官方权重（默认）') }}
-                </option>
-                <option value="custom">
-                  {{ workspaceText('Custom compatible checkpoint', '自定义兼容权重') }}
-                </option>
-              </select>
-            </label>
-            <div id="gvhmr-custom-checkpoint" class="video-checkpoint-control" style="display:none">
-              <button id="gvhmr-pick-checkpoint" type="button" class="btn secondary small">
-                {{ workspaceText('Import checkpoint', '导入权重') }}
+              <section id="gvhmr-video-selection" class="video-selection" style="display:none">
+                <video id="gvhmr-video-preview" controls preload="metadata"></video>
+                <div class="video-selection-row">
+                  <div class="video-selection-copy">
+                    <strong id="gvhmr-video-name">—</strong>
+                    <span id="gvhmr-video-meta" class="hint"></span>
+                  </div>
+                  <button type="button" class="btn secondary small" @click="requestVideoImport">
+                    {{ workspaceText('Replace video', '替换视频') }}
+                  </button>
+                </div>
+              </section>
+            </div>
+          </details>
+
+          <details id="gvhmr-step-environment" class="video-workflow-step">
+            <summary class="video-workflow-step-summary">
+              <span>{{ workspaceText('2. Select environment', '2. 选择环境') }}</span>
+            </summary>
+            <div class="video-workflow-step-body">
+              <p id="gvhmr-runtime-status" class="hint video-runtime-status" role="status">
+                {{ workspaceText('Checking the GVHMR runtime…', '正在检查 GVHMR 推理环境……') }}
+              </p>
+              <div class="meta-row">
+                <span class="k">GVHMR</span>
+                <span class="v" id="gvhmr-workflow-runtime">{{ workspaceText('Checking…', '检查中……') }}</span>
+              </div>
+              <div class="meta-row">
+                <span class="k">{{ workspaceText('Video', '视频') }}</span>
+                <span class="v" id="gvhmr-workflow-video">{{ workspaceText('Not selected', '未选择') }}</span>
+              </div>
+              <label class="video-workflow-field">
+                <span class="k">{{ workspaceText('Model weights', '模型权重') }}</span>
+                <select id="gvhmr-weight-source" class="search">
+                  <option value="official">
+                    {{ workspaceText('Official GVHMR (default)', 'GVHMR 官方权重（默认）') }}
+                  </option>
+                  <option value="custom">
+                    {{ workspaceText('Custom compatible checkpoint', '自定义兼容权重') }}
+                  </option>
+                </select>
+              </label>
+              <div id="gvhmr-custom-checkpoint" class="video-checkpoint-control" style="display:none">
+                <button id="gvhmr-pick-checkpoint" type="button" class="btn secondary small">
+                  {{ workspaceText('Import checkpoint', '导入权重') }}
+                </button>
+                <span id="gvhmr-checkpoint-name" class="video-checkpoint-name">
+                  {{ workspaceText('No checkpoint selected', '尚未选择权重') }}
+                </span>
+              </div>
+              <p class="hint video-checkpoint-hint">
+                {{ workspaceText(
+                  'Custom CKPT, PT, or PTH files must match the GVHMR architecture. Only import checkpoints you trust.',
+                  '自定义 CKPT、PT 或 PTH 文件必须兼容 GVHMR 架构，并且只应导入可信权重。',
+                ) }}
+              </p>
+              <label class="row video-workflow-option">
+                <input id="gvhmr-static-cam" type="checkbox" checked />
+                <span>
+                  <b>{{ workspaceText('Static camera', '静态相机') }}</b>
+                  <small>{{ workspaceText('Use when the recording camera does not move.', '录制相机没有移动时启用。') }}</small>
+                </span>
+              </label>
+              <label class="video-workflow-field">
+                <span class="k">{{ workspaceText('Focal length (optional, mm)', '焦距（可选，mm）') }}</span>
+                <input
+                  id="gvhmr-f-mm"
+                  class="search"
+                  type="number"
+                  min="1"
+                  step="1"
+                  :placeholder="workspaceText('Auto estimate', '自动估计')"
+                />
+              </label>
+            </div>
+          </details>
+
+          <details id="gvhmr-step-generate" class="video-workflow-step">
+            <summary class="video-workflow-step-summary">
+              <span>{{ workspaceText('3. Generate', '3. 生成动作') }}</span>
+            </summary>
+            <div class="video-workflow-step-body">
+              <button id="gvhmr-run" type="button" class="btn" disabled>
+                {{ workspaceText('Start GVHMR', '开始 GVHMR 推理') }}
               </button>
-              <span id="gvhmr-checkpoint-name" class="video-checkpoint-name">
-                {{ workspaceText('No checkpoint selected', '尚未选择权重') }}
-              </span>
+              <p id="gvhmr-disabled-reason" class="disabled-action-reason" role="status">
+                {{ workspaceText('Select a video first.', '请先选择视频。') }}
+              </p>
+              <div id="gvhmr-progress" class="progress video-workflow-progress" style="display:none">
+                <div class="bar"></div>
+              </div>
+              <p id="gvhmr-status" class="hint" role="status"></p>
             </div>
-            <p class="hint video-checkpoint-hint">
-              {{ workspaceText(
-                'Custom CKPT, PT, or PTH files must match the GVHMR architecture. Only import checkpoints you trust.',
-                '自定义 CKPT、PT 或 PTH 文件必须兼容 GVHMR 架构，并且只应导入可信权重。',
-              ) }}
-            </p>
-            <label class="row video-workflow-option">
-              <input id="gvhmr-static-cam" type="checkbox" checked />
-              <span>
-                <b>{{ workspaceText('Static camera', '静态相机') }}</b>
-                <small>{{ workspaceText('Use when the recording camera does not move.', '录制相机没有移动时启用。') }}</small>
-              </span>
-            </label>
-            <label class="video-workflow-field">
-              <span class="k">{{ workspaceText('Focal length (optional, mm)', '焦距（可选，mm）') }}</span>
-              <input
-                id="gvhmr-f-mm"
-                class="search"
-                type="number"
-                min="1"
-                step="1"
-                :placeholder="workspaceText('Auto estimate', '自动估计')"
-              />
-            </label>
-            <button id="gvhmr-run" type="button" class="btn" disabled>
-              {{ workspaceText('Start GVHMR', '开始 GVHMR 推理') }}
-            </button>
-            <p id="gvhmr-disabled-reason" class="disabled-action-reason" role="status">
-              {{ workspaceText('Select a video first.', '请先选择视频。') }}
-            </p>
-            <div id="gvhmr-progress" class="progress video-workflow-progress" style="display:none">
-              <div class="bar"></div>
-            </div>
-            <p id="gvhmr-status" class="hint" role="status"></p>
-          </div>
+          </details>
 
-          <div id="gvhmr-result-card" class="card" style="display:none">
-            <h3>{{ workspaceText('3 · Result', '3 · 结果') }}</h3>
-            <div class="meta-row"><span class="k">{{ workspaceText('Motion', '动作') }}</span><span class="v" id="gvhmr-result-name">—</span></div>
-            <div class="meta-row"><span class="k">{{ workspaceText('Frames', '帧数') }}</span><span class="v" id="gvhmr-result-frames">—</span></div>
-            <div class="meta-row"><span class="k">{{ workspaceText('Duration', '时长') }}</span><span class="v" id="gvhmr-result-duration">—</span></div>
-            <p class="hint">
-              {{ workspaceText(
-                'The generated clip is loaded into the 3D stage and published to the Motion Library.',
-                '生成结果已加载到 3D 舞台，并发布到 Motion Library。',
-              ) }}
-            </p>
-            <button type="button" class="btn secondary" @click="requestPanel('motion')">
-              {{ workspaceText('Open Motion Library', '打开动作资源库') }}
-            </button>
-          </div>
+          <details id="gvhmr-step-result" class="video-workflow-step">
+            <summary class="video-workflow-step-summary">
+              <span>{{ workspaceText('4. Motion result', '4. 动作结果') }}</span>
+            </summary>
+            <div class="video-workflow-step-body">
+              <p id="gvhmr-result-empty" class="hint video-workflow-result-empty">
+                {{ workspaceText('No motion has been generated yet.', '尚未生成动作。') }}
+              </p>
+              <div id="gvhmr-result-card" style="display:none">
+                <div class="meta-row"><span class="k">{{ workspaceText('Motion', '动作') }}</span><span class="v" id="gvhmr-result-name">—</span></div>
+                <div class="meta-row"><span class="k">{{ workspaceText('Frames', '帧数') }}</span><span class="v" id="gvhmr-result-frames">—</span></div>
+                <div class="meta-row"><span class="k">{{ workspaceText('Duration', '时长') }}</span><span class="v" id="gvhmr-result-duration">—</span></div>
+                <p class="hint">
+                  {{ workspaceText(
+                    'The generated clip is loaded into the 3D stage and published to the Motion Library.',
+                    '生成结果已加载到 3D 舞台，并发布到 Motion Library。',
+                  ) }}
+                </p>
+                <button type="button" class="btn secondary" @click="requestPanel('motion')">
+                  {{ workspaceText('Open Motion Library', '打开动作资源库') }}
+                </button>
+              </div>
+            </div>
+          </details>
         </div>
       </section>
 
@@ -925,39 +949,106 @@ onBeforeUnmount(() => {
         :class="{ active: activePanel === 'robot-assets' || activePanel === 'h2r' }"
         data-panel="robot"
       >
-        <div v-show="activePanel === 'robot-assets'" class="panel-stack">
-          <h2>机器人 Robot Registry</h2>
-          <p class="lead">注册或检查可复用的 Robot Model：URDF 描述、mesh 资源、DoF、<code>ik_map</code> 与标定配置。</p>
+        <div v-show="activePanel === 'robot-assets'" class="panel-stack robot-assets-stack">
+          <h2>{{ workspaceText('Robot', '机器人') }}</h2>
 
-          <div class="robot-import-grid" id="tour-robot-import">
-          <div class="dropzone dropzone-compact" id="robot-drop-urdf">
-            <div class="dz-glyph">📄</div>
-            <div class="dz-title">1 · URDF 文件</div>
-            <div class="dz-sub">拖入 <code>*.urdf</code>，或选择机器人描述文件</div>
-            <div class="row" style="margin-top:10px">
-              <button class="btn secondary small" id="robot-pick-urdf">选择 .urdf</button>
+          <div class="robot-import-stack" id="tour-robot-import">
+            <div
+              class="dropzone robot-import-dropzone"
+              id="robot-drop-urdf"
+              role="group"
+              :aria-label="workspaceText('URDF import area', 'URDF 导入区')"
+            >
+              <div class="motion-import-info">
+                <button
+                  type="button"
+                  class="motion-import-info-trigger"
+                  :aria-label="workspaceText('View URDF import instructions', '查看 URDF 导入说明')"
+                  aria-controls="robot-urdf-info"
+                  :aria-expanded="robotUploadInfoOpen === 'urdf'"
+                  :aria-describedby="robotUploadInfoOpen === 'urdf' ? 'robot-urdf-info' : undefined"
+                  @click.stop="toggleRobotUploadInfo('urdf')"
+                >?</button>
+                <div
+                  v-show="robotUploadInfoOpen === 'urdf'"
+                  id="robot-urdf-info"
+                  class="motion-import-info-popover"
+                  role="tooltip"
+                  @click.stop
+                >
+                  <strong>{{ workspaceText('URDF description', 'URDF 描述文件') }}</strong>
+                  <span>
+                    {{ workspaceText('Drop a ', '拖入 ') }}<code>*.urdf</code>{{ workspaceText(' file here, or choose the robot description file. Import the URDF before adding its mesh assets.', ' 文件，或选择机器人描述文件。请先导入 URDF，再添加对应的 mesh 资源。') }}
+                  </span>
+                </div>
+              </div>
+              <div class="dz-glyph" aria-hidden="true">📄</div>
+              <div class="dz-title">{{ workspaceText('1 · URDF file', '1 · URDF 文件') }}</div>
+              <div class="row robot-import-actions">
+                <button class="btn secondary small" id="robot-pick-urdf">
+                  {{ workspaceText('Choose .urdf', '选择 .urdf') }}
+                </button>
+              </div>
             </div>
-          </div>
-          <div class="dropzone dropzone-compact" id="robot-drop-mesh">
-            <div class="dz-glyph">📁</div>
-            <div class="dz-title">2 · Mesh 文件夹</div>
-            <div class="dz-sub">拖入 <code>meshes/</code> 目录或 <code>.stl/.obj/.dae</code> 网格</div>
-            <div class="row" style="margin-top:10px">
-              <button class="btn secondary small" id="robot-pick-mesh-folder">选择 mesh 文件夹</button>
-            </div>
-          </div>
-          </div>
-          <p class="hint" id="robot-import-status" style="margin-top:8px">尚未选择 URDF。</p>
 
-          <div class="card">
-            <h3>已注册机器人</h3>
-            <select class="search" id="robot-select"></select>
-            <p class="hint" id="robot-library-hint" style="margin-top:6px">通过 UI 注册的机器人保存在用户资源库，重启 <code>hhtools web</code> 后仍可用。</p>
-            <div class="row" style="margin-top:8px;gap:8px">
-              <button class="btn secondary small" id="robot-load-btn" style="flex:1">加载选中机器人</button>
-              <button class="btn secondary small" id="robot-delete-btn" style="display:none" title="从用户资源库删除（内置机器人不可删）">删除</button>
+            <div
+              class="dropzone robot-import-dropzone"
+              id="robot-drop-mesh"
+              role="group"
+              :aria-label="workspaceText('Mesh folder import area', 'Mesh 文件夹导入区')"
+            >
+              <div class="motion-import-info">
+                <button
+                  type="button"
+                  class="motion-import-info-trigger"
+                  :aria-label="workspaceText('View mesh import instructions', '查看 Mesh 导入说明')"
+                  aria-controls="robot-mesh-info"
+                  :aria-expanded="robotUploadInfoOpen === 'mesh'"
+                  :aria-describedby="robotUploadInfoOpen === 'mesh' ? 'robot-mesh-info' : undefined"
+                  @click.stop="toggleRobotUploadInfo('mesh')"
+                >?</button>
+                <div
+                  v-show="robotUploadInfoOpen === 'mesh'"
+                  id="robot-mesh-info"
+                  class="motion-import-info-popover"
+                  role="tooltip"
+                  @click.stop
+                >
+                  <strong>{{ workspaceText('Robot mesh assets', '机器人 Mesh 资源') }}</strong>
+                  <span>
+                    {{ workspaceText('After choosing the URDF, drop its ', '选择 URDF 后，拖入对应的 ') }}<code>meshes/</code>{{ workspaceText(' folder here. Supported formats: ', ' 文件夹。支持的格式：') }}<code>.stl</code>, <code>.obj</code>, <code>.dae</code>, <code>.ply</code>, <code>.glb</code>, <code>.gltf</code>{{ workspaceText('.', '。') }}
+                  </span>
+                </div>
+              </div>
+              <div class="dz-glyph" aria-hidden="true">📁</div>
+              <div class="dz-title">{{ workspaceText('2 · Mesh folder', '2 · Mesh 文件夹') }}</div>
+              <div class="row robot-import-actions">
+                <button class="btn secondary small" id="robot-pick-mesh-folder">
+                  {{ workspaceText('Choose mesh folder', '选择 mesh 文件夹') }}
+                </button>
+              </div>
             </div>
           </div>
+          <p class="hint robot-import-status" id="robot-import-status" aria-live="polite">
+            {{ workspaceText('No URDF selected.', '尚未选择 URDF。') }}
+          </p>
+
+          <section class="motion-library robot-library" aria-labelledby="robot-library-title">
+            <h2 id="robot-library-title">{{ workspaceText('Robot Library', '机器人库') }}</h2>
+            <div class="robot-library-tools">
+              <SearchField
+                v-model="robotLibrarySearch"
+                id="robot-library-search"
+                :label="workspaceText('Search the Robot Library', '搜索机器人库')"
+                :placeholder="workspaceText('Search robots…', '搜索机器人……')"
+                :clear-label="workspaceText('Clear robot search', '清除机器人搜索')"
+              />
+            </div>
+            <div class="motion-library-list-frame robot-library-list-frame">
+              <div class="lib-list robot-library-list" id="robot-library-list"></div>
+            </div>
+            <p class="hint robot-library-hint" id="robot-library-hint"></p>
+          </section>
 
           <div class="card" id="robot-meta-card" style="display:none">
             <h3 id="robot-name">—</h3>

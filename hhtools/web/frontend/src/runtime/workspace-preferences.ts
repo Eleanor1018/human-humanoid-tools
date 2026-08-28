@@ -31,7 +31,6 @@ const DEFAULT_PREFERENCES: WorkspacePreferences = {
 
 const PANELS = new Set<WorkspacePanelId>([
   'motion',
-  'video',
   'robot-assets',
   'video-to-motion',
   'h2r',
@@ -51,9 +50,13 @@ function clampSpeed(value: unknown): number {
 export function loadWorkspacePreferences(): WorkspacePreferences {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}') as Partial<WorkspacePreferences>
-    const activePanel = PANELS.has(saved.activePanel as WorkspacePanelId)
-      ? saved.activePanel as WorkspacePanelId
-      : DEFAULT_PREFERENCES.activePanel
+    const storedPanel = saved.activePanel as unknown
+    // Migrate the retired standalone Video workspace into the unified workflow.
+    const activePanel = storedPanel === 'video'
+      ? 'video-to-motion'
+      : PANELS.has(storedPanel as WorkspacePanelId)
+        ? storedPanel as WorkspacePanelId
+        : DEFAULT_PREFERENCES.activePanel
     const comparisonPresets = { ...DEFAULT_PREFERENCES.comparisonPresets }
     for (const workflow of ['h2r', 'r2r'] as const) {
       const preset = saved.comparisonPresets?.[workflow]

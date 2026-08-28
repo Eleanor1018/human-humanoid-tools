@@ -48,7 +48,7 @@ describe('SidebarNavigation', () => {
     const videoToMotion = wrapper.findAll<HTMLButtonElement>('.nav-item')
       .find((item) => item.text().includes('Video → Motion'))
     expect(pae?.attributes('disabled')).toBeDefined()
-    expect(wrapper.get('[data-panel="video"]').text()).toContain('Video')
+    expect(wrapper.find('[data-panel="video"]').exists()).toBe(false)
     expect(videoToMotion?.attributes('disabled')).toBeUndefined()
     expect(videoToMotion?.attributes('data-panel')).toBe('video-to-motion')
   })

@@ -91,7 +91,6 @@ export type PlaybackAction = 'toggle' | 'seek' | 'speed' | 'loop'
 
 export type WorkspacePanelId =
   | 'motion'
-  | 'video'
   | 'robot-assets'
   | 'video-to-motion'
   | 'h2r'
@@ -273,6 +272,7 @@ export interface RobotSummary {
   display_name: string
   has_urdf: boolean
   num_dof: number
+  builtin?: boolean
   deletable: boolean
 }
 

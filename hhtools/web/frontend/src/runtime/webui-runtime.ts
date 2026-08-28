@@ -196,6 +196,7 @@ import type {
   PlaybackPayload,
   PlaybackView,
   RobotPayload,
+  RobotSummary,
   RobotExportPreviewResult,
   RetargetResult,
   ResultDiagnostics,
@@ -2815,11 +2816,23 @@ function renderRobotValidation(robotPayload: RobotPayload): void {
   const unresolved = mappedLinks.filter((link) => !knownLinks.has(link));
   const dofCount = robotPayload.num_dof ?? robotPayload.joints?.length ?? 0;
   renderValidationSummary(document.getElementById("robot-validation-summary"), [
-    [dofCount > 0 ? "ok" : "error", `${dofCount} 个可控 DoF`],
-    [mappings.length > 0 ? "ok" : "warn", `ik_map：${mappings.length}/17 个语义槽位`],
+    [dofCount > 0 ? "ok" : "error", runtimeText(
+      `${dofCount} controllable DoF`,
+      `${dofCount} 个可控 DoF`,
+    )],
+    [mappings.length > 0 ? "ok" : "warn", runtimeText(
+      `ik_map: ${mappings.length}/17 semantic slots`,
+      `ik_map：${mappings.length}/17 个语义槽位`,
+    )],
     [unresolved.length === 0 ? "ok" : "error", unresolved.length === 0
-      ? "ik_map 中的目标 link 均可解析"
-      : `${unresolved.length} 个 ik_map link 无法在 Robot Model 中解析`],
+      ? runtimeText(
+        "All target links in ik_map resolve in the robot model",
+        "ik_map 中的目标 link 均可解析",
+      )
+      : runtimeText(
+        `${unresolved.length} ik_map links do not resolve in the robot model`,
+        `${unresolved.length} 个 ik_map link 无法在 Robot Model 中解析`,
+      )],
   ]);
 }
 
@@ -3501,11 +3514,17 @@ document.getElementById("lib-category").onchange = (event) => {
 };
 window.addEventListener("hhtools:workspace-locale-change", () => {
   renderLibrary();
+  renderRobotLibrary();
+  updateRobotImportStatus();
   const motionMetaCard = document.getElementById("motion-meta-card");
   // Calibration-only loads intentionally keep the details card hidden. A
   // locale change should translate visible details, not alter that UI state.
   if (state.motion && motionMetaCard?.style.display !== "none") {
     renderMotionDetails(state.motion);
+  }
+  const robotMetaCard = document.getElementById("robot-meta-card");
+  if (state.robot && robotMetaCard?.style.display !== "none") {
+    renderRobotDetails(state.robot);
   }
 });
 
@@ -3903,6 +3922,8 @@ function renderGvhmrWorkspace(): void {
 
   const resultCard = document.getElementById("gvhmr-result-card");
   if (resultCard) resultCard.style.display = gvhmrWorkspace.result ? "block" : "none";
+  const resultEmpty = document.getElementById("gvhmr-result-empty");
+  if (resultEmpty) resultEmpty.style.display = gvhmrWorkspace.result ? "none" : "block";
   const resultName = document.getElementById("gvhmr-result-name");
   if (resultName) resultName.textContent = gvhmrWorkspace.result?.name ?? "—";
   const resultFrames = document.getElementById("gvhmr-result-frames");
@@ -4152,6 +4173,32 @@ document.getElementById("add-to-basket").onclick = () => {
 
 // =================================================================  ROBOT
 let _robotPanelLockDepth = 0;
+let robotSummaries: RobotSummary[] = [];
+let robotLibraryDir = "";
+let robotLoadingName = "";
+
+const builtinRobotCopy: Record<string, { en: string; zh: string; order: number }> = {
+  g1_29dof: { en: "Unitree G1", zh: "宇树 G1", order: 0 },
+  agibot_x2_ultra: { en: "AgiBot X2", zh: "智元 X2", order: 1 },
+};
+
+function isBuiltinRobot(summary: RobotSummary): boolean {
+  return summary.builtin === true || summary.name in builtinRobotCopy;
+}
+
+function robotSummaryLabel(summary: RobotSummary): string {
+  const copy = builtinRobotCopy[summary.name];
+  return copy ? runtimeText(copy.en, copy.zh) : summary.display_name || summary.name;
+}
+
+function sortedRobotSummaries(): RobotSummary[] {
+  return [...robotSummaries].sort((left, right) => {
+    const leftOrder = builtinRobotCopy[left.name]?.order ?? Number.MAX_SAFE_INTEGER;
+    const rightOrder = builtinRobotCopy[right.name]?.order ?? Number.MAX_SAFE_INTEGER;
+    if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+    return robotSummaryLabel(left).localeCompare(robotSummaryLabel(right));
+  });
+}
 
 function setRobotPanelLocked(locked: boolean): void {
   if (locked) _robotPanelLockDepth++;
@@ -4159,24 +4206,33 @@ function setRobotPanelLocked(locked: boolean): void {
   const busy = _robotPanelLockDepth > 0;
   state.robotPanelLocked = busy;
 
-  const sel = document.getElementById("robot-select");
-  if (sel) sel.disabled = busy;
-  for (const id of ["robot-load-btn", "robot-pick-urdf", "robot-pick-mesh-folder"]) {
+  for (const id of ["robot-pick-urdf", "robot-pick-mesh-folder"]) {
     const el = document.getElementById(id) as HTMLButtonElement | null;
     if (el) el.disabled = busy;
   }
-  const delBtn = document.getElementById("robot-delete-btn");
-  if (delBtn && busy) delBtn.disabled = true;
-  if (!busy) updateRobotDeleteBtn();
   for (const id of ["robot-drop-urdf", "robot-drop-mesh"]) {
     document.getElementById(id)?.classList.toggle("disabled", busy);
   }
+  renderRobotLibrary();
   publishH2rWorkflowState();
+}
+
+function renderRobotDetails(robotData: RobotPayload): void {
+  document.getElementById("robot-name").textContent = robotData.display_name;
+  renderMetaRows(document.getElementById("robot-meta"), [
+    [runtimeText("Links", "链接"), robotData.links.length],
+    [runtimeText("Degrees of freedom", "自由度"), robotData.num_dof ?? robotData.joints?.length ?? 0],
+    [runtimeText("ik_map slots", "ik_map 槽位"), Object.keys(robotData.ik_map ?? {}).length],
+  ]);
+  renderRobotValidation(robotData);
 }
 
 async function applyRobot(robotData: RobotPayload): Promise<void> {
   if (state.robotPanelLocked) {
-    toast("Retarget 进行中，请等待完成后再切换机器人", true);
+    toast(runtimeText(
+      "Retargeting is running. Wait for it to finish before switching robots.",
+      "Retarget 进行中，请等待完成后再切换机器人",
+    ), true);
     return;
   }
   state.robot = robotData;
@@ -4188,13 +4244,8 @@ async function applyRobot(robotData: RobotPayload): Promise<void> {
   document.getElementById("rt-export-card").style.display = "none";
   await robot.load(robotData);
   document.getElementById("robot-meta-card").style.display = "block";
-  document.getElementById("robot-name").textContent = robotData.display_name;
-  renderMetaRows(document.getElementById("robot-meta"), [
-    ["链接 links", robotData.links.length],
-    ["自由度 DOF", robotData.num_dof ?? robotData.joints?.length ?? 0],
-    ["ik_map 槽位", Object.keys(robotData.ik_map ?? {}).length],
-  ]);
-  renderRobotValidation(robotData);
+  renderRobotDetails(robotData);
+  renderRobotLibrary();
   document.getElementById("batch-robot").textContent = robotData.display_name;
   void syncBatchRefHint();
   renderBasket();
@@ -4208,83 +4259,187 @@ async function applyRobot(robotData: RobotPayload): Promise<void> {
   if (state.calibrationMode) {
     switchInspectorPanel("h2r");
     await enterCalibrationMode(state.calibQ);
-    toast(`机器人已加载（标定姿态）：${robotData.display_name}`);
+    toast(runtimeText(
+      `Robot loaded in calibration pose: ${robotData.display_name}`,
+      `机器人已加载（标定姿态）：${robotData.display_name}`,
+    ));
     return;
   }
   await routeAfterRobotLoad();
   toast(
     state.motion
-      ? `机器人已加载：${robotData.display_name}`
-      : `机器人已加载：${robotData.display_name} — 请先加载动作`,
+      ? runtimeText(
+        `Robot loaded: ${robotData.display_name}`,
+        `机器人已加载：${robotData.display_name}`,
+      )
+      : runtimeText(
+        `Robot loaded: ${robotData.display_name} — load a motion next`,
+        `机器人已加载：${robotData.display_name} — 请先加载动作`,
+      ),
   );
-}
-
-function updateRobotDeleteBtn() {
-  const sel = document.getElementById("robot-select");
-  const btn = document.getElementById("robot-delete-btn");
-  if (!sel || !btn) return;
-  const opt = sel.selectedOptions[0];
-  const deletable = opt?.dataset.deletable === "1";
-  btn.style.display = deletable ? "" : "none";
-  btn.dataset.deletable = deletable ? "1" : "0";
-  btn.disabled = state.robotPanelLocked || !deletable;
 }
 
 async function refreshRobotList(): Promise<void> {
   try {
     const data = await API.get("/api/robots");
-    const sel = document.getElementById("robot-select");
-    const hint = document.getElementById("robot-library-hint");
-    const prev = sel.value;
-    sel.innerHTML = "";
-    for (const r of data.robots) {
-      const opt = document.createElement("option");
-      opt.value = r.name;
-      opt.dataset.deletable = r.deletable ? "1" : "0";
-      const tag = r.deletable ? " · 用户库" : "";
-      opt.textContent = `${r.display_name} (${r.num_dof} DOF)${tag}${r.has_urdf ? "" : " — 无URDF"}`;
-      opt.disabled = !r.has_urdf;
-      sel.appendChild(opt);
-    }
-    if (prev && [...sel.options].some((o) => o.value === prev)) sel.value = prev;
-    if (hint && data.library_dir) {
-      hint.replaceChildren(
-        document.createTextNode("通过 UI 注册的机器人保存在 "),
-        textElement("code", "", data.library_dir),
-        document.createTextNode("，重启 "),
-        textElement("code", "", "hhtools web"),
-        document.createTextNode(" 后仍可用。"),
-      );
-    }
-    updateRobotDeleteBtn();
-  } catch (e) { /* ignore */ }
+    robotSummaries = data.robots || [];
+    robotLibraryDir = data.library_dir || "";
+    renderRobotLibrary();
+  } catch (e) {
+    renderTextMessage(
+      document.getElementById("robot-library-list"),
+      runtimeText(
+        `Unable to read the Robot Library: ${errorMessage(e)}`,
+        `无法读取机器人库：${errorMessage(e)}`,
+      ),
+    );
+  }
 }
-document.getElementById("robot-select")?.addEventListener("change", updateRobotDeleteBtn);
-document.getElementById("robot-load-btn").onclick = async () => {
-  if (state.robotPanelLocked) {
-    toast("Retarget 进行中，请等待完成后再切换机器人", true);
+
+function renderRobotLibrary(): void {
+  const list = document.getElementById("robot-library-list");
+  if (!list) return;
+  const input = document.getElementById("robot-library-search") as HTMLInputElement | null;
+  const query = input?.value.trim().toLowerCase() || "";
+  const tokens = query.split(/\s+/).filter(Boolean);
+  const filtered = sortedRobotSummaries().filter((summary) => {
+    const builtin = isBuiltinRobot(summary);
+    const haystack = [
+      summary.name,
+      summary.display_name,
+      robotSummaryLabel(summary),
+      summary.num_dof,
+      builtin ? "builtin built-in included 内置 预置" : "imported custom uploaded 导入 自定义 上传",
+    ].join(" ").toLowerCase();
+    return tokens.every((token) => haystack.includes(token));
+  });
+
+  list.replaceChildren();
+  if (!robotSummaries.length) {
+    renderTextMessage(list, runtimeText(
+      "No robot models are available. Import a complete robot folder above.",
+      "机器人库中暂无模型，请从上方导入完整的机器人文件夹。",
+    ));
     return;
   }
-  const name = document.getElementById("robot-select").value;
-  if (!name) return;
-  toast("加载机器人…");
-  try { await applyRobot(await API.post("/api/robot/select", { name })); }
-  catch (e) { toast(errorMessage(e), true); }
-};
-document.getElementById("robot-delete-btn").onclick = async () => {
-  if (state.robotPanelLocked) {
-    toast("Retarget 进行中，请等待完成后再操作", true);
+  if (!filtered.length) {
+    renderTextMessage(list, runtimeText(
+      `No robots match “${input?.value || ""}”`,
+      `没有匹配「${input?.value || ""}」的机器人`,
+    ));
     return;
   }
-  const sel = document.getElementById("robot-select");
-  const name = sel?.value;
-  if (!name) return;
-  const label = sel.selectedOptions[0]?.textContent || name;
-  if (!confirm(`确定从资源库删除「${label}」？\n将永久删除对应目录，不可恢复。`)) return;
-  toast("删除机器人…");
+
+  for (const summary of filtered) {
+    const builtin = isBuiltinRobot(summary);
+    const active = state.robot?.name === summary.name;
+    const unavailable = !summary.has_urdf;
+    const row = document.createElement("div");
+    row.className = "lib-row robot-lib-row";
+    row.classList.toggle("is-active", active);
+    row.classList.toggle("is-unavailable", unavailable);
+
+    const loadButton = document.createElement("button");
+    loadButton.type = "button";
+    loadButton.className = "lr-load robot-library-load";
+    loadButton.disabled = unavailable || state.robotPanelLocked || Boolean(robotLoadingName);
+    loadButton.setAttribute("aria-label", runtimeText(
+      `Load robot ${robotSummaryLabel(summary)}`,
+      `加载机器人 ${robotSummaryLabel(summary)}`,
+    ));
+    if (active) loadButton.setAttribute("aria-current", "true");
+
+    const icon = document.createElement("img");
+    icon.className = "robot-library-icon";
+    icon.src = "./hhtools-robot.svg";
+    icon.alt = "";
+    icon.setAttribute("aria-hidden", "true");
+
+    const copy = document.createElement("span");
+    copy.className = "robot-library-copy";
+    copy.append(
+      textElement("strong", "robot-library-name", robotSummaryLabel(summary)),
+      textElement("small", "robot-library-meta", runtimeText(
+        `${summary.num_dof} DoF · ${builtin ? "Built-in" : "Imported"}${unavailable ? " · URDF missing" : ""}`,
+        `${summary.num_dof} DoF · ${builtin ? "内置" : "已导入"}${unavailable ? " · 缺少 URDF" : ""}`,
+      )),
+    );
+    loadButton.append(icon, copy);
+    if (robotLoadingName === summary.name) {
+      loadButton.append(textElement("span", "robot-library-state", runtimeText("Loading…", "加载中……")));
+    } else if (active) {
+      loadButton.append(textElement("span", "robot-library-state", runtimeText("Loaded", "已加载")));
+    }
+    loadButton.onclick = () => loadRobotSummary(summary);
+    row.appendChild(loadButton);
+
+    if (summary.deletable && !builtin) {
+      const deleteButton = textElement("button", "robot-library-delete", "×");
+      deleteButton.type = "button";
+      deleteButton.disabled = state.robotPanelLocked || Boolean(robotLoadingName);
+      deleteButton.title = runtimeText("Remove from Robot Library", "从机器人库删除");
+      deleteButton.setAttribute("aria-label", runtimeText(
+        `Delete robot ${robotSummaryLabel(summary)}`,
+        `删除机器人 ${robotSummaryLabel(summary)}`,
+      ));
+      deleteButton.onclick = (event) => {
+        event.stopPropagation();
+        void deleteRobotSummary(summary);
+      };
+      row.appendChild(deleteButton);
+    }
+    list.appendChild(row);
+  }
+
+  const hint = document.getElementById("robot-library-hint");
+  if (hint) {
+    hint.textContent = runtimeText(
+      "Imported robot models stay in the local library.",
+      "导入的机器人模型会保存在本机资源库。",
+    );
+    hint.title = robotLibraryDir;
+  }
+}
+
+async function loadRobotSummary(summary: RobotSummary): Promise<void> {
+  if (state.robotPanelLocked) {
+    toast(runtimeText(
+      "Retargeting is running. Wait for it to finish before switching robots.",
+      "Retarget 进行中，请等待完成后再切换机器人",
+    ), true);
+    return;
+  }
+  if (!summary.has_urdf || robotLoadingName) return;
+  robotLoadingName = summary.name;
+  renderRobotLibrary();
+  toast(runtimeText("Loading robot…", "加载机器人……"));
   try {
-    await API.delete(`/api/robot/${encodeURIComponent(name)}`);
-    if (state.robot?.name === name) {
+    await applyRobot(await API.post("/api/robot/select", { name: summary.name }));
+  } catch (e) {
+    toast(errorMessage(e), true);
+  } finally {
+    robotLoadingName = "";
+    renderRobotLibrary();
+  }
+}
+
+async function deleteRobotSummary(summary: RobotSummary): Promise<void> {
+  if (state.robotPanelLocked) {
+    toast(runtimeText(
+      "Retargeting is running. Wait for it to finish before editing the library.",
+      "Retarget 进行中，请等待完成后再操作",
+    ), true);
+    return;
+  }
+  const label = robotSummaryLabel(summary);
+  if (!confirm(runtimeText(
+    `Remove “${label}” from the Robot Library?\nThis permanently deletes its local folder and cannot be undone.`,
+    `确定从机器人库删除「${label}」？\n将永久删除对应目录，不可恢复。`,
+  ))) return;
+  toast(runtimeText("Removing robot…", "删除机器人……"));
+  try {
+    await API.delete(`/api/robot/${encodeURIComponent(summary.name)}`);
+    if (state.robot?.name === summary.name) {
       state.robot = null;
       state.exportToken = null;
       state.robotTrajectory = null;
@@ -4292,15 +4447,21 @@ document.getElementById("robot-delete-btn").onclick = async () => {
       h2rRunState = "idle";
       robot.group.visible = false;
       document.getElementById("robot-meta-card").style.display = "none";
-      document.getElementById("robot-pill").textContent = "未加载机器人";
-      document.getElementById("batch-robot").textContent = "未加载";
+      document.getElementById("robot-pill").textContent = runtimeText("No robot loaded", "未加载机器人");
+      document.getElementById("batch-robot").textContent = runtimeText("Not loaded", "未加载");
       renderBasket();
       refreshRetargetPanel();
     }
     await refreshRobotList();
-    toast(`已从资源库删除：${name}`);
+    toast(runtimeText(
+      `Removed from Robot Library: ${label}`,
+      `已从机器人库删除：${label}`,
+    ));
   } catch (e) { toast(errorMessage(e), true); }
-};
+}
+
+const robotSearchInput = document.getElementById("robot-library-search") as HTMLInputElement | null;
+if (robotSearchInput) robotSearchInput.oninput = renderRobotLibrary;
 
 interface RobotImportState {
   urdf: UploadFile | null;
@@ -4319,22 +4480,33 @@ function isMeshFile(f: UploadFile): boolean {
 function updateRobotImportStatus(): void {
   const el = document.getElementById("robot-import-status");
   if (!el) return;
-  const parts = [];
-  if (robotImport.urdf) parts.push(`URDF：${robotImport.urdf.name || "robot.urdf"}`);
-  if (robotImport.meshes.length) parts.push(`Mesh：${robotImport.meshes.length} 个文件`);
+  const parts: string[] = [];
+  if (robotImport.urdf) parts.push(`URDF: ${robotImport.urdf.name || "robot.urdf"}`);
+  if (robotImport.meshes.length) parts.push(runtimeText(
+    `Assets: ${robotImport.meshes.length} files`,
+    `资源：${robotImport.meshes.length} 个文件`,
+  ));
   if (robotImport.urdf && !robotImport.meshes.length) {
-    parts.push("请接着拖入 meshes/ 文件夹完成注册");
+    parts.push(runtimeText(
+      "Choose the matching mesh folder to continue",
+      "请继续选择对应的 mesh 文件夹",
+    ));
   }
-  el.textContent = parts.length ? parts.join(" · ") : "尚未选择 URDF。";
+  el.textContent = parts.length
+    ? parts.join(" · ")
+    : runtimeText("No URDF selected.", "尚未选择 URDF。");
 }
 
 async function tryUploadRobot(): Promise<void> {
   if (state.robotPanelLocked) {
-    toast("Retarget 进行中，请等待完成后再切换机器人", true);
+    toast(runtimeText(
+      "Retargeting is running. Wait for it to finish before switching robots.",
+      "Retarget 进行中，请等待完成后再切换机器人",
+    ), true);
     return;
   }
   if (!robotImport.urdf) {
-    toast("请先放入 .urdf 文件", true);
+    toast(runtimeText("Choose a .urdf file first.", "请先选择 .urdf 文件。"), true);
     return;
   }
   // The backend wipes the upload dir on every call, so URDF + meshes MUST be
@@ -4346,30 +4518,40 @@ async function tryUploadRobot(): Promise<void> {
     .replace(/\.urdf$/i, "")
     .replace(/[^a-z0-9_]/gi, "_")
     .toLowerCase();
-  toast(`上传机器人… (${files.length} 个文件)`);
+  toast(runtimeText(
+    `Importing robot… (${files.length} files)`,
+    `导入机器人……（${files.length} 个文件）`,
+  ));
   try {
     const robotData = await API.upload("/api/robot/upload", files, { name });
     await applyRobot(robotData);
-    // The clip is now a registered preset (name derived from the URDF) — show
-    // it in the "已注册机器人" list and select it.
+    // The backend persists the imported preset; refreshing exposes it through
+    // the same Robot Library used for the bundled G1 and X2 models.
     await refreshRobotList();
-    const sel = document.getElementById("robot-select");
-    if (sel && robotData.name) sel.value = robotData.name;
     robotImport.urdf = null;
     robotImport.meshes = [];
     updateRobotImportStatus();
-    toast(`机器人已注册：${robotData.display_name || robotData.name}`);
+    toast(runtimeText(
+      `Robot added to the library: ${robotData.display_name || robotData.name}`,
+      `机器人已加入资源库：${robotData.display_name || robotData.name}`,
+    ));
   } catch (e) { toast(errorMessage(e), true); }
 }
 
 function ingestRobotUrdf(files: UploadFile[]): void {
   if (state.robotPanelLocked) {
-    toast("Retarget 进行中，请等待完成后再切换机器人", true);
+    toast(runtimeText(
+      "Retargeting is running. Wait for it to finish before switching robots.",
+      "Retarget 进行中，请等待完成后再切换机器人",
+    ), true);
     return;
   }
   if (!files?.length) return;
   const urdf = files.find(isUrdfFile);
-  if (!urdf) { toast("此区域需要 .urdf 文件", true); return; }
+  if (!urdf) {
+    toast(runtimeText("No .urdf file was found.", "未找到 .urdf 文件。"), true);
+    return;
+  }
   robotImport.urdf = urdf;
   const extra = files.filter((f) => f !== urdf && (isMeshFile(f) || !isUrdfFile(f)));
   if (extra.length) robotImport.meshes = [...robotImport.meshes, ...extra];
@@ -4379,27 +4561,39 @@ function ingestRobotUrdf(files: UploadFile[]): void {
   // — uploading immediately used to register a mesh-less robot and reset the
   // stored URDF, so the subsequent meshes drop hit "请先放入 .urdf 文件".
   if (robotImport.meshes.length) {
-    tryUploadRobot();
+    void tryUploadRobot();
   } else {
-    toast("已读取 URDF，请接着拖入 meshes/ 文件夹完成注册");
+    toast(runtimeText(
+      "URDF selected. Choose the matching mesh folder to finish importing.",
+      "已读取 URDF，请继续选择对应的 mesh 文件夹完成导入。",
+    ));
   }
 }
 
 function ingestRobotMesh(files: UploadFile[]): void {
   if (state.robotPanelLocked) {
-    toast("Retarget 进行中，请等待完成后再切换机器人", true);
+    toast(runtimeText(
+      "Retargeting is running. Wait for it to finish before switching robots.",
+      "Retarget 进行中，请等待完成后再切换机器人",
+    ), true);
     return;
   }
   if (!files?.length) return;
   const meshes = files.filter((f) => !isUrdfFile(f));
-  if (!meshes.length) { toast("未找到 mesh 文件", true); return; }
+  if (!meshes.length) {
+    toast(runtimeText("No mesh assets were found.", "未找到 mesh 资源。"), true);
+    return;
+  }
   if (!robotImport.urdf) {
-    toast("请先在「1 · URDF 文件」区域放入 .urdf，再拖入 meshes/", true);
+    toast(runtimeText(
+      "Choose the robot URDF before selecting its mesh folder.",
+      "请先选择机器人 URDF，再选择对应的 mesh 文件夹。",
+    ), true);
     return;
   }
   robotImport.meshes = meshes;
   updateRobotImportStatus();
-  tryUploadRobot();
+  void tryUploadRobot();
 }
 
 setupDropzone(document.getElementById("robot-drop-urdf"), ingestRobotUrdf);

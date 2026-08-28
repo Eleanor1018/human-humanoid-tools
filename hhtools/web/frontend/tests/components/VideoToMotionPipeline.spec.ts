@@ -28,7 +28,7 @@ describe('VideoToMotionPipeline', () => {
     }))
     await nextTick()
 
-    expect(wrapper.findAll('.state-completed')).toHaveLength(2)
+    expect(wrapper.findAll('.state-completed')).toHaveLength(3)
     expect(wrapper.text()).toContain('gvhmr-run')
 
     const panels: string[] = []
@@ -39,7 +39,7 @@ describe('VideoToMotionPipeline', () => {
     await wrapper.findAll('.workflow-node-button')[3]?.trigger('click')
     window.removeEventListener('hhtools:panel-request', receive)
 
-    expect(panels).toEqual(['motion'])
+    expect(panels).toEqual(['video-to-motion'])
   })
 
   it('blocks generation until a selected custom checkpoint is available', async () => {
