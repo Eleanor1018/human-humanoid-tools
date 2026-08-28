@@ -164,6 +164,12 @@ import {
   loadWorkspacePreferences,
   updateWorkspacePreferences,
 } from "./workspace-preferences";
+import {
+  curatedRobotLibraryItem,
+  DEFAULT_ROBOT_LIBRARY_ICON,
+  robotLibraryIcon,
+} from "./robot-library-catalog";
+import { sortRobotLibrarySummaries } from "./robot-library-order";
 import type {
   ApiClient,
   ApiGetResponse,
@@ -4202,27 +4208,17 @@ let robotSummaries: RobotSummary[] = [];
 let robotLibraryDir = "";
 let robotLoadingName = "";
 
-const builtinRobotCopy: Record<string, { en: string; zh: string; order: number }> = {
-  g1_29dof: { en: "Unitree G1", zh: "宇树 G1", order: 0 },
-  agibot_x2_ultra: { en: "AgiBot X2", zh: "智元 X2", order: 1 },
-};
-
 function isBuiltinRobot(summary: RobotSummary): boolean {
-  return summary.builtin === true || summary.name in builtinRobotCopy;
+  return summary.builtin === true || curatedRobotLibraryItem(summary.name) != null;
 }
 
 function robotSummaryLabel(summary: RobotSummary): string {
-  const copy = builtinRobotCopy[summary.name];
+  const copy = curatedRobotLibraryItem(summary.name);
   return copy ? runtimeText(copy.en, copy.zh) : summary.display_name || summary.name;
 }
 
 function sortedRobotSummaries(): RobotSummary[] {
-  return [...robotSummaries].sort((left, right) => {
-    const leftOrder = builtinRobotCopy[left.name]?.order ?? Number.MAX_SAFE_INTEGER;
-    const rightOrder = builtinRobotCopy[right.name]?.order ?? Number.MAX_SAFE_INTEGER;
-    if (leftOrder !== rightOrder) return leftOrder - rightOrder;
-    return robotSummaryLabel(left).localeCompare(robotSummaryLabel(right));
-  });
+  return sortRobotLibrarySummaries(robotSummaries, robotSummaryLabel);
 }
 
 function setRobotPanelLocked(locked: boolean): void {
@@ -4376,7 +4372,13 @@ function renderRobotLibrary(): void {
 
     const icon = document.createElement("img");
     icon.className = "robot-library-icon";
-    icon.src = "./hhtools-robot.svg";
+    icon.src = robotLibraryIcon(summary.name);
+    // Broken or unavailable curated artwork must degrade to the same generic
+    // mark used by user imports, never to a browser broken-image glyph.
+    icon.onerror = () => {
+      icon.onerror = null;
+      icon.src = DEFAULT_ROBOT_LIBRARY_ICON;
+    };
     icon.alt = "";
     icon.setAttribute("aria-hidden", "true");
 

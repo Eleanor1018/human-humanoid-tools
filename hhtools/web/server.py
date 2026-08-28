@@ -65,7 +65,7 @@ _log = logging.getLogger(__name__)
 
 # Bump when static/ front-end behaviour changes.  Injected into ``index.html``
 # at serve time so collaborators only need to pull + restart (no triple-sync).
-UI_BUILD_ID = "20260828-robot-library"
+UI_BUILD_ID = "20260828-curated-robot-icons"
 
 _UPLOAD_CHUNK_BYTES = 1024 * 1024
 # These are application-level resource controls, not transport tuning knobs.
@@ -81,10 +81,19 @@ _DEFAULT_JOB_TTL_SECONDS = 60 * 60.0
 
 _ACTIVE_JOB_STATUSES = frozenset({"pending", "running"})
 
-# The installer provisions these curated models in the local robot library.
-# They remain read-only in the UI even when their files live under the same
-# per-user root as imported models.
-_BUILTIN_ROBOT_PRESET_NAMES = frozenset({"g1_29dof", "agibot_x2_ultra"})
+# Product-curated models remain read-only even when a distribution provisions
+# them below the same per-user root as uploaded models. Keep this list aligned
+# with the front-end Robot Library catalog.
+_BUILTIN_ROBOT_PRESET_NAMES = frozenset(
+    {
+        "g1_29dof",
+        "roboto_origin",
+        "agibot_x2_ultra",
+        "asimov_1",
+        "fourier_gr2",
+        "berkeley_humanoid_lite",
+    }
+)
 
 
 def _is_builtin_robot_preset(name: str) -> bool:
@@ -2473,6 +2482,14 @@ def create_app(
             drop_name = _safe_upload_directory_name(name, default="uploaded_robot")
         except ValueError as err:
             raise HTTPException(status_code=400, detail=str(err)) from err
+        if _is_builtin_robot_preset(drop_name):
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"robot {drop_name!r} is a built-in preset and cannot be "
+                    "overwritten via upload"
+                ),
+            )
         drop = state.robot_root / drop_name
         # Re-uploading an existing robot rebuilds geometry but must NOT wipe the
         # user's tuned retarget config: keep bundled scalers, calibrations, and
