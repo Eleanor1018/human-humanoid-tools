@@ -3,6 +3,7 @@
 const bridge = () => window.__hhApp || {};
 
 const DV_USER_ROOT_KEY = "hh.dvUserSourceRoot";
+const DV_LOCAL_SOURCE_KEY = "hh.dvLocalSource";
 
 const state = {
   clips: [],
@@ -19,6 +20,7 @@ const state = {
   analyzeSource: "",
   analyzeSourceRoot: "",
   uploadSummary: null,
+  basketRemovable: false,
   embeddingName: "handcrafted",
   previewRobot: "",
   scatterView: { scale: 1, panX: 0, panY: 0, dragging: false, dragMoved: false, lastX: 0, lastY: 0 },
@@ -80,9 +82,9 @@ function applyCatalogTexts() {
   const grid = $("dv-format-grid");
   if (grid) {
     grid.innerHTML =
-      `<div class="dv-format-item"><b>人体</b><span>拖入含 BVH / NPZ / PKL / NPY / GLB 的文件夹即可（AMASS、ACCAD、CMU、LAFAN、OMOMO、parc_ms、holosoma 等；支持 mimic / intermimic / meshmimic 多级目录）</span></div>`
+      `<div class="dv-format-item"><b>人体</b><span>拖入含 BVH / NPZ / PKL / NPY / GLB 的文件夹即可（AMASS、ACCAD、CMU、LAFAN、OMOMO、<b>OmniContact</b>、<code>parc_ms</code>、holosoma 等）。OmniContact 的 <code>motion_actor.csv</code> / <code>prop_*.csv</code> 是人体侧车，不是机器人轨迹。</span></div>`
       + `<div class="dv-format-item"><b>机器人</b><span>拖入 retarget 导出的轨迹 CSV / PKL / NPZ 文件夹（含 <code>*_export</code>、terrain / object 侧车）</span></div>`
-      + `<div class="dv-format-warn">请勿混合拖入人体与机器人数据；一次分析只支持一种。</div>`;
+      + `<div class="dv-format-warn">请勿混合拖入人体与机器人数据；一次分析只支持一种。整库请填本机路径，勿上传数 GB。</div>`;
   }
 }
 
@@ -327,32 +329,61 @@ function scheduleSubset() {
 
 // ------------------------------------------------------------------ upload / analyze
 function walkEntry(entry, out, prefix = "") {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     if (entry.isFile) {
-      entry.file((f) => { f._relpath = prefix + f.name; out.push(f); resolve(); });
-    } else if (entry.isDirectory) {
-      entry.createReader().readEntries(async (entries) => {
-        await Promise.all(entries.map((e) => walkEntry(e, out, prefix + entry.name + "/")));
-        resolve();
-      });
-    } else resolve();
+      entry.file((f) => { f._relpath = prefix + f.name; out.push(f); resolve(); }, reject);
+      return;
+    }
+    if (!entry.isDirectory) { resolve(); return; }
+    const reader = entry.createReader();
+    const nextPrefix = prefix + entry.name + "/";
+    const drain = () => {
+      reader.readEntries(async (entries) => {
+        if (!entries.length) { resolve(); return; }
+        try {
+          await Promise.all(entries.map((e) => walkEntry(e, out, nextPrefix)));
+          drain();
+        } catch (err) { reject(err); }
+      }, reject);
+    };
+    drain();
   });
 }
 
+function isHumanSidecarCsv(base) {
+  const n = String(base || "").toLowerCase();
+  if (n === "motion_actor.csv") return true;
+  if (n.startsWith("prop_") && n.endsWith(".csv")) return true;
+  if (n.startsWith("object_") && n.endsWith(".csv")) return true;
+  return false;
+}
+
 function guessUploadKind(files) {
-  let csv = 0, motion = 0, robotCsv = 0;
+  let csv = 0, motion = 0;
+  let hasOmni = false;
   for (const f of files) {
     const n = (f._relpath || f.name || "").toLowerCase();
     const base = n.split("/").pop();
-    if (base.startsWith("object_") && base.endsWith(".csv")) continue;
-    if (n.endsWith(".csv")) {
-      csv++;
-      if (/root_x|dof_/.test(f.name || "")) robotCsv++;
-    } else if (/\.(bvh|npz|pkl|npy|glb|pt)$/.test(n)) motion++;
+    if (base === "motion_actor.bvh") hasOmni = true;
+    if (isHumanSidecarCsv(base)) continue;
+    if (n.endsWith(".csv")) csv++;
+    else if (/\.(bvh|npz|pkl|npy|glb|pt)$/.test(n)) motion++;
   }
+  if (hasOmni) return "human";
   if (csv && motion) return "mixed";
   if (csv) return "robot";
   return "human";
+}
+
+function dropLooksHugeOmniContact(files) {
+  let omni = 0;
+  let bytes = 0;
+  for (const f of files) {
+    const n = (f._relpath || f.name || "").toLowerCase();
+    if (n.split("/").pop() === "motion_actor.bvh") omni++;
+    bytes += f.size || 0;
+  }
+  return omni >= 8 && (files.length > 80 || bytes > 80 * 1024 * 1024);
 }
 
 function resolveUploadKind(info, fallback = "unknown") {
@@ -423,16 +454,20 @@ function renderUploadBasket(info) {
         const namesEl = document.createElement("span");
         namesEl.className = "dv-basket-names";
         namesEl.textContent = `${names.slice(0, 3).join(" · ")}${names.length > 3 ? " …" : ""}`;
-        const rmBtn = document.createElement("button");
-        rmBtn.type = "button";
-        rmBtn.className = "dv-basket-remove btn-link";
-        rmBtn.title = "移除此文件夹";
-        rmBtn.textContent = "×";
-        rmBtn.onclick = (ev) => {
-          ev.stopPropagation();
-          removeBasketFolder(folder);
-        };
-        row.append(folderEl, metaEl, namesEl, rmBtn);
+        if (state.basketRemovable) {
+          const rmBtn = document.createElement("button");
+          rmBtn.type = "button";
+          rmBtn.className = "dv-basket-remove btn-link";
+          rmBtn.title = "移除此文件夹";
+          rmBtn.textContent = "×";
+          rmBtn.onclick = (ev) => {
+            ev.stopPropagation();
+            removeBasketFolder(folder);
+          };
+          row.append(folderEl, metaEl, namesEl, rmBtn);
+        } else {
+          row.append(folderEl, metaEl, namesEl);
+        }
         list.appendChild(row);
       }
     }
@@ -443,6 +478,7 @@ function renderUploadBasket(info) {
 function clearUploadBasket() {
   state.analyzeSource = "";
   state.uploadSummary = null;
+  state.basketRemovable = false;
   state.dataKind = "unknown";
   $("dv-source").value = "";
   $("dv-upload-basket").hidden = true;
@@ -509,6 +545,12 @@ async function ingestDroppedFiles(files) {
     toast("与当前批次类型不同，请先点「清空批次」再拖入", true);
     return;
   }
+  const looksHuge = (bridge().dropLooksHuge || dropLooksHugeOmniContact)(files);
+  if (looksHuge) {
+    toast(bridge().HUGE_DROP_MSG || "数据集很大，请勿用浏览器上传。请填写下方「服务器本机路径」后点「扫描」或「开始分析」。", true);
+    $("dv-local-source")?.focus();
+    return;
+  }
 
   const dropzone = $("dv-dropzone");
   dropzone?.classList.remove("ok", "err");
@@ -523,6 +565,7 @@ async function ingestDroppedFiles(files) {
       userSourceRoot: userRoot || undefined,
     });
     state.analyzeSource = info.source || "";
+    state.basketRemovable = true;
     $("dv-source").value = state.analyzeSource;
     if (info.user_source_root) setUserSourceRoot(info.user_source_root);
     const n = info.clip_count || 0;
@@ -560,10 +603,46 @@ async function pickFolder() {
   inp.click();
 }
 
+function applyScanSummary(info, { removable = false } = {}) {
+  state.analyzeSource = info.source || "";
+  state.basketRemovable = removable;
+  $("dv-source").value = state.analyzeSource;
+  renderUploadBasket(info);
+}
+
+async function scanLocalSource() {
+  const { API, toast } = bridge();
+  const path = ($("dv-local-source")?.value || "").trim();
+  if (!path) {
+    toast("请先填写服务器本机路径", true);
+    $("dv-local-source")?.focus();
+    return;
+  }
+  localStorage.setItem(DV_LOCAL_SOURCE_KEY, path);
+  $("dv-status").textContent = "扫描本机目录…";
+  try {
+    const info = await API.post("/api/dataset/scan", { source: path });
+    const n = info.clip_count || 0;
+    if (!n) {
+      toast("该目录未识别到可分析 clip（OmniContact 需要 motion_actor.bvh）", true);
+      $("dv-status").textContent = "";
+      return;
+    }
+    applyScanSummary(info, { removable: false });
+    $("dv-status").textContent = `已扫描本机目录 · ${n} clip（未复制文件）`;
+    toast(`已扫描 ${n} 个 clip`);
+  } catch (e) {
+    toast(e.message, true);
+    $("dv-status").textContent = "";
+  }
+}
+
 async function runAnalysis() {
   const { API, toast } = bridge();
   await loadCatalog();
-  const source = state.analyzeSource || $("dv-source").value.trim();
+  const localPath = ($("dv-local-source")?.value || "").trim();
+  if (localPath) localStorage.setItem(DV_LOCAL_SOURCE_KEY, localPath);
+  const source = state.analyzeSource || localPath || $("dv-source").value.trim();
   const prog = $("dv-progress");
   prog.style.display = "block";
   prog.querySelector(".bar").style.width = "4%";
@@ -1409,12 +1488,22 @@ function setupDropzone() {
 function bind() {
   loadCatalog();
   syncUserRootField();
+  const savedLocal = localStorage.getItem(DV_LOCAL_SOURCE_KEY);
+  if (savedLocal && $("dv-local-source") && !$("dv-local-source").value.trim()) {
+    $("dv-local-source").value = savedLocal;
+  }
   updateKindBadge();
   setupDropzone();
   setupHistInteraction();
   setupScatterNav();
   $("dv-pick-folder")?.addEventListener("click", pickFolder);
   $("dv-clear-upload")?.addEventListener("click", clearUploadBasket);
+  $("dv-scan-local")?.addEventListener("click", scanLocalSource);
+  $("dv-local-source")?.addEventListener("change", (e) => {
+    const v = String(e.target.value || "").trim();
+    if (v) localStorage.setItem(DV_LOCAL_SOURCE_KEY, v);
+    else localStorage.removeItem(DV_LOCAL_SOURCE_KEY);
+  });
   $("dv-analyze")?.addEventListener("click", runAnalysis);
   $("dv-clear-tags")?.addEventListener("click", () => {
     state.activeTags.clear(); recomputeSubset(); renderAll();

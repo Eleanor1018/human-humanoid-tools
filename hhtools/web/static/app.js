@@ -267,7 +267,7 @@ async function uploadWithProgress(url, files, { profile } = {}, onProgress) {
 }
 
 /** Upload files with real byte progress, then return the JSON body (``{job_id}``). */
-function uploadFilesXHR(url, files, { profile, appendTo, libraryFolderLabel } = {}, onUploadProgress) {
+function uploadFilesXHR(url, files, { profile, appendTo, libraryFolderLabel, userSourceRoot } = {}, onUploadProgress) {
   return new Promise((resolve, reject) => {
     const fd = new FormData();
     for (const f of files) fd.append("files", f, f._relpath || f.name);
@@ -275,6 +275,7 @@ function uploadFilesXHR(url, files, { profile, appendTo, libraryFolderLabel } = 
     if (profile) qs.set("profile", profile);
     if (appendTo) qs.set("append_to", appendTo);
     if (libraryFolderLabel) qs.set("library_folder_label", libraryFolderLabel);
+    if (userSourceRoot) qs.set("user_source_root", userSourceRoot);
     const q = qs.toString() ? `?${qs.toString()}` : "";
     const xhr = new XMLHttpRequest();
     xhr.upload.onprogress = (e) => {
@@ -294,6 +295,41 @@ function uploadFilesXHR(url, files, { profile, appendTo, libraryFolderLabel } = 
     xhr.open("POST", url + q);
     xhr.send(fd);
   });
+}
+
+const HUGE_DROP_MSG = "数据集很大，请勿用浏览器上传。请填写下方「服务器本机路径」后点「扫描」。";
+
+function dropLooksHuge(files) {
+  if (!files?.length) return false;
+  let omni = 0;
+  let bytes = 0;
+  for (const f of files) {
+    const n = (f._relpath || f.name || "").toLowerCase();
+    if (n.split("/").pop() === "motion_actor.bvh") omni++;
+    bytes += f.size || 0;
+  }
+  if (omni >= 8 && (files.length > 80 || bytes > 80 * 1024 * 1024)) return true;
+  if (files.length > 200 && bytes > 200 * 1024 * 1024) return true;
+  return false;
+}
+
+function persistLocalPath(storageKey, inputId) {
+  const el = document.getElementById(inputId);
+  const v = (el?.value || "").trim();
+  if (v) localStorage.setItem(storageKey, v);
+  else localStorage.removeItem(storageKey);
+  return v;
+}
+
+function restoreLocalPath(storageKey, inputId) {
+  const el = document.getElementById(inputId);
+  if (!el || el.value.trim()) return;
+  const saved = localStorage.getItem(storageKey);
+  if (saved) el.value = saved;
+}
+
+function focusLocalPath(inputId) {
+  document.getElementById(inputId)?.focus();
 }
 
 function formatJobProgress(job, prefix = "") {
@@ -803,6 +839,8 @@ class EnvView {
         (gltf) => {
           const real = gltf.scene;
           // GLB from /api/object_glb is already centred + scaled on the server.
+          real.position.copy(box.position);
+          real.quaternion.copy(box.quaternion);
           box.geometry.dispose();
           box.visible = false;
           this.group.add(real);
@@ -893,6 +931,8 @@ class ScaledEnvView {
         glbUrl,
         (gltf) => {
           const real = gltf.scene;
+          real.position.copy(box.position);
+          real.quaternion.copy(box.quaternion);
           box.geometry.dispose();
           box.visible = false;
           this.group.add(real);
@@ -4075,6 +4115,11 @@ document.getElementById("basket-clear").onclick = () => { basket = []; renderBas
 
 async function ingestBasketFiles(files, profile = "auto") {
   if (!files || !files.length) return;
+  if (dropLooksHuge(files)) {
+    toast(HUGE_DROP_MSG, true);
+    focusLocalPath("batch-local-source");
+    return;
+  }
   showLoading(`上传到会话缓存… (${files.length} 个文件)`);
   try {
     const { job_id } = await uploadFilesXHR(
@@ -4101,6 +4146,36 @@ async function ingestBasketFiles(files, profile = "auto") {
     hideLoading();
   }
 }
+
+async function scanBasketLocalSource() {
+  const path = persistLocalPath("hh.batchLocalSource", "batch-local-source");
+  if (!path) {
+    toast("请先填写服务器本机路径", true);
+    focusLocalPath("batch-local-source");
+    return;
+  }
+  showLoading("扫描本机目录…");
+  try {
+    const payload = await API.post("/api/basket/scan", { source: path, profile: "auto" });
+    const entries = payload.entries || [];
+    if (!entries.length) {
+      toast("未识别到可 retarget 的 clip", true);
+      return;
+    }
+    addToBasket(entries, { silent: true });
+    toast(`已扫描本机目录：${entries.length} 个 clip（未复制文件）`);
+  } catch (e) {
+    toast(e.message, true);
+  } finally {
+    hideLoading();
+  }
+}
+
+restoreLocalPath("hh.batchLocalSource", "batch-local-source");
+document.getElementById("batch-scan-local")?.addEventListener("click", scanBasketLocalSource);
+document.getElementById("batch-local-source")?.addEventListener("change", () => {
+  persistLocalPath("hh.batchLocalSource", "batch-local-source");
+});
 
 setupDropzone(document.getElementById("basket-drop"), (files) => ingestBasketFiles(files, "auto"));
 
@@ -5031,8 +5106,42 @@ function r2rRenderBasket() {
   if (runBtn) runBtn.disabled = !(r2r.basket.length && r2r.targetName && r2r.sourceName);
 }
 
+async function scanR2rBasketLocalSource() {
+  const path = persistLocalPath("hh.r2rBatchLocalSource", "r2r-batch-local-source");
+  if (!path) {
+    toast("请先填写服务器本机路径", true);
+    focusLocalPath("r2r-batch-local-source");
+    return;
+  }
+  showLoading("扫描本机目录…");
+  try {
+    const payload = await API.post("/api/r2r/basket/scan", { source: path, profile: "auto" });
+    const entries = payload.entries || [];
+    if (!entries.length) {
+      toast("未找到可识别的机器人轨迹 clip", true);
+      return;
+    }
+    for (const e of entries) {
+      if (!r2r.basket.find((x) => x.source_path === e.source_path)) r2r.basket.push(e);
+    }
+    const last = entries[entries.length - 1];
+    if (last?.suggested_backend) r2rApplySuggestedBackend(last.suggested_backend);
+    r2rRenderBasket();
+    toast(`已扫描本机目录：${entries.length} 个 clip（未复制文件）`);
+  } catch (e) {
+    toast(e.message, true);
+  } finally {
+    hideLoading();
+  }
+}
+
 async function r2rIngestBasket(files, profile = "auto") {
   if (!files?.length) return;
+  if (dropLooksHuge(files)) {
+    toast(HUGE_DROP_MSG, true);
+    focusLocalPath("r2r-batch-local-source");
+    return;
+  }
   showLoading(`R2R 批量上传… (${files.length} 个文件)`);
   try {
     const { job_id } = await uploadFilesXHR(
@@ -5077,6 +5186,11 @@ function r2rInit() {
     };
   });
   setupDropzone(document.getElementById("r2r-basket-drop"), (files) => r2rIngestBasket(files, "auto"));
+  restoreLocalPath("hh.r2rBatchLocalSource", "r2r-batch-local-source");
+  document.getElementById("r2r-batch-scan-local")?.addEventListener("click", scanR2rBasketLocalSource);
+  document.getElementById("r2r-batch-local-source")?.addEventListener("change", () => {
+    persistLocalPath("hh.r2rBatchLocalSource", "r2r-batch-local-source");
+  });
   for (const [id, key, view] of [
     ["r2r-tg-src-robot", "srcRobot", r2rSrc],
     ["r2r-tg-src-skel", "srcSkel", r2rSrcSkel],
@@ -5224,6 +5338,8 @@ window.__hhApp = {
   switchInspectorPanel,
   getLibrarySourceRoot: () => libSourceRoot,
   uploadFilesXHR,
+  dropLooksHuge,
+  HUGE_DROP_MSG,
 };
 
 async function verifyUiBuild() {

@@ -1121,6 +1121,19 @@ body.tour-active { overflow: hidden; }
 }
 .dv-user-root { margin-top: 8px; }
 .dv-user-root .hint { font-size: 11px; line-height: 1.35; }
+.dv-local-row { display: flex; gap: 8px; align-items: center; }
+.dv-local-row .dv-input,
+.dv-local-row .search { flex: 1; min-width: 0; }
+.local-path-field { margin: 10px 0 12px; }
+.local-path-field > span {
+  display: block;
+  font-size: 10px;
+  color: var(--ink-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-bottom: 4px;
+}
+.local-path-field .hint { margin-top: 6px; }
 .dv-input {
   width: 100%; padding: 7px 9px; border-radius: 8px; border: 1px solid var(--border, #d2d2d7);
   font-size: 12px; font-family: inherit; background: var(--bg, #fff);

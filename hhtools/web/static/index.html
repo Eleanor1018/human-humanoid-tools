@@ -348,6 +348,15 @@
           <div class="dz-title">拖入文件 / 文件夹到篮子</div>
           <div class="dz-sub">支持任意路径的数据集（会话缓存，重启即清除）；也可在「动作」资源库点 ＋ 加入</div>
         </div>
+        <div class="local-path-field">
+          <span>服务器本机路径</span>
+          <div class="dv-local-row">
+            <input class="search" id="batch-local-source" type="text"
+              placeholder="/home/…/intermimic/OmniContact-Dataset" />
+            <button type="button" class="btn secondary small" id="batch-scan-local">扫描</button>
+          </div>
+          <p class="hint">整库（如 OmniContact，约 12GB）请填本机路径后扫描，勿用浏览器上传</p>
+        </div>
 
         <div class="card">
           <h3>篮子 <span id="basket-count">0</span> 项</h3>
@@ -569,6 +578,15 @@
             <div class="dz-title">拖入待处理 clip</div>
             <div class="dz-sub">自动识别 mimic / intermimic / meshmimic</div>
           </div>
+          <div class="local-path-field">
+            <span>服务器本机路径</span>
+            <div class="dv-local-row">
+              <input class="search" id="r2r-batch-local-source" type="text"
+                placeholder="/home/…/robot_export_or_dataset" />
+              <button type="button" class="btn secondary small" id="r2r-batch-scan-local">扫描</button>
+            </div>
+            <p class="hint">整库很大时请填本机路径后扫描，勿用浏览器上传数 GB</p>
+          </div>
           <div class="meta-row" style="margin-top:8px"><span class="k">篮子</span><span class="v" id="r2r-basket-count">0</span></div>
           <div id="r2r-basket-list" style="margin-top:6px; max-height:120px; overflow-y:auto"></div>
           <div class="row" style="margin-top:8px">
@@ -617,6 +635,15 @@
             </div>
             <div class="hint dv-drop-hint" id="dv-drop-hint">留空 = 当前资源库根目录 · 可多次拖入追加到同一批次</div>
           </div>
+          <label class="dv-field dv-user-root" id="dv-local-root-wrap">
+            <span>服务器本机路径</span>
+            <div class="dv-local-row">
+              <input type="text" id="dv-local-source" class="dv-input"
+                placeholder="/home/…/intermimic/OmniContact-Dataset" />
+              <button type="button" class="btn secondary small" id="dv-scan-local">扫描</button>
+            </div>
+            <span class="hint">整库（如 OmniContact）请填本机路径后扫描 / 分析，勿用浏览器上传数 GB 数据</span>
+          </label>
           <div class="dv-upload-basket" id="dv-upload-basket" hidden>
             <div class="dv-basket-head">
               <span class="dv-basket-title" id="dv-basket-summary">—</span>

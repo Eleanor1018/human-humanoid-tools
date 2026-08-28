@@ -750,6 +750,42 @@ class NewtonBasicPipeline:
                 meta={"robot": self.robot.preset.name},
             )
 
+        ik_map_restore = self._push_motion_ik_policy(motion)
+        try:
+            return self._run_with_active_ik_map(
+                motion, progress_callback=progress_callback,
+            )
+        finally:
+            if ik_map_restore is not None:
+                self.ik_mapping = ik_map_restore
+
+    def _push_motion_ik_policy(self, motion: Motion):
+        """Drop head/neck IK entries for OmniContact→G1; return prior mapping."""
+        from hhtools.robot.ik_map_policy import drop_head_targets_for_motion
+        from hhtools.retarget.newton_basic.robot_model import IKMapping
+
+        if not drop_head_targets_for_motion(self.robot.preset.name, motion):
+            return None
+        kept = tuple(
+            e for e in self.ik_mapping.entries
+            if e.canonical_name not in ("head", "neck")
+        )
+        if not kept or len(kept) == len(self.ik_mapping.entries):
+            return None
+        saved = self.ik_mapping
+        self.ik_mapping = IKMapping(entries=kept)
+        _log.info(
+            "OmniContact+G1: dropped head/neck IK targets (%d → %d entries)",
+            len(saved.entries), len(kept),
+        )
+        return saved
+
+    def _run_with_active_ik_map(
+        self,
+        motion: Motion,
+        *,
+        progress_callback: Callable[[int, int], None] | None = None,
+    ) -> RetargetedMotion:
         # 1. Scale source motion into effector targets.
         scaler = self._build_scaler(motion)
         scaled = scaler.apply(motion)
@@ -1047,6 +1083,33 @@ class NewtonBasicPipeline:
         if len(motions) == 1:
             return [self.run(motions[0], progress_callback=progress_callback)]
 
+        # Same OmniContact+G1 head drop as :meth:`run` (shared IK width).
+        from hhtools.robot.ik_map_policy import drop_head_targets_for_motion
+
+        trigger = next(
+            (
+                m for m in motions
+                if drop_head_targets_for_motion(self.robot.preset.name, m)
+            ),
+            None,
+        )
+        ik_restore = (
+            self._push_motion_ik_policy(trigger) if trigger is not None else None
+        )
+        try:
+            return self._run_batch_with_active_ik_map(
+                motions, progress_callback=progress_callback,
+            )
+        finally:
+            if ik_restore is not None:
+                self.ik_mapping = ik_restore
+
+    def _run_batch_with_active_ik_map(
+        self,
+        motions: list[Motion],
+        *,
+        progress_callback: Callable[[int, int], None] | None = None,
+    ) -> list[RetargetedMotion]:
         entries = self.ik_mapping.entries
         M = len(entries)
         n_init = max(0, int(self.config.num_initialization_frames))

@@ -72,6 +72,55 @@ def _looks_like_object_header(cells: list[str]) -> bool:
     return any(c.strip().lower() in ("pos_x", "quat_x", "quat_w") for c in cells)
 
 
+def _object_display_name_from_stem(stem: str) -> str:
+    """``object_0_Box_H_1`` → ``Box_H_1``; otherwise the stem itself."""
+    name = str(stem)
+    if name.startswith("object_") and name.count("_") >= 2:
+        return name.split("_", 2)[2]
+    return name
+
+
+def resolve_object_mesh_path(csv_path: Path, meta: dict[str, str] | None = None) -> Path | None:
+    """Locate the object ``.obj`` next to an ``object_*.csv`` track.
+
+    Mesh names are **not** restricted to ``*_cleaned_simplified.obj``.  Web
+    exports commonly ship ``Box_H_1.obj`` beside ``object_0_Box_H_1.csv``.
+    """
+    folder = Path(csv_path).parent
+    meta = meta or {}
+    mesh_name = str(meta.get("mesh_filename") or "").strip()
+    if mesh_name:
+        cand = folder / mesh_name
+        if cand.is_file():
+            return cand
+
+    display = _object_display_name_from_stem(Path(csv_path).stem)
+    preferred = [
+        folder / f"{display}.obj",
+        folder / f"{display}_cleaned_simplified.obj",
+        folder / f"{Path(csv_path).stem}.obj",
+    ]
+    for cand in preferred:
+        if cand.is_file():
+            return cand
+
+    for cand in sorted(folder.glob("*_cleaned_simplified.obj")):
+        return cand
+
+    objs = [
+        p for p in sorted(folder.glob("*.obj"))
+        if "_terrain" not in p.name.lower()
+    ]
+    if len(objs) == 1:
+        return objs[0]
+    display_l = display.lower()
+    for p in objs:
+        stem_l = p.stem.lower()
+        if display_l and (display_l in stem_l or stem_l in display_l):
+            return p
+    return None
+
+
 def _load_object_track_csv(path: Path) -> dict[str, Any] | None:
     """Parse ``object_<i>_<name>.csv`` (robot-frame pose; geometry from mesh).
 
@@ -120,14 +169,7 @@ def _load_object_track_csv(path: Path) -> dict[str, Any] | None:
         fps = float(1.0 / max(times[1] - times[0], 1e-6))
     else:
         fps = float(meta.get("sample_rate", 30.0) or 30.0)
-    mesh_name = meta.get("mesh_filename", "")
-    mesh_path = path.parent / mesh_name if mesh_name else None
-    if mesh_path is not None and not mesh_path.is_file():
-        mesh_path = None
-    if mesh_path is None:
-        for cand in path.parent.glob("*_cleaned_simplified.obj"):
-            mesh_path = cand
-            break
+    mesh_path = resolve_object_mesh_path(path, meta)
 
     if all(n in col for n in ("ext_x", "ext_y", "ext_z")):
         extents = arr[0, [col["ext_x"], col["ext_y"], col["ext_z"]]].astype(np.float32)

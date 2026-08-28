@@ -27,6 +27,7 @@ DATASET_TO_REFERENCE: dict[str, str] = {
     "xsens_mocap": "xsens_mocap",
     "gvhmr": "gvhmr",
     "omomo": "smplx",
+    "omnicontact": "lafan_bvh",
     "meshmimic_holosoma": "smplx",
     "glb": "glb",
     "unified_npz": "smpl",

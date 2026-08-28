@@ -33,6 +33,8 @@ _NUMERIC_METRIC_KEYS: tuple[str, ...] = (
     "root_speed_xy",
     "root_speed_z",
     "root_turn_rate",
+    "root_xy_range",
+    "root_z_range",
     "com_height_range",
     "airborne_ratio",
     "path_efficiency",
