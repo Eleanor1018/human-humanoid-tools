@@ -788,14 +788,8 @@ onBeforeUnmount(() => {
         :class="{ active: activePanel === 'video-to-motion' }"
         data-panel="video-to-motion"
       >
-        <div class="panel-stack">
+        <div class="panel-stack video-to-motion-stack">
           <h2>{{ workspaceText('Video → Motion', '视频 → 动作') }}</h2>
-          <p class="lead">
-            {{ workspaceText(
-              'Recover a reusable human motion from one video with the official GVHMR checkpoint or a compatible custom checkpoint.',
-              '使用 GVHMR 官方权重或兼容的自定义权重，从单个视频中恢复可复用的人体动作。',
-            ) }}
-          </p>
           <VideoToMotionPipeline :locale="workspaceLocale" />
 
           <details id="gvhmr-step-video" class="video-workflow-step" open>
@@ -841,60 +835,19 @@ onBeforeUnmount(() => {
               <span>{{ workspaceText('2. Select environment', '2. 选择环境') }}</span>
             </summary>
             <div class="video-workflow-step-body">
-              <p id="gvhmr-runtime-status" class="hint video-runtime-status" role="status">
-                {{ workspaceText('Checking the GVHMR runtime…', '正在检查 GVHMR 推理环境……') }}
-              </p>
-              <div class="meta-row">
-                <span class="k">GVHMR</span>
-                <span class="v" id="gvhmr-workflow-runtime">{{ workspaceText('Checking…', '检查中……') }}</span>
-              </div>
-              <div class="meta-row">
-                <span class="k">{{ workspaceText('Video', '视频') }}</span>
-                <span class="v" id="gvhmr-workflow-video">{{ workspaceText('Not selected', '未选择') }}</span>
-              </div>
-              <label class="video-workflow-field">
-                <span class="k">{{ workspaceText('Model weights', '模型权重') }}</span>
-                <select id="gvhmr-weight-source" class="search">
-                  <option value="official">
-                    {{ workspaceText('Official GVHMR (default)', 'GVHMR 官方权重（默认）') }}
-                  </option>
-                  <option value="custom">
-                    {{ workspaceText('Custom compatible checkpoint', '自定义兼容权重') }}
-                  </option>
-                </select>
-              </label>
-              <div id="gvhmr-custom-checkpoint" class="video-checkpoint-control" style="display:none">
-                <button id="gvhmr-pick-checkpoint" type="button" class="btn secondary small">
-                  {{ workspaceText('Import checkpoint', '导入权重') }}
+              <div class="video-environment-control">
+                <label class="video-workflow-field">
+                <span class="k">{{ workspaceText('Runtime environment', '运行环境') }}</span>
+                  <select id="gvhmr-weight-source" class="search">
+                    <option value="official">
+                      {{ workspaceText('Official GVHMR', 'GVHMR 官方环境') }}
+                    </option>
+                  </select>
+                </label>
+                <button id="gvhmr-confirm-environment" type="button" class="btn secondary small">
+                  {{ workspaceText('Confirm', '确认环境') }}
                 </button>
-                <span id="gvhmr-checkpoint-name" class="video-checkpoint-name">
-                  {{ workspaceText('No checkpoint selected', '尚未选择权重') }}
-                </span>
               </div>
-              <p class="hint video-checkpoint-hint">
-                {{ workspaceText(
-                  'Custom CKPT, PT, or PTH files must match the GVHMR architecture. Only import checkpoints you trust.',
-                  '自定义 CKPT、PT 或 PTH 文件必须兼容 GVHMR 架构，并且只应导入可信权重。',
-                ) }}
-              </p>
-              <label class="row video-workflow-option">
-                <input id="gvhmr-static-cam" type="checkbox" checked />
-                <span>
-                  <b>{{ workspaceText('Static camera', '静态相机') }}</b>
-                  <small>{{ workspaceText('Use when the recording camera does not move.', '录制相机没有移动时启用。') }}</small>
-                </span>
-              </label>
-              <label class="video-workflow-field">
-                <span class="k">{{ workspaceText('Focal length (optional, mm)', '焦距（可选，mm）') }}</span>
-                <input
-                  id="gvhmr-f-mm"
-                  class="search"
-                  type="number"
-                  min="1"
-                  step="1"
-                  :placeholder="workspaceText('Auto estimate', '自动估计')"
-                />
-              </label>
             </div>
           </details>
 
@@ -906,9 +859,6 @@ onBeforeUnmount(() => {
               <button id="gvhmr-run" type="button" class="btn" disabled>
                 {{ workspaceText('Start GVHMR', '开始 GVHMR 推理') }}
               </button>
-              <p id="gvhmr-disabled-reason" class="disabled-action-reason" role="status">
-                {{ workspaceText('Select a video first.', '请先选择视频。') }}
-              </p>
               <div id="gvhmr-progress" class="progress video-workflow-progress" style="display:none">
                 <div class="bar"></div>
               </div>
@@ -921,19 +871,10 @@ onBeforeUnmount(() => {
               <span>{{ workspaceText('4. Motion result', '4. 动作结果') }}</span>
             </summary>
             <div class="video-workflow-step-body">
-              <p id="gvhmr-result-empty" class="hint video-workflow-result-empty">
-                {{ workspaceText('No motion has been generated yet.', '尚未生成动作。') }}
-              </p>
               <div id="gvhmr-result-card" style="display:none">
                 <div class="meta-row"><span class="k">{{ workspaceText('Motion', '动作') }}</span><span class="v" id="gvhmr-result-name">—</span></div>
                 <div class="meta-row"><span class="k">{{ workspaceText('Frames', '帧数') }}</span><span class="v" id="gvhmr-result-frames">—</span></div>
                 <div class="meta-row"><span class="k">{{ workspaceText('Duration', '时长') }}</span><span class="v" id="gvhmr-result-duration">—</span></div>
-                <p class="hint">
-                  {{ workspaceText(
-                    'The generated clip is loaded into the 3D stage and published to the Motion Library.',
-                    '生成结果已加载到 3D 舞台，并发布到 Motion Library。',
-                  ) }}
-                </p>
                 <button type="button" class="btn secondary" @click="requestPanel('motion')">
                   {{ workspaceText('Open Motion Library', '打开动作资源库') }}
                 </button>

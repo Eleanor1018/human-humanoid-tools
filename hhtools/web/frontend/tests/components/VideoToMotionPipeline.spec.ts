@@ -20,6 +20,7 @@ describe('VideoToMotionPipeline', () => {
         checkpointName: null,
         runtimeState: 'ready',
         runtimeMessage: 'Ready · official weights',
+        environmentConfirmed: true,
         stage: 'completed',
         progress: 1,
         message: 'Motion generated successfully.',
@@ -28,8 +29,9 @@ describe('VideoToMotionPipeline', () => {
     }))
     await nextTick()
 
-    expect(wrapper.findAll('.state-completed')).toHaveLength(3)
-    expect(wrapper.text()).toContain('gvhmr-run')
+    expect(wrapper.findAll('.state-completed')).toHaveLength(4)
+    expect(wrapper.find('.workflow-pipeline-head').exists()).toBe(false)
+    expect(wrapper.findAll('.workflow-node-detail')).toHaveLength(0)
 
     const panels: string[] = []
     const receive = (event: WindowEventMap['hhtools:panel-request']): void => {
@@ -42,17 +44,18 @@ describe('VideoToMotionPipeline', () => {
     expect(panels).toEqual(['video-to-motion'])
   })
 
-  it('blocks generation until a selected custom checkpoint is available', async () => {
+  it('keeps the environment incomplete until the user confirms it', async () => {
     const wrapper = mount(VideoToMotionPipeline, { props: { locale: 'en' } })
     wrappers.push(wrapper)
 
     window.dispatchEvent(new CustomEvent('hhtools:video-to-motion-state', {
       detail: {
         videoName: 'run.mp4',
-        weightSource: 'custom',
+        weightSource: 'official',
         checkpointName: null,
         runtimeState: 'ready',
-        runtimeMessage: 'Ready · select custom weights',
+        runtimeMessage: 'Ready · official weights',
+        environmentConfirmed: false,
         stage: 'idle',
         progress: 0,
         message: '',
@@ -61,8 +64,27 @@ describe('VideoToMotionPipeline', () => {
     }))
     await nextTick()
 
-    expect(wrapper.text()).toContain('Custom checkpoint not selected')
-    expect(wrapper.text()).toContain('Import a compatible custom checkpoint.')
-    expect(wrapper.findAll('.state-missing').length).toBeGreaterThanOrEqual(2)
+    expect(wrapper.findAll('.state-completed')).toHaveLength(1)
+    expect(wrapper.findAll('.state-ready')).toHaveLength(1)
+    expect(wrapper.find('.video-workflow-hint').exists()).toBe(false)
+
+    window.dispatchEvent(new CustomEvent('hhtools:video-to-motion-state', {
+      detail: {
+        videoName: 'run.mp4',
+        weightSource: 'official',
+        checkpointName: null,
+        runtimeState: 'ready',
+        runtimeMessage: 'Ready · official weights',
+        environmentConfirmed: true,
+        stage: 'idle',
+        progress: 0,
+        message: '',
+        result: null,
+      },
+    }))
+    await nextTick()
+
+    expect(wrapper.findAll('.state-completed')).toHaveLength(2)
+    expect(wrapper.findAll('.state-ready')).toHaveLength(1)
   })
 })

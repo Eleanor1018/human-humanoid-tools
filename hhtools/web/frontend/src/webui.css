@@ -1423,6 +1423,29 @@ button { font-family: inherit; cursor: pointer; }
 .workflow-pipeline-nodes.video-to-motion-pipeline-nodes {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
+.video-to-motion-pipeline {
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.video-to-motion-pipeline .workflow-pipeline-nodes {
+  min-height: 54px;
+}
+.video-to-motion-pipeline .workflow-node-button {
+  grid-template-rows: 18px 20px;
+  min-height: 54px;
+  padding: 7px 3px 5px;
+}
+.video-to-motion-pipeline .workflow-node-button.state-ready .workflow-node-dot {
+  border-color: var(--accent);
+  background: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-soft);
+}
+.video-to-motion-pipeline .workflow-node-label {
+  font-size: 11px;
+}
 .workflow-pipeline-node {
   position: relative;
   min-width: 0;
@@ -2066,6 +2089,20 @@ button { font-family: inherit; cursor: pointer; }
   flex-direction: column;
   gap: 5px;
   margin-bottom: 12px;
+}
+.video-environment-control {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+.video-environment-control .video-workflow-field {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-bottom: 0;
+}
+.video-environment-control .btn {
+  flex: 0 0 auto;
+  min-width: 86px;
 }
 
 .video-checkpoint-control {

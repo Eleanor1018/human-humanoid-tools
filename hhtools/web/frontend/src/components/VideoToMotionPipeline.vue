@@ -20,6 +20,7 @@ const state = ref<VideoToMotionStateDetail>({
   checkpointName: null,
   runtimeState: 'checking',
   runtimeMessage: 'Checking GVHMR runtime',
+  environmentConfirmed: false,
   stage: 'idle',
   progress: 0,
   message: '',
@@ -40,7 +41,6 @@ const nodes = computed<Array<{
 }>>(() => {
   const hasVideo = state.value.videoName !== null
   const runtimeReady = state.value.runtimeState === 'ready'
-  const weightsReady = state.value.weightSource === 'official' || state.value.checkpointName !== null
   const processing = state.value.stage === 'uploading' || state.value.stage === 'running'
 
   return [
@@ -48,19 +48,19 @@ const nodes = computed<Array<{
       id: 'video',
       label: text('Select Video', '选择视频'),
       detail: state.value.videoName ?? text('Not selected', '未选择'),
-      state: hasVideo ? 'completed' : 'missing',
+      state: hasVideo ? 'completed' : 'ready',
       panel: 'video-to-motion',
       target: 'gvhmr-step-video',
     },
     {
       id: 'runtime',
       label: text('Environment', '选择环境'),
-      detail: state.value.weightSource === 'official'
-        ? `${state.value.runtimeMessage} · ${text('Official', '官方')}`
-        : state.value.checkpointName ?? text('Custom checkpoint not selected', '尚未选择自定义权重'),
-      state: state.value.runtimeState === 'checking'
-        ? 'validating'
-        : !runtimeReady ? 'failed' : weightsReady ? 'ready' : 'missing',
+      detail: state.value.environmentConfirmed
+        ? text('Official GVHMR confirmed', '已确认 GVHMR 官方环境')
+        : state.value.runtimeMessage,
+      state: !runtimeReady
+        ? state.value.runtimeState === 'checking' ? 'missing' : 'failed'
+        : state.value.environmentConfirmed ? 'completed' : hasVideo ? 'ready' : 'missing',
       panel: 'video-to-motion',
       target: 'gvhmr-step-environment',
     },
@@ -80,7 +80,7 @@ const nodes = computed<Array<{
           ? 'completed'
           : state.value.stage === 'failed'
             ? 'failed'
-            : hasVideo && runtimeReady && weightsReady ? 'ready' : 'missing',
+            : hasVideo && runtimeReady && state.value.environmentConfirmed ? 'ready' : 'missing',
       panel: 'video-to-motion',
       target: 'gvhmr-step-generate',
     },
@@ -95,16 +95,6 @@ const nodes = computed<Array<{
       target: 'gvhmr-step-result',
     },
   ]
-})
-
-const blockedReason = computed(() => {
-  if (state.value.runtimeState === 'unavailable') return state.value.runtimeMessage
-  if (!state.value.videoName) return text('Select a video before generating motion.', '请先选择待处理视频。')
-  if (state.value.weightSource === 'custom' && !state.value.checkpointName) {
-    return text('Import a compatible custom checkpoint.', '请导入兼容的自定义权重。')
-  }
-  if (state.value.stage === 'failed') return state.value.message
-  return null
 })
 
 function receive(event: WindowEventMap['hhtools:video-to-motion-state']): void {
@@ -124,11 +114,7 @@ onBeforeUnmount(() => window.removeEventListener('hhtools:video-to-motion-state'
 </script>
 
 <template>
-  <section class="workflow-pipeline" :aria-label="text('Video to Motion Pipeline', '视频生成动作流程')">
-    <header class="workflow-pipeline-head">
-      <span>{{ text('Video → Motion Pipeline', '视频 → 动作流程') }}</span>
-      <span class="workflow-pipeline-legend">{{ text('Click a step to navigate', '点击步骤可定位') }}</span>
-    </header>
+  <section class="workflow-pipeline video-to-motion-pipeline" :aria-label="text('Video to Motion Pipeline', '视频生成动作流程')">
     <ol class="workflow-pipeline-nodes video-to-motion-pipeline-nodes">
       <li v-for="node in nodes" :key="node.id" class="workflow-pipeline-node">
         <button
@@ -140,12 +126,8 @@ onBeforeUnmount(() => window.removeEventListener('hhtools:video-to-motion-state'
         >
           <span class="workflow-node-dot" aria-hidden="true"></span>
           <span class="workflow-node-label">{{ node.label }}</span>
-          <span class="workflow-node-detail">{{ node.detail }}</span>
         </button>
       </li>
     </ol>
-    <p v-if="blockedReason" class="workflow-blocked-reason" role="status">
-      {{ blockedReason }}
-    </p>
   </section>
 </template>

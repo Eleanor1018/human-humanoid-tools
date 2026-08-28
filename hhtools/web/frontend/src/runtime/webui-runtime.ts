@@ -3762,6 +3762,7 @@ interface GvhmrWorkspaceState {
   runtimeState: VideoToMotionStateDetail["runtimeState"];
   runtimeMissing: string[];
   runtimeError: string | null;
+  environmentConfirmed: boolean;
   stage: VideoToMotionStateDetail["stage"];
   progress: number;
   message: string;
@@ -3777,6 +3778,7 @@ const gvhmrWorkspace: GvhmrWorkspaceState = {
   runtimeState: "checking",
   runtimeMissing: [],
   runtimeError: null,
+  environmentConfirmed: false,
   stage: "idle",
   progress: 0,
   message: "",
@@ -3811,6 +3813,7 @@ function gvhmrPublicState(): VideoToMotionStateDetail {
     checkpointName: gvhmrWorkspace.checkpoint?.name ?? null,
     runtimeState: gvhmrWorkspace.runtimeState,
     runtimeMessage: gvhmrRuntimeMessage(),
+    environmentConfirmed: gvhmrWorkspace.environmentConfirmed,
     stage: gvhmrWorkspace.stage,
     progress: gvhmrWorkspace.progress,
     message: gvhmrWorkspace.message,
@@ -3822,7 +3825,7 @@ function renderGvhmrWorkspace(): void {
   const isBusy = gvhmrWorkspace.stage === "uploading" || gvhmrWorkspace.stage === "running";
   const canRun = Boolean(gvhmrWorkspace.file)
     && gvhmrWorkspace.runtimeState === "ready"
-    && (gvhmrWorkspace.weightSource === "official" || Boolean(gvhmrWorkspace.checkpoint))
+    && gvhmrWorkspace.environmentConfirmed
     && !isBusy;
   const runtimeMessage = gvhmrRuntimeMessage();
 
@@ -3865,6 +3868,16 @@ function renderGvhmrWorkspace(): void {
   }
   const weightSource = document.getElementById("gvhmr-weight-source") as HTMLSelectElement | null;
   if (weightSource) weightSource.value = gvhmrWorkspace.weightSource;
+  const confirmEnvironment = document.getElementById("gvhmr-confirm-environment") as HTMLButtonElement | null;
+  if (confirmEnvironment) {
+    confirmEnvironment.disabled = gvhmrWorkspace.runtimeState !== "ready"
+      || !gvhmrWorkspace.file
+      || gvhmrWorkspace.environmentConfirmed
+      || isBusy;
+    confirmEnvironment.textContent = gvhmrWorkspace.environmentConfirmed
+      ? gvhmrText("Confirmed", "已确认")
+      : gvhmrText("Confirm", "确认环境");
+  }
   const customCheckpoint = document.getElementById("gvhmr-custom-checkpoint");
   if (customCheckpoint) {
     customCheckpoint.style.display = gvhmrWorkspace.weightSource === "custom" ? "flex" : "none";
@@ -3898,6 +3911,8 @@ function renderGvhmrWorkspace(): void {
       reason = runtimeMessage;
     } else if (!gvhmrWorkspace.file) {
       reason = gvhmrText("Select a video first.", "请先选择视频。");
+    } else if (!gvhmrWorkspace.environmentConfirmed) {
+      reason = gvhmrText("Confirm the runtime environment.", "请确认运行环境。");
     } else if (gvhmrWorkspace.weightSource === "custom" && !gvhmrWorkspace.checkpoint) {
       reason = gvhmrText(
         "Import a compatible custom checkpoint or switch back to official weights.",
@@ -4038,7 +4053,7 @@ function gvhmrFocalLength(): number | undefined {
 
 async function runGvhmrVideoToMotion(): Promise<void> {
   const file = gvhmrWorkspace.file;
-  if (!file || gvhmrWorkspace.runtimeState !== "ready") {
+  if (!file || gvhmrWorkspace.runtimeState !== "ready" || !gvhmrWorkspace.environmentConfirmed) {
     renderGvhmrWorkspace();
     return;
   }
@@ -4132,25 +4147,35 @@ function initGvhmrWorkspace(): void {
   const pickButton = document.getElementById("video-pick-file") as HTMLButtonElement | null;
   const runButton = document.getElementById("gvhmr-run") as HTMLButtonElement | null;
   const weightSource = document.getElementById("gvhmr-weight-source") as HTMLSelectElement | null;
+  const confirmEnvironment = document.getElementById("gvhmr-confirm-environment") as HTMLButtonElement | null;
   const pickCheckpoint = document.getElementById("gvhmr-pick-checkpoint") as HTMLButtonElement | null;
   const dropzone = document.getElementById("video-drop-shared");
-  if (!pickButton || !runButton || !weightSource || !pickCheckpoint || !dropzone) return;
+  if (!pickButton || !runButton || !weightSource || !confirmEnvironment || !dropzone) return;
 
   pickButton.onclick = async () => {
     selectGvhmrVideo(await pickFiles({ accept: GVHMR_VIDEO_ACCEPT }));
   };
   runButton.onclick = () => void runGvhmrVideoToMotion();
   weightSource.onchange = () => {
-    gvhmrWorkspace.weightSource = weightSource.value === "custom" ? "custom" : "official";
+    gvhmrWorkspace.weightSource = "official";
+    gvhmrWorkspace.environmentConfirmed = false;
     gvhmrWorkspace.stage = "idle";
     gvhmrWorkspace.progress = 0;
     gvhmrWorkspace.message = "";
     gvhmrWorkspace.result = null;
     renderGvhmrWorkspace();
   };
-  pickCheckpoint.onclick = async () => {
-    selectGvhmrCheckpoint(await pickFiles({ accept: GVHMR_CHECKPOINT_ACCEPT }));
+  confirmEnvironment.onclick = () => {
+    if (!gvhmrWorkspace.file || gvhmrWorkspace.runtimeState !== "ready") return;
+    gvhmrWorkspace.weightSource = "official";
+    gvhmrWorkspace.environmentConfirmed = true;
+    renderGvhmrWorkspace();
   };
+  if (pickCheckpoint) {
+    pickCheckpoint.onclick = async () => {
+      selectGvhmrCheckpoint(await pickFiles({ accept: GVHMR_CHECKPOINT_ACCEPT }));
+    };
+  }
   setupDropzone(dropzone, (files) => selectGvhmrVideo(files));
   window.addEventListener("hhtools:workspace-locale-change", renderGvhmrWorkspace);
   renderGvhmrWorkspace();

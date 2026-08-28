@@ -215,6 +215,7 @@ export interface VideoToMotionStateDetail {
   checkpointName: string | null
   runtimeState: 'checking' | 'ready' | 'unavailable'
   runtimeMessage: string
+  environmentConfirmed: boolean
   stage: VideoToMotionStage
   progress: number
   message: string
