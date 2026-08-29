@@ -1390,61 +1390,28 @@ button { font-family: inherit; cursor: pointer; }
 .panel h2 { font-size: 19px; font-weight: 700; letter-spacing: -0.02em; }
 .panel .lead { font-size: 13px; color: var(--ink-secondary); line-height: 1.5; margin-top: -8px; }
 
-/* Compact, persistent workflow state shared by H2R and R2R. */
+/* Bare workflow roadmap shared by Video-to-Motion, H2R, and R2R. */
 .workflow-pipeline {
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-sm);
-  background: var(--panel-solid);
-  overflow: hidden;
-  box-shadow: var(--shadow-sm);
-}
-.workflow-pipeline-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-height: 34px;
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--hairline);
-  font-size: 11px;
-  font-weight: 650;
-}
-.workflow-pipeline-legend {
-  color: var(--ink-tertiary);
-  font-size: 10px;
-  font-weight: 500;
-}
-.workflow-pipeline-nodes {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  list-style: none;
-  min-height: 76px;
-}
-.workflow-pipeline-nodes.video-to-motion-pipeline-nodes {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-}
-.video-to-motion-pipeline {
   overflow: visible;
   border: 0;
   border-radius: 0;
   background: transparent;
   box-shadow: none;
 }
-.video-to-motion-pipeline .workflow-pipeline-nodes {
+.workflow-pipeline-nodes {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  list-style: none;
   min-height: 54px;
 }
-.video-to-motion-pipeline .workflow-node-button {
-  grid-template-rows: 18px 20px;
-  min-height: 54px;
-  padding: 7px 3px 5px;
+.workflow-pipeline-nodes.video-to-motion-pipeline-nodes {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
-.video-to-motion-pipeline .workflow-node-button.state-ready .workflow-node-dot {
-  border-color: var(--accent);
-  background: var(--accent);
-  box-shadow: 0 0 0 4px var(--accent-soft);
+.workflow-pipeline-nodes.data-analysis-pipeline-nodes {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
-.video-to-motion-pipeline .workflow-node-label {
-  font-size: 11px;
+.workflow-h2r-pipeline .workflow-pipeline-nodes {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 .workflow-pipeline-node {
   position: relative;
@@ -1464,13 +1431,13 @@ button { font-family: inherit; cursor: pointer; }
   position: relative;
   z-index: 1;
   display: grid;
-  grid-template-rows: 18px 16px 26px;
+  grid-template-rows: 18px 20px;
   justify-items: center;
   align-items: center;
   width: 100%;
   min-width: 0;
-  min-height: 76px;
-  padding: 8px 3px 5px;
+  min-height: 54px;
+  padding: 7px 3px 5px;
   border: 0;
   background: transparent;
   color: var(--ink-secondary);
@@ -1487,23 +1454,16 @@ button { font-family: inherit; cursor: pointer; }
   max-width: 100%;
   overflow: hidden;
   color: inherit;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.workflow-node-detail {
-  display: -webkit-box;
-  max-width: 100%;
-  overflow: hidden;
-  color: var(--ink-tertiary);
-  font-size: 9px;
-  line-height: 1.25;
-  text-align: center;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+.workflow-node-button.state-ready .workflow-node-dot {
+  border-color: var(--accent);
+  background: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-soft);
 }
-.workflow-node-button.state-ready .workflow-node-dot,
 .workflow-node-button.state-completed .workflow-node-dot {
   border-color: var(--green);
   background: var(--green);
@@ -1522,16 +1482,6 @@ button { font-family: inherit; cursor: pointer; }
   border-color: var(--red);
   background: var(--red);
 }
-.workflow-blocked-reason {
-  min-height: 30px;
-  padding: 7px 10px;
-  border-top: 1px solid var(--hairline);
-  background: rgba(255, 159, 10, 0.08);
-  color: var(--ink-secondary);
-  font-size: 10px;
-  line-height: 1.4;
-}
-
 .disabled-action-reason {
   margin-top: 6px;
   color: var(--orange);
@@ -1980,6 +1930,66 @@ button { font-family: inherit; cursor: pointer; }
   line-height: 1.45;
 }
 .video-upload-shared { padding-right: 36px; }
+.data-analysis-stack { gap: 0; }
+.data-analysis-stack > h2 { margin-bottom: 10px; }
+.data-analysis-pipeline { margin-bottom: 4px; }
+.data-analysis-upload-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.data-analysis-upload {
+  display: flex;
+  min-width: 0;
+  min-height: 150px;
+  padding: 14px 10px 12px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+.data-analysis-upload .dz-glyph {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  margin-bottom: 6px;
+  place-items: center;
+  border: 1px solid var(--hairline);
+  border-radius: 50%;
+  background: var(--panel-solid);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 750;
+  opacity: 1;
+}
+.data-analysis-upload .dz-title {
+  margin-bottom: 4px;
+  font-size: 13px;
+}
+.data-analysis-upload .dz-sub {
+  display: -webkit-box;
+  min-height: 34px;
+  margin-bottom: 10px;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  font-size: 11px;
+}
+.data-analysis-upload .btn {
+  max-width: 100%;
+  padding-right: 10px;
+  padding-left: 10px;
+}
+.data-analysis-stack .video-workflow-step-summary .dv-card-badge {
+  margin-right: 8px;
+  margin-left: auto;
+}
+.data-analysis-config {
+  align-items: center;
+}
+.data-analysis-results-empty {
+  margin: 0;
+  line-height: 1.5;
+}
 .video-workflow-step {
   border-bottom: 1px solid var(--hairline);
 }
@@ -2089,6 +2099,284 @@ button { font-family: inherit; cursor: pointer; }
   flex-direction: column;
   gap: 5px;
   margin-bottom: 12px;
+}
+.workflow-panel-stack {
+  gap: 0;
+}
+.workflow-panel-stack > h2 {
+  margin-bottom: 12px;
+}
+.workflow-panel-stack > .workflow-pipeline {
+  margin-bottom: 8px;
+}
+.workflow-compact-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.workflow-selection-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.workflow-selection-row > .search {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.workflow-selection-copy {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.workflow-selection-copy strong {
+  overflow: hidden;
+  color: var(--ink-secondary);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workflow-selection-copy .status-chip {
+  color: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+}
+.workflow-selection-value {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-secondary);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workflow-picker-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  min-width: 0;
+}
+.workflow-picker-row > .search { min-width: 0; }
+.workflow-picker-row > .btn { white-space: nowrap; }
+.workflow-load-button { width: 100%; }
+.workflow-button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.workflow-field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.workflow-field-grid .video-workflow-field {
+  margin-bottom: 0;
+}
+.workflow-import-list {
+  border-top: 1px solid var(--hairline);
+}
+.workflow-import-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 48px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+.workflow-import-row.hover {
+  background: var(--accent-soft);
+}
+.workflow-inline-field {
+  margin: 0;
+}
+.workflow-status-line {
+  min-height: 16px;
+  margin: 0;
+  /* Status copy should support a step title, not compete with it. */
+  color: var(--ink-secondary);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.4;
+}
+.workflow-calibration-editor,
+.workflow-export-section {
+  padding-top: 12px;
+  border-top: 1px solid var(--hairline);
+}
+.workflow-checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink-secondary);
+  font-size: 11px;
+}
+.workflow-hidden-runtime {
+  display: none !important;
+}
+@container (max-width: 340px) {
+  .workflow-field-grid {
+    grid-template-columns: 1fr;
+  }
+  .workflow-selection-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
+/* Reusable Motion Library selector. Batch can mount the same dialog in
+   `basket` mode while H2R uses `load`, keeping one search/filter interaction. */
+.motion-picker-backdrop {
+  position: fixed;
+  z-index: 1120;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: var(--overlay-scrim);
+  backdrop-filter: blur(5px);
+  -webkit-backdrop-filter: blur(5px);
+}
+.motion-picker-dialog {
+  width: min(680px, 100%);
+  max-height: min(720px, calc(100vh - 40px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: var(--panel-solid);
+  box-shadow: var(--shadow);
+}
+.motion-picker-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--hairline);
+}
+.motion-picker-head h2 { font-size: 17px; }
+.motion-picker-close {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ink-secondary);
+  font-size: 20px;
+}
+.motion-picker-close:hover { background: var(--accent-soft); color: var(--ink); }
+.motion-picker-tools {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 150px;
+  gap: 10px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--hairline);
+}
+.motion-picker-filter { width: 100%; }
+.motion-picker-list {
+  min-height: 240px;
+  overflow-y: auto;
+  padding: 0 18px;
+}
+.motion-picker-row {
+  width: 100%;
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 62px;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 0;
+  border: 0;
+  border-bottom: 1px solid var(--hairline);
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+}
+.motion-picker-row:hover,
+.motion-picker-row:focus-visible { background: var(--accent-soft); }
+.motion-picker-row.is-selected {
+  background: var(--accent-soft);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.motion-picker-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.motion-picker-row:disabled { cursor: wait; opacity: 0.58; }
+.motion-picker-row-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+.motion-picker-row-copy strong,
+.motion-picker-row-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.motion-picker-row-copy strong { font-size: 13px; }
+.motion-picker-row-copy small { color: var(--ink-tertiary); font-size: 11px; }
+.motion-picker-category {
+  padding: 3px 7px;
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--ink-secondary);
+  font-size: 10px;
+  font-weight: 650;
+}
+.motion-picker-category[data-category="motion"] { color: var(--accent); }
+.motion-picker-action {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 650;
+  text-align: right;
+}
+.motion-picker-message {
+  min-height: 240px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--ink-secondary);
+  font-size: 12px;
+  text-align: center;
+}
+.motion-picker-message.error { color: var(--red); }
+.motion-picker-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--hairline);
+}
+.motion-picker-basket-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+.motion-picker-selection-count {
+  margin-right: 2px;
+  color: var(--ink-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.motion-picker-add-selected { min-width: 112px; }
+@media (max-width: 560px) {
+  .motion-picker-backdrop { padding: 10px; }
+  .motion-picker-tools { grid-template-columns: 1fr; }
+  .motion-picker-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .motion-picker-category { display: none; }
+  .motion-picker-actions { align-items: stretch; flex-direction: column; }
+  .motion-picker-basket-actions { flex-wrap: wrap; }
+  .motion-picker-selection-count { margin-right: auto; }
 }
 .video-environment-control {
   display: flex;
@@ -2715,13 +3003,15 @@ button { font-family: inherit; cursor: pointer; }
 
 /* calibration-mode banner pinned to the top of the viewport */
 #calib-banner {
-  position: fixed; top: 14px; left: 50%; transform: translateX(-50%);
+  position: fixed; top: 66px; left: 50%; transform: translateX(-50%);
   z-index: 160; display: flex; align-items: center; gap: 9px;
   max-width: min(920px, calc(100vw - 28px));
   background: var(--accent, #2563eb); color: #fff;
   padding: 9px 18px; border-radius: 999px; box-shadow: var(--shadow);
   font: 600 13px/1.35 -apple-system, sans-serif; letter-spacing: 0.2px;
+  pointer-events: none;
 }
+body:has(#app.workspace-shell) #calib-banner { top: 52px; }
 #calib-banner.hidden { display: none; }
 #calib-banner .dot {
   width: 9px; height: 9px; border-radius: 50%; background: #fff;
@@ -2757,10 +3047,601 @@ button { font-family: inherit; cursor: pointer; }
 }
 
 /* basket */
+.batch-basket-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.card .batch-basket-heading h3 { margin: 0; }
 .basket-list { display: flex; flex-direction: column; gap: 2px; max-height: 260px; overflow-y: auto; }
 .basket-row { display: flex; align-items: center; gap: 8px; padding: 7px 9px;
   border-radius: var(--radius-sm); font-size: 12px; background: var(--panel); }
 .basket-row .rm { margin-left: auto; color: var(--red); border: none; background: none; font-size: 15px; }
+
+/* Batch workspace ---------------------------------------------------------
+   Batch is a list-building task, so it replaces the visual stage without
+   unmounting Three.js.  Keeping the canvas sized and alive avoids rebuilding
+   WebGL state whenever the user moves between Batch and preview workflows. */
+#stage.batch-stage-active > #three-canvas,
+#stage.batch-stage-active > .stage-top-tools,
+#stage.batch-stage-active > .stage-empty,
+#stage.batch-stage-active > .stage-overlay,
+#stage.batch-stage-active > .calib-mapping-overlay,
+#stage.batch-stage-active > .calib-landmark-labels,
+#stage.batch-stage-active > .calib-hud,
+#stage.batch-stage-active > .calib-hover-hint {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.batch-stage-workspace {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 22px 24px 16px;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+.batch-stage-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  min-width: 0;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--hairline);
+}
+.batch-stage-header > div:first-child { min-width: 0; }
+.batch-stage-header h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 720;
+  letter-spacing: -0.02em;
+}
+.batch-stage-header p {
+  margin-top: 4px;
+  color: var(--ink-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.batch-stage-count {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  color: var(--ink-secondary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.batch-stage-count strong {
+  color: var(--ink);
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.batch-stage-toolbar {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: auto auto auto minmax(170px, 1fr) 128px;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.batch-stage-workspace .btn,
+.batch-workflow-stack .btn {
+  width: auto;
+  min-height: 32px;
+  padding: 7px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.batch-stage-workspace .btn.secondary,
+.batch-workflow-stack .btn.secondary { box-shadow: none; }
+.batch-stage-toolbar .search-field { min-width: 0; }
+.batch-stage-toolbar .search,
+.batch-stage-toolbar .search-field-input,
+.batch-basket-filter {
+  min-height: 32px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.batch-basket-frame {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 160px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--hairline);
+  border-radius: 0;
+  background: var(--panel-solid);
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.batch-basket-frame.hover {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent-soft) 45%, var(--panel-solid));
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.batch-basket-frame.is-locked {
+  opacity: 0.72;
+  cursor: not-allowed;
+}
+.batch-basket-frame.is-locked.hover {
+  border-color: var(--hairline);
+  background: var(--panel-solid);
+  box-shadow: none;
+}
+.batch-basket-frame.is-locked.hover::after { display: none; }
+.batch-basket-frame.hover::after {
+  content: "Drop to add";
+  position: absolute;
+  inset: 8px;
+  z-index: 3;
+  display: grid;
+  place-items: center;
+  border: 1px dashed var(--accent);
+  background: color-mix(in srgb, var(--panel-solid) 88%, transparent);
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 650;
+  pointer-events: none;
+}
+:root[lang="zh-CN"] .batch-basket-frame.hover::after { content: "松开以添加"; }
+
+.batch-basket-columns,
+.batch-basket-row {
+  display: grid;
+  grid-template-columns: 30px minmax(180px, 1fr) 88px minmax(112px, 0.52fr) 64px;
+  align-items: center;
+  column-gap: 10px;
+  min-width: 570px;
+}
+.batch-basket-columns {
+  flex: 0 0 35px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--hairline);
+  background: color-mix(in srgb, var(--panel-solid) 82%, var(--bg));
+  color: var(--ink-tertiary);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.025em;
+}
+.batch-basket-check-column { width: 16px; }
+.batch-basket-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.batch-basket-row {
+  min-height: 48px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--hairline);
+  background: transparent;
+  color: var(--ink);
+  font-size: 12px;
+}
+.batch-basket-row:last-child { border-bottom: 0; }
+.batch-basket-row:hover,
+.batch-basket-row:focus-within { background: var(--accent-soft); }
+.batch-basket-row.is-selected { background: color-mix(in srgb, var(--accent-soft) 74%, transparent); }
+.batch-basket-row input[type="checkbox"],
+.batch-select-all input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+.batch-basket-copy,
+.batch-basket-main {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+.batch-basket-title,
+.batch-basket-name {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.batch-basket-meta,
+.batch-basket-context {
+  overflow: hidden;
+  color: var(--ink-tertiary);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.batch-category-tag,
+.batch-basket-type {
+  width: fit-content;
+  max-width: 100%;
+  overflow: hidden;
+  padding: 2px 6px;
+  border: 1px solid var(--hairline);
+  border-radius: 3px;
+  background: var(--panel);
+  color: var(--ink-secondary);
+  font-size: 10px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.batch-category-tag[data-category="motion"],
+.batch-basket-type[data-category="motion"] { color: var(--accent); }
+.batch-category-tag[data-category="object"],
+.batch-basket-type[data-category="object"] { color: var(--result-accent); }
+.batch-category-tag[data-category="terrain"],
+.batch-basket-type[data-category="terrain"] { color: color-mix(in srgb, var(--green) 84%, var(--ink)); }
+.batch-basket-reference {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-secondary);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.batch-basket-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 3px;
+}
+.batch-basket-remove,
+.batch-row-action,
+.batch-basket-row .rm {
+  min-width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--ink-tertiary);
+  font-size: 15px;
+}
+.batch-basket-remove:hover,
+.batch-row-action:hover,
+.batch-basket-row .rm:hover {
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+  color: var(--red);
+}
+.batch-basket-empty,
+.batch-basket-no-results {
+  min-width: 100%;
+  min-height: 180px;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+  color: var(--ink-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
+}
+.batch-basket-empty strong,
+.batch-basket-no-results strong {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.batch-stage-footer {
+  flex: 0 0 auto;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  color: var(--ink-secondary);
+  font-size: 11px;
+}
+.batch-stage-footer .spacer { flex: 1 1 auto; }
+.batch-select-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.batch-selected-count {
+  overflow: hidden;
+  color: var(--ink-tertiary);
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.batch-drop-hint {
+  flex: 0 0 auto;
+  margin-top: -5px;
+  color: var(--ink-tertiary);
+  font-size: 10px;
+  line-height: 1.4;
+  text-align: center;
+}
+
+/* Batch inspector: compact four-step preflight, run, and result flow. */
+.batch-workflow-stack { gap: 0; }
+.batch-workflow-stack > h2 { margin-bottom: 2px; }
+.batch-workflow-scope {
+  margin-bottom: 12px;
+  color: var(--ink-secondary);
+  font-size: 11px;
+  line-height: 1.45;
+}
+.batch-step-summary {
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-top: 1px solid var(--hairline);
+  border-bottom: 1px solid var(--hairline);
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 650;
+}
+.batch-step-summary strong {
+  color: var(--ink-secondary);
+  font-size: 12px;
+  font-weight: 550;
+  font-variant-numeric: tabular-nums;
+}
+.batch-workflow-stack .video-workflow-step-body { padding-bottom: 14px; }
+.batch-workflow-stack .workflow-status-line {
+  margin: 0;
+  color: var(--ink-secondary);
+  font-size: 12px;
+}
+.batch-workflow-stack .search {
+  min-height: 32px;
+  padding: 7px 9px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+.batch-workflow-stack .workflow-load-button { width: 100%; }
+
+.batch-compatibility-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border-top: 1px solid var(--hairline);
+}
+.batch-compatibility-list:empty { display: none; }
+.batch-compatibility-row,
+#batch-ref-hint .batch-ref-block {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  margin: 0;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+.batch-compatibility-row:last-child,
+#batch-ref-hint .batch-ref-block:last-child { border-bottom: 0; }
+.batch-compatibility-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+.batch-compatibility-copy strong,
+#batch-ref-hint .batch-ref-block > strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.batch-compatibility-copy small,
+#batch-ref-hint .sub {
+  color: var(--ink-tertiary);
+  font-size: 10px;
+}
+.batch-compatibility-status,
+#batch-ref-hint .status-ok,
+#batch-ref-hint .status-warn {
+  justify-self: end;
+  font-size: 10px;
+  font-weight: 650;
+  text-align: right;
+}
+.batch-compatibility-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.batch-compatibility-status.ok,
+#batch-ref-hint .status-ok { color: var(--green); }
+.batch-compatibility-status.warn,
+#batch-ref-hint .status-warn { color: var(--orange); }
+.batch-compatibility-action {
+  min-height: 26px;
+  padding: 4px 7px;
+  border: 1px solid var(--hairline);
+  border-radius: 3px;
+  background: var(--panel-solid);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 650;
+}
+.batch-compatibility-action:hover { background: var(--accent-soft); }
+
+.batch-settings-note {
+  min-height: 0;
+  color: var(--ink-secondary);
+  font-size: 10px;
+  line-height: 1.45;
+}
+.batch-settings-note:empty { display: none; }
+.batch-settings-note.warn {
+  padding: 7px 8px;
+  border-left: 2px solid var(--orange);
+  background: color-mix(in srgb, var(--orange) 9%, transparent);
+  color: color-mix(in srgb, var(--orange) 72%, var(--ink));
+}
+.batch-advanced-settings {
+  border-top: 1px solid var(--hairline);
+}
+.batch-advanced-settings > summary {
+  position: relative;
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  padding: 7px 20px 7px 0;
+  color: var(--ink-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+}
+.batch-advanced-settings > summary::-webkit-details-marker { display: none; }
+.batch-advanced-settings > summary::after {
+  content: "+";
+  position: absolute;
+  right: 2px;
+  color: var(--ink-tertiary);
+  font-size: 15px;
+  font-weight: 400;
+}
+.batch-advanced-settings[open] > summary::after { content: "−"; }
+.batch-advanced-settings-body {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 2px 0 8px;
+}
+.batch-advanced-settings .video-workflow-field { margin: 0; }
+.batch-advanced-settings .video-workflow-field > small {
+  color: var(--ink-tertiary);
+  font-size: 9px;
+  line-height: 1.4;
+}
+.batch-advanced-settings .workflow-checkbox-row { margin: 2px 0; }
+
+.batch-run-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding-top: 14px;
+  border-top: 1px solid var(--hairline);
+}
+.batch-run-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.batch-run-heading h3 {
+  font-size: 14px;
+  font-weight: 650;
+}
+.batch-task-note {
+  color: var(--ink-tertiary);
+  font-size: 9px;
+  text-align: right;
+}
+.batch-run-summary {
+  color: var(--ink-secondary);
+  font-size: 11px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.batch-run-panel > #batch-run { width: 100%; }
+.batch-run-panel .disabled-action-reason {
+  margin: -2px 0 0;
+  color: var(--ink-tertiary);
+  font-size: 10px;
+  line-height: 1.4;
+  text-align: center;
+}
+.batch-progress-stack { margin-top: 2px; }
+.batch-progress-row { gap: 8px; }
+.batch-progress-label { flex-basis: 54px; font-size: 10px; }
+.batch-progress-row .progress { height: 5px; border-radius: 0; }
+
+.batch-result-card {
+  display: grid;
+  gap: 7px;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--green) 42%, var(--hairline));
+  border-radius: 0;
+  background: color-mix(in srgb, var(--green) 8%, var(--panel-solid));
+}
+.batch-result-card.hidden,
+.batch-failures.hidden { display: none; }
+.batch-result-card > strong { color: var(--ink); font-size: 12px; }
+.batch-result-card > p {
+  color: var(--ink-secondary);
+  font-size: 10px;
+  line-height: 1.45;
+}
+.batch-result-card .workflow-button-row { gap: 6px; }
+.batch-result-card .btn { flex: 1 1 auto; }
+.batch-workflow-stack .batch-failures {
+  margin-top: 0;
+  border-radius: 0;
+  font-size: 11px;
+}
+
+/* The stage is a CSS container, so Batch can compact independently of the
+   application window and both resizable drawers. */
+@container (max-width: 760px) {
+  .batch-stage-workspace { padding: 18px 16px 12px; }
+  .batch-stage-toolbar {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .batch-stage-toolbar .btn { width: 100%; }
+  .batch-stage-toolbar .search-field { grid-column: 1 / 3; }
+  .batch-basket-filter { grid-column: 3; }
+}
+
+@container (max-width: 520px) {
+  .batch-stage-workspace { gap: 9px; padding: 14px 10px 10px; }
+  .batch-stage-header { gap: 10px; padding-bottom: 9px; }
+  .batch-stage-header h1 { font-size: 17px; }
+  .batch-stage-header p { display: none; }
+  .batch-stage-count strong { font-size: 18px; }
+  .batch-stage-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .batch-stage-toolbar > .btn:first-child { grid-column: 1 / -1; }
+  .batch-stage-toolbar .search-field { grid-column: 1; }
+  .batch-basket-filter { grid-column: 2; }
+  .batch-stage-footer { flex-wrap: wrap; gap: 7px; }
+  .batch-stage-footer .spacer { display: none; }
+  .batch-stage-footer .btn { margin-left: auto; }
+  .batch-drop-hint { display: none; }
+}
+
+@container (max-width: 340px) {
+  .batch-workflow-stack .workflow-picker-row,
+  .batch-workflow-stack .workflow-field-grid { grid-template-columns: 1fr; }
+  .batch-workflow-stack .workflow-picker-row > .btn { width: 100%; }
+  .batch-run-heading { align-items: flex-start; flex-direction: column; }
+  .batch-task-note { text-align: left; }
+  .batch-result-card .workflow-button-row { flex-direction: column; }
+  .batch-result-card .btn { width: 100%; }
+}
 
 /* toast */
 #toast {
@@ -2997,14 +3878,26 @@ body.tour-active { overflow: hidden; }
   padding: 14px 10px; text-align: center; background: var(--bg);
   margin-bottom: 8px; transition: border-color 0.15s, background 0.15s;
 }
-.dv-dropzone.hover { border-color: var(--accent); background: var(--accent-soft); }
-.dv-dropzone.busy { border-color: var(--accent); opacity: 0.85; }
-.dv-dropzone.ok {
+.dv-dropzone.hover,
+.data-analysis-upload.hover { border-color: var(--accent); background: var(--accent-soft); }
+.dv-dropzone.busy,
+.data-analysis-upload.busy { border-color: var(--accent); opacity: 0.85; }
+.dv-dropzone.ok,
+.data-analysis-upload.ok {
   border-color: #30d158; border-style: solid;
   background: rgba(48, 209, 88, 0.08);
 }
 .dv-dropzone.ok .dv-drop-icon::after { content: ""; }
-.dv-dropzone.err { border-color: #ff375f; background: rgba(255, 55, 95, 0.06); }
+.data-analysis-upload.ok .dz-glyph {
+  border-color: #30d158;
+  color: #248a3d;
+}
+.dv-dropzone.err,
+.data-analysis-upload.err { border-color: #ff375f; background: rgba(255, 55, 95, 0.06); }
+.data-analysis-upload.err .dz-glyph {
+  border-color: #ff375f;
+  color: #d70015;
+}
 .dv-drop-inner {
   display: flex; flex-direction: column; align-items: center; gap: 8px; font-size: 13px;
 }

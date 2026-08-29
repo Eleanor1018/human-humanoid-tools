@@ -5,6 +5,7 @@ import type {
   CalibrationEditorStateDetail,
   ComparisonCommandDetail,
   ComparisonStateDetail,
+  DataAnalysisStateDetail,
   HhAppBridge,
   ImportCommandDetail,
   JobHistoryCommandDetail,
@@ -53,6 +54,7 @@ export type HHToolsInputId =
 
 export type HHToolsSelectId =
   | 'lib-category'
+  | 'h2r-robot-select'
   | 'rt-ref-select'
   | 'rt-backend'
   | 'rt-export-format'
@@ -118,6 +120,7 @@ export type HHToolsButtonId =
   | 'add-to-basket'
   | 'robot-pick-urdf'
   | 'robot-pick-mesh-folder'
+  | 'h2r-robot-load'
   | 'recalib-btn'
   | 'calib-zero'
   | 'calib-restore'
@@ -138,6 +141,7 @@ export type HHToolsButtonId =
   | 'r2r-basket-clear'
   | 'r2r-batch-run'
   | 'dv-pick-folder'
+  | 'dv-pick-robot-folder'
   | 'dv-clear-upload'
   | 'dv-analyze'
   | 'dv-clear-tags'
@@ -199,6 +203,7 @@ declare global {
     'hhtools:calibration-editor-state': CustomEvent<CalibrationEditorStateDetail>
     'hhtools:comparison-command': CustomEvent<ComparisonCommandDetail>
     'hhtools:comparison-state': CustomEvent<ComparisonStateDetail>
+    'hhtools:data-analysis-state': CustomEvent<DataAnalysisStateDetail>
     'hhtools:job-history-command': CustomEvent<JobHistoryCommandDetail>
     'hhtools:job-history-state': CustomEvent<JobHistoryStateDetail>
     'hhtools:import-command': CustomEvent<ImportCommandDetail>

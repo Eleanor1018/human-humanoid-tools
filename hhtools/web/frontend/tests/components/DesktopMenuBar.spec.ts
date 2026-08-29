@@ -29,23 +29,31 @@ describe('DesktopMenuBar', () => {
     }
     window.addEventListener('hhtools:panel-request', receive)
     await wrapper.get('[data-menu-trigger="workflows"]').trigger('click')
-    const h2r = wrapper.findAll('.desktop-menu-item').find((item) => item.text().includes('H2R'))
+    const h2r = wrapper.findAll('.desktop-menu-item').find((item) => item.text().includes('Human to Robot'))
     await h2r?.trigger('click')
     window.removeEventListener('hhtools:panel-request', receive)
 
     expect(panels).toEqual(['h2r'])
   })
 
-  it('shows unavailable analysis commands as disabled', async () => {
+  it('routes the consolidated data-analysis command', async () => {
     const wrapper = mount(DesktopMenuBar, { props: { activePanel: 'motion' } })
     wrappers.push(wrapper)
 
-    await wrapper.get('[data-menu-trigger="analysis"]').trigger('click')
-    const pae = wrapper.findAll<HTMLButtonElement>('.desktop-menu-item')
-      .find((item) => item.text().includes('PAE Analysis'))
+    const panels: string[] = []
+    const receive = (event: WindowEventMap['hhtools:panel-request']): void => {
+      panels.push(event.detail)
+    }
+    window.addEventListener('hhtools:panel-request', receive)
 
-    expect(pae?.attributes('disabled')).toBeDefined()
-    expect(pae?.text()).toContain('Coming soon')
+    await wrapper.get('[data-menu-trigger="analysis"]').trigger('click')
+    const analysis = wrapper.findAll<HTMLButtonElement>('.desktop-menu-item')
+      .find((item) => item.text().includes('Data Analysis'))
+    await analysis?.trigger('click')
+    window.removeEventListener('hhtools:panel-request', receive)
+
+    expect(analysis?.attributes('disabled')).toBeUndefined()
+    expect(panels).toEqual(['dataset-viz'])
   })
 
   it('routes the enabled video-to-motion workflow', async () => {

@@ -2,16 +2,17 @@
 import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 
 import { usePanelLayout } from './composables/usePanelLayout'
+import BatchWorkflow from './components/BatchWorkflow.vue'
 import PlaybackBar from './components/PlaybackBar.vue'
-import CalibrationEditorControls from './components/CalibrationEditorControls.vue'
 import CommandPalette from './components/CommandPalette.vue'
+import DataAnalysisPipeline from './components/DataAnalysisPipeline.vue'
 import DesktopMenuBar from './components/DesktopMenuBar.vue'
+import HumanToRobotWorkflow from './components/HumanToRobotWorkflow.vue'
 import JobDrawer from './components/JobDrawer.vue'
-import ResultEvaluationPanel from './components/ResultEvaluationPanel.vue'
+import RobotToRobotWorkflow from './components/RobotToRobotWorkflow.vue'
 import SearchField from './components/SearchField.vue'
 import SidebarNavigation from './components/SidebarNavigation.vue'
 import VideoToMotionPipeline from './components/VideoToMotionPipeline.vue'
-import WorkflowPipeline from './components/WorkflowPipeline.vue'
 import WorkspaceDrawerHandle from './components/WorkspaceDrawerHandle.vue'
 import WorkspaceSettingsDialog from './components/WorkspaceSettingsDialog.vue'
 import type {
@@ -511,7 +512,7 @@ onBeforeUnmount(() => {
     />
 
     <!-- 3D stage -->
-    <main id="stage">
+    <main id="stage" :class="{ 'batch-stage-active': activePanel === 'batch' }">
       <canvas id="three-canvas"></canvas>
       <svg id="calib-mapping-overlay" class="calib-mapping-overlay" aria-hidden="true"></svg>
       <div id="calib-landmark-labels" class="calib-landmark-labels" aria-hidden="true"></div>
@@ -574,8 +575,8 @@ onBeforeUnmount(() => {
           <div class="glyph">🎞</div>
           <div class="big">{{ workspaceText('Drop a motion here to preview', '把动作拖到这里预览') }}</div>
           <div class="sub">{{ workspaceText(
-            'Supports BVH / GLB / NPZ and datasets such as AMASS, Motion-X, OMOMO, and holosoma. Drop content on the stage, choose a file or folder from the Motion panel, or select a clip from the Library.',
-            '支持 BVH / GLB / NPZ 以及 AMASS、Motion-X、OMOMO、holosoma 等数据集。可拖到此舞台、在右侧「动作」面板选择文件或文件夹，或直接从资源库点选。',
+            'Supports BVH / GLB / NPZ and datasets such as AMASS, Motion-X, OMOMO, and holosoma.',
+            '支持 BVH / GLB / NPZ 以及 AMASS、Motion-X、OMOMO、holosoma 等数据集。',
           ) }}</div>
         </div>
       </div>
@@ -998,544 +999,247 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <div v-show="activePanel === 'h2r'" class="panel-stack">
-          <h2>人体 → 机器人 H2R</h2>
-          <p class="lead">输入人体 Motion 与目标 Robot Model，匹配标定配置后运行 IK/MPC，输出可播放、可导出的 Robot Trajectory。</p>
-          <WorkflowPipeline workflow="h2r" />
-
-          <div class="card" id="tour-calibration">
-          <h3>1 · 状态</h3>
-          <div class="meta-row"><span class="k">动作</span><span class="v" id="rt-motion">未加载</span></div>
-          <div class="meta-row"><span class="k">机器人</span><span class="v" id="rt-robot">未加载</span></div>
-          <div class="meta-row meta-row-select">
-            <span class="k">参考姿态</span>
-            <select class="search" id="rt-ref-select" disabled title="标定用人体参考骨架；自动识别有误时可手动切换">
-              <option value="">—</option>
-            </select>
-          </div>
-          <p class="hint" id="rt-ref-hint" style="display:none;margin-top:2px"></p>
-          <div class="meta-row"><span class="k">标定</span><span class="v" id="rt-cal"><span class="status-chip"><span class="dot"></span>—</span></span></div>
-          <div style="height:8px"></div>
-          <button class="btn secondary small" id="recalib-btn" disabled>重新标定</button>
-          <div class="calibration-save-summary" id="calibration-save-summary" aria-live="polite"></div>
-          </div>
-
-          <div class="card" id="calib-card" style="display:none">
-            <h3>2 · 参考姿态对齐 Calibration</h3>
-            <div class="calibration-principle">
-              调整目标机器人，使其静止姿态与蓝色源参考骨架在语义上对应。机器人比例不同，<b>不要求逐点重合</b>；hhtools 会根据 FK 推导缩放与姿态偏移。
-            </div>
-            <div class="calibration-scope" id="calibration-scope">配置范围：目标机器人 + 源参考格式</div>
-            <div class="validation-summary" id="calibration-validation-summary" aria-live="polite"></div>
-            <p class="hint">舞台只显示<b>灰色机器人</b>与<b>蓝色参考骨架</b>。蓝色骨架是当前参考格式的标准姿态，不是正在播放的 Motion，也不一定是 URDF 零位。可在 3D 中点击关节拖动，或用下方滑块微调。</p>
-          <CalibrationEditorControls workflow="h2r" />
-          <div id="calib-sliders" class="calibration-joint-list"></div>
-          <div class="divider"></div>
-          <div class="row">
-            <button class="btn secondary small" id="calib-zero" title="全部关节置 0（URDF 零位）">归零</button>
-            <button class="btn secondary small" id="calib-restore" disabled
-              title="恢复到上次保存的标定值">重置</button>
-            <button class="btn secondary small" id="calib-cancel">取消</button>
-            <button class="btn small" id="calib-save">保存标定</button>
-          </div>
-          </div>
-
-          <div class="card" id="tour-retarget">
-          <h3>3 · 执行</h3>
-          <div class="row">
-            <select class="search" id="rt-backend">
-              <option value="newton">Newton IK（骨架）</option>
-              <option value="interaction_mesh">Interaction-Mesh（含物体/地形）</option>
-            </select>
-          </div>
-          <div class="row" style="margin-top:8px; align-items:center; gap:8px">
-            <label class="k" style="white-space:nowrap" title="求解前对人体动作抽帧">Retarget FPS</label>
-            <input class="search" id="rt-retarget-fps" type="number" min="1" step="1" style="flex:1"
-              placeholder="留空 = 动作原始帧率" />
-          </div>
-          <p class="hint" id="rt-retarget-fps-hint" style="margin-top:4px">
-            <b>Retarget FPS</b>：在跑 IK/MPC <b>之前</b>对人体动作（含物体轨迹）重采样；帧数变少会<b>更快</b>，但可能丢失快动作/接触细节。留空则用原始帧率。
-          </p>
-          <p class="hint" id="rt-first-hint" style="margin-top:6px">
-            <b>首次 Retarget 较慢：</b>新机器人第一次求解会编译 GPU/Warp IK 内核并捕获 CUDA 图（约 10–60 秒）。进度条可能短暂不动，属正常现象，请耐心等待；加载机器人后会在后台预热，同一机器人后续会快很多。
-          </p>
-          <p class="hint" id="rt-tuning-hint" style="margin-top:6px">
-            默认机器人构型比例接近 SMPL。若手臂、肩宽或腿宽与预期不符，可手动编辑 <code>~/.config/hhtools/robots/&lt;name&gt;/robot.yaml</code> 中的 scale（<code>retarget.joint_scale_multipliers</code>）与权重（<code>weights</code>）针对自己的机器人微调；改 yaml 后下次 Retarget 即生效。
-          </p>
-          <div style="height:8px"></div>
-          <button class="btn" id="retarget-btn" disabled>开始 Retarget</button>
-          <p class="disabled-action-reason" id="retarget-disabled-reason" role="status">请先加载动作与机器人。</p>
-          <div style="height:10px"></div>
-          <div class="progress" style="display:none" id="rt-progress"><div class="bar"></div></div>
-          <div class="hint" id="rt-status" style="margin-top:8px"></div>
-          </div>
-
-          <ResultEvaluationPanel workflow="h2r" />
-
-          <div class="card" id="rt-export-card" style="display:none">
-          <h3>4 · 导出</h3>
-          <p class="hint" id="rt-export-fmt">格式：<code>time, root_x, root_y, root_z, root_qx, root_qy, root_qz, root_qw, dof_*</code>（机器人位置 xyz + 四元数 xyzw + 各自由度）</p>
-          <div class="row" style="margin-top:8px; align-items:center; gap:8px">
-            <label class="k" style="white-space:nowrap" title="仅影响导出文件，不重新求解">导出 FPS</label>
-            <input class="search" id="rt-export-fps" type="number" min="1" step="1" style="flex:1"
-              placeholder="留空 = Retarget 结果帧率" />
-          </div>
-          <div class="hint" id="rt-export-srcfps" style="margin-top:4px">
-            <b>导出 FPS</b>：只对已算好的机器人关节轨迹做时间重采样（插值），<b>不会</b>重新 IK/MPC。与上方的 Retarget FPS 无关；可 Retarget 用 30 fps、导出再降到 15 fps。
-          </div>
-          <div class="row" style="margin-top:8px; align-items:center; gap:8px">
-            <label class="k" style="white-space:nowrap" title="相对 Retarget 结果时间轴">起始 (s)</label>
-            <input class="search" id="rt-export-t-start" type="number" min="0" step="0.01" style="flex:1"
-              placeholder="留空 = 0" />
-            <label class="k" style="white-space:nowrap">截止 (s)</label>
-            <input class="search" id="rt-export-t-end" type="number" min="0" step="0.01" style="flex:1"
-              placeholder="留空 = 结尾" />
-          </div>
-          <p class="hint" style="margin-top:4px">可选：只导出 clip 中一段；时间相对 Retarget 播放轴，导出后 <code>time</code> 从 0 重计。物体轨迹同步裁剪。</p>
-          <div class="row" style="margin-top:8px">
-            <select class="search" id="rt-export-format" style="flex:1">
-              <option value="csv" selected>CSV（机器人 + 物体轨迹，默认）</option>
-              <option value="pkl">PKL（机器人 + 物体轨迹）</option>
-            </select>
-          </div>
-          <label class="row" style="margin-top:8px; gap:8px; align-items:center; cursor:pointer">
-            <input type="checkbox" id="rt-csv-header" checked />
-            <span class="hint" style="margin:0">CSV 含注释与列名表头</span>
-          </label>
-          <p class="hint" style="margin-top:4px">取消勾选后 CSV 从第一行纯数值开始（无 <code>#</code> 注释、无列名）。</p>
-          <div style="height:10px"></div>
-          <button class="btn secondary" id="rt-export-btn">下载导出包</button>
-          <p class="hint" id="rt-export-bundle-hint" style="margin-top:6px;display:none">
-            含交互物体/地形时将下载 ZIP：<code>&lt;clip&gt;.csv|.pkl</code>（机器人）、<code>object_&lt;i&gt;_&lt;name&gt;.csv|.pkl</code>（物体 retarget 轨迹，与所选格式一致；位姿为机器人坐标系，几何见同目录 <code>.obj</code>）、以及按机器人尺度缩放的 <code>_terrain.obj</code> / 物体 <code>.obj</code>（布局同 OMOMO / meshmimic clip 文件夹）。
-          </p>
-          </div>
+        <div v-show="activePanel === 'h2r'">
+          <HumanToRobotWorkflow
+            :locale="workspaceLocale"
+            @request-panel="requestPanel"
+          />
         </div>
       </section>
 
       <!-- BATCH -->
       <section class="panel" :class="{ active: activePanel === 'batch' }" data-panel="batch">
-        <h2>批量 Batch</h2>
-        <p class="lead">把要 retarget 的数据拖进篮子，一次性批量导出。</p>
-
-        <div class="dropzone" id="basket-drop">
-          <div class="dz-glyph">🧺</div>
-          <div class="dz-title">拖入文件 / 文件夹到篮子</div>
-          <div class="dz-sub">支持任意路径的数据集（会话缓存，重启即清除）；也可在「动作」资源库点 ＋ 加入</div>
-        </div>
-
-        <div class="card">
-          <h3>篮子 <span id="basket-count">0</span> 项</h3>
-          <div class="basket-list" id="basket-list"></div>
-          <div class="divider"></div>
-          <button class="btn secondary small" id="basket-clear">清空篮子</button>
-        </div>
-
-        <div class="card">
-          <h3>批量参数</h3>
-          <div class="meta-row"><span class="k">机器人</span><span class="v" id="batch-robot">未加载</span></div>
-          <p class="hint" id="batch-ref-hint" style="margin-top:6px"></p>
-          <select class="search" id="batch-backend">
-            <option value="newton">Newton IK（GPU 批量）</option>
-            <option value="interaction_mesh">Interaction-Mesh（逐条）</option>
-          </select>
-          <div class="row" style="margin-top:8px; align-items:center; gap:8px">
-            <label class="k" style="white-space:nowrap">批量并行数</label>
-            <input class="search" id="batch-size" type="number" min="1" max="256" step="1" style="flex:1"
-              value="16" />
-          </div>
-          <p class="hint" style="margin-top:8px">Newton：多条 clip 在 GPU 上<strong>并行</strong>求解（每条子问题独立 dof×dof 内核，与并行数无关，不再受“多 clip 共享内存”限制）。并行数越大越快、占用显存/内存越多；超出设备能力会自动下调。Interaction-Mesh 始终逐条 MPC。</p>
-          <div class="row" style="margin-top:8px; align-items:center; gap:8px">
-            <label class="k" style="white-space:nowrap">Retarget FPS</label>
-            <input class="search" id="batch-retarget-fps" type="number" min="1" step="1" style="flex:1"
-              placeholder="留空 = 原始" />
-          </div>
-          <p class="hint" style="margin-top:4px">批量求解前对人体动作抽帧；低于原始帧率可加速，可能损质量。</p>
-          <div class="row" style="margin-top:8px; gap:8px">
-            <select class="search" id="batch-format" style="flex:1">
-              <option value="csv">CSV（可读，单文件）</option>
-              <option value="pkl">PKL（更小，含地形/物体，适合批量）</option>
-            </select>
-            <input class="search" id="batch-export-fps" type="number" min="1" step="1" style="flex:0 0 42%"
-              placeholder="导出 FPS" title="留空 = 与 Retarget 相同" />
-          </div>
-          <p class="hint" style="margin-top:4px">导出 FPS：仅对机器人轨迹插值写文件，不重新求解。大批量优先选 <b>PKL</b>（写盘更快）；CSV 批量打包使用无压缩 ZIP 以加速。
-          </p>
-          <div class="row" style="margin-top:8px; align-items:center; gap:8px">
-            <label class="k" style="white-space:nowrap">起始 (s)</label>
-            <input class="search" id="batch-export-t-start" type="number" min="0" step="0.01" style="flex:1"
-              placeholder="留空 = 0" title="对篮子内每条 clip 统一裁剪" />
-            <label class="k" style="white-space:nowrap">截止 (s)</label>
-            <input class="search" id="batch-export-t-end" type="number" min="0" step="0.01" style="flex:1"
-              placeholder="留空 = 结尾" />
-          </div>
-          <p class="hint" style="margin-top:4px">可选：导出时对每条 clip 裁同一时间窗（相对各 clip 的 Retarget 时间轴）；超出该 clip 长度的截止会夹到结尾。</p>
-          <label class="row" style="margin-top:8px; gap:8px; align-items:center; cursor:pointer">
-            <input type="checkbox" id="batch-csv-header" checked />
-            <span class="hint" style="margin:0">CSV 含注释与列名表头</span>
-          </label>
-          <div style="height:8px"></div>
-          <input class="search" id="batch-out" placeholder="ZIP 文件名（不含扩展名）" value="batch_export" />
-          <p class="hint" id="batch-fmt-note" style="margin-top:8px">
-            完成后由浏览器下载 ZIP（保存到系统默认下载目录，<b>不会</b>写入本项目）。目录层级与源数据一致：扁平数据集（如 AMASS）为 <code>AMASS/clip.csv</code>；含物体/地形的 clip 为 <code>OMOMO/clip/clip.csv + 附属文件</code>；外部拖入保持拖入时的相对路径。<br>
-            CSV 列：<code>time, root_xyz, root_qxyzw, dof_*</code>。
-          </p>
-          <div style="height:10px"></div>
-          <button class="btn" id="batch-run" disabled>批量 Retarget 并导出</button>
-          <div style="height:10px"></div>
-          <div class="batch-progress-stack hidden" id="batch-progress-stack">
-            <div class="batch-progress-row">
-              <span class="batch-progress-label">总进度</span>
-              <div class="progress" id="batch-progress-total"><div class="bar"></div></div>
-            </div>
-            <div class="batch-progress-row">
-              <span class="batch-progress-label">当前批次</span>
-              <div class="progress" id="batch-progress-clip"><div class="bar"></div></div>
-            </div>
-          </div>
-          <div class="hint" id="batch-status" style="margin-top:8px"></div>
-          <div class="batch-failures hidden" id="batch-failures"></div>
-        </div>
+        <BatchWorkflow
+          :active="activePanel === 'batch'"
+          :locale="workspaceLocale"
+          @request-panel="requestPanel"
+        />
       </section>
 
       <!-- ROBOT-TO-ROBOT (R2R) -->
       <section class="panel" :class="{ active: activePanel === 'r2r' }" data-panel="r2r">
-        <h2>机器人 → 机器人 R2R</h2>
-        <p class="lead">把已有的 <b>G1 机器人轨迹</b>（<code>.pkl / .npz / .csv</code>，须为本工具导出格式）重定向到<b>任意其他机器人</b>。CSV 支持两种导出样式：<b>含</b> <code>#</code> 注释与列名表头，或<b>取消勾选表头后</b>从第一行起的纯数值（无注释、无表头，帧率由 <code>time</code> 列推算）。流程：源机器人 → 上传轨迹播放 → 目标机器人 → 标定 → Retarget → 导出。</p>
-        <WorkflowPipeline workflow="r2r" />
+        <RobotToRobotWorkflow
+          :locale="workspaceLocale"
+          @request-panel="requestPanel"
+        />
 
-        <div class="card">
-          <h3>1 · 源机器人（轨迹来源）</h3>
-          <select class="search" id="r2r-source-select"></select>
-          <p class="hint" style="margin-top:6px">轨迹通常由 G1 导出，默认选 Unitree G1。源机器人用于<b>正运动学</b>还原关键点。</p>
-          <div class="row" style="margin-top:8px">
-            <button class="btn secondary small" id="r2r-source-load" style="flex:1">加载源机器人</button>
-          </div>
-          <p class="hint" id="r2r-source-status" style="margin-top:6px">尚未加载源机器人。</p>
-        </div>
-
-        <div class="card">
-          <h3>2 · 上传源轨迹</h3>
-          <div class="robot-import-grid">
-            <div class="dropzone dropzone-compact" id="r2r-drop-mimic" data-r2r-profile="mimic">
-              <div class="dz-glyph">🎞️</div>
-              <div class="dz-title">mimic · 通用</div>
-              <div class="dz-sub">单文件或含多级子目录的 <code>.csv/.pkl/.npz</code></div>
-              <div class="row" style="margin-top:10px">
-                <button type="button" class="btn secondary small" data-r2r-pick="mimic">选择文件</button>
-                <button type="button" class="btn secondary small" data-r2r-pick="mimic" data-folder="1">文件夹</button>
-              </div>
-            </div>
-            <div class="dropzone dropzone-compact" id="r2r-drop-intermimic" data-r2r-profile="intermimic">
-              <div class="dz-glyph">📦</div>
-              <div class="dz-title">intermimic</div>
-              <div class="dz-sub">须拖入<b>文件夹</b>：轨迹 + <code>*_cleaned_simplified.obj</code></div>
-              <div class="row" style="margin-top:10px">
-                <button type="button" class="btn secondary small" data-r2r-pick="intermimic" data-folder="1">选择文件夹</button>
-              </div>
-            </div>
-            <div class="dropzone dropzone-compact" id="r2r-drop-meshmimic" data-r2r-profile="meshmimic">
-              <div class="dz-glyph">⛰️</div>
-              <div class="dz-title">meshmimic</div>
-              <div class="dz-sub">须拖入<b>文件夹</b>：轨迹 + <code>*_terrain.obj</code></div>
-              <div class="row" style="margin-top:10px">
-                <button type="button" class="btn secondary small" data-r2r-pick="meshmimic" data-folder="1">选择文件夹</button>
-              </div>
-            </div>
-          </div>
-          <div class="row" style="margin-top:10px; align-items:center; gap:8px">
-            <label class="k" style="white-space:nowrap" title="无 time/sample_rate 的外来 CSV（如 MotionDecode）使用此值">源轨迹 FPS</label>
-            <input class="search" id="r2r-source-fps" type="number" min="1" step="1" value="50" style="flex:1" />
-          </div>
-          <p class="hint" style="margin-top:4px">默认 50。无时间戳的外来轨迹请按真实采集帧率填写（例如 120）；自有导出带 <code>time</code> / <code># sample_rate</code> 时仍按文件识别。</p>
-          <p class="hint" id="r2r-traj-status" style="margin-top:8px">先加载源机器人，再上传轨迹即可播放。</p>
-          <div class="progress" style="display:none; margin-top:8px" id="r2r-traj-progress"><div class="bar"></div></div>
-        </div>
-
-        <div class="card">
-          <h3>3 · 目标机器人</h3>
-          <p class="hint" style="margin-top:0">先在「机器人 Robot Registry」注册你的机器人（URDF + meshes），这里即可选择。</p>
-          <select class="search" id="r2r-target-select"></select>
-          <div class="row" style="margin-top:8px">
-            <button class="btn secondary small" id="r2r-target-load" style="flex:1">加载目标机器人</button>
-          </div>
-          <p class="hint" id="r2r-target-status" style="margin-top:6px">尚未加载目标机器人。</p>
-        </div>
-
-        <div class="section-rule"><span>Retarget</span></div>
-
-        <div class="card">
-          <h3>4 · 标定 Calibration</h3>
-          <div class="meta-row"><span class="k">标定</span><span class="v" id="r2r-cal"><span class="status-chip"><span class="dot"></span>—</span></span></div>
-          <div class="calibration-principle" style="margin-top:8px">
-            调整目标机器人，使其与蓝色源机器人参考姿态在语义上对应。两台机器人结构和比例可以不同，<b>不要求逐点重合</b>。
-          </div>
-          <div class="calibration-scope" id="r2r-calibration-scope">配置范围：目标机器人 + 源机器人</div>
-          <div class="validation-summary" id="r2r-calibration-validation-summary" aria-live="polite"></div>
-          <p class="hint" style="margin-top:6px">蓝色参考姿态由源机器人零位 FK 得到。未标定时加载目标机器人会自动进入标定模式；可在 3D 舞台<b>点击关节拖动</b>，或使用下方滑块 / 浮动 HUD 微调。</p>
-          <div style="height:8px"></div>
-          <button class="btn secondary small" id="r2r-calib-btn" disabled>开始 / 重新标定</button>
-          <div class="calibration-save-summary" id="r2r-calibration-save-summary" aria-live="polite"></div>
-          <div id="r2r-calib-edit" style="display:none">
-            <CalibrationEditorControls workflow="r2r" />
-            <div id="r2r-calib-sliders" class="calibration-joint-list"></div>
-            <div class="divider"></div>
-            <div class="row">
-              <button class="btn secondary small" id="r2r-calib-zero" title="全部关节置 0（URDF 零位）">归零</button>
-              <button class="btn secondary small" id="r2r-calib-cancel">取消</button>
-              <button class="btn small" id="r2r-calib-save">保存标定</button>
-            </div>
-          </div>
-        </div>
-
-        <div class="card">
-          <h3>5 · 执行 Retarget</h3>
-          <select class="search" id="r2r-backend">
-            <option value="newton">Newton IK（GPU）</option>
-            <option value="interaction_mesh">Interaction-Mesh（MPC）</option>
-          </select>
-          <p class="hint" style="margin-top:6px">mimic 默认 Newton；intermimic / meshmimic（带物体/地形）默认 Interaction-Mesh。上传后会自动切换，也可手动改。</p>
-          <div class="row" style="margin-top:8px; align-items:center; gap:8px">
-            <label class="k" style="white-space:nowrap" title="求解前对源轨迹抽帧">Retarget FPS</label>
-            <input class="search" id="r2r-retarget-fps" type="number" min="1" step="1" style="flex:1"
-              placeholder="留空 = 轨迹原始帧率" />
-          </div>
-          <p class="hint" style="margin-top:6px"><b>首次较慢：</b>Newton 首次会编译 GPU/Warp IK 内核；Interaction-Mesh 逐帧 MPC，带地形 clip 更慢，进度条可能短暂不动，属正常现象。</p>
-          <div style="height:8px"></div>
-          <button class="btn" id="r2r-retarget-btn" disabled>开始 Retarget</button>
-          <p class="disabled-action-reason" id="r2r-disabled-reason" role="status">请先加载源机器人、源轨迹与目标机器人。</p>
-          <div style="height:10px"></div>
-          <div class="progress" style="display:none" id="r2r-progress"><div class="bar"></div></div>
-          <div class="hint" id="r2r-status" style="margin-top:8px"></div>
-        </div>
-
-        <ResultEvaluationPanel workflow="r2r" />
-
-        <div class="card" id="r2r-export-card" style="display:none">
-          <h3>6 · 导出</h3>
-          <p class="hint">格式：<code>time, root_xyz, root_qxyzw, dof_*</code>（目标机器人轨迹）。</p>
-          <div class="row" style="margin-top:8px; align-items:center; gap:8px">
-            <label class="k" style="white-space:nowrap">导出 FPS</label>
-            <input class="search" id="r2r-export-fps" type="number" min="1" step="1" style="flex:1"
-              placeholder="留空 = Retarget 结果帧率" />
-          </div>
-          <div class="row" style="margin-top:8px; align-items:center; gap:8px">
-            <label class="k" style="white-space:nowrap">起始 (s)</label>
-            <input class="search" id="r2r-export-t-start" type="number" min="0" step="0.01" style="flex:1"
-              placeholder="留空 = 0" />
-            <label class="k" style="white-space:nowrap">截止 (s)</label>
-            <input class="search" id="r2r-export-t-end" type="number" min="0" step="0.01" style="flex:1"
-              placeholder="留空 = 结尾" />
-          </div>
-          <p class="hint" style="margin-top:4px">可选：只导出一段；时间相对 R2R 结果轴，导出 <code>time</code> 从 0 重计。</p>
-          <div class="row" style="margin-top:8px">
-            <select class="search" id="r2r-export-format" style="flex:1">
-              <option value="csv" selected>CSV</option>
-              <option value="pkl">PKL</option>
-            </select>
-          </div>
-          <label class="row" style="margin-top:8px; gap:8px; align-items:center; cursor:pointer">
-            <input type="checkbox" id="r2r-csv-header" checked />
-            <span class="hint" style="margin:0">CSV 含注释与列名表头</span>
-          </label>
-          <p class="hint" id="r2r-export-bundle-hint" style="display:none; margin-top:8px">
-            含地形/物体时将打包为 ZIP（目标机器人轨迹 + 缩放后的 OBJ / object_*.csv）。
-          </p>
-          <div style="height:10px"></div>
-          <button class="btn secondary" id="r2r-export-btn">下载导出文件</button>
-        </div>
-
-        <div class="section-rule"><span>批量</span></div>
-
-        <div class="card">
-          <h3>7 · 批量 R2R</h3>
-          <p class="hint">与上方三种 profile 相同：mimic 可文件/多级目录；intermimic / meshmimic 须<b>完整文件夹</b>（含物体/地形 sidecar）。批量导出与人体 Retarget 一致：meshmimic → <code>&lt;stem&gt;.csv</code> + <code>&lt;stem&gt;_terrain.obj</code>；intermimic → 机器人轨迹 + <code>object_*</code> 缩放轨迹 + <code>*_cleaned_simplified.obj</code>，按 clip 打 ZIP。总 ZIP 保留拖入目录层级。</p>
-          <div class="dropzone" id="r2r-basket-drop">
-            <div class="dz-glyph">🧺</div>
-            <div class="dz-title">拖入待处理 clip</div>
-            <div class="dz-sub">自动识别 mimic / intermimic / meshmimic</div>
-          </div>
-          <div class="meta-row" style="margin-top:8px"><span class="k">篮子</span><span class="v" id="r2r-basket-count">0</span></div>
-          <div id="r2r-basket-list" style="margin-top:6px; max-height:120px; overflow-y:auto"></div>
-          <div class="row" style="margin-top:8px">
-            <button class="btn secondary small" id="r2r-basket-clear">清空篮子</button>
-          </div>
-          <select class="search" id="r2r-batch-backend" style="margin-top:8px">
-            <option value="newton">Newton IK（GPU）</option>
-            <option value="interaction_mesh">Interaction-Mesh（逐条 MPC）</option>
-          </select>
-          <p class="hint" style="margin-top:6px">批量使用同一求解器；混放 mimic 与 intermimic/meshmimic 时请按 clip 类型手动选择，或分两批跑。</p>
-          <div class="row" style="margin-top:8px; align-items:center; gap:8px">
-            <label class="k" style="white-space:nowrap">导出 FPS</label>
-            <input class="search" id="r2r-batch-export-fps" type="number" min="1" step="1" style="flex:1" placeholder="留空 = Retarget 帧率" />
-          </div>
-          <div class="row" style="margin-top:8px; align-items:center; gap:8px">
-            <label class="k" style="white-space:nowrap">起始 (s)</label>
-            <input class="search" id="r2r-batch-t-start" type="number" min="0" step="0.01" style="flex:1" placeholder="留空 = 0" />
-            <label class="k" style="white-space:nowrap">截止 (s)</label>
-            <input class="search" id="r2r-batch-t-end" type="number" min="0" step="0.01" style="flex:1" placeholder="留空 = 结尾" />
-          </div>
-          <input class="search" id="r2r-batch-out" placeholder="ZIP 文件名" value="r2r_batch_export" style="margin-top:8px" />
-          <label class="row" style="margin-top:8px; gap:8px; align-items:center; cursor:pointer">
-            <input type="checkbox" id="r2r-batch-csv-header" checked />
-            <span class="hint" style="margin:0">CSV 含注释与列名表头</span>
-          </label>
-          <div style="height:8px"></div>
-          <button class="btn" id="r2r-batch-run" disabled>批量 Retarget 并导出</button>
-          <div class="progress" style="display:none; margin-top:10px" id="r2r-batch-progress"><div class="bar"></div></div>
-          <div class="hint" id="r2r-batch-status" style="margin-top:8px"></div>
-        </div>
       </section>
 
       <section class="panel panel-dataset-viz" :class="{ active: activePanel === 'dataset-viz' }" data-panel="dataset-viz">
-        <h2>数据集可视化分析</h2>
+        <div class="panel-stack data-analysis-stack">
+          <h2>{{ workspaceText('Data Analysis', '数据分析') }}</h2>
+          <DataAnalysisPipeline :locale="workspaceLocale" />
 
-        <div class="dv-card dv-card-source">
-          <div class="dv-card-head">
-            <span class="dv-card-title">数据源</span>
-            <span class="dv-card-badge" id="dv-kind-badge">—</span>
-          </div>
-          <div class="dv-dropzone" id="dv-dropzone">
-            <div class="dv-drop-inner">
-              <span class="dv-drop-icon" id="dv-drop-icon">📁</span>
-              <span id="dv-drop-label">拖入<b>人体</b>或<b>机器人</b>数据集文件夹</span>
-              <button type="button" class="btn secondary small" id="dv-pick-folder">选择文件夹</button>
-            </div>
-            <div class="hint dv-drop-hint" id="dv-drop-hint">留空 = 当前资源库根目录 · 可多次拖入追加到同一批次</div>
-          </div>
-          <div class="dv-upload-basket" id="dv-upload-basket" hidden>
-            <div class="dv-basket-head">
-              <span class="dv-basket-title" id="dv-basket-summary">—</span>
-              <button type="button" class="btn-link" id="dv-clear-upload">清空批次</button>
-            </div>
-            <ul class="dv-basket-list" id="dv-basket-list"></ul>
-          </div>
-          <div class="dv-source-display" id="dv-source-display">未指定目录</div>
-          <label class="dv-field dv-user-root" id="dv-user-root-wrap" hidden>
-            <span>本地数据目录 <b>*</b></span>
-            <input type="text" id="dv-user-source-root" class="dv-input"
-              placeholder="/home/motions 或 /home/motions/sub10_largebox_000_export" />
-            <span class="hint">拖入上传后必填：JSON manifest 会映射到此目录下的真实路径（非 /tmp）</span>
-          </label>
-          <details class="dv-support-compact" open>
-            <summary>支持格式</summary>
-            <div class="dv-format-grid" id="dv-format-grid"></div>
-          </details>
-          <input type="hidden" id="dv-source" value="" />
-          <div class="dv-toolbar">
-            <label class="dv-field">
-              <span>Embedding</span>
-              <select id="dv-embedding">
-                <option value="handcrafted">档A · 手工特征（推荐）</option>
-                <option value="pae" disabled>档B · PAE（预留，暂不可用）</option>
-              </select>
-            </label>
-            <label class="dv-check"><input type="checkbox" id="dv-force" /> 忽略缓存</label>
-            <button class="btn" id="dv-analyze">开始分析</button>
-          </div>
-          <div class="dv-robot-preview" id="dv-robot-preview" hidden>
-            <label class="dv-field">
-              <span>预览机器人</span>
-              <select id="dv-robot-select"></select>
-            </label>
-            <span class="hint" id="dv-robot-hint">点击散点/列表 ▶ 将用 mesh 播放轨迹</span>
-          </div>
-          <div class="progress dv-progress" style="display:none" id="dv-progress"><div class="bar"></div></div>
-          <div class="dv-status" id="dv-status"></div>
-        </div>
+          <details id="dv-step-source" class="video-workflow-step" open>
+            <summary class="video-workflow-step-summary">
+              <span>{{ workspaceText('1. Select data', '1. 选择数据') }}</span>
+              <span class="dv-card-badge" id="dv-kind-badge" hidden></span>
+            </summary>
+            <div class="video-workflow-step-body">
+              <div class="data-analysis-upload-grid">
+                <div
+                  id="dv-dropzone"
+                  class="dropzone motion-upload-shared data-analysis-upload"
+                  role="group"
+                  :aria-label="workspaceText('Motion dataset upload', '动作数据上传区')"
+                >
+                  <div class="dz-glyph" id="dv-drop-icon">M</div>
+                  <div class="dz-title">Motion</div>
+                  <div class="dz-sub" id="dv-drop-label">
+                    {{ workspaceText('Drop a motion dataset folder here', '拖入动作数据集文件夹') }}
+                  </div>
+                  <button type="button" class="btn secondary small" id="dv-pick-folder">
+                    {{ workspaceText('Choose folder', '选择文件夹') }}
+                  </button>
+                </div>
 
-        <div id="dv-results" hidden>
-          <div class="dv-overview" id="dv-overview"></div>
-
-          <div class="dv-card">
-            <div class="dv-card-head">
-              <span class="dv-card-title" id="dv-stage1-title">Stage I · 标签</span>
-              <div class="dv-tagmode">
-                <label><input type="radio" name="dv-tagmode" value="or" checked /> OR</label>
-                <label><input type="radio" name="dv-tagmode" value="and" /> AND</label>
-                <button type="button" class="btn-link" id="dv-clear-tags">清除</button>
+                <div
+                  id="dv-dropzone-robot"
+                  class="dropzone motion-upload-shared data-analysis-upload"
+                  role="group"
+                  :aria-label="workspaceText('Robot trajectory upload', '机器人轨迹上传区')"
+                >
+                  <div class="dz-glyph" id="dv-drop-icon-robot">R</div>
+                  <div class="dz-title">Robot</div>
+                  <div class="dz-sub" id="dv-drop-label-robot">
+                    {{ workspaceText('Drop a robot trajectory folder here', '拖入机器人轨迹文件夹') }}
+                  </div>
+                  <button type="button" class="btn secondary small" id="dv-pick-robot-folder">
+                    {{ workspaceText('Choose folder', '选择文件夹') }}
+                  </button>
+                </div>
               </div>
-            </div>
-            <div class="dv-chips" id="dv-chips"></div>
-            <div class="dv-info-panel" id="dv-tag-info" hidden></div>
-          </div>
 
-          <div class="dv-card">
-            <div class="dv-card-head">
-              <span class="dv-card-title" id="dv-explore-title">探索 · 指标分布</span>
-              <button type="button" class="btn-link" id="dv-clear-brush">清除刷选</button>
-            </div>
-            <div class="dv-row dv-row-tight">
-              <select id="dv-view-dim" class="dv-select dv-select-grow"></select>
-            </div>
-            <div class="dv-info-panel dv-info-compact" id="dv-metric-info"></div>
-            <div class="dv-chart-wrap">
-              <canvas id="dv-hist-canvas" class="dv-canvas" width="640" height="240"></canvas>
-            </div>
-            <div class="dv-chart-footer">
-              <span class="dv-chart-stats" id="dv-hist-stats"></span>
-              <span class="hint" id="dv-hist-axis-hint"></span>
-            </div>
-          </div>
-
-          <div class="dv-card">
-            <div class="dv-card-head">
-              <span class="dv-card-title" id="dv-stage2-title">Stage II · 语义散点</span>
-              <button type="button" class="btn secondary small" id="dv-scatter-reset">默认视角</button>
-            </div>
-            <div class="dv-scatter-wrap">
-              <canvas id="dv-scatter-canvas" class="dv-canvas dv-scatter" width="640" height="400"></canvas>
-              <div class="dv-scatter-tip" id="dv-scatter-tip" hidden></div>
-            </div>
-            <div class="dv-scatter-toolbar">
-              <span class="hint">滚轮缩放 · 拖拽平移 · 点击预览 · 非推荐点可手动补选 · Shift 多选</span>
-              <div class="dv-legend" id="dv-legend"></div>
-            </div>
-            <div class="dv-clip-list-wrap">
-              <div class="dv-list-head">
-                <span>刷选结果</span>
-                <span class="hint" id="dv-list-count"></span>
+              <p class="hint dv-drop-hint" id="dv-drop-hint">
+                {{ workspaceText('You can append folders of the same type to the current batch.', '可向当前批次继续追加同一类型的文件夹。') }}
+              </p>
+              <div class="dv-upload-basket" id="dv-upload-basket" hidden>
+                <div class="dv-basket-head">
+                  <span class="dv-basket-title" id="dv-basket-summary">—</span>
+                  <button type="button" class="btn-link" id="dv-clear-upload">
+                    {{ workspaceText('Clear batch', '清空批次') }}
+                  </button>
+                </div>
+                <ul class="dv-basket-list" id="dv-basket-list"></ul>
               </div>
-              <div class="dv-clip-list" id="dv-clip-list"></div>
-            </div>
-          </div>
-
-          <div class="dv-card dv-card-stage3">
-            <div class="dv-card-head">
-              <span class="dv-card-title" id="dv-stage3-title">Stage III · 子集推荐</span>
-            </div>
-            <div class="dv-slider-block">
-              <div class="dv-slider-row">
-                <label class="dv-slider-label">想要导出多少的子集</label>
-                <span class="dv-slider-val" id="dv-subset-pct">10%</span>
+              <div class="dv-source-display" id="dv-source-display">
+                {{ workspaceText('No folder selected', '未指定目录') }}
               </div>
-              <input type="range" id="dv-subset-ratio" class="dv-range" min="1" max="100" value="10" />
-            </div>
-            <div class="dv-slider-block">
-              <div class="dv-slider-row">
-                <label class="dv-slider-label">多样性 α
-                  <span class="dv-tip" title="α 越大越重视 embedding 空间多样性；越小越偏向高复杂度 clip">?</span>
-                </label>
-                <span class="dv-slider-val" id="dv-subset-alpha-val">0.99</span>
-              </div>
-              <input type="range" id="dv-subset-alpha" class="dv-range" min="50" max="100" value="99" />
-              <p class="hint dv-alpha-hint" id="dv-alpha-hint">α=0.99：优先选彼此差异大的 clip；降低 α 会更偏向高动态动作。</p>
-            </div>
-            <div class="dv-selbar" id="dv-selbar"></div>
-            <div class="dv-robot-export-opts" id="dv-robot-export-opts" hidden>
-              <label class="dv-check">
-                <input type="checkbox" id="dv-robot-export-files" checked />
-                打包轨迹文件夹 (ZIP)
+              <label class="dv-field dv-user-root" id="dv-user-root-wrap" hidden>
+                <span>{{ workspaceText('Local data directory', '本地数据目录') }} <b>*</b></span>
+                <input type="text" id="dv-user-source-root" class="dv-input"
+                  placeholder="/home/motions or /home/motions/sub10_largebox_000_export" />
+                <span class="hint">{{ workspaceText('Map an uploaded JSON manifest to its real local directory.', '将上传后的 JSON manifest 映射到真实本地目录。') }}</span>
               </label>
-              <span class="hint">取消勾选 → 仅导出选中 clip 的 JSON 清单</span>
+              <details class="dv-support-compact">
+                <summary>{{ workspaceText('Supported formats', '支持格式') }}</summary>
+                <div class="dv-format-grid" id="dv-format-grid"></div>
+              </details>
+              <input type="hidden" id="dv-source" value="" />
             </div>
-            <div class="dv-actions-grid">
-              <button type="button" class="btn" id="dv-human-basket" disabled>人体数据 → 批量篮子</button>
-              <button type="button" class="btn" id="dv-export-robot" disabled>导出机器人数据</button>
-              <button type="button" class="btn secondary" id="dv-export-json">导出 manifest (JSON)</button>
-              <button type="button" class="btn secondary" id="dv-clear-sel">清除手动选中</button>
+          </details>
+
+          <details id="dv-step-configure" class="video-workflow-step">
+            <summary class="video-workflow-step-summary">
+              <span>{{ workspaceText('2. Configure', '2. 分析配置') }}</span>
+            </summary>
+            <div class="video-workflow-step-body">
+              <div class="dv-toolbar data-analysis-config">
+                <label class="dv-field">
+                  <span>Embedding</span>
+                  <select id="dv-embedding">
+                    <option value="handcrafted">{{ workspaceText('Handcrafted features (recommended)', '档A · 手工特征（推荐）') }}</option>
+                    <option value="pae" disabled>{{ workspaceText('PAE (coming soon)', '档B · PAE（暂不可用）') }}</option>
+                  </select>
+                </label>
+                <label class="dv-check"><input type="checkbox" id="dv-force" /> {{ workspaceText('Ignore cache', '忽略缓存') }}</label>
+              </div>
             </div>
-            <div class="hint dv-clip-detail" id="dv-clip-detail"></div>
-          </div>
+          </details>
+
+          <details id="dv-step-analyze" class="video-workflow-step">
+            <summary class="video-workflow-step-summary">
+              <span>{{ workspaceText('3. Analyze', '3. 运行分析') }}</span>
+            </summary>
+            <div class="video-workflow-step-body">
+              <button class="btn" id="dv-analyze">{{ workspaceText('Start analysis', '开始分析') }}</button>
+              <div class="progress dv-progress" style="display:none" id="dv-progress"><div class="bar"></div></div>
+              <div class="dv-status" id="dv-status" role="status"></div>
+            </div>
+          </details>
+
+          <details id="dv-step-results" class="video-workflow-step">
+            <summary class="video-workflow-step-summary">
+              <span>{{ workspaceText('4. Results', '4. 分析结果') }}</span>
+            </summary>
+            <div class="video-workflow-step-body data-analysis-results-body">
+              <p id="dv-results-empty" class="hint data-analysis-results-empty">
+                {{ workspaceText('Run an analysis to view metrics, clusters, and recommended subsets.', '运行分析后可查看指标、聚类与推荐子集。') }}
+              </p>
+              <div class="dv-robot-preview" id="dv-robot-preview" hidden>
+                <label class="dv-field">
+                  <span>{{ workspaceText('Preview robot', '预览机器人') }}</span>
+                  <select id="dv-robot-select"></select>
+                </label>
+                <span class="hint" id="dv-robot-hint">{{ workspaceText('Select a point or row to preview the trajectory.', '点击散点或列表中的条目以预览轨迹。') }}</span>
+              </div>
+
+              <div id="dv-results" hidden>
+                <div class="dv-overview" id="dv-overview"></div>
+
+                <div class="dv-card">
+                  <div class="dv-card-head">
+                    <span class="dv-card-title" id="dv-stage1-title">Stage I · 标签</span>
+                    <div class="dv-tagmode">
+                      <label><input type="radio" name="dv-tagmode" value="or" checked /> OR</label>
+                      <label><input type="radio" name="dv-tagmode" value="and" /> AND</label>
+                      <button type="button" class="btn-link" id="dv-clear-tags">清除</button>
+                    </div>
+                  </div>
+                  <div class="dv-chips" id="dv-chips"></div>
+                  <div class="dv-info-panel" id="dv-tag-info" hidden></div>
+                </div>
+
+                <div class="dv-card">
+                  <div class="dv-card-head">
+                    <span class="dv-card-title" id="dv-explore-title">探索 · 指标分布</span>
+                    <button type="button" class="btn-link" id="dv-clear-brush">清除刷选</button>
+                  </div>
+                  <div class="dv-row dv-row-tight">
+                    <select id="dv-view-dim" class="dv-select dv-select-grow"></select>
+                  </div>
+                  <div class="dv-info-panel dv-info-compact" id="dv-metric-info"></div>
+                  <div class="dv-chart-wrap">
+                    <canvas id="dv-hist-canvas" class="dv-canvas" width="640" height="240"></canvas>
+                  </div>
+                  <div class="dv-chart-footer">
+                    <span class="dv-chart-stats" id="dv-hist-stats"></span>
+                    <span class="hint" id="dv-hist-axis-hint"></span>
+                  </div>
+                </div>
+
+                <div class="dv-card">
+                  <div class="dv-card-head">
+                    <span class="dv-card-title" id="dv-stage2-title">Stage II · 语义散点</span>
+                    <button type="button" class="btn secondary small" id="dv-scatter-reset">默认视角</button>
+                  </div>
+                  <div class="dv-scatter-wrap">
+                    <canvas id="dv-scatter-canvas" class="dv-canvas dv-scatter" width="640" height="400"></canvas>
+                    <div class="dv-scatter-tip" id="dv-scatter-tip" hidden></div>
+                  </div>
+                  <div class="dv-scatter-toolbar">
+                    <span class="hint">滚轮缩放 · 拖拽平移 · 点击预览 · 非推荐点可手动补选 · Shift 多选</span>
+                    <div class="dv-legend" id="dv-legend"></div>
+                  </div>
+                  <div class="dv-clip-list-wrap">
+                    <div class="dv-list-head">
+                      <span>刷选结果</span>
+                      <span class="hint" id="dv-list-count"></span>
+                    </div>
+                    <div class="dv-clip-list" id="dv-clip-list"></div>
+                  </div>
+                </div>
+
+                <div class="dv-card dv-card-stage3">
+                  <div class="dv-card-head">
+                    <span class="dv-card-title" id="dv-stage3-title">Stage III · 子集推荐</span>
+                  </div>
+                  <div class="dv-slider-block">
+                    <div class="dv-slider-row">
+                      <label class="dv-slider-label">想要导出多少的子集</label>
+                      <span class="dv-slider-val" id="dv-subset-pct">10%</span>
+                    </div>
+                    <input type="range" id="dv-subset-ratio" class="dv-range" min="1" max="100" value="10" />
+                  </div>
+                  <div class="dv-slider-block">
+                    <div class="dv-slider-row">
+                      <label class="dv-slider-label">多样性 α
+                        <span class="dv-tip" title="α 越大越重视 embedding 空间多样性；越小越偏向高复杂度 clip">?</span>
+                      </label>
+                      <span class="dv-slider-val" id="dv-subset-alpha-val">0.99</span>
+                    </div>
+                    <input type="range" id="dv-subset-alpha" class="dv-range" min="50" max="100" value="99" />
+                    <p class="hint dv-alpha-hint" id="dv-alpha-hint">α=0.99：优先选彼此差异大的 clip；降低 α 会更偏向高动态动作。</p>
+                  </div>
+                  <div class="dv-selbar" id="dv-selbar"></div>
+                  <div class="dv-robot-export-opts" id="dv-robot-export-opts" hidden>
+                    <label class="dv-check">
+                      <input type="checkbox" id="dv-robot-export-files" checked />
+                      打包轨迹文件夹 (ZIP)
+                    </label>
+                    <span class="hint">取消勾选 → 仅导出选中 clip 的 JSON 清单</span>
+                  </div>
+                  <div class="dv-actions-grid">
+                    <button type="button" class="btn" id="dv-human-basket" disabled>人体数据 → 批量篮子</button>
+                    <button type="button" class="btn" id="dv-export-robot" disabled>导出机器人数据</button>
+                    <button type="button" class="btn secondary" id="dv-export-json">导出 manifest (JSON)</button>
+                    <button type="button" class="btn secondary" id="dv-clear-sel">清除手动选中</button>
+                  </div>
+                  <div class="hint dv-clip-detail" id="dv-clip-detail"></div>
+                </div>
+              </div>
+            </div>
+          </details>
         </div>
       </section>
       </div>

@@ -29,13 +29,13 @@ describe('SidebarNavigation', () => {
     expect(wrapper.emitted('request')).toEqual([['h2r']])
   })
 
-  it('adds full-workspace analysis destinations in application mode', () => {
+  it('exposes a single data-analysis destination in application mode', () => {
     const wrapper = mount(SidebarNavigation, {
       props: { activePanel: 'motion', workspace: true, locale: 'en' },
     })
     mountedWrappers.push(wrapper)
 
-    expect(wrapper.get('[data-panel="dataset-viz"]').text()).toContain('Manual Analysis')
+    expect(wrapper.get('[data-panel="dataset-viz"]').text()).toContain('Data Analysis')
     expect(wrapper.findAll('.nav-group-label')).toHaveLength(0)
     expect(wrapper.findAll('[role="group"]').map((item) => item.attributes('aria-label'))).toEqual([
       'Assets',
@@ -43,11 +43,9 @@ describe('SidebarNavigation', () => {
       'Analysis',
       'Help',
     ])
-    const pae = wrapper.findAll<HTMLButtonElement>('.nav-item')
-      .find((item) => item.text().includes('PAE Analysis'))
     const videoToMotion = wrapper.findAll<HTMLButtonElement>('.nav-item')
       .find((item) => item.text().includes('Video → Motion'))
-    expect(pae?.attributes('disabled')).toBeDefined()
+    expect(wrapper.text()).not.toContain('PAE Analysis')
     expect(wrapper.find('[data-panel="video"]').exists()).toBe(false)
     expect(videoToMotion?.attributes('disabled')).toBeUndefined()
     expect(videoToMotion?.attributes('data-panel')).toBe('video-to-motion')

@@ -68,15 +68,15 @@ const PANEL_COMMANDS: ReadonlyArray<{
     shortcut: 'Alt+7', menu: 'workflows',
   },
   {
-    panel: 'h2r', label: 'Human to Robot (H2R)', detail: '人体动作重映射到机器人',
-    enLabel: 'Human to Robot (H2R)', enDetail: 'Retarget human motion to a robot',
-    zhLabel: '人体到机器人 (H2R)', zhDetail: '将人体动作重映射到机器人',
+    panel: 'h2r', label: 'Human to Robot', detail: '人体动作重映射到机器人',
+    enLabel: 'Human to Robot', enDetail: 'Retarget human motion to a robot',
+    zhLabel: '人体到机器人', zhDetail: '将人体动作重映射到机器人',
     shortcut: 'Alt+3', menu: 'workflows',
   },
   {
-    panel: 'r2r', label: 'Robot to Robot (R2R)', detail: '机器人轨迹跨本体重映射',
-    enLabel: 'Robot to Robot (R2R)', enDetail: 'Retarget trajectories across robot embodiments',
-    zhLabel: '机器人到机器人 (R2R)', zhDetail: '在不同机器人本体间重映射轨迹',
+    panel: 'r2r', label: 'Robot to Robot', detail: '机器人轨迹跨本体重映射',
+    enLabel: 'Robot to Robot', enDetail: 'Retarget trajectories across robot embodiments',
+    zhLabel: '机器人到机器人', zhDetail: '在不同机器人本体间重映射轨迹',
     shortcut: 'Alt+4', menu: 'workflows',
   },
   {
@@ -86,9 +86,9 @@ const PANEL_COMMANDS: ReadonlyArray<{
     shortcut: 'Alt+5', menu: 'workflows',
   },
   {
-    panel: 'dataset-viz', label: 'Manual Analysis', detail: '数据集可视化与手动分析',
-    enLabel: 'Manual Analysis', enDetail: 'Visualize and inspect motion datasets',
-    zhLabel: '手动分析', zhDetail: '可视化并检查动作数据集',
+    panel: 'dataset-viz', label: 'Data Analysis', detail: '分析动作与机器人轨迹数据',
+    enLabel: 'Data Analysis', enDetail: 'Analyze motion and robot trajectory datasets',
+    zhLabel: '数据分析', zhDetail: '分析动作与机器人轨迹数据',
     shortcut: 'Alt+6', menu: 'analysis',
   },
 ]
@@ -242,16 +242,6 @@ export function createApplicationCommands(
 
   if (context.applicationMode) {
     commands.push({
-      id: 'analysis-pae',
-      group: localize(locale, 'Analysis', '分析'),
-      label: 'PAE Analysis',
-      detail: localize(locale, 'Automated PAE analysis workflow', 'PAE 自动分析流程'),
-      keywords: 'pae analysis 自动 分析',
-      menu: 'analysis',
-      enabled: false,
-      disabledReason: localize(locale, 'Coming soon', '即将推出'),
-      run: () => undefined,
-    }, {
       id: 'help-tutorial',
       group: localize(locale, 'Help', '帮助'),
       label: localize(locale, 'Tutorial', '操作教程'),

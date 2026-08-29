@@ -222,6 +222,20 @@ export interface VideoToMotionStateDetail {
   result: VideoToMotionResultSummary | null
 }
 
+export type DataAnalysisKind = 'human' | 'robot' | 'mixed' | 'unknown'
+
+export type DataAnalysisStage = 'idle' | 'uploading' | 'running' | 'completed' | 'failed'
+
+/** Minimal renderer state for the dataset-analysis workflow navigation. */
+export interface DataAnalysisStateDetail {
+  dataKind: DataAnalysisKind
+  clipCount: number
+  stage: DataAnalysisStage
+  progress: number
+  message: string
+  hasResults: boolean
+}
+
 export interface PlaybackCommandDetail {
   action: PlaybackAction
   value?: number
@@ -337,6 +351,16 @@ export interface CalibrationStatus {
 
 export type MotionCategory = 'motion' | 'object' | 'terrain'
 
+/**
+ * Pipeline-level meaning of a library item.
+ *
+ * A human motion is a skeleton/body-space reference consumed by H2R. A robot
+ * trajectory contains root pose plus source-robot DoF samples and is consumed
+ * by R2R. Keeping this separate from `motion_category` prevents a visually
+ * similar clip from crossing workflow boundaries.
+ */
+export type LibraryAssetKind = 'human_motion' | 'robot_trajectory'
+
 export interface LibraryEntry {
   dataset?: string
   folder_label?: string
@@ -354,6 +378,8 @@ export interface LibraryEntry {
   suggested_backend?: string
   /** Stable backend-provided UX category; never infer it from dataset labels. */
   motion_category?: MotionCategory
+  /** Stable backend-provided pipeline boundary. */
+  asset_kind?: LibraryAssetKind
 }
 
 export interface LibraryResponse {
@@ -827,6 +853,7 @@ export type ApiPostResponse<Url extends string> =
         : Url extends '/api/r2r/calibration/session' ? CalibrationSession
           : Url extends '/api/scaled_preview' ? ScaledPreviewResponse
             : Url extends '/api/motion/load_library' ? JobStartResponse
+              : Url extends '/api/r2r/source/library' ? JobStartResponse
               : Url extends '/api/dataset/preview_robot' ? JobStartResponse
                 : Url extends '/api/dataset/analyze' ? JobStartResponse
                   : Url extends '/api/retarget' ? JobStartResponse
@@ -868,6 +895,9 @@ export interface HhAppBridge {
   API: ApiClient
   toast: (message: string, isError?: boolean) => void
   loadLibraryEntry: (entry: LibraryEntry) => Promise<void>
+  loadHumanMotionEntry: (entry: LibraryEntry) => Promise<void>
+  loadR2rLibraryEntry: (entry: LibraryEntry) => Promise<void>
+  pickR2rTrajectory: (options?: { folder?: boolean }) => Promise<void>
   previewRobotClip: (
     entry: LibraryEntry,
     robotName?: string,

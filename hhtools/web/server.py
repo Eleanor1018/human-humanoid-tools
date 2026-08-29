@@ -65,7 +65,7 @@ _log = logging.getLogger(__name__)
 
 # Bump when static/ front-end behaviour changes.  Injected into ``index.html``
 # at serve time so collaborators only need to pull + restart (no triple-sync).
-UI_BUILD_ID = "20260828-curated-robot-icons"
+UI_BUILD_ID = "20260830-r2r-motion-boundary"
 
 _UPLOAD_CHUNK_BYTES = 1024 * 1024
 # These are application-level resource controls, not transport tuning knobs.
@@ -2305,6 +2305,30 @@ def create_app(
 
     @app.post("/api/motion/load_library")
     async def load_library(body: dict) -> dict:
+        if body.get("usage") == "human_to_robot":
+            from hhtools.web.motion_library_links import library_entry_for_load
+            from hhtools.web.r2r_upload_resolve import _is_robot_export_trajectory
+
+            try:
+                entry = library_entry_for_load(
+                    dataset=str(body.get("dataset") or "unknown"),
+                    folder_label=str(body.get("folder_label") or ""),
+                    sequence_id=str(body.get("sequence_id") or ""),
+                    source_path=str(body.get("source_path") or ""),
+                )
+            except (FileNotFoundError, ValueError) as err:
+                raise HTTPException(status_code=422, detail=str(err)) from err
+            if (
+                str(body.get("dataset") or "").casefold() in {"robot", "r2r"}
+                or _is_robot_export_trajectory(entry.source_path)
+            ):
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "人体到机器人工作流只接受人体动作；机器人关节轨迹请使用"
+                        "机器人到机器人工作流。"
+                    ),
+                )
         job = _schedule_job(
             "motion_load", body, _run_motion_library_job, args=(body,),
         )
@@ -3739,6 +3763,48 @@ def create_app(
                 admission.cancel()
                 shutil.rmtree(drop, ignore_errors=True)
 
+    @app.post("/api/r2r/source/library")
+    async def r2r_source_library(body: dict) -> dict:
+        """Load one existing robot trajectory without crossing into H2R data."""
+        from hhtools.web.motion_library_links import library_entry_for_load
+        from hhtools.web.r2r_upload_resolve import r2r_clip_ref_for_path
+
+        source_robot = str(body.get("source_robot") or "").strip()
+        if not source_robot:
+            raise HTTPException(status_code=400, detail="source_robot is required")
+        try:
+            entry = library_entry_for_load(
+                dataset=str(body.get("dataset") or "unknown"),
+                folder_label=str(body.get("folder_label") or ""),
+                sequence_id=str(body.get("sequence_id") or ""),
+                source_path=str(body.get("source_path") or ""),
+            )
+            profile = str(body.get("upload_profile") or body.get("profile") or "auto")
+            clip_ref = r2r_clip_ref_for_path(entry.source_path, profile)
+            source_fps = _parse_optional_fps(body.get("source_fps"))
+        except (FileNotFoundError, TypeError, ValueError) as err:
+            raise HTTPException(status_code=422, detail=str(err)) from err
+
+        job = _schedule_job(
+            "r2r_source_library",
+            {
+                "source_robot": source_robot,
+                "profile": clip_ref.profile,
+                "source_fps": source_fps,
+                "source_path": str(clip_ref.path),
+            },
+            _run_r2r_source_upload_job,
+            args=(
+                clip_ref.path.parent,
+                source_robot,
+                clip_ref.profile,
+                state,
+                source_fps,
+                clip_ref.path,
+            ),
+        )
+        return {"job_id": job.id}
+
     @app.get("/api/r2r/scene_glb")
     def r2r_scene_glb(token: str, mesh: str, scale: float | None = None) -> Response:
         """Serve an interaction-object mesh from an uploaded R2R clip folder."""
@@ -4049,6 +4115,14 @@ def _enrich_basket_entry(entry: dict, fallback: str = "smpl") -> dict:
     # Keep category semantics on the API boundary. The renderer must not infer
     # object/terrain workflows from volatile adapter or folder display names.
     out["motion_category"] = infer_motion_category(out)
+    explicit_kind = str(out.get("asset_kind") or "").strip().casefold()
+    if explicit_kind in {"human_motion", "robot_trajectory"}:
+        out["asset_kind"] = explicit_kind
+    else:
+        dataset = str(out.get("dataset") or "").strip().casefold()
+        out["asset_kind"] = (
+            "robot_trajectory" if dataset in {"robot", "r2r"} else "human_motion"
+        )
     return out
 
 
@@ -4556,14 +4630,16 @@ def _run_r2r_source_upload_job(
     profile: str,
     state: SessionState,
     source_fps: float | None = None,
+    selected_path: Path | None = None,
 ) -> None:
     from hhtools.retarget import robot_to_robot as r2r
+    from hhtools.web.r2r_export_bundle import clip_has_export_scene
     from hhtools.web.r2r_upload_resolve import (
         detect_r2r_profile,
         enumerate_r2r_clips,
+        r2r_clip_ref_for_path,
         validate_r2r_upload,
     )
-    from hhtools.web.r2r_export_bundle import clip_has_export_scene
     from hhtools.web.serialize import (
         serialize_motion_skeleton_preview,
         serialize_robot_trajectory,
@@ -4572,14 +4648,18 @@ def _run_r2r_source_upload_job(
     try:
         job.progress = 0.02
         job.message = "正在识别轨迹格式…"
-        validate_r2r_upload(drop, profile)
-        prof = (profile or "auto").strip().lower()
-        if prof == "auto":
-            prof = detect_r2r_profile(drop)
-        clips = enumerate_r2r_clips(drop, prof)
-        if not clips:
-            raise ValueError("no robot trajectory clip found under upload")
-        clip_ref = clips[0]
+        if selected_path is not None:
+            clip_ref = r2r_clip_ref_for_path(selected_path, profile)
+            prof = clip_ref.profile
+        else:
+            validate_r2r_upload(drop, profile)
+            prof = (profile or "auto").strip().lower()
+            if prof == "auto":
+                prof = detect_r2r_profile(drop)
+            clips = enumerate_r2r_clips(drop, prof)
+            if not clips:
+                raise ValueError("no robot trajectory clip found under upload")
+            clip_ref = clips[0]
         picked = clip_ref.path
         stem = picked.stem
         clip_dir = picked.parent
@@ -4721,6 +4801,7 @@ def _r2r_entry_from_upload(drop_dir: Path, ref) -> dict:
 
     return {
         "dataset": "r2r",
+        "asset_kind": "robot_trajectory",
         "folder_label": folder_by_profile.get(prof, "r2r"),
         "sequence_id": sequence_id,
         "source_path": str(picked),

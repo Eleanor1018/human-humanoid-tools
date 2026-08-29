@@ -298,3 +298,36 @@ def test_library_api_exposes_stable_motion_category(
 
     assert response.status_code == 200
     assert response.json()["entries"][0]["motion_category"] == "object"
+    assert response.json()["entries"][0]["asset_kind"] == "human_motion"
+
+
+def test_library_api_exposes_robot_trajectory_asset_boundary(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    app = _create_app(tmp_path, monkeypatch)
+    clip = tmp_path / "robot-exports" / "walk.csv"
+    clip.parent.mkdir(parents=True)
+    clip.write_text("root_x,root_y,root_z,dof_0\n0,0,1,0\n", encoding="utf-8")
+
+    from hhtools.viewer import library as viewer_library
+    from hhtools.web import motion_library_links
+
+    monkeypatch.setattr(viewer_library, "scan_library", lambda _root: [])
+    monkeypatch.setattr(
+        motion_library_links,
+        "scan_motions_library",
+        lambda _root=None: [{
+            "dataset": "robot",
+            "folder_label": "G1 exports",
+            "sequence_id": "walk.csv",
+            "stem": "walk",
+            "source_path": str(clip),
+        }],
+    )
+
+    with _local_client(app) as client:
+        response = client.get("/api/library")
+
+    assert response.status_code == 200
+    assert response.json()["entries"][0]["asset_kind"] == "robot_trajectory"
