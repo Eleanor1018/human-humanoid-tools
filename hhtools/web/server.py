@@ -110,7 +110,6 @@ _UPLOAD_ENDPOINTS = frozenset(
         "/api/r2r/basket/upload",
     }
 )
-
 # Datasets whose adapters accept ``with_mesh=True`` (SMPL forward → baked vertices).
 # The web UI always requests mesh so AMASS / Motion-X etc. show a real body surface,
 # not just a stick skeleton (matches Viser's "Skinned mesh" path).
@@ -143,6 +142,7 @@ _DATASET_TO_REFERENCE: dict[str, str] = {
     "xsens_mocap": "xsens_mocap",
     "gvhmr": "gvhmr",
     "omomo": "smplx",
+    "omnicontact": "lafan_bvh",
     "meshmimic_holosoma": "smplx",
     "glb": "glb",
     "unified_npz": "smpl",
@@ -1517,6 +1517,7 @@ def create_app(
                 {"ext": ".npz", "label": "AMASS / SMPL-H,X poses", "needs": "smpl-weights"},
                 {"ext": ".npy", "label": "Motion-X / holosoma", "needs": "smpl / terrain.obj"},
                 {"ext": ".pkl", "label": "OMOMO (interaction)", "needs": "object .obj sidecar"},
+                {"ext": ".bvh", "label": "OmniContact (HOI mocap)", "needs": "object CSV + optional assets/"},
                 {"ext": ".pt", "label": "GVHMR", "needs": "smpl-weights"},
             ],
             "registered_loaders": exts,
@@ -1711,6 +1712,19 @@ def create_app(
         summary = _da.scan_upload_summary(drop)
         return summary
 
+    @app.post("/api/dataset/scan")
+    def dataset_scan(body: dict) -> dict:
+        """Scan a server-local directory without copying files into /tmp."""
+        from hhtools.web import dataset_analysis as _da
+
+        raw = str(body.get("source") or "").strip()
+        if not raw:
+            raise HTTPException(status_code=400, detail="请填写本机目录路径")
+        root = Path(raw).expanduser()
+        if not root.is_dir():
+            raise HTTPException(status_code=400, detail=f"目录不存在：{root}")
+        return _da.scan_upload_summary(root.resolve())
+
     @app.post("/api/dataset/upload/remove")
     async def dataset_upload_remove(body: dict) -> dict:
         from hhtools.web import dataset_analysis as _da
@@ -1870,6 +1884,12 @@ def create_app(
                 else None
             )
             dataset = infer_mimic_dataset(source_path, bone_names=bone_names)
+            if dataset == "omnicontact":
+                from hhtools.io.bvh_detect import infer_bvh_dataset_from_joints
+
+                detected = infer_bvh_dataset_from_joints(motion.hierarchy.bone_names)
+                if detected and detected in _DATASET_TO_REFERENCE:
+                    return _DATASET_TO_REFERENCE[detected]
         elif str(motion.source_format) == "bvh":
             from hhtools.io.bvh_detect import infer_bvh_dataset_from_joints
 
@@ -2321,6 +2341,43 @@ def create_app(
             if not scheduled:
                 admission.cancel()
                 shutil.rmtree(drop, ignore_errors=True)
+
+    @app.post("/api/basket/scan")
+    def basket_scan(body: dict) -> dict:
+        """Enumerate Human2Robot clips on a server-local path (no copy)."""
+        from hhtools.web.upload_resolve import enumerate_upload_clips
+
+        raw = str(body.get("source") or "").strip()
+        profile = str(body.get("profile") or "auto").strip() or "auto"
+        if not raw:
+            raise HTTPException(status_code=400, detail="请填写本机目录路径")
+        root = Path(raw).expanduser()
+        if not root.is_dir():
+            raise HTTPException(status_code=400, detail=f"目录不存在：{root}")
+        root = root.resolve()
+        clips = enumerate_upload_clips(root, profile)
+        if not clips:
+            raise HTTPException(
+                status_code=400,
+                detail="未找到可识别的动作 clip（OmniContact 需要 motion_actor.bvh）",
+            )
+        entries = [
+            _library_entry_from_upload(
+                root,
+                ref.path,
+                ref.dataset,
+                ref.profile,
+                upload_profile=ref.profile,
+                clip_kind=ref.clip_kind,
+            )
+            for ref in clips
+        ]
+        return {
+            "entries": entries,
+            "clip_count": len(entries),
+            "source": str(root),
+            "profile": profile,
+        }
 
     @app.post("/api/motion/upload")
     async def upload_motion(
@@ -3939,6 +3996,34 @@ def create_app(
                 admission.cancel()
                 shutil.rmtree(drop, ignore_errors=True)
 
+    @app.post("/api/r2r/basket/scan")
+    def r2r_basket_scan(body: dict) -> dict:
+        """Enumerate R2R clips on a server-local path (no copy)."""
+        from hhtools.web.r2r_upload_resolve import enumerate_r2r_clips, validate_r2r_upload
+
+        raw = str(body.get("source") or "").strip()
+        profile = str(body.get("profile") or "auto").strip() or "auto"
+        if not raw:
+            raise HTTPException(status_code=400, detail="请填写本机目录路径")
+        root = Path(raw).expanduser()
+        if not root.is_dir():
+            raise HTTPException(status_code=400, detail=f"目录不存在：{root}")
+        root = root.resolve()
+        try:
+            validate_r2r_upload(root, profile)
+        except ValueError as err:
+            raise HTTPException(status_code=400, detail=str(err)) from err
+        clips = enumerate_r2r_clips(root, profile)
+        if not clips:
+            raise HTTPException(status_code=400, detail="未找到可识别的机器人轨迹 clip")
+        entries = [_r2r_entry_from_upload(root, ref) for ref in clips]
+        return {
+            "entries": entries,
+            "clip_count": len(entries),
+            "source": str(root),
+            "profile": profile,
+        }
+
     @app.post("/api/r2r/batch/retarget")
     async def r2r_batch_retarget(body: dict) -> dict:
         job = _schedule_job(
@@ -4076,9 +4161,11 @@ def _library_entry_from_upload(
         rel = picked.relative_to(drop_dir)
         sequence_id = rel.as_posix()
         stem = picked.parent.name if picked.parent.name == picked.stem else picked.stem
+        if picked.stem.lower() == "motion_actor":
+            stem = picked.parent.name or stem
     except ValueError:
         sequence_id = picked.name
-        stem = picked.stem
+        stem = picked.parent.name if picked.stem.lower() == "motion_actor" else picked.stem
     return _enrich_basket_entry({
         "dataset": dataset or "unknown",
         "folder_label": folder_label,
@@ -5615,6 +5702,16 @@ def _load_via_adapter(path: Path):
     """Best-effort dataset-adapter load for non-io.base extensions."""
     suf = path.suffix.lower()
     try:
+        if suf == ".bvh":
+            from hhtools.io.mimic_detect import is_omnicontact_capture
+
+            if is_omnicontact_capture(path):
+                from hhtools.io.datasets.omnicontact import OmniContactAdapter
+
+                return (
+                    OmniContactAdapter(root=path.parent).load_motion(path.name),
+                    "omnicontact",
+                )
         if suf == ".pkl":
             from hhtools.io.datasets.omomo import OmomoAdapter
             from hhtools.io.datasets.parc_ms import ParcMsAdapter
@@ -5980,7 +6077,11 @@ def _compute_scaled_scene(
     scaler = HumanToRobotScaler(
         motion.hierarchy, scaler_cfg, human_height=float(human_height),
     )
-    ik_canons = frozenset(model.preset.ik_map.keys()) if model.preset.ik_map else frozenset()
+    from hhtools.robot.ik_map_policy import ik_map_canonicals_for_motion
+
+    ik_canons = ik_map_canonicals_for_motion(
+        model.preset.name, model.preset.ik_map, motion,
+    )
     ratio = float(
         uniform_overlay_scale_for_motion(
             scaler_cfg, float(human_height), motion, ik_map_keys=ik_canons,

@@ -57,6 +57,9 @@ _DIR_TO_ADAPTER: dict[str, str] = {
     "kungfu": "kungfu_athlete",
     "kungfuathlete": "kungfu_athlete",
     "omomo": "omomo",
+    "omnicontact": "omnicontact",
+    "omnicontactdataset": "omnicontact",
+    "raw_mocap": "omnicontact",
     # meshmimic sub-sources: every folder under `meshmimic/<source>/<clip>/<clip>.npy`
     # registers as its own dataset bucket so UI labels stay clean
     # ("holosoma · parkour_1" etc.) and different sources can coexist with
@@ -113,7 +116,31 @@ class LibraryEntry:
 
     @property
     def stem(self) -> str:
-        return Path(self.sequence_id).stem
+        raw = Path(self.sequence_id).stem
+        # OmniContact ships every capture as ``motion_actor.bvh``; use the
+        # capture-id folder so library labels / cache names stay unique.
+        if raw.lower() == "motion_actor":
+            parent = self.source_path.parent
+            case = parent.parent.name
+            capture = parent.name
+            dataset_like = {
+                "raw_mocap", "box", "soccer",
+                "omnicontact", "omnicontactdataset",
+            }
+            if capture.startswith("case") or _normalise_dirname(case) in dataset_like:
+                return capture or raw
+            if case:
+                return f"{case}_{capture}"
+            return capture or raw
+        return raw
+
+    @property
+    def search_key(self) -> str:
+        """Lower-cased haystack used by :func:`filter_entries`."""
+        extra = ""
+        if self.dataset == "omnicontact":
+            extra = " ".join(self.source_path.parts[-5:-1])
+        return f"{self.folder_label} {self.stem} {extra}".lower()
 
     @property
     def adapter_sequence_id(self) -> str:
@@ -129,11 +156,6 @@ class LibraryEntry:
     def display_label(self) -> str:
         """Tree-style label shown in the UI (folder · stem)."""
         return f"{self.folder_label} · {self.stem}"
-
-    @property
-    def search_key(self) -> str:
-        """Lower-cased haystack used by :func:`filter_entries`."""
-        return f"{self.folder_label} {self.stem}".lower()
 
 
 def _normalise_dirname(name: str) -> str:
@@ -221,6 +243,10 @@ def scan_library(source_root: str | Path) -> list[LibraryEntry]:
             for fname in sorted(filenames):
                 suffix = Path(fname).suffix.lower()
                 if suffix not in _SUPPORTED_EXTS:
+                    continue
+                # Official OmniContact trees also ship G1 ``npz/`` trajectories;
+                # those are robot qpos, not the human adapter input.
+                if adapter_name == "omnicontact" and fname.lower() != "motion_actor.bvh":
                     continue
                 if suffix == ".pkl" and Path(fname).stem in primary_stems:
                     # sidecar — owned by the primary clip in this dir

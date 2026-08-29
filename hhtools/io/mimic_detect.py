@@ -11,6 +11,7 @@ Registered mimic datasets (see :data:`hhtools.viewer.library._DIR_TO_ADAPTER`):
 
 * ``amass``, ``motion_x``, ``phuma`` — SMPL-family parameter files
 * ``soma``, ``lafan``, ``xsens_mocap`` — BVH dialects
+* ``omnicontact`` — OmniContact-Dataset ``motion_actor.bvh`` + object CSV
 * ``gvhmr``, ``kungfu_athlete`` — HMR4D ``.pt`` results
 * ``meshmimic_holosoma`` — holosoma ``.npy`` + ``source.yaml``
 * ``unified_npz`` — hhtools internal NPZ schema
@@ -27,7 +28,15 @@ from hhtools.viewer.library import _DIR_TO_ADAPTER, _normalise_dirname
 _SOURCE_MANIFEST = "source.yaml"
 
 
-def path_dataset_hint(path: Path, *, depth: int = 4) -> str | None:
+def is_omnicontact_capture(path: Path) -> bool:
+    """True for an OmniContact ``motion_actor.bvh`` (or its capture directory)."""
+    path = Path(path)
+    if path.is_dir():
+        return (path / "motion_actor.bvh").is_file()
+    return path.is_file() and path.name.lower() == "motion_actor.bvh"
+
+
+def path_dataset_hint(path: Path, *, depth: int = 6) -> str | None:
     """Map ancestor folder names to a registered adapter name."""
     current = path.parent
     for _ in range(depth):
@@ -172,6 +181,8 @@ def infer_mimic_dataset(
     if suf in (".glb", ".gltf"):
         return "glb"
     if suf == ".bvh":
+        if is_omnicontact_capture(path) or hint == "omnicontact":
+            return "omnicontact"
         from hhtools.io.bvh_detect import infer_bvh_dataset
 
         return infer_bvh_dataset(path, bone_names=bone_names)

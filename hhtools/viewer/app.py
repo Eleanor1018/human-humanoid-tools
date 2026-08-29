@@ -146,6 +146,16 @@ def _suggested_calibration_reference(
         # mismatches bind proportions and breaks scaler rest + scale preview.
         if ds == "omomo" or ds.startswith("meshmimic"):
             return "smpl"
+        if ds == "omnicontact":
+            from hhtools.retarget.newton_basic.human_aliases import list_detected_rig_type
+
+            rig = list_detected_rig_type(motion.hierarchy.bone_names)
+            return {
+                "SOMA BVH": "soma_bvh",
+                "Mixamo/CMU/LAFAN": "lafan_bvh",
+                "MOCAP BVH (Spine3 chest)": "mocap_bvh",
+                "Xsens mocap BVH": "xsens_mocap",
+            }.get(rig, "lafan_bvh")
     # Prefer the library row's *authored* file (``.glb``) for format;
     # ``source_path`` from callers is often a converted cache ``.npz`` and would
     # miss the extension-based ``glb`` hint.
@@ -195,8 +205,9 @@ def _dataset_defaults_to_interaction_mesh(
 
     Detection layers, in order:
 
-    1. **Adapter dataset name** — ``omomo`` and any ``meshmimic*`` flavour
-       always need MPC-SQP because they ship terrain / object props.
+    1. **Adapter dataset name** — ``omomo`` / ``omnicontact`` and any
+       ``meshmimic*`` flavour always need MPC-SQP because they ship
+       terrain / object props.
     2. **Source-path grouping segment** — ``intermimic/<adapter>/...`` and
        ``meshmimic/<adapter>/...`` are the conventional library layouts for
        human-object / human-terrain interaction clips
@@ -217,7 +228,7 @@ def _dataset_defaults_to_interaction_mesh(
     """
 
     ds = (dataset or "").lower()
-    if ds == "omomo":
+    if ds in {"omomo", "omnicontact"}:
         return True
     if ds.startswith("meshmimic"):
         return True
@@ -2774,11 +2785,14 @@ def _build_robot_tab(  # type: ignore[no-untyped-def]
         m = get_current_motion() if get_current_motion is not None else None
         if isinstance(m, Motion):
             mdl = state.get("current_model")
-            ik_keys = (
-                frozenset(mdl.preset.ik_map.keys())
-                if mdl is not None and hasattr(mdl, "preset")
-                else frozenset()
-            )
+            if mdl is not None and hasattr(mdl, "preset"):
+                from hhtools.robot.ik_map_policy import ik_map_canonicals_for_motion
+
+                ik_keys = ik_map_canonicals_for_motion(
+                    mdl.preset.name, mdl.preset.ik_map, m,
+                )
+            else:
+                ik_keys = frozenset()
             ratio = float(
                 uniform_overlay_scale_for_motion(
                     scaler_cfg, float(human_h), m, ik_map_keys=ik_keys,
@@ -3411,8 +3425,12 @@ def _build_robot_tab(  # type: ignore[no-untyped-def]
         )
 
         if _use_source_topology_scaled_preview(model, clip):
+            from hhtools.robot.ik_map_policy import ik_map_canonicals_for_motion
+
             jn = scaler.joint_names
-            ik_canons = frozenset(model.preset.ik_map.keys())
+            ik_canons = ik_map_canonicals_for_motion(
+                model.preset.name, model.preset.ik_map, clip,
+            )
             seg_s, seg_d = _scaler_skeleton_segment_indices(
                 jn, clip.hierarchy, ik_map_canonicals=ik_canons,
             )
@@ -3468,10 +3486,16 @@ def _build_robot_tab(  # type: ignore[no-untyped-def]
                 z_min_uniform = float(human_source_floor_z_world(clip))
                 src_pos_full[:, :, 2] -= z_min_uniform
                 src_pos_full *= smpl_scale
+                from hhtools.retarget.interaction_mesh.arm_reach import (
+                    maybe_boost_arm_reach_positions,
+                )
                 from hhtools.web.scaled_preview import (
                     resolve_scaled_overlay_z_correction,
                 )
 
+                src_pos_full = maybe_boost_arm_reach_positions(
+                    src_pos_full, clip, model,
+                )
                 z_corr = float(
                     resolve_scaled_overlay_z_correction(
                         clip, scaler, smpl_scale,

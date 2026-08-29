@@ -25,7 +25,7 @@ def list_datasets() -> None:
     if not datasets:
         _console.print(
             "[yellow]No dataset adapters have been implemented yet. The concrete adapters "
-            "(AMASS, Motion-X, OMOMO, GRAB, PHUMA, KungFuAthlete, Humanoid-X, GVHMR, LAFAN, SOMA) "
+            "(AMASS, Motion-X, OMOMO, OmniContact, GRAB, PHUMA, KungFuAthlete, Humanoid-X, GVHMR, LAFAN, SOMA) "
             "will be added in milestone M6.[/]"
         )
         return

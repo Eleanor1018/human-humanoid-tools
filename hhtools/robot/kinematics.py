@@ -107,6 +107,13 @@ def _side_of(lower: str) -> str:
         return "left"
     if re.search(r"(^|_)right(_|$)", lower) or lower.startswith("r_") or "_r_" in lower:
         return "right"
+    # Vendor suffix without a following ``_link``: ``LINK_HIP_PITCH_L``,
+    # ``J00_HIP_PITCH_R`` (T800).  ``_l_`` above already covers
+    # ``knee_pitch_l_link``.
+    if re.search(r"(^|_)l$", lower):
+        return "left"
+    if re.search(r"(^|_)r$", lower):
+        return "right"
     # PND / vendor camelCase: ``toeLeft``, ``shinRight``, ``shoulderPitchLeft``.
     if re.search(r"(?<=[a-z])(?:left|right)$", lower):
         return "right" if lower.endswith("right") else "left"
@@ -623,9 +630,17 @@ def _gimbal_smooth_masks_on_path(
     masks: dict[str, float] = {path[0]: 0.1}
     for link in path[1:3]:
         jn = km.joint_for_child.get(link, "").lower()
-        if "roll" in jn or "_r_" in jn or jn.endswith("_r"):
+        # Prefer explicit axis tokens.  A trailing ``_r`` / ``_y`` is a
+        # side tag on T800-style names (``J20_SHOULDER_YAW_R``), not roll/yaw.
+        if "roll" in jn:
             masks[link] = 1.0
-        elif "yaw" in jn or "_y_" in jn or jn.endswith("_y"):
+        elif "yaw" in jn:
+            masks[link] = 0.3
+        elif "pitch" in jn:
+            masks[link] = 0.1
+        elif "_r_" in jn or re.search(r"(^|_)r(_link|_joint)?$", jn):
+            masks[link] = 1.0
+        elif "_y_" in jn or re.search(r"(^|_)y(_link|_joint)?$", jn):
             masks[link] = 0.3
         else:
             masks[link] = 0.1

@@ -23,9 +23,9 @@
 ## 亮点
 
 - **快速重映射**：Web UI 或 **CLI**（`hhtools retarget` / `scripts/batch_*_retarget.py`）；**Newton IK** + **MPC-SQP** 交互网格。
-- **多源人体数据**：BVH / GLB / SMPL 系；适配 AMASS、GVHMR、LAFAN、100STYLE、OMOMO、PHUMA、intermimic、meshmimic 等。
+- **多源人体数据**：BVH / GLB / SMPL 系；适配 AMASS、GVHMR、LAFAN、100STYLE、OMOMO、OmniContact、PHUMA、intermimic、meshmimic 等。
 - **任意 URDF**：Web 上传任意其他机器人。拖入 URDF，拖入 mesh，自动识别，无需调参。
-- **机器人→机器人（R2R）**：已有机器人 CSV/PKL 轨迹重映射到新 URDF。
+- **机器人→机器人（R2R）**：已有机器人 CSV/PKL 轨迹重映射到新 URDF，含 [MotionDecode](https://huggingface.co/datasets/CMRobot/MotionDecode) 的 G1 CSV。
 - **数据集分析**：Web 端扫描、打标、聚类、子集推荐。
 
 **环境：** Linux，Python 3.12+；预览 CPU 即可，重映射需 **NVIDIA GPU（CUDA 12）**。
@@ -109,6 +109,8 @@ uv run hhtools import run --dataset lafan \
 uv run hhtools import run --dataset omomo \
   --root assets/motions/intermimic/OMOMO -o /tmp/omomo_npz \
   --sequence sub12_woodchair_000/sub12_woodchair_000.pkl
+uv run hhtools import run --dataset omnicontact \
+  --root /path/to/OmniContact-Dataset -o /tmp/omnicontact_npz
 ```
 
 **机器人**
@@ -130,7 +132,7 @@ uv run hhtools retarget run path/to/clip.npz \
   --robot unitree_g1__g1_29dof -o /tmp/out.csv \
   --calibration-reference smpl --limit-frames 30
 
-# Interaction-mesh（OMOMO / 带地形）
+# Interaction-mesh（OMOMO / OmniContact / 带地形）
 uv run hhtools retarget interaction-mesh run path/to/clip.pkl \
   --robot unitree_g1__g1_29dof -o /tmp/out_im.csv \
   --calibration-reference smpl --limit-frames 30
@@ -151,10 +153,14 @@ python scripts/batch_mimic_retarget.py \
   --in /path/to/100STYLE --out /path/to/100STYLE_rp1 \
   --skip-existing
 
-# intermimic（人–物）：omomo
+# intermimic（人–物）：omomo | omnicontact
 python scripts/batch_intermimic_retarget.py \
   --robot rp1 --dataset omomo \
   --in /path/to/OMOMO --out /path/to/OMOMO_rp1 \
+  --skip-existing
+python scripts/batch_intermimic_retarget.py \
+  --robot rp1 --dataset omnicontact \
+  --in /path/to/OmniContact-Dataset --out /path/to/OmniContact_rp1 \
   --skip-existing
 
 # meshmimic（地形）：parc_ms | holosoma
@@ -168,6 +174,12 @@ python scripts/batch_r2r_retarget.py \
   --source-robot rp1 --target-robot unitree_g1__g1_29dof \
   --in /path/to/rp1_exports --out /path/to/g1_from_rp1 \
   --profile auto --skip-existing
+
+# MotionDecode（Unitree G1 CSV，120 Hz；文件无 time / sample_rate）
+python scripts/batch_r2r_retarget.py \
+  --source-robot g1 --target-robot rp1 \
+  --in /path/to/MotionDecode/samples --out /path/to/MotionDecode_rp1 \
+  --source-fps 120 --skip-existing
 ```
 
 场景 clip → `<out>/<clip>/<clip>.csv` + 地形/物体 sidecar（机器人坐标系）。平坦 mimic → `<out>/…/<stem>.csv`。可用 `--t-start` / `--t-end`（秒，相对 Retarget 时间轴）只导出一段；Web 单条/批量导出也有对应选项。Interaction-mesh 需要 `mujoco` + `osqp`；Newton 需要 NVIDIA `newton` 包。R2R 需要目标机旁已有 `r2r_calibration_<source>.yaml`（先在 Web 标定，或 `--calibration` / `--init-zero-calibration`）。
@@ -226,10 +238,16 @@ smooth_joint_filter_masks:
 | mimic | PHUMA | [arXiv](https://arxiv.org/abs/2510.26236) | [GitHub](https://github.com/DAVIAN-Robotics/PHUMA) |
 | mimic | SOMA | [arXiv](https://arxiv.org/abs/2603.16858) | [Hugging Face](https://huggingface.co/datasets/bones-studio/seed) |
 | intermimic | OMOMO | [arXiv](https://arxiv.org/abs/2309.16237) | [Hugging Face](https://huggingface.co/datasets/YaojieShen/hhtools_omomo) |
+| intermimic | OmniContact-Dataset | [arXiv](https://arxiv.org/abs/2606.26201) | [Hugging Face](https://huggingface.co/datasets/lightcone02/OmniContact-Dataset) |
 | meshmimic | holosoma | [arXiv](https://arxiv.org/abs/2509.26633) | [GitHub](https://github.com/amazon-far/holosoma) |
 | meshmimic | PARC MS | [arXiv](https://arxiv.org/abs/2505.04002) | [Hugging Face](https://huggingface.co/datasets/YaojieShen/hhtools_parc_ms) |
+| R2R | [MotionDecode](https://huggingface.co/datasets/CMRobot/MotionDecode) | [官网](https://chingmudata.github.io/MotionDecode/) | [Hugging Face](https://huggingface.co/datasets/CMRobot/MotionDecode) |
 
 **100STYLE** 为 Xsens MVN 风格 BVH（60 fps 风格化步态）。将解压后的目录放到名为 `100STYLE`、`xsens` 或 `xsens_mocap` 的文件夹下（例如 `assets/motions/mimic/100STYLE/`），Web 动作库即可扫描到。机器人请用参考 `xsens_mocap` 标定一次——rest 是该格式的 T-pose，不是某条 clip 的第 0 帧。单独拖入 `.bvh` 时会按关节名自动识别。
+
+**OmniContact-Dataset** 为光学动捕人–物交互（通常 90 Hz）。请用官方 [`raw_mocap/`](https://huggingface.co/datasets/lightcone02/OmniContact-Dataset)（`motion_actor.bvh` + 物体位姿 CSV），不要用已经 retarget 到 G1 的 `npz/`。把 Hugging Face 根目录（或只把 `raw_mocap/`）放到名为 `OmniContact-Dataset` 的文件夹下，例如 `assets/motions/intermimic/OmniContact-Dataset/`。若旁边有 `assets/` 物体网格会自动匹配。重映射走 interaction-mesh（`hhtools retarget interaction-mesh` / `scripts/batch_intermimic_retarget.py --dataset omnicontact`）。默认标定参考为检测到的 BVH 方言（无法识别时用 `lafan_bvh`）。
+
+**MotionDecode**（[ChingMu](https://huggingface.co/datasets/CMRobot/MotionDecode)）在 `samples/` 下提供已重映射到 **Unitree G1** 的 CSV（120 Hz；`root_pos_{xyz}(m)` + `root_rot` **wxyz** + `dof_*(rad)`）。这是 **机器人→机器人** 源轨迹，不是人体 mocap 适配器：请用 Web 的 **Robot → Robot**（源机器人选 `g1`），或 `scripts/batch_r2r_retarget.py`。文件没有 `time` / `# sample_rate`，必须把 **源轨迹 FPS 设为 120**（Web「源轨迹 FPS」，或 `--source-fps 120`）；默认 50 Hz 会按错误速度播放和重映射。分类子目录会按 R2R mimic clip 扫描。使用数据时请注明来源为 ChingMu。
 
 ---
 

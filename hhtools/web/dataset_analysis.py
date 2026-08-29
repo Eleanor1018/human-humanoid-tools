@@ -18,6 +18,8 @@ from typing import Any, Callable
 ProgressCb = Callable[[float, str], None]
 
 _SOURCE_HINT_FILE = ".hhtools_source.json"
+# Bump when user-facing numeric metrics change so old manifests are not reused.
+_METRIC_CACHE_SCHEMA = 2
 
 
 def save_upload_source_hint(drop_dir: Path, user_source_root: str) -> None:
@@ -136,6 +138,8 @@ def _clip_folder_label(root: Path, clip_path: Path) -> str:
 
 def _clip_stem(root: Path, clip_path: Path) -> str:
     """Display stem; prefer clip-folder name when it matches the primary file."""
+    if clip_path.stem.lower() == "motion_actor":
+        return clip_path.parent.name or clip_path.stem
     if clip_path.parent.name == clip_path.stem:
         return clip_path.stem
     try:
@@ -187,6 +191,8 @@ def load_cached(
         return None
     if data.get("meta", {}).get("fingerprint") != _fingerprint(entries):
         return None
+    if data.get("meta", {}).get("metric_schema") != _METRIC_CACHE_SCHEMA:
+        return None
     return data
 
 
@@ -221,6 +227,7 @@ def run_analysis(
             "source_root": str(source_root),
             "embedding": embedding,
             "fingerprint": _fingerprint(entries),
+            "metric_schema": _METRIC_CACHE_SCHEMA,
             "generated_at": time.time(),
         },
         "clips": [c.to_dict() for c in clips],

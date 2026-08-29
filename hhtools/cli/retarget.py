@@ -48,11 +48,28 @@ def _load_input_motion(path: Path):
 
 
 def _load_motion_any(path: Path):
-    """Load :class:`~hhtools.core.motion.Motion` from NPZ/BVH/OMOMO ``.pkl`` / meshmimic ``.npy``."""
+    """Load :class:`~hhtools.core.motion.Motion` from NPZ/BVH/OMOMO ``.pkl`` / meshmimic ``.npy``.
+
+    OmniContact capture directories (containing ``motion_actor.bvh``) are
+    accepted in addition to the actor BVH path itself.
+    """
     from hhtools.io import load_motion
+    from hhtools.io.mimic_detect import is_omnicontact_capture
+
+    path = Path(path)
+    if path.is_dir() and is_omnicontact_capture(path):
+        from hhtools.io.datasets.omnicontact import OmniContactAdapter
+
+        return OmniContactAdapter(root=path).load_motion("motion_actor.bvh")
 
     suf = path.suffix.lower()
-    if suf in (".npz", ".bvh", ".csv"):
+    if suf == ".bvh":
+        if is_omnicontact_capture(path):
+            from hhtools.io.datasets.omnicontact import OmniContactAdapter
+
+            return OmniContactAdapter(root=path.parent).load_motion(path.name)
+        return load_motion(path)
+    if suf in (".npz", ".csv"):
         return load_motion(path)
     if suf == ".pkl":
         from hhtools.io.datasets.omomo import OmomoAdapter
@@ -72,6 +89,59 @@ def _load_motion_any(path: Path):
     raise typer.BadParameter(
         f"unsupported extension for interaction-mesh loader: {path.suffix}"
     )
+
+
+def _bvh_dialect_reference(motion) -> str:
+    """Map a Mixamo/SOMA/… BVH dialect to a calibration reference name."""
+    from hhtools.io.bvh_detect import infer_bvh_dataset_from_joints
+
+    detected = infer_bvh_dataset_from_joints(motion.hierarchy.bone_names)
+    return {
+        "soma": "soma_bvh",
+        "lafan": "lafan_bvh",
+        "mocap": "mocap_bvh",
+        "xsens_mocap": "xsens_mocap",
+    }.get(detected or "", "lafan_bvh")
+
+
+def _calibration_reference_for_motion(motion, requested: str) -> str:
+    """Keep explicit refs; remap the CLI default ``smpl`` for OmniContact BVH.
+
+    ``hhtools retarget interaction-mesh`` historically defaulted to ``smpl``
+    (correct for OMOMO / AMASS).  OmniContact is Mixamo-named optical mocap,
+    so the implicit default would pair an A-pose SMPL calibration with a
+    T-pose BVH.  Explicit ``--calibration-reference`` values are unchanged.
+    """
+    dataset = str((getattr(motion, "meta", {}) or {}).get("dataset") or "")
+    if dataset == "omnicontact" and requested == "smpl":
+        return _bvh_dialect_reference(motion)
+    return requested
+
+
+def _expand_interaction_inputs(inputs: list[Path]) -> list[Path]:
+    """Pass files through; expand OmniContact dataset trees to actor BVHs."""
+    from hhtools.io.mimic_detect import is_omnicontact_capture
+
+    out: list[Path] = []
+    for raw in inputs:
+        path = Path(raw).resolve()
+        if path.is_file():
+            out.append(path)
+            continue
+        if path.is_dir() and is_omnicontact_capture(path):
+            out.append(path)
+            continue
+        if path.is_dir():
+            clips = [
+                p
+                for p in sorted(path.rglob("motion_actor.bvh"))
+                if p.is_file() and is_omnicontact_capture(p)
+            ]
+            if clips:
+                out.extend(clips)
+                continue
+        out.append(path)
+    return out
 
 
 def _expand_inputs(inputs: list[Path]) -> list[Path]:
@@ -330,13 +400,23 @@ _im = typer.Typer(
 
 @_im.command("precompute-laplacian")
 def interaction_mesh_precompute_laplacian(
-    input_path: Path = typer.Argument(..., help="NPZ, OMOMO .pkl, or meshmimic holosoma clip .npy"),
+    input_path: Path = typer.Argument(
+        ...,
+        help="NPZ, OMOMO .pkl, meshmimic .npy, or OmniContact capture / motion_actor.bvh",
+    ),
     robot: str = typer.Option(..., "--robot", help="Registered robot preset name."),
     output: Path = typer.Option(
         ..., "--output", "-o", help="Output .npz with stacked target Laplacians.",
     ),
     human_height: float = typer.Option(1.7, "--human-height"),
-    calibration_reference: str = typer.Option("smpl", "--calibration-reference"),
+    calibration_reference: str = typer.Option(
+        "smpl",
+        "--calibration-reference",
+        help=(
+            "Saved calibration to load. Default smpl is remapped to the "
+            "detected BVH dialect for OmniContact (usually lafan_bvh)."
+        ),
+    ),
     limit_frames: int | None = typer.Option(
         None, "--limit-frames", help="Optional frame cap for smoke tests.",
     ),
@@ -362,11 +442,12 @@ def interaction_mesh_precompute_laplacian(
     robot_model = load_robot(preset)
     if preset.urdf_path is None:
         raise typer.BadParameter(f"preset {robot!r} has no URDF")
-    cal_path = resolve_calibration_file(preset.urdf_path.parent, calibration_reference)
-    if cal_path is None:
-        raise typer.BadParameter(f"no calibration for {robot!r} ref={calibration_reference!r}")
 
     motion = _load_motion_any(src)
+    ref = _calibration_reference_for_motion(motion, calibration_reference)
+    cal_path = resolve_calibration_file(preset.urdf_path.parent, ref)
+    if cal_path is None:
+        raise typer.BadParameter(f"no calibration for {robot!r} ref={ref!r}")
     if limit_frames is not None and motion.num_frames > limit_frames:
         motion.positions = motion.positions[:limit_frames]
         motion.quaternions = motion.quaternions[:limit_frames]
@@ -398,11 +479,21 @@ def interaction_mesh_precompute_laplacian(
 
 @_im.command("run")
 def interaction_mesh_run(
-    inputs: list[Path] = typer.Argument(..., help="NPZ, OMOMO .pkl, or meshmimic clip .npy paths."),
+    inputs: list[Path] = typer.Argument(
+        ...,
+        help="NPZ, OMOMO .pkl, meshmimic .npy, OmniContact capture dir, or dataset root.",
+    ),
     robot: str = typer.Option(..., "--robot", help="Registered robot preset name."),
     output: Path = typer.Option(..., "--output", "-o", help="Output directory or single .csv path."),
     human_height: float = typer.Option(1.7, "--human-height"),
-    calibration_reference: str = typer.Option("smpl", "--calibration-reference"),
+    calibration_reference: str = typer.Option(
+        "smpl",
+        "--calibration-reference",
+        help=(
+            "Saved calibration to load. Default smpl is remapped to the "
+            "detected BVH dialect for OmniContact (usually lafan_bvh)."
+        ),
+    ),
     limit_frames: int | None = typer.Option(None, "--limit-frames"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
@@ -417,18 +508,13 @@ def interaction_mesh_run(
     from hhtools.robot.loader import load_robot
     from hhtools.robot.registry import get as get_preset
 
-    files: list[Path] = []
-    for raw in inputs:
-        files.append(raw.resolve() if raw.is_file() else raw)
+    files = _expand_interaction_inputs(inputs)
     if not files:
         raise typer.Exit(code=2)
     preset = get_preset(robot)
     robot_model = load_robot(preset)
     if preset.urdf_path is None:
         raise typer.BadParameter(f"preset {robot!r} has no URDF")
-    cal_path = resolve_calibration_file(preset.urdf_path.parent, calibration_reference)
-    if cal_path is None:
-        raise typer.BadParameter(f"no calibration for {robot!r} ref={calibration_reference!r}")
 
     output_is_file = output.suffix.lower() == ".csv" or (len(files) == 1 and not output.is_dir())
     if output_is_file and len(files) != 1:
@@ -438,6 +524,10 @@ def interaction_mesh_run(
 
     for src in files:
         motion = _load_motion_any(src)
+        ref = _calibration_reference_for_motion(motion, calibration_reference)
+        cal_path = resolve_calibration_file(preset.urdf_path.parent, ref)
+        if cal_path is None:
+            raise typer.BadParameter(f"no calibration for {robot!r} ref={ref!r}")
         if limit_frames is not None and motion.num_frames > limit_frames:
             motion.positions = motion.positions[:limit_frames]
             motion.quaternions = motion.quaternions[:limit_frames]

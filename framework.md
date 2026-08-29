@@ -58,6 +58,7 @@ hhtools/
 │       ├── amass.py       #   AMASS（SMPL-H / SMPL-X）
 │       ├── motion_x.py    #   Motion-X 322-dim
 │       ├── omomo.py       #   OMOMO（交互物体）
+│       ├── omnicontact.py #   OmniContact-Dataset（BVH + 物体 CSV）
 │       ├── phuma.py       #   PHUMA
 │       ├── hmr4d.py       #   GVHMR / 4DHumans
 │       ├── meshmimic_holosoma.py  # meshmimic / holosoma 跑酷地形
@@ -122,7 +123,7 @@ SMPL 参数序列    ──┼──►  Motion + NPZ  ──►  RetargetedMoti
 | 模式 | 场景 | 后端 | 模块 |
 |------|------|------|------|
 | **mimic** | 纯人体骨架（跳舞、行走、LAFAN 等） | Newton IK | `retarget/newton_basic/` |
-| **intermimic** | 人体 + 刚性交互物体（OMOMO 等） | Laplacian + MPC/SQP | `retarget/interaction_mesh/` |
+| **intermimic** | 人体 + 刚性交互物体（OMOMO、OmniContact 等） | Laplacian + MPC/SQP | `retarget/interaction_mesh/` |
 | **meshmimic** | 人体 + 地形高度场（跑酷障碍） | 同上 + 地形碰撞 | `retarget/interaction_mesh/` |
 
 Web UI 根据动作是否携带 `objects` / `terrain` 自动推荐后端；用户也可手动切换。
@@ -337,6 +338,7 @@ J_L = \mathrm{kron}(L, I_3) \cdot J_V, \quad
 | AMASS | [amass.is.tue.mpg.de](https://amass.is.tue.mpg.de) | SMPL-H/X 动捕，非商业 |
 | Motion-X | [IDEA-Research/Motion-X](https://github.com/IDEA-Research/Motion-X) | SMPL-X 322-dim |
 | OMOMO | [lijiaman/omomo_release](https://github.com/lijiaman/omomo_release) | 人体+物体交互 |
+| OmniContact-Dataset | [lightcone02/OmniContact-Dataset](https://huggingface.co/datasets/lightcone02/OmniContact-Dataset) | 光学动捕 HOI（raw_mocap BVH + 物体 CSV） |
 | PHUMA | [DAVIAN-Robotics/PHUMA](https://github.com/DAVIAN-Robotics/PHUMA) | 精选人体动作 |
 | GVHMR | [zju3dv/GVHMR](https://github.com/zju3dv/GVHMR) | 视频单目 HMR |
 | meshmimic / holosoma | [NVIDIA-Omniverse/holosoma](https://github.com/NVIDIA-Omniverse/holosoma) | 跑酷地形片段 |

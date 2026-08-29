@@ -429,7 +429,14 @@ class InteractionMeshPipeline:
         ``robot_link_names[i]``.  This gives the 1:1 vertex correspondence
         the Laplacian optimization requires.
         """
-        ik_map = self.robot.preset.ik_map
+        from hhtools.robot.ik_map_policy import filter_ik_map_for_motion
+
+        # OmniContact + G1: drop head so waist_pitch does not track head bob.
+        ik_map = filter_ik_map_for_motion(
+            self.robot.preset.ik_map,
+            self.robot.preset.name,
+            motion,
+        )
         src2can = auto_source_to_canonical(motion.hierarchy.bone_names)
         can2src: dict[str, str] = {}
         for src_name, can_name in src2can.items():
@@ -584,6 +591,15 @@ class InteractionMeshPipeline:
         all_pos[:, :, 2] -= z_min
         all_pos *= smpl_scale
 
+        # OmniContact / 2-spine Mixamo: height-uniform scale leaves arms
+        # shorter than many humanoids.  Lengthen from the shoulders so
+        # wrist targets (and the yellow overlay) match robot arm reach.
+        from hhtools.retarget.interaction_mesh.arm_reach import (
+            maybe_boost_arm_reach_positions,
+        )
+
+        all_pos = maybe_boost_arm_reach_positions(all_pos, motion, self.robot)
+
         _log.debug(
             "Source pose scale: × %.4f, Z shifted by %.4f "
             "(robot_h=%.3f / human_h=%.3f); source_body_quat NOT applied — "
@@ -709,6 +725,12 @@ class InteractionMeshPipeline:
         # freezes yaw for the whole clip — the actor looks "heading-locked"
         # while the body still translates.  Skip the attach so SQP can yaw
         # freely from position / Laplacian costs.
+        #
+        # OmniContact / 2-segment Mixamo BVH also skip: Mixamo ``Hips``
+        # local axes are (+Z forward, +Y up) after Y→Z, while the robot
+        # FREE joint is (+X forward, +Z up).  Copying the hips quat into
+        # the FREE joint tips the robot ~90° and folds the arms behind
+        # the back even though wrist *positions* are in front of the box.
         try:
             from hhtools.core.math import quaternion as Q
 
@@ -721,6 +743,7 @@ class InteractionMeshPipeline:
                 and self._pelvis_orientations_are_informative(
                     motion, pelvis_idx, F,
                 )
+                and not self._skip_source_root_quat_lock(motion)
             ):
                 qs = Q.ensure_continuous(
                     Q.normalize(
@@ -761,6 +784,17 @@ class InteractionMeshPipeline:
         identity = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float64)
         # Same threshold as the scaler's position-only heading probe.
         return float(np.abs(qs - identity[None, :]).max()) >= 0.01
+
+    @staticmethod
+    def _skip_source_root_quat_lock(motion: Motion) -> bool:
+        """True when source hips quats must not lock the robot FREE joint."""
+        meta = getattr(motion, "meta", None) or {}
+        if str(meta.get("dataset") or "") == "omnicontact":
+            return True
+        from hhtools.retarget.newton_basic.human_aliases import is_two_segment_mixamo_like
+
+        names = getattr(getattr(motion, "hierarchy", None), "bone_names", None)
+        return bool(names) and is_two_segment_mixamo_like(names)
 
     def _build_contact_scaled_positions(
         self,

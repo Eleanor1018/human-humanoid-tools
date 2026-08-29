@@ -55,6 +55,17 @@ def _quat_angular_speed(quat: NDArray, dt: float) -> NDArray:
     return out
 
 
+def root_spatial_ranges(root_pos: NDArray) -> tuple[float, float]:
+    """XY-plane bbox diagonal and Z peak-to-peak of a ``(F, 3)`` root path."""
+    pos = np.asarray(root_pos, dtype=np.float64)
+    if pos.ndim != 2 or pos.shape[0] == 0 or pos.shape[1] < 3:
+        return 0.0, 0.0
+    dx = _safe_stat(pos[:, 0], np.max) - _safe_stat(pos[:, 0], np.min)
+    dy = _safe_stat(pos[:, 1], np.max) - _safe_stat(pos[:, 1], np.min)
+    dz = _safe_stat(pos[:, 2], np.max) - _safe_stat(pos[:, 2], np.min)
+    return round(float(np.hypot(dx, dy)), 5), round(float(dz), 5)
+
+
 def _safe_stat(values: NDArray, fn) -> float:
     arr = np.asarray(values, dtype=np.float64)
     arr = arr[np.isfinite(arr)]
@@ -98,6 +109,8 @@ def compute_dynamics(feat: CanonicalMotionFeatures, cfg: dict[str, Any]) -> dict
             "root_turn_rate": 0.0,
             "com_height_std": 0.0,
             "com_height_range": 0.0,
+            "root_xy_range": 0.0,
+            "root_z_range": 0.0,
             "airborne_ratio": 0.0,
             "path_efficiency": 1.0,
             "step_count": 0.0,
@@ -139,9 +152,10 @@ def compute_dynamics(feat: CanonicalMotionFeatures, cfg: dict[str, Any]) -> dict
     # --- COM height (use root z as a cheap proxy) -----------------------------
     com_z = feat.root_pos[:, 2]
     out["com_height_std"] = round(_safe_stat(com_z, np.std), 5)
-    out["com_height_range"] = round(
-        _safe_stat(com_z, np.max) - _safe_stat(com_z, np.min), 5
-    )
+    xy_range, z_range = root_spatial_ranges(feat.root_pos)
+    out["root_xy_range"] = xy_range
+    out["root_z_range"] = z_range
+    out["com_height_range"] = z_range
 
     # --- airborne / contact / steps ------------------------------------------
     ground = _ground_z(feat)

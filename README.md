@@ -23,9 +23,9 @@ We welcome suggestions and ideas — please open an issue or discussion anytime.
 ## Highlights
 
 - **Fast retarget** — Web UI or **CLI** (`hhtools retarget` / `scripts/batch_*_retarget.py`); **Newton IK** + **MPC-SQP** interaction mesh.
-- **Human formats** — BVH / GLB / SMPL family; adapters for AMASS, GVHMR, LAFAN, 100STYLE, OMOMO, PHUMA, intermimic, meshmimic, …
+- **Human formats** — BVH / GLB / SMPL family; adapters for AMASS, GVHMR, LAFAN, 100STYLE, OMOMO, OmniContact, PHUMA, intermimic, meshmimic, …
 - **Any URDF** — upload any robot in the Web UI: drag in the URDF, drag in meshes; auto-detected, no manual tuning.
-- **Robot→robot (R2R)** — retarget existing robot CSV/PKL exports onto a new URDF.
+- **Robot→robot (R2R)** — retarget existing robot CSV/PKL exports onto a new URDF, including [MotionDecode](https://huggingface.co/datasets/CMRobot/MotionDecode) G1 CSVs.
 - **Dataset analysis** — scan, tag, embed, cluster, and subset human or robot motion libraries in the Web UI.
 
 **Requirements:** Linux, Python 3.12+. Preview on CPU; retarget needs **NVIDIA GPU (CUDA 12)**.
@@ -112,6 +112,8 @@ uv run hhtools import run --dataset lafan \
 uv run hhtools import run --dataset omomo \
   --root assets/motions/intermimic/OMOMO -o /tmp/omomo_npz \
   --sequence sub12_woodchair_000/sub12_woodchair_000.pkl
+uv run hhtools import run --dataset omnicontact \
+  --root /path/to/OmniContact-Dataset -o /tmp/omnicontact_npz
 ```
 
 **Robots**
@@ -133,7 +135,7 @@ uv run hhtools retarget run path/to/clip.npz \
   --robot unitree_g1__g1_29dof -o /tmp/out.csv \
   --calibration-reference smpl --limit-frames 30
 
-# Interaction-mesh (OMOMO / terrain clips)
+# Interaction-mesh (OMOMO / OmniContact / terrain clips)
 uv run hhtools retarget interaction-mesh run path/to/clip.pkl \
   --robot unitree_g1__g1_29dof -o /tmp/out_im.csv \
   --calibration-reference smpl --limit-frames 30
@@ -154,10 +156,14 @@ python scripts/batch_mimic_retarget.py \
   --in /path/to/100STYLE --out /path/to/100STYLE_rp1 \
   --skip-existing
 
-# intermimic (human–object): omomo
+# intermimic (human–object): omomo | omnicontact
 python scripts/batch_intermimic_retarget.py \
   --robot rp1 --dataset omomo \
   --in /path/to/OMOMO --out /path/to/OMOMO_rp1 \
+  --skip-existing
+python scripts/batch_intermimic_retarget.py \
+  --robot rp1 --dataset omnicontact \
+  --in /path/to/OmniContact-Dataset --out /path/to/OmniContact_rp1 \
   --skip-existing
 
 # meshmimic (terrain): parc_ms | holosoma
@@ -171,6 +177,12 @@ python scripts/batch_r2r_retarget.py \
   --source-robot rp1 --target-robot unitree_g1__g1_29dof \
   --in /path/to/rp1_exports --out /path/to/g1_from_rp1 \
   --profile auto --skip-existing
+
+# MotionDecode (Unitree G1 CSV @ 120 Hz; files omit time / sample_rate)
+python scripts/batch_r2r_retarget.py \
+  --source-robot g1 --target-robot rp1 \
+  --in /path/to/MotionDecode/samples --out /path/to/MotionDecode_rp1 \
+  --source-fps 120 --skip-existing
 ```
 
 Scene clips → `<out>/<clip>/<clip>.csv` + terrain/object sidecars (robot frame). Flat mimic → `<out>/…/<stem>.csv`. Use `--t-start` / `--t-end` (seconds on the retargeted timeline) to export a sub-clip; the Web single/batch export UI has the same option. Interaction-mesh needs `mujoco` + `osqp`; Newton needs the NVIDIA `newton` package. R2R needs a saved `r2r_calibration_<source>.yaml` beside the target URDF (Web calibrate once, or `--calibration` / `--init-zero-calibration`).
@@ -227,10 +239,16 @@ Demo paths only — download full datasets from upstream. Adapters provided; **n
 | mimic | PHUMA | [arXiv](https://arxiv.org/abs/2510.26236) | [GitHub](https://github.com/DAVIAN-Robotics/PHUMA) |
 | mimic | SOMA | [arXiv](https://arxiv.org/abs/2603.16858) | [Hugging Face](https://huggingface.co/datasets/bones-studio/seed) |
 | intermimic | OMOMO | [arXiv](https://arxiv.org/abs/2309.16237) | [Hugging Face](https://huggingface.co/datasets/YaojieShen/hhtools_omomo) |
+| intermimic | OmniContact-Dataset | [arXiv](https://arxiv.org/abs/2606.26201) | [Hugging Face](https://huggingface.co/datasets/lightcone02/OmniContact-Dataset) |
 | meshmimic | holosoma | [arXiv](https://arxiv.org/abs/2509.26633) | [GitHub](https://github.com/amazon-far/holosoma) |
 | meshmimic | PARC MS | [arXiv](https://arxiv.org/abs/2505.04002) | [Hugging Face](https://huggingface.co/datasets/YaojieShen/hhtools_parc_ms) |
+| R2R | [MotionDecode](https://huggingface.co/datasets/CMRobot/MotionDecode) | [site](https://chingmudata.github.io/MotionDecode/) | [Hugging Face](https://huggingface.co/datasets/CMRobot/MotionDecode) |
 
 **100STYLE** is Xsens MVN BVH (60 fps stylized locomotion). Drop the unzipped tree under a folder named `100STYLE`, `xsens`, or `xsens_mocap` (for example `assets/motions/mimic/100STYLE/`) so the Web library picks it up. Calibrate the robot once with reference `xsens_mocap` — rest is the format T-pose, not a clip’s first frame. Single-file drops are auto-detected from joint names.
+
+**OmniContact-Dataset** is optical-mocap human–object interaction (typically 90 Hz). Use the official [`raw_mocap/`](https://huggingface.co/datasets/lightcone02/OmniContact-Dataset) tree (`motion_actor.bvh` + object-pose CSV), not the already-retargeted G1 `npz/` files. Place the Hugging Face root (or just `raw_mocap/`) under a folder named `OmniContact-Dataset` — for example `assets/motions/intermimic/OmniContact-Dataset/`. Object meshes are picked up from a sibling `assets/` directory when present. Retarget with the interaction-mesh backend (`hhtools retarget interaction-mesh` / `scripts/batch_intermimic_retarget.py --dataset omnicontact`). The default calibration reference is the detected BVH dialect (`lafan_bvh` if unknown).
+
+**MotionDecode** ([ChingMu](https://huggingface.co/datasets/CMRobot/MotionDecode)) ships **Unitree G1** retargeted CSVs under `samples/` (120 Hz; `root_pos_{xyz}(m)` + `root_rot` **wxyz** + `dof_*(rad)`). This is a **robot→robot** source, not a human-mocap adapter: use the Web **Robot → Robot** panel (source robot = `g1`) or `scripts/batch_r2r_retarget.py`. The files have no `time` / `# sample_rate`, so set **source FPS to 120** (Web “源轨迹 FPS”, or `--source-fps 120`); the default 50 Hz will play and retarget at the wrong speed. Nested taxonomy folders are scanned as R2R mimic clips. Please credit ChingMu when you use the data.
 
 ---
 
