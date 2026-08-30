@@ -25,7 +25,7 @@
   --radius: 14px;
   --radius-sm: 9px;
   --button-radius: 0px;
-  --menu-radius: 0px;
+  --menu-radius: 8px;
   --shadow: 0 8px 30px rgba(0, 0, 0, 0.10);
   --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.08);
   --font: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text",
@@ -1081,7 +1081,7 @@ button { font-family: inherit; cursor: pointer; }
   min-width: 0;
   display: flex; flex-direction: column; gap: 4px; padding: 6px 8px;
   background: var(--panel); border: 1px solid var(--hairline);
-  border-radius: 14px; box-shadow: var(--shadow-sm);
+  border-radius: 0; box-shadow: var(--shadow-sm);
   backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
 }
 .view-hud.hidden { display: none; }
@@ -4204,7 +4204,8 @@ body.tour-active { overflow: hidden; }
 }
 
 /* ----------------------------------------------------------------- control geometry
-   Action buttons, navigation, and selection menus share a square silhouette. */
+   Action buttons use a square silhouette. Navigation and selection menus keep
+   a small radius so layered choices remain visually distinct from commands. */
 #app button,
 .tour-root button {
   border-radius: var(--button-radius);
