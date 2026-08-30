@@ -25,7 +25,7 @@
   --radius: 14px;
   --radius-sm: 9px;
   --button-radius: 0px;
-  --menu-radius: 8px;
+  --menu-radius: 0px;
   --shadow: 0 8px 30px rgba(0, 0, 0, 0.10);
   --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.08);
   --font: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text",
@@ -4204,8 +4204,7 @@ body.tour-active { overflow: hidden; }
 }
 
 /* ----------------------------------------------------------------- control geometry
-   Action buttons use a square silhouette. Navigation and selection menus keep
-   a small radius so layered choices remain visually distinct from commands. */
+   Action buttons, navigation, and selection menus share a square silhouette. */
 #app button,
 .tour-root button {
   border-radius: var(--button-radius);
