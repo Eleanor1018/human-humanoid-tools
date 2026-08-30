@@ -1250,6 +1250,17 @@ def create_app(
     app.state.motion_library_settings_store = motion_library_settings_store
     ensure_motions_library()
 
+    # Agent-facing REST is a thin, versioned adapter over transport-neutral
+    # services.  Capability discovery receives only the scheduler's read-only
+    # snapshot function: it cannot reserve a queue slot or touch solver state.
+    from hhtools.services import CapabilitiesService
+    from hhtools.web.agent_api import router as agent_router
+
+    app.state.agent_capabilities_service = CapabilitiesService(
+        scheduler_snapshot=scheduler.snapshot,
+    )
+    app.include_router(agent_router)
+
     def _render_index_html() -> str:
         raw = (static_dir / "index.html").read_text(encoding="utf-8")
         return raw.replace("{{UI_BUILD}}", UI_BUILD_ID)
