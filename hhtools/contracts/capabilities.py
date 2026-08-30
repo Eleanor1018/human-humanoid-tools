@@ -26,7 +26,12 @@ class SchedulerMode(StrEnum):
 
 
 class SchedulerCapability(ContractModel):
-    """Current admission policy and occupancy; zero limits mean unlimited."""
+    """Current admission policy and occupancy.
+
+    ``max_running_jobs == 0`` disables admission control entirely in the Web
+    scheduler.  In that state ``max_queued_jobs`` is retained as configured
+    metadata but is not enforced, so the effective mode remains ``unlimited``.
+    """
 
     max_running_jobs: Annotated[int, Field(ge=0)] = 0
     max_queued_jobs: Annotated[int, Field(ge=0)] = 0
@@ -39,7 +44,7 @@ class SchedulerCapability(ContractModel):
     @model_validator(mode="after")
     def validate_mode(self) -> SchedulerCapability:
         expected = SchedulerMode.MIXED
-        if self.max_running_jobs == 0 and self.max_queued_jobs == 0:
+        if self.max_running_jobs == 0:
             expected = SchedulerMode.UNLIMITED
         elif self.max_running_jobs > 0 and self.max_queued_jobs > 0:
             expected = SchedulerMode.LIMITED
@@ -89,6 +94,7 @@ class RobotCapability(ContractModel):
     dof_count: Annotated[int | None, Field(default=None, ge=0)]
     supported_references: list[str] = Field(default_factory=list)
     calibrated_references: list[str] = Field(default_factory=list)
+    scaler_references: list[str] = Field(default_factory=list)
     unavailable_reason: str | None = None
 
 
@@ -103,6 +109,16 @@ class CapabilityResponse(ContractModel):
     devices: list[DeviceCapability] = Field(default_factory=list)
     robots: list[RobotCapability] = Field(default_factory=list)
     scheduler: SchedulerCapability
+    asset_root_ids: list[
+        Annotated[
+            str,
+            Field(
+                min_length=1,
+                max_length=128,
+                pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$",
+            ),
+        ]
+    ] = Field(default_factory=list)
     supported_input_formats: list[str] = Field(default_factory=list)
     supported_output_formats: list[str] = Field(default_factory=list)
     features: dict[str, bool] = Field(default_factory=dict)

@@ -18,6 +18,7 @@ from hhtools.contracts import (
     AssetInspectionRequest,
     AssetKind,
     AssetRegistrationRequest,
+    AssetSearchResponse,
     AssetSource,
     BackendCapability,
     CapabilityResponse,
@@ -42,6 +43,7 @@ from hhtools.contracts import (
     RetargetPreflightRequest,
     RobotCapability,
     SchedulerCapability,
+    SchedulerMode,
     SchemaVersion,
 )
 
@@ -73,6 +75,7 @@ def ready_plan() -> RetargetPlan:
         expires_at=NOW + timedelta(hours=1),
         motion_asset_id=ASSET_MOTION,
         robot_id="g1_29dof",
+        robot_asset_id=ASSET_ROBOT,
         backend="newton",
         calibration_id=CALIBRATION_ID,
         output_format="csv",
@@ -178,6 +181,14 @@ def test_asset_requests_only_accept_paths_below_a_configured_root() -> None:
         )
 
 
+def test_asset_search_response_is_versioned_and_bounded() -> None:
+    response = AssetSearchResponse(assets=[], total=0, limit=50, offset=0)
+
+    assert response.model_dump(mode="json")["schema_version"] == "1.0"
+    with pytest.raises(ValidationError):
+        AssetSearchResponse(assets=[], total=0, limit=501, offset=0)
+
+
 def test_asset_inspection_status_matches_issues() -> None:
     inspection = AssetInspection(
         asset_id=ASSET_MOTION,
@@ -200,6 +211,22 @@ def test_asset_inspection_status_matches_issues() -> None:
             status="invalid",
             kind="motion_bundle",
             category="plain_motion",
+        )
+
+    with pytest.raises(ValidationError, match="errors must use invalid status"):
+        AssetInspection(
+            asset_id=ASSET_MOTION,
+            status="valid_with_warnings",
+            kind="motion_bundle",
+            category="plain_motion",
+            warnings=["Partial metadata."],
+            errors=[
+                ApiError(
+                    code="BUNDLE_INCOMPLETE",
+                    message="A sidecar is missing.",
+                    stage="asset_inspection",
+                )
+            ],
         )
 
 
@@ -235,6 +262,7 @@ def test_capabilities_are_compact_and_json_serializable() -> None:
                 dof_count=29,
                 supported_references=["smpl", "smplx"],
                 calibrated_references=["smpl"],
+                scaler_references=["smplx"],
             )
         ],
         scheduler=SchedulerCapability(
@@ -257,12 +285,15 @@ def test_capabilities_are_compact_and_json_serializable() -> None:
     assert payload["scheduler"]["mode"] == "unlimited"
     assert payload["supported_output_formats"] == ["csv", "pkl"]
 
+    configured_but_ignored_queue_limit = SchedulerCapability(
+        max_running_jobs=0,
+        max_queued_jobs=8,
+        mode="unlimited",
+    )
+    assert configured_but_ignored_queue_limit.mode is SchedulerMode.UNLIMITED
+
     with pytest.raises(ValidationError, match="mode must be mixed"):
-        SchedulerCapability(
-            max_running_jobs=0,
-            max_queued_jobs=8,
-            mode="unlimited",
-        )
+        SchedulerCapability(max_running_jobs=8, max_queued_jobs=0, mode="limited")
 
 
 def test_preflight_request_and_ready_response_round_trip_through_json() -> None:
@@ -466,6 +497,7 @@ def test_agent_job_view_rejects_inconsistent_terminal_states() -> None:
         AssetInspection,
         AssetRegistrationRequest,
         AssetInspectionRequest,
+        AssetSearchResponse,
         BackendCapability,
         DeviceCapability,
         RobotCapability,

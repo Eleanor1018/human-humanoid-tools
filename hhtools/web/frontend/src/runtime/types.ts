@@ -907,6 +907,13 @@ export interface HhAppBridge {
   switchInspectorPanel: (panelId: string) => void
   getLibrarySourceRoot: () => string
   refreshLibrary: () => Promise<void>
+  pickFiles: (options?: { folder?: boolean; accept?: string }) => Promise<UploadFile[]>
+  collectDroppedFiles: (dataTransfer: DataTransfer | null) => Promise<UploadFile[]>
+  waitMotionJob: <Result = JobResult>(
+    jobId: string,
+    onProgress?: (fraction: number, message: string) => void,
+    options?: { uploadFrac?: number },
+  ) => Promise<Result>
   uploadFilesXHR: <Url extends string>(
     url: Url,
     files: Iterable<UploadFile>,
@@ -915,6 +922,9 @@ export interface HhAppBridge {
       appendTo?: string
       libraryFolderLabel?: string
       userSourceRoot?: string
+      staticCam?: boolean
+      fMm?: number
+      checkpoint?: UploadFile
     },
     onProgress?: (progress: number | null, loaded: number, total: number) => void,
   ) => Promise<

@@ -293,6 +293,12 @@
           "title": "Plan Id",
           "type": "string"
         },
+        "robot_asset_id": {
+          "description": "Content-addressed asset id.",
+          "pattern": "^asset:sha256:[0-9a-f]{64}$",
+          "title": "Robot Asset Id",
+          "type": "string"
+        },
         "robot_digest": {
           "description": "Lower-case SHA-256 content digest.",
           "pattern": "^[0-9a-f]{64}$",
@@ -315,6 +321,7 @@
         "created_at",
         "motion_asset_id",
         "robot_id",
+        "robot_asset_id",
         "backend",
         "output_format",
         "output_policy",

@@ -1,5 +1,84 @@
 {
   "$defs": {
+    "AssetBundle": {
+      "additionalProperties": false,
+      "description": "Portable manifest for all files required by one logical input.",
+      "properties": {
+        "asset_id": {
+          "description": "Content-addressed asset id.",
+          "pattern": "^asset:sha256:[0-9a-f]{64}$",
+          "title": "Asset Id",
+          "type": "string"
+        },
+        "category": {
+          "$ref": "#/$defs/AssetCategory"
+        },
+        "detected": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AssetDetected"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "display_name": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Display Name",
+          "type": "string"
+        },
+        "files": {
+          "items": {
+            "$ref": "#/$defs/AssetFile"
+          },
+          "minItems": 1,
+          "title": "Files",
+          "type": "array"
+        },
+        "kind": {
+          "$ref": "#/$defs/AssetKind"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "primary_file": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Primary File",
+          "type": "string"
+        },
+        "schema_version": {
+          "$ref": "#/$defs/SchemaVersion",
+          "default": "1.0"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AssetSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "asset_id",
+        "kind",
+        "category",
+        "display_name",
+        "primary_file",
+        "files"
+      ],
+      "title": "AssetBundle",
+      "type": "object"
+    },
     "AssetCategory": {
       "description": "Workflow category used for backend selection.",
       "enum": [
@@ -201,80 +280,41 @@
     }
   },
   "additionalProperties": false,
-  "description": "Portable manifest for all files required by one logical input.",
+  "description": "Versioned, bounded search result for registered asset manifests.",
   "properties": {
-    "asset_id": {
-      "description": "Content-addressed asset id.",
-      "pattern": "^asset:sha256:[0-9a-f]{64}$",
-      "title": "Asset Id",
-      "type": "string"
-    },
-    "category": {
-      "$ref": "#/$defs/AssetCategory"
-    },
-    "detected": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/AssetDetected"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null
-    },
-    "display_name": {
-      "maxLength": 256,
-      "minLength": 1,
-      "title": "Display Name",
-      "type": "string"
-    },
-    "files": {
+    "assets": {
       "items": {
-        "$ref": "#/$defs/AssetFile"
+        "$ref": "#/$defs/AssetBundle"
       },
-      "minItems": 1,
-      "title": "Files",
+      "title": "Assets",
       "type": "array"
     },
-    "kind": {
-      "$ref": "#/$defs/AssetKind"
+    "limit": {
+      "maximum": 500,
+      "minimum": 1,
+      "title": "Limit",
+      "type": "integer"
     },
-    "metadata": {
-      "additionalProperties": true,
-      "title": "Metadata",
-      "type": "object"
-    },
-    "primary_file": {
-      "maxLength": 1024,
-      "minLength": 1,
-      "title": "Primary File",
-      "type": "string"
+    "offset": {
+      "minimum": 0,
+      "title": "Offset",
+      "type": "integer"
     },
     "schema_version": {
       "$ref": "#/$defs/SchemaVersion",
       "default": "1.0"
     },
-    "source": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/AssetSource"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null
+    "total": {
+      "minimum": 0,
+      "title": "Total",
+      "type": "integer"
     }
   },
   "required": [
-    "asset_id",
-    "kind",
-    "category",
-    "display_name",
-    "primary_file",
-    "files"
+    "total",
+    "limit",
+    "offset"
   ],
-  "title": "AssetBundle",
+  "title": "AssetSearchResponse",
   "type": "object"
 }

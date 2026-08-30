@@ -49,6 +49,10 @@ class RetargetPreflightRequest(ContractModel):
     schema_version: SchemaVersion = SchemaVersion.V1
     motion_asset_id: AssetId
     robot_id: Annotated[str, Field(min_length=1, max_length=256)]
+    robot_asset_id: AssetId | None = Field(
+        default=None,
+        description="Registered RobotBundle identity; required for a runnable plan.",
+    )
     backend: str | None = Field(
         default=None,
         description="Backend id, or null to request a recommendation.",
@@ -88,6 +92,7 @@ class RetargetPlan(ContractModel):
     expires_at: AwareDatetime | None = None
     motion_asset_id: AssetId
     robot_id: Annotated[str, Field(min_length=1, max_length=256)]
+    robot_asset_id: AssetId
     backend: Annotated[str, Field(min_length=1, max_length=128)]
     calibration_id: CalibrationId | None = None
     output_format: Annotated[str, Field(min_length=1, max_length=32)]

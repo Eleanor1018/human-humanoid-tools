@@ -179,9 +179,9 @@ async function importTrajectory(options?: { folder?: boolean }): Promise<void> {
       </div>
     </details>
 
-    <!-- The legacy batch runtime remains mounted for compatibility, but R2R now presents five focused steps. -->
+    <!-- File-menu commands retain stable import hooks. The visible R2R batch
+         workspace now lives under Batch, alongside the H2R batch mode. -->
     <div class="workflow-hidden-runtime" hidden aria-hidden="true">
-      <!-- File-menu commands keep using these runtime hooks; the visible UI uses the shared picker. -->
       <div id="r2r-drop-mimic" data-r2r-profile="mimic">
         <button type="button" data-r2r-pick="mimic"></button>
         <button type="button" data-r2r-pick="mimic" data-folder="1"></button>
@@ -192,22 +192,6 @@ async function importTrajectory(options?: { folder?: boolean }): Promise<void> {
       <div id="r2r-drop-meshmimic" data-r2r-profile="meshmimic">
         <button type="button" data-r2r-pick="meshmimic" data-folder="1"></button>
       </div>
-      <div id="r2r-basket-drop"></div>
-      <span id="r2r-basket-count">0</span>
-      <div id="r2r-basket-list"></div>
-      <button id="r2r-basket-clear" type="button"></button>
-      <select id="r2r-batch-backend">
-        <option value="newton">Newton IK</option>
-        <option value="interaction_mesh">Interaction-Mesh</option>
-      </select>
-      <input id="r2r-batch-export-fps" type="number" />
-      <input id="r2r-batch-t-start" type="number" />
-      <input id="r2r-batch-t-end" type="number" />
-      <input id="r2r-batch-out" value="r2r_batch_export" />
-      <input id="r2r-batch-csv-header" type="checkbox" checked />
-      <button id="r2r-batch-run" type="button"></button>
-      <div id="r2r-batch-progress"><div class="bar"></div></div>
-      <div id="r2r-batch-status"></div>
     </div>
 
     <MotionPickerDialog

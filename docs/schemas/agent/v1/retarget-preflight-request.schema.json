@@ -71,6 +71,21 @@
       "title": "Parameters",
       "type": "object"
     },
+    "robot_asset_id": {
+      "anyOf": [
+        {
+          "description": "Content-addressed asset id.",
+          "pattern": "^asset:sha256:[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Registered RobotBundle identity; required for a runnable plan.",
+      "title": "Robot Asset Id"
+    },
     "robot_id": {
       "maxLength": 256,
       "minLength": 1,

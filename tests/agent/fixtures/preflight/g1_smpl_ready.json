@@ -3,6 +3,7 @@
     "schema_version": "1.0",
     "motion_asset_id": "asset:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "robot_id": "g1_29dof",
+    "robot_asset_id": "asset:sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     "backend": null,
     "calibration_id": "cal:sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     "output_format": "csv",
@@ -23,6 +24,7 @@
       "expires_at": "2026-08-31T13:05:00Z",
       "motion_asset_id": "asset:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "robot_id": "g1_29dof",
+      "robot_asset_id": "asset:sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       "backend": "newton",
       "calibration_id": "cal:sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
       "output_format": "csv",
@@ -52,7 +54,7 @@
         "next_action": null
       },
       {
-        "code": "GPU_ADMISSION",
+        "code": "JOB_ADMISSION",
         "level": "warning",
         "message": "Job concurrency is configured as unlimited.",
         "details": {

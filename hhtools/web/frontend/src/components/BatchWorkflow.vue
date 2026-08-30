@@ -3,9 +3,11 @@ import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import MotionPickerDialog from './MotionPickerDialog.vue'
 import SearchField from './SearchField.vue'
+import VideoToMotionBatch from './VideoToMotionBatch.vue'
 import type { MotionCategory, WorkspaceLocale, WorkspacePanelId } from '../runtime/types'
 
 type BatchCategory = 'all' | MotionCategory
+type BatchMode = 'v2m' | 'h2r' | 'r2r'
 
 const props = withDefaults(defineProps<{
   active: boolean
@@ -19,6 +21,7 @@ const emit = defineEmits<{
 }>()
 
 const pickerOpen = ref(false)
+const batchMode = ref<BatchMode>('h2r')
 const basketQuery = ref('')
 const basketCategory = ref<BatchCategory>('all')
 
@@ -46,6 +49,11 @@ function importFromMotionWorkspace(): void {
   emit('request-panel', 'motion')
 }
 
+function selectBatchMode(mode: BatchMode): void {
+  batchMode.value = mode
+  pickerOpen.value = false
+}
+
 watch([basketQuery, basketCategory], publishFilter)
 watch(() => props.active, (active) => {
   if (!active) pickerOpen.value = false
@@ -61,7 +69,7 @@ onBeforeUnmount(() => window.removeEventListener('hhtools:batch-basket-changed',
        runtime binds the stable IDs inside this workspace. -->
   <Teleport defer to="#stage">
     <section
-      v-show="active"
+      v-show="active && batchMode === 'h2r'"
       class="batch-stage-workspace"
       :aria-label="text('Batch inputs', '批量输入')"
     >
@@ -138,9 +146,106 @@ onBeforeUnmount(() => window.removeEventListener('hhtools:batch-basket-changed',
     </section>
   </Teleport>
 
+  <Teleport defer to="#stage">
+    <section
+      v-show="active && batchMode === 'r2r'"
+      class="batch-stage-workspace r2r-batch-stage-workspace"
+      :aria-label="text('R2R batch inputs', 'R2R 批量输入')"
+    >
+      <header class="batch-stage-header">
+        <div>
+          <h1>{{ text('Robot trajectory inputs', '机器人轨迹输入') }}</h1>
+          <p>{{ text('Build a robot-trajectory set for one source and target robot pair.', '为同一组源机器人和目标机器人整理待转换轨迹。') }}</p>
+        </div>
+        <div class="batch-stage-count" aria-live="polite">
+          <strong id="r2r-basket-count">0</strong>
+          <span>{{ text('trajectories', '条轨迹') }}</span>
+        </div>
+      </header>
+
+      <div class="batch-stage-toolbar r2r-batch-stage-toolbar">
+        <button id="r2r-batch-pick-file" type="button" class="btn secondary">
+          {{ text('Import file', '导入文件') }}
+        </button>
+        <button id="r2r-batch-pick-folder" type="button" class="btn secondary">
+          {{ text('Import folder', '导入文件夹') }}
+        </button>
+      </div>
+
+      <div id="r2r-basket-drop" class="batch-basket-frame r2r-batch-basket-frame">
+        <div class="batch-basket-columns r2r-batch-basket-columns" aria-hidden="true">
+          <span>{{ text('Trajectory', '轨迹') }}</span>
+          <span>{{ text('Profile', '类型') }}</span>
+          <span>{{ text('Actions', '操作') }}</span>
+        </div>
+        <div id="r2r-basket-list" class="batch-basket-list" aria-live="polite"></div>
+      </div>
+
+      <footer class="batch-stage-footer">
+        <span id="r2r-batch-stage-summary" class="batch-selected-count">
+          {{ text('No robot trajectories selected', '尚未选择机器人轨迹') }}
+        </span>
+        <span class="spacer"></span>
+        <button id="r2r-basket-clear" type="button" class="btn secondary small" disabled>
+          {{ text('Clear all', '清空全部') }}
+        </button>
+      </footer>
+
+      <p class="batch-drop-hint">
+        {{ text('Drop robot-trajectory files or folders anywhere in the list.', '也可以把机器人轨迹文件或文件夹直接拖入清单。') }}
+      </p>
+    </section>
+  </Teleport>
+
   <div class="panel-stack batch-workflow-stack">
     <h2>{{ text('Batch', '批量处理') }}</h2>
-    <p class="batch-workflow-scope">{{ text('Human motions → one target robot', '人体动作 → 单个目标机器人') }}</p>
+
+    <div
+      class="motion-profile-switcher batch-mode-switcher"
+      role="radiogroup"
+      :aria-label="text('Batch workflow', '批量工作流')"
+    >
+      <label class="motion-profile-selector">
+        <input
+          class="sr-only"
+          type="radio"
+          name="batch-workflow-mode"
+          value="v2m"
+          :checked="batchMode === 'v2m'"
+          @change="selectBatchMode('v2m')"
+        />
+        <span class="motion-profile-selector-content">V2M</span>
+      </label>
+      <label class="motion-profile-selector">
+        <input
+          class="sr-only"
+          type="radio"
+          name="batch-workflow-mode"
+          value="h2r"
+          :checked="batchMode === 'h2r'"
+          @change="selectBatchMode('h2r')"
+        />
+        <span class="motion-profile-selector-content">H2R</span>
+      </label>
+      <label class="motion-profile-selector">
+        <input
+          class="sr-only"
+          type="radio"
+          name="batch-workflow-mode"
+          value="r2r"
+          :checked="batchMode === 'r2r'"
+          @change="selectBatchMode('r2r')"
+        />
+        <span class="motion-profile-selector-content">R2R</span>
+      </label>
+    </div>
+
+    <VideoToMotionBatch
+      :active="active && batchMode === 'v2m'"
+      :locale="locale"
+    />
+
+    <div v-show="batchMode === 'h2r'" class="batch-mode-content">
 
     <div class="batch-step-summary">
       <span>{{ text('1. Inputs', '1. 输入动作') }}</span>
@@ -285,5 +390,142 @@ onBeforeUnmount(() => window.removeEventListener('hhtools:batch-basket-changed',
       @close="pickerOpen = false"
       @import="importFromMotionWorkspace"
     />
+    </div>
+
+    <div v-show="batchMode === 'r2r'" class="batch-mode-content">
+      <div class="batch-step-summary">
+        <span>{{ text('1. Source trajectories', '1. 源轨迹') }}</span>
+        <strong><span id="r2r-batch-inspector-count">0</span> {{ text('trajectories', '条') }}</strong>
+      </div>
+
+      <details class="video-workflow-step" open>
+        <summary class="video-workflow-step-summary">
+          <span>{{ text('2. Source robot', '2. 源机器人') }}</span>
+        </summary>
+        <div class="video-workflow-step-body workflow-compact-controls">
+          <div class="workflow-picker-row">
+            <select
+              id="r2r-batch-source-select"
+              class="search"
+              :aria-label="text('Select source robot', '选择源机器人')"
+            ></select>
+            <button type="button" class="btn secondary small" @click="emit('request-panel', 'robot-assets')">
+              {{ text('Import robot', '导入机器人') }}
+            </button>
+          </div>
+          <button id="r2r-batch-source-load" type="button" class="btn workflow-load-button">
+            {{ text('Load source robot', '加载源机器人') }}
+          </button>
+          <p id="r2r-batch-source-status" class="workflow-status-line" role="status">
+            {{ text('Not loaded', '未加载') }}
+          </p>
+        </div>
+      </details>
+
+      <details class="video-workflow-step" open>
+        <summary class="video-workflow-step-summary">
+          <span>{{ text('3. Target robot', '3. 目标机器人') }}</span>
+        </summary>
+        <div class="video-workflow-step-body workflow-compact-controls">
+          <div class="workflow-picker-row">
+            <select
+              id="r2r-batch-target-select"
+              class="search"
+              :aria-label="text('Select target robot', '选择目标机器人')"
+            ></select>
+            <button type="button" class="btn secondary small" @click="emit('request-panel', 'robot-assets')">
+              {{ text('Import robot', '导入机器人') }}
+            </button>
+          </div>
+          <button id="r2r-batch-target-load" type="button" class="btn workflow-load-button">
+            {{ text('Load target robot', '加载目标机器人') }}
+          </button>
+          <p id="r2r-batch-target-status" class="workflow-status-line" role="status">
+            {{ text('Not loaded', '未加载') }}
+          </p>
+          <p id="r2r-batch-calibration-status" class="workflow-status-line" role="status"></p>
+        </div>
+      </details>
+
+      <details class="video-workflow-step" open>
+        <summary class="video-workflow-step-summary">
+          <span>{{ text('4. Run settings', '4. 运行设置') }}</span>
+        </summary>
+        <div class="video-workflow-step-body workflow-compact-controls">
+          <div class="workflow-field-grid">
+            <label class="video-workflow-field">
+              <span class="k">{{ text('Solver', '求解器') }}</span>
+              <select id="r2r-batch-backend" class="search">
+                <option value="newton">Newton IK</option>
+                <option value="interaction_mesh">Interaction-Mesh</option>
+              </select>
+            </label>
+            <label class="video-workflow-field">
+              <span class="k">{{ text('Output format', '输出格式') }}</span>
+              <select id="r2r-batch-format" class="search">
+                <option value="csv">CSV</option>
+                <option value="pkl">PKL</option>
+              </select>
+            </label>
+          </div>
+
+          <details class="batch-advanced-settings">
+            <summary>{{ text('Advanced settings', '高级设置') }}</summary>
+            <div class="batch-advanced-settings-body">
+              <div class="workflow-field-grid">
+                <label class="video-workflow-field">
+                  <span class="k">{{ text('Source FPS', '源轨迹 FPS') }}</span>
+                  <input id="r2r-batch-source-fps" class="search" type="number" min="1" step="1" value="50" />
+                </label>
+                <label class="video-workflow-field">
+                  <span class="k">Retarget FPS</span>
+                  <input id="r2r-batch-retarget-fps" class="search" type="number" min="1" step="1" :placeholder="text('Source FPS', '与源轨迹相同')" />
+                </label>
+              </div>
+              <label class="video-workflow-field">
+                <span class="k">Export FPS</span>
+                <input id="r2r-batch-export-fps" class="search" type="number" min="1" step="1" :placeholder="text('Same as Retarget', '与 Retarget 相同')" />
+              </label>
+              <div class="workflow-field-grid">
+                <label class="video-workflow-field">
+                  <span class="k">{{ text('Start (s)', '起始 (s)') }}</span>
+                  <input id="r2r-batch-t-start" class="search" type="number" min="0" step="0.01" placeholder="0" />
+                </label>
+                <label class="video-workflow-field">
+                  <span class="k">{{ text('End (s)', '截止 (s)') }}</span>
+                  <input id="r2r-batch-t-end" class="search" type="number" min="0" step="0.01" :placeholder="text('End of each trajectory', '每条轨迹结尾')" />
+                </label>
+              </div>
+              <label class="workflow-checkbox-row">
+                <input id="r2r-batch-csv-header" type="checkbox" checked />
+                <span>{{ text('Include CSV comments and column headers', 'CSV 含注释与列名表头') }}</span>
+              </label>
+              <label class="video-workflow-field">
+                <span class="k">{{ text('Result name', '结果名称') }}</span>
+                <input id="r2r-batch-out" class="search" value="r2r_batch_export" :placeholder="text('ZIP filename', 'ZIP 文件名')" />
+              </label>
+            </div>
+          </details>
+        </div>
+      </details>
+
+      <section class="batch-run-panel" aria-labelledby="r2r-batch-run-title">
+        <div class="batch-run-heading">
+          <h3 id="r2r-batch-run-title">{{ text('5. Run', '5. 执行') }}</h3>
+          <span class="batch-task-note">{{ text('Continues in Tasks', '任务会在底部继续运行') }}</span>
+        </div>
+        <p id="r2r-batch-run-summary" class="batch-run-summary">
+          {{ text('No source trajectories selected.', '尚未选择源轨迹。') }}
+        </p>
+        <button id="r2r-batch-run" type="button" class="btn" disabled>
+          {{ text('Start R2R batch task', '开始 R2R 批量任务') }}
+        </button>
+        <p id="r2r-batch-disabled-reason" class="disabled-action-reason" role="status">
+          {{ text('Add trajectories and load both robots first.', '请先添加轨迹并加载源机器人和目标机器人。') }}
+        </p>
+        <div id="r2r-batch-progress" class="progress video-workflow-progress" style="display:none"><div class="bar"></div></div>
+        <p id="r2r-batch-status" class="workflow-status-line" role="status" aria-live="polite"></p>
+      </section>
+    </div>
   </div>
 </template>

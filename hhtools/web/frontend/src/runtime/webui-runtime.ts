@@ -7806,7 +7806,16 @@ async function r2rUpdateRetargetBtn(): Promise<void> {
   r2r.calibrated = calibrated;
   if (!r2r.targetName || !r2r.sourceName) r2rSetCalChip("—", "");
   else r2rSetCalChip(calibrated ? "已标定" : "未标定 — 请先标定", calibrated ? "ok" : "warn");
+  const batchCalibrationStatus = document.getElementById("r2r-batch-calibration-status");
+  if (batchCalibrationStatus) {
+    batchCalibrationStatus.textContent = !r2r.targetName || !r2r.sourceName
+      ? ""
+      : (calibrated
+        ? runtimeText("Calibration ready", "标定已就绪")
+        : runtimeText("Calibration required in Robot → Robot", "需要先在“机器人 → 机器人”中完成标定"));
+  }
   if (rtBtn) rtBtn.disabled = !(r2r.sourceToken && r2r.targetName && calibrated);
+  r2rRenderBasket();
   publishR2rWorkflowState();
 }
 
@@ -7833,6 +7842,109 @@ async function r2rPopulateSelects(): Promise<void> {
   };
   fill(document.getElementById("r2r-source-select"), true);
   fill(document.getElementById("r2r-target-select"), false);
+  fill(document.getElementById("r2r-batch-source-select"), true);
+  fill(document.getElementById("r2r-batch-target-select"), false);
+  for (const id of ["r2r-source-select", "r2r-batch-source-select"]) {
+    const select = document.getElementById(id) as HTMLSelectElement | null;
+    if (select && r2r.sourceName) select.value = r2r.sourceName;
+  }
+  for (const id of ["r2r-target-select", "r2r-batch-target-select"]) {
+    const select = document.getElementById(id) as HTMLSelectElement | null;
+    if (select && r2r.targetName) select.value = r2r.targetName;
+  }
+}
+
+function setR2rRobotStatus(kind: "source" | "target", text: string): void {
+  const ids = kind === "source"
+    ? ["r2r-source-status", "r2r-batch-source-status"]
+    : ["r2r-target-status", "r2r-batch-target-status"];
+  for (const id of ids) {
+    const element = document.getElementById(id);
+    if (element) element.textContent = text;
+  }
+}
+
+function syncR2rRobotSelects(kind: "source" | "target", name: string): void {
+  const ids = kind === "source"
+    ? ["r2r-source-select", "r2r-batch-source-select"]
+    : ["r2r-target-select", "r2r-batch-target-select"];
+  for (const id of ids) {
+    const select = document.getElementById(id) as HTMLSelectElement | null;
+    if (select && [...select.options].some((option) => option.value === name)) {
+      select.value = name;
+    }
+  }
+}
+
+async function r2rLoadSourceRobot(
+  name: string,
+  { activateWorkspace = true }: { activateWorkspace?: boolean } = {},
+): Promise<void> {
+  if (!name) return;
+  toast(runtimeText("Loading source robot…", "加载源机器人…"));
+  try {
+    const sourcePayload = await API.post("/api/robot/select", { name });
+    if (r2r.sourceName !== name) {
+      r2r.sourceToken = null;
+      r2r.sourceStem = null;
+      r2rTrajectoryState = "idle";
+      const trajectoryValue = document.getElementById("r2r-trajectory-value");
+      if (trajectoryValue) trajectoryValue.textContent = runtimeText("Not loaded", "未加载");
+    }
+    r2r.calibrated = false;
+    r2r.sourcePayload = sourcePayload;
+    r2r.sourceName = name;
+    r2r.exportToken = null;
+    r2rRunState = "idle";
+    clearResultDiagnostics("r2r");
+    await r2rSrc.load(sourcePayload);
+    syncR2rRobotSelects("source", name);
+    if (activateWorkspace) {
+      switchInspectorPanel("r2r");
+      if (!r2r.active) r2rEnterPanel();
+      r2rApplyStage();
+      r2rFocus(r2rSrc);
+    }
+    setR2rRobotStatus("source", runtimeText(
+      `Source robot: ${sourcePayload.display_name}`,
+      `源机器人：${sourcePayload.display_name}`,
+    ));
+    toast(runtimeText(
+      `Source robot loaded: ${sourcePayload.display_name}`,
+      `源机器人已加载：${sourcePayload.display_name}`,
+    ));
+    await r2rMaybeAutoCalib();
+    r2rRenderBasket();
+  } catch (error) {
+    toast(errorMessage(error), true);
+  }
+}
+
+async function r2rLoadTargetRobot(name: string): Promise<void> {
+  if (!name) return;
+  toast(runtimeText("Loading target robot…", "加载目标机器人…"));
+  try {
+    const targetPayload = await API.post("/api/robot/select", { name });
+    r2r.calibrated = false;
+    r2r.targetPayload = targetPayload;
+    r2r.targetName = name;
+    r2r.exportToken = null;
+    r2rRunState = "idle";
+    clearResultDiagnostics("r2r");
+    syncR2rRobotSelects("target", name);
+    setR2rRobotStatus("target", runtimeText(
+      `Target robot: ${targetPayload.display_name}`,
+      `目标机器人：${targetPayload.display_name}`,
+    ));
+    toast(runtimeText(
+      `Target robot loaded: ${targetPayload.display_name}`,
+      `目标机器人已加载：${targetPayload.display_name}`,
+    ));
+    await r2rMaybeAutoCalib();
+    r2rRenderBasket();
+  } catch (error) {
+    toast(errorMessage(error), true);
+  }
 }
 
 // --------------------------------------------------------------- calibration
@@ -8459,25 +8571,91 @@ function r2rRenderBasket() {
   const list = document.getElementById("r2r-basket-list");
   if (!list) return;
   list.replaceChildren();
+  if (!r2r.basket.length) {
+    const empty = document.createElement("div");
+    empty.className = "batch-basket-empty";
+    empty.append(
+      textElement("strong", "", runtimeText("No robot trajectories yet", "还没有机器人轨迹")),
+      document.createTextNode(runtimeText(
+        "Import trajectory files or folders to build this R2R batch.",
+        "导入轨迹文件或文件夹来建立 R2R 批量任务。",
+      )),
+    );
+    list.appendChild(empty);
+  }
   for (const e of r2r.basket) {
     const row = document.createElement("div");
-    row.className = "basket-row";
+    row.className = "batch-basket-row r2r-batch-basket-row";
     const label = e.export_subdir ? `${e.export_subdir}/${e.stem}` : e.stem;
-    const removeButton = textElement("button", "rm", "×");
+    const main = textElement("span", "batch-basket-main", label);
+    const profile = textElement(
+      "span",
+      "batch-basket-type",
+      e.upload_profile || "mimic",
+    );
+    const actions = document.createElement("span");
+    actions.className = "batch-basket-actions";
+    const removeButton = textElement("button", "batch-basket-remove rm", "×");
     removeButton.type = "button";
+    removeButton.setAttribute("aria-label", runtimeText(`Remove ${label}`, `移除 ${label}`));
     removeButton.onclick = () => {
       r2r.basket = r2r.basket.filter((x) => x !== e);
       r2rRenderBasket();
     };
-    row.append(
-      textElement("span", "", `${label} · ${e.upload_profile || "mimic"}`),
-      removeButton,
-    );
+    actions.appendChild(removeButton);
+    row.append(main, profile, actions);
     list.appendChild(row);
   }
-  document.getElementById("r2r-basket-count").textContent = String(r2r.basket.length);
+  const count = String(r2r.basket.length);
+  for (const id of ["r2r-basket-count", "r2r-batch-inspector-count"]) {
+    const element = document.getElementById(id);
+    if (element) element.textContent = count;
+  }
+  const clearButton = document.getElementById("r2r-basket-clear") as HTMLButtonElement | null;
+  if (clearButton) clearButton.disabled = !r2r.basket.length;
+  const summary = document.getElementById("r2r-batch-stage-summary");
+  if (summary) {
+    summary.textContent = r2r.basket.length
+      ? runtimeText(
+        `${r2r.basket.length} robot trajectories ready`,
+        `已准备 ${r2r.basket.length} 条机器人轨迹`,
+      )
+      : runtimeText("No robot trajectories selected", "尚未选择机器人轨迹");
+  }
+  const runSummary = document.getElementById("r2r-batch-run-summary");
+  if (runSummary) {
+    runSummary.textContent = r2r.basket.length
+      ? runtimeText(
+        `${r2r.basket.length} trajectories · ${r2r.sourceName || "no source robot"} → ${r2r.targetName || "no target robot"}`,
+        `${r2r.basket.length} 条轨迹 · ${r2r.sourceName || "未加载源机器人"} → ${r2r.targetName || "未加载目标机器人"}`,
+      )
+      : runtimeText("No source trajectories selected.", "尚未选择源轨迹。");
+  }
   const runBtn = document.getElementById("r2r-batch-run");
-  if (runBtn) runBtn.disabled = !(r2r.basket.length && r2r.targetName && r2r.sourceName);
+  const ready = Boolean(
+    r2r.basket.length && r2r.targetName && r2r.sourceName && r2r.calibrated,
+  );
+  if (runBtn) runBtn.disabled = !ready;
+  const disabledReason = document.getElementById("r2r-batch-disabled-reason");
+  if (disabledReason) {
+    if (!r2r.basket.length) {
+      disabledReason.textContent = runtimeText(
+        "Add at least one source trajectory.",
+        "请至少添加一条源轨迹。",
+      );
+    } else if (!r2r.sourceName) {
+      disabledReason.textContent = runtimeText("Load the source robot.", "请加载源机器人。");
+    } else if (!r2r.targetName) {
+      disabledReason.textContent = runtimeText("Load the target robot.", "请加载目标机器人。");
+    } else if (!r2r.calibrated) {
+      disabledReason.textContent = runtimeText(
+        "Calibrate this robot pair in Robot → Robot first.",
+        "请先在“机器人 → 机器人”中完成这组机器人的标定。",
+      );
+    } else {
+      disabledReason.textContent = "";
+    }
+  }
 }
 
 async function r2rIngestBasket(
@@ -8545,58 +8723,22 @@ function r2rInit(): void {
       r2rApplyStage();
     });
   }
-  document.getElementById("r2r-source-load").onclick = async () => {
-    const name = document.getElementById("r2r-source-select").value;
-    if (!name) return;
-    toast("加载源机器人…");
-    try {
-      const sourcePayload = await API.post("/api/robot/select", { name });
-      if (r2r.sourceName !== name) {
-        r2r.sourceToken = null;
-        r2r.sourceStem = null;
-        r2rTrajectoryState = "idle";
-        const trajectoryValue = document.getElementById("r2r-trajectory-value");
-        if (trajectoryValue) {
-          trajectoryValue.textContent = runtimeText("Not loaded", "未加载");
-        }
-      }
-      r2r.calibrated = false;
-      r2r.sourcePayload = sourcePayload;
-      r2r.sourceName = name;
-      r2r.exportToken = null;
-      r2rRunState = "idle";
-      clearResultDiagnostics("r2r");
-      await r2rSrc.load(sourcePayload);
-      switchInspectorPanel("r2r");
-      if (!r2r.active) r2rEnterPanel();
-      r2rApplyStage();
-      r2rFocus(r2rSrc);
-      document.getElementById("r2r-source-status").textContent =
-        `源机器人：${sourcePayload.display_name}（上传轨迹后可播放）`;
-      toast(`源机器人已加载：${sourcePayload.display_name}`);
-      await r2rMaybeAutoCalib();
-      r2rRenderBasket();
-    } catch (e) { toast(errorMessage(e), true); }
-  };
-  document.getElementById("r2r-target-load").onclick = async () => {
-    const name = document.getElementById("r2r-target-select").value;
-    if (!name) return;
-    toast("加载目标机器人…");
-    try {
-      const targetPayload = await API.post("/api/robot/select", { name });
-      r2r.calibrated = false;
-      r2r.targetPayload = targetPayload;
-      r2r.targetName = name;
-      r2r.exportToken = null;
-      r2rRunState = "idle";
-      clearResultDiagnostics("r2r");
-      document.getElementById("r2r-target-status").textContent =
-        `目标机器人：${targetPayload.display_name}`;
-      toast(`目标机器人已加载：${targetPayload.display_name}`);
-      await r2rMaybeAutoCalib();
-      r2rRenderBasket();
-    } catch (e) { toast(errorMessage(e), true); }
-  };
+  document.getElementById("r2r-source-load")?.addEventListener("click", () => {
+    const name = (document.getElementById("r2r-source-select") as HTMLSelectElement | null)?.value || "";
+    void r2rLoadSourceRobot(name);
+  });
+  document.getElementById("r2r-batch-source-load")?.addEventListener("click", () => {
+    const name = (document.getElementById("r2r-batch-source-select") as HTMLSelectElement | null)?.value || "";
+    void r2rLoadSourceRobot(name, { activateWorkspace: false });
+  });
+  document.getElementById("r2r-target-load")?.addEventListener("click", () => {
+    const name = (document.getElementById("r2r-target-select") as HTMLSelectElement | null)?.value || "";
+    void r2rLoadTargetRobot(name);
+  });
+  document.getElementById("r2r-batch-target-load")?.addEventListener("click", () => {
+    const name = (document.getElementById("r2r-batch-target-select") as HTMLSelectElement | null)?.value || "";
+    void r2rLoadTargetRobot(name);
+  });
   document.getElementById("r2r-calib-btn").onclick = () => void r2rStartCalib();
   document.getElementById("r2r-calib-zero").onclick = () => {
     void applyCalibrationComparison("r2r", "zero");
@@ -8630,6 +8772,12 @@ function r2rInit(): void {
     r2r.basket = [];
     r2rRenderBasket();
   });
+  document.getElementById("r2r-batch-pick-file")?.addEventListener("click", async () => {
+    await r2rIngestBasket(await pickFiles({ accept: ".csv,.pkl,.npz" }), "auto");
+  });
+  document.getElementById("r2r-batch-pick-folder")?.addEventListener("click", async () => {
+    await r2rIngestBasket(await pickFiles({ folder: true }), "auto");
+  });
   document.getElementById("r2r-batch-run")?.addEventListener("click", async () => {
     if (!r2r.basket.length || !r2r.targetName || !r2r.sourceName) return;
     const prog = document.getElementById("r2r-batch-progress");
@@ -8645,12 +8793,12 @@ function r2rInit(): void {
         entries: r2r.basket,
         backend: document.getElementById("r2r-batch-backend")?.value || "newton",
         out_dir: document.getElementById("r2r-batch-out")?.value || "r2r_batch_export",
-        format: document.getElementById("r2r-export-format")?.value || "csv",
+        format: document.getElementById("r2r-batch-format")?.value || "csv",
         csv_header: document.getElementById("r2r-batch-csv-header")?.checked !== false,
       };
       const exFps = parseOptionalFps(document.getElementById("r2r-batch-export-fps"));
-      const rtFps = parseOptionalFps(document.getElementById("r2r-retarget-fps"));
-      const srcFps = parseOptionalFps(document.getElementById("r2r-source-fps"));
+      const rtFps = parseOptionalFps(document.getElementById("r2r-batch-retarget-fps"));
+      const srcFps = parseOptionalFps(document.getElementById("r2r-batch-source-fps"));
       if (exFps) body.export_fps = exFps;
       if (rtFps) body.retarget_fps = rtFps;
       if (srcFps) body.source_fps = srcFps;
@@ -8701,6 +8849,9 @@ window.__hhApp = {
   switchInspectorPanel,
   getLibrarySourceRoot: () => libSourceRoot,
   refreshLibrary,
+  pickFiles,
+  collectDroppedFiles,
+  waitMotionJob,
   uploadFilesXHR,
 };
 

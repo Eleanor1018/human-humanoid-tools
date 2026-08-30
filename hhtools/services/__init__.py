@@ -5,6 +5,13 @@ than importing one another.  Solver and calibration algorithms stay in their
 existing modules; services only discover capabilities and orchestrate them.
 """
 
+from .asset_service import AgentAssetService
+from .assets import AssetRegistry, AssetServiceError
 from .capabilities import CapabilitiesService
 
-__all__ = ["CapabilitiesService"]
+__all__ = [
+    "AgentAssetService",
+    "AssetRegistry",
+    "AssetServiceError",
+    "CapabilitiesService",
+]

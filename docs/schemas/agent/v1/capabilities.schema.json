@@ -225,6 +225,13 @@
           "title": "Robot Id",
           "type": "string"
         },
+        "scaler_references": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Scaler References",
+          "type": "array"
+        },
         "supported_references": {
           "items": {
             "type": "string"
@@ -257,7 +264,7 @@
     },
     "SchedulerCapability": {
       "additionalProperties": false,
-      "description": "Current admission policy and occupancy; zero limits mean unlimited.",
+      "description": "Current admission policy and occupancy.\n\n``max_running_jobs == 0`` disables admission control entirely in the Web\nscheduler.  In that state ``max_queued_jobs`` is retained as configured\nmetadata but is not enforced, so the effective mode remains ``unlimited``.",
       "properties": {
         "closed": {
           "default": false,
@@ -330,6 +337,16 @@
       "default": "v1",
       "title": "Agent Api Version",
       "type": "string"
+    },
+    "asset_root_ids": {
+      "items": {
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        "type": "string"
+      },
+      "title": "Asset Root Ids",
+      "type": "array"
     },
     "backends": {
       "items": {

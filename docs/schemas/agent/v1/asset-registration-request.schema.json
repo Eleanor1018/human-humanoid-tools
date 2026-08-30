@@ -17,6 +17,7 @@
       "enum": [
         "motion_bundle",
         "robot_bundle",
+        "calibration_bundle",
         "dataset_bundle",
         "video"
       ],

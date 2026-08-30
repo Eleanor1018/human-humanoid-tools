@@ -185,7 +185,10 @@ def _scheduler_capability(snapshot: object | None) -> SchedulerCapability:
 
     max_running = int(value("max_running_jobs"))
     max_queued = int(value("max_queued_jobs"))
-    if max_running == 0 and max_queued == 0:
+    # JobScheduler bypasses both running and queue admission checks whenever
+    # max_running_jobs is zero.  Preserve max_queued as configured metadata,
+    # but describe the effective policy rather than implying it is enforced.
+    if max_running == 0:
         mode = SchedulerMode.UNLIMITED
     elif max_running > 0 and max_queued > 0:
         mode = SchedulerMode.LIMITED
@@ -202,22 +205,50 @@ def _scheduler_capability(snapshot: object | None) -> SchedulerCapability:
     )
 
 
-def _calibrated_references(preset: RobotPreset) -> list[str]:
-    """List references with either a saved calibration or declared scaler."""
+def _reference_readiness(preset: RobotPreset) -> tuple[list[str], list[str]]:
+    """Return independently validated calibration and scaler references.
 
-    from hhtools.retarget.calibration import resolve_calibration_file
+    A bundled Newton scaler is not equivalent to a human-reviewed robot pose
+    calibration: notably, Interaction-Mesh still requires the latter.  Keep
+    both facts separate so clients can make backend-specific decisions.
+    """
+
+    from hhtools.retarget.calibration import load_calibration, resolve_calibration_file
+    from hhtools.retarget.newton_basic.config import load_scaler_config
     from hhtools.robot.retarget_profile import bundled_scaler_path
 
     calibrated: list[str] = []
+    scalers: list[str] = []
+    known_joints = set(preset.dof_order)
+    calibration_root = (
+        preset.urdf_path.parent if preset.urdf_path is not None else preset.root_dir
+    ).resolve()
+    preset_root = preset.root_dir.resolve()
     for reference in _CALIBRATION_REFERENCES:
         try:
-            calibration = resolve_calibration_file(preset.root_dir, reference)
-            scaler = bundled_scaler_path(preset, reference)
-        except (OSError, TypeError, ValueError):
-            continue
-        if calibration is not None or scaler is not None:
-            calibrated.append(reference)
-    return calibrated
+            calibration_path = resolve_calibration_file(calibration_root, reference)
+            if calibration_path is not None:
+                calibration_path.resolve(strict=True).relative_to(calibration_root)
+                calibration = load_calibration(calibration_path)
+                calibration_joints = set(calibration.calibrated_joint_q)
+                robot_matches = not calibration.robot or calibration.robot == preset.name
+                reference_matches = calibration.reference == reference
+                joints_match = not calibration_joints.difference(known_joints)
+                if robot_matches and reference_matches and joints_match:
+                    calibrated.append(reference)
+        except Exception:  # noqa: BLE001 - invalid optional metadata is "not ready"
+            pass
+
+        try:
+            scaler_path = bundled_scaler_path(preset, reference)
+            if scaler_path is not None:
+                contained_scaler = scaler_path.resolve(strict=True)
+                contained_scaler.relative_to(preset_root)
+                load_scaler_config(contained_scaler)
+                scalers.append(reference)
+        except Exception:  # noqa: BLE001 - invalid optional metadata is "not ready"
+            pass
+    return calibrated, scalers
 
 
 def _robot_capabilities(presets: Iterable[RobotPreset]) -> list[RobotCapability]:
@@ -233,6 +264,7 @@ def _robot_capabilities(presets: Iterable[RobotPreset]) -> list[RobotCapability]
             unavailable.append("IK mapping is missing")
         if not has_dof_order:
             unavailable.append("DOF order is missing")
+        calibrated_references, scaler_references = _reference_readiness(preset)
         robots.append(
             RobotCapability(
                 robot_id=preset.name,
@@ -242,7 +274,8 @@ def _robot_capabilities(presets: Iterable[RobotPreset]) -> list[RobotCapability]
                 has_ik_mapping=has_ik_mapping,
                 dof_count=len(preset.dof_order) if preset.dof_order else None,
                 supported_references=list(_CALIBRATION_REFERENCES),
-                calibrated_references=_calibrated_references(preset),
+                calibrated_references=calibrated_references,
+                scaler_references=scaler_references,
                 unavailable_reason="; ".join(unavailable) if unavailable else None,
             )
         )
@@ -251,32 +284,45 @@ def _robot_capabilities(presets: Iterable[RobotPreset]) -> list[RobotCapability]
 
 def _backend_capabilities(devices: list[DeviceCapability]) -> list[BackendCapability]:
     cuda_available = any(device.kind.value == "cuda" and device.available for device in devices)
-    linux = platform.system().lower() == "linux"
 
     definitions = (
         (
             "newton",
             "Newton IK",
-            ("torch", "newton", "warp"),
+            # The solver core is Newton + Warp.  The current end-to-end robot
+            # adapter imports yourdfpy and MuJoCo before constructing it, so
+            # capability discovery must include those real execution-path deps.
+            ("newton", "warp", "mujoco", "yourdfpy"),
             [AssetCategory.PLAIN_MOTION],
-            {"batch": True, "scene_geometry": False, "cuda_graph": True},
+            {
+                "batch": True,
+                "scene_geometry": False,
+                "cuda_graph": cuda_available,
+                "cpu_fallback": True,
+            },
+            {
+                "requires_cuda": False,
+                "recommended_linux_cuda": True,
+            },
         ),
         (
             "interaction_mesh",
             "Interaction-Mesh MPC",
-            ("torch", "newton", "warp", "mujoco", "osqp"),
+            ("mujoco", "osqp", "scipy", "yourdfpy"),
             [AssetCategory.OBJECT_INTERACTION, AssetCategory.TERRAIN_SCENE],
-            {"batch": False, "scene_geometry": True, "mpc": True},
+            {
+                "batch": False,
+                "scene_geometry": True,
+                "mpc": True,
+                "cpu_fallback": True,
+            },
+            {"requires_cuda": False},
         ),
     )
     capabilities: list[BackendCapability] = []
-    for backend_id, display_name, dependencies, categories, features in definitions:
+    for backend_id, display_name, dependencies, categories, features, limits in definitions:
         missing = [name for name in dependencies if not _module_available(name)]
         reasons: list[str] = []
-        if not linux:
-            reasons.append("retargeting requires Linux")
-        if not cuda_available:
-            reasons.append("retargeting requires an NVIDIA CUDA device")
         if missing:
             reasons.append(f"missing dependencies: {', '.join(missing)}")
         capabilities.append(
@@ -289,7 +335,7 @@ def _backend_capabilities(devices: list[DeviceCapability]) -> list[BackendCapabi
                 output_formats=list(_OUTPUT_FORMATS),
                 unavailable_reason="; ".join(reasons) if reasons else None,
                 features=features,
-                limits={"requires_linux": True, "requires_cuda": True},
+                limits=limits,
             )
         )
     return capabilities
@@ -304,31 +350,40 @@ class CapabilitiesService:
         scheduler_snapshot: Callable[[], object] | None = None,
         robot_provider: Callable[[], Iterable[RobotPreset]] | None = None,
         device_probe: Callable[[], list[DeviceCapability]] = _detect_devices,
+        asset_root_provider: Callable[[], Iterable[str]] | None = None,
     ) -> None:
         if robot_provider is None:
-            from hhtools.robot.registry import list_presets
+            from hhtools.robot.registry import list_presets_readonly
 
-            robot_provider = list_presets
+            robot_provider = list_presets_readonly
         self._scheduler_snapshot = scheduler_snapshot
         self._robot_provider = robot_provider
         self._device_probe = device_probe
+        self._asset_root_provider = asset_root_provider
 
     def get_capabilities(self) -> CapabilityResponse:
         """Return a compact snapshot; no solver, queue slot, or asset is created."""
 
         snapshot = self._scheduler_snapshot() if self._scheduler_snapshot is not None else None
         devices = self._device_probe()
+        asset_root_ids = (
+            sorted(set(self._asset_root_provider()))
+            if self._asset_root_provider is not None
+            else []
+        )
         return CapabilityResponse(
             service_version=__version__,
             backends=_backend_capabilities(devices),
             devices=devices,
             robots=_robot_capabilities(self._robot_provider()),
             scheduler=_scheduler_capability(snapshot),
+            asset_root_ids=asset_root_ids,
             supported_input_formats=list(_INPUT_FORMATS),
             supported_output_formats=list(_OUTPUT_FORMATS),
             features={
                 "agent_rest": True,
-                "asset_registry": False,
+                "asset_inspection": self._asset_root_provider is not None,
+                "asset_registry": self._asset_root_provider is not None,
                 "job_spec_v2": True,
                 "json_cli": False,
                 "mcp": False,

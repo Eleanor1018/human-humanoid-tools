@@ -16,6 +16,7 @@ class AssetKind(StrEnum):
 
     MOTION_BUNDLE = "motion_bundle"
     ROBOT_BUNDLE = "robot_bundle"
+    CALIBRATION_BUNDLE = "calibration_bundle"
     DATASET_BUNDLE = "dataset_bundle"
     VIDEO = "video"
 
@@ -182,6 +183,8 @@ class AssetInspection(ContractModel):
     def validate_status(self) -> AssetInspection:
         if self.status is InspectionStatus.INVALID and not self.errors:
             raise ValueError("invalid inspections must include at least one error")
+        if self.errors and self.status is not InspectionStatus.INVALID:
+            raise ValueError("inspections with errors must use invalid status")
         if self.status is InspectionStatus.VALID and (self.warnings or self.errors):
             raise ValueError("valid inspections cannot include warnings or errors")
         if self.status is InspectionStatus.VALID_WITH_WARNINGS and not self.warnings:
@@ -213,3 +216,13 @@ class AssetInspectionRequest(ContractModel):
     asset_id: AssetId
     verify_hashes: bool = True
     parse_content: bool = True
+
+
+class AssetSearchResponse(ContractModel):
+    """Versioned, bounded search result for registered asset manifests."""
+
+    schema_version: SchemaVersion = SchemaVersion.V1
+    assets: list[AssetBundle] = Field(default_factory=list)
+    total: Annotated[int, Field(ge=0)]
+    limit: Annotated[int, Field(ge=1, le=500)]
+    offset: Annotated[int, Field(ge=0)]
