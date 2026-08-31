@@ -146,7 +146,9 @@ function updateRetargetFpsPlaceholder() {
   const inp = document.getElementById("rt-retarget-fps");
   if (!inp) return;
   const src = state.motion?.framerate;
-  inp.placeholder = src ? `留空 = 原始 ${src.toFixed(0)} fps` : "留空 = 动作原始帧率";
+  inp.placeholder = src
+    ? runtimeText(`Blank = source ${src.toFixed(0)} fps`, `留空 = 原始 ${src.toFixed(0)} fps`)
+    : runtimeText("Blank = source motion frame rate", "留空 = 动作原始帧率");
 }
 
 import * as THREE from "three";
@@ -452,7 +454,10 @@ async function writeClipboardText(value: string): Promise<void> {
   textarea.select();
   const copied = document.execCommand("copy");
   textarea.remove();
-  if (!copied) throw new Error("浏览器未允许复制，请在开发者工具中查看配置");
+  if (!copied) throw new Error(runtimeText(
+    "The browser blocked copying. View the configuration in developer tools.",
+    "浏览器未允许复制，请在开发者工具中查看配置",
+  ));
 }
 
 async function handleJobHistoryCommand(
@@ -467,9 +472,12 @@ async function handleJobHistoryCommand(
     try {
       const config: JobConfigResponse = await API.get(`/api/job/${detail.jobId}/config`);
       await writeClipboardText(JSON.stringify(config, null, 2));
-      toast("任务有效配置已复制");
+      toast(runtimeText("Effective job configuration copied", "任务有效配置已复制"));
     } catch (error) {
-      toast(`复制配置失败：${errorMessage(error)}`, true);
+      toast(runtimeText(
+        `Unable to copy configuration: ${errorMessage(error)}`,
+        `复制配置失败：${errorMessage(error)}`,
+      ), true);
     }
     return;
   }
@@ -477,12 +485,18 @@ async function handleJobHistoryCommand(
     try {
       const cli = await API.get(`/api/job/${detail.jobId}/cli`);
       if (!cli.available || !cli.command) {
-        throw new Error(cli.reason || "该任务没有等价 CLI 命令");
+        throw new Error(cli.reason || runtimeText(
+          "This job has no equivalent CLI command",
+          "该任务没有等价 CLI 命令",
+        ));
       }
       await writeClipboardText(cli.command);
-      toast("等价 CLI 命令已复制");
+      toast(runtimeText("Equivalent CLI command copied", "等价 CLI 命令已复制"));
     } catch (error) {
-      toast(`复制 CLI 失败：${errorMessage(error)}`, true);
+      toast(runtimeText(
+        `Unable to copy CLI command: ${errorMessage(error)}`,
+        `复制 CLI 失败：${errorMessage(error)}`,
+      ), true);
     }
     return;
   }
@@ -492,9 +506,12 @@ async function handleJobHistoryCommand(
         `/api/job/${detail.jobId}/config/download`,
         `hhtools-job-${detail.jobId}.json`,
       );
-      toast("任务配置已开始下载");
+      toast(runtimeText("Job configuration download started", "任务配置已开始下载"));
     } catch (error) {
-      toast(`保存配置失败：${errorMessage(error)}`, true);
+      toast(runtimeText(
+        `Unable to save configuration: ${errorMessage(error)}`,
+        `保存配置失败：${errorMessage(error)}`,
+      ), true);
     }
     return;
   }
@@ -503,9 +520,12 @@ async function handleJobHistoryCommand(
       `/api/job/${detail.jobId}/download`,
       detail.filename || `hhtools-${detail.jobId}.zip`,
     );
-    toast("任务结果已开始下载");
+    toast(runtimeText("Job result download started", "任务结果已开始下载"));
   } catch (error) {
-    toast(`下载失败：${errorMessage(error)}`, true);
+    toast(runtimeText(
+      `Download failed: ${errorMessage(error)}`,
+      `下载失败：${errorMessage(error)}`,
+    ), true);
   }
 }
 
@@ -529,7 +549,8 @@ function fmtBytes(n: number): string {
 function showLoading(label?: string): void {
   const o = document.getElementById("load-overlay");
   if (!o) return;
-  document.getElementById("load-label").textContent = label || "加载中…";
+  document.getElementById("load-label").textContent = label
+    || runtimeText("Loading…", "加载中…");
   document.getElementById("load-sub").textContent = "";
   document.getElementById("load-bar").style.width = "0%";
   o.classList.remove("hidden");
@@ -674,7 +695,7 @@ function uploadFilesXHR<Url extends string>(
 
 function formatJobProgress(job: JobResponse, prefix = ""): string {
   const pct = Math.round(Math.max(0, Math.min(100, (job.progress || 0) * 100)));
-  const msg = job.message || "处理中…";
+  const msg = job.message || runtimeText("Processing…", "处理中…");
   return `${prefix}${msg} (${pct}%)`;
 }
 
@@ -1091,23 +1112,23 @@ interface ReferenceAlignmentDiagnostic {
   rotationResidualDeg: number | null;
 }
 
-const CANONICAL_LANDMARK_LABELS: Record<string, string> = {
-  hips: "髋部",
-  chest: "胸部",
-  neck: "颈部",
-  head: "头部",
-  left_hip: "左髋",
-  right_hip: "右髋",
-  left_knee: "左膝",
-  right_knee: "右膝",
-  left_ankle: "左踝",
-  right_ankle: "右踝",
-  left_shoulder: "左肩",
-  right_shoulder: "右肩",
-  left_elbow: "左肘",
-  right_elbow: "右肘",
-  left_wrist: "左腕",
-  right_wrist: "右腕",
+const CANONICAL_LANDMARK_LABELS: Record<string, readonly [string, string]> = {
+  hips: ["Hips", "髋部"],
+  chest: ["Chest", "胸部"],
+  neck: ["Neck", "颈部"],
+  head: ["Head", "头部"],
+  left_hip: ["Left hip", "左髋"],
+  right_hip: ["Right hip", "右髋"],
+  left_knee: ["Left knee", "左膝"],
+  right_knee: ["Right knee", "右膝"],
+  left_ankle: ["Left ankle", "左踝"],
+  right_ankle: ["Right ankle", "右踝"],
+  left_shoulder: ["Left shoulder", "左肩"],
+  right_shoulder: ["Right shoulder", "右肩"],
+  left_elbow: ["Left elbow", "左肘"],
+  right_elbow: ["Right elbow", "右肘"],
+  left_wrist: ["Left wrist", "左腕"],
+  right_wrist: ["Right wrist", "右腕"],
 };
 
 function normalizedSemanticName(value: unknown): string {
@@ -1262,7 +1283,10 @@ class ReferenceSkeletonView {
       const label = document.createElement("span");
       label.className = "calib-landmark-label";
       const primary = document.createElement("strong");
-      primary.textContent = CANONICAL_LANDMARK_LABELS[semantic] ?? semantic.replaceAll("_", " ");
+      const labels = CANONICAL_LANDMARK_LABELS[semantic];
+      primary.textContent = labels
+        ? runtimeText(labels[0], labels[1])
+        : semantic.replaceAll("_", " ");
       label.append(primary, document.createTextNode(` · ${targetLink}`));
       this.labelRoot.appendChild(label);
 
@@ -2340,7 +2364,10 @@ function publishPlaybackState(extra: Partial<PlaybackUiState> = {}): void {
   let label = `${player.t.toFixed(2)} / ${player.duration.toFixed(2)} s`;
   const sourceDuration = src?.duration ?? 0;
   if (isPlaybackPreview(src) && sourceDuration > player.duration + 0.5) {
-    label += `（预览，原片 ${sourceDuration.toFixed(1)} s）`;
+    label += runtimeText(
+      ` (preview; source ${sourceDuration.toFixed(1)} s)`,
+      `（预览，原片 ${sourceDuration.toFixed(1)} s）`,
+    );
   }
   window.dispatchEvent(new CustomEvent("hhtools:playback-state", {
     detail: {
@@ -2723,13 +2750,28 @@ function workflowNode(
 }
 
 function h2rBlockedReason(): string | null {
-  if (!state.motion) return "缺少源 Motion：请先在“动作 Motion”中加载一个 clip。";
-  if (!state.robot) return "缺少目标机器人：请先在 Robot Registry 中加载 Robot Model。";
-  if (!state.reference) return "未识别源参考格式：请检查 Motion 格式或手动选择参考姿态。";
+  if (!state.motion) return runtimeText(
+    "Source motion is missing. Load a clip from Motion first.",
+    "缺少源 Motion：请先在“动作 Motion”中加载一个 clip。",
+  );
+  if (!state.robot) return runtimeText(
+    "Target robot is missing. Load a robot model from the Robot Library first.",
+    "缺少目标机器人：请先在机器人库中加载 Robot Model。",
+  );
+  if (!state.reference) return runtimeText(
+    "The source reference format was not recognized. Check the motion format or select a reference pose manually.",
+    "未识别源参考格式：请检查 Motion 格式或手动选择参考姿态。",
+  );
   if (!state.calibration) {
-    return `缺少 ${state.robot.display_name} + ${referenceLabel(state.reference)} 标定配置。`;
+    return runtimeText(
+      `Calibration is missing for ${state.robot.display_name} + ${referenceLabel(state.reference)}.`,
+      `缺少 ${state.robot.display_name} + ${referenceLabel(state.reference)} 标定配置。`,
+    );
   }
-  if (state.robotPanelLocked || h2rRunState === "running") return "Retarget 正在运行，请等待当前任务完成。";
+  if (state.robotPanelLocked || h2rRunState === "running") return runtimeText(
+    "Retarget is running. Wait for the current task to finish.",
+    "Retarget 正在运行，请等待当前任务完成。",
+  );
   return null;
 }
 
@@ -2761,47 +2803,51 @@ function publishH2rWorkflowState(): void {
   const nodes: WorkflowNodeStatus[] = [
     workflowNode(
       "motion",
-      "动作",
+      runtimeText("Motion", "动作"),
       state.motion ? "ready" : "missing",
-      state.motion?.name || "未选择",
+      state.motion?.name || runtimeText("Not selected", "未选择"),
       "motion",
     ),
     workflowNode(
       "robot",
-      "机器人",
+      runtimeText("Robot", "机器人"),
       state.robot ? "ready" : "missing",
-      state.robot?.display_name || "未选择",
+      state.robot?.display_name || runtimeText("Not selected", "未选择"),
       "robot-assets",
     ),
     workflowNode(
       "calibration",
-      "标定",
+      runtimeText("Calibration", "标定"),
       calibrationState,
       state.calibrationMode
-        ? "正在编辑"
+        ? runtimeText("Editing", "正在编辑")
         : state.calibration
           ? referenceLabel(state.reference)
-          : "未就绪",
+          : runtimeText("Not ready", "未就绪"),
       "h2r",
     ),
     workflowNode(
       "solver",
-      "求解",
+      runtimeText("Solver", "求解"),
       solverState,
       h2rRunState === "running"
-        ? "运行中"
+        ? runtimeText("Running", "运行中")
         : state.exportToken
-          ? "已完成"
+          ? runtimeText("Completed", "已完成")
           : solverReady
-            ? "可以运行"
-            : "等待输入",
+            ? runtimeText("Ready to run", "可以运行")
+            : runtimeText("Waiting for input", "等待输入"),
       "h2r",
     ),
     workflowNode(
       "result",
-      "结果",
+      runtimeText("Result", "结果"),
       resultState,
-      state.exportToken ? "可预览/导出" : h2rRunState === "failed" ? "运行失败" : "尚无结果",
+      state.exportToken
+        ? runtimeText("Ready to preview/export", "可预览/导出")
+        : h2rRunState === "failed"
+          ? runtimeText("Run failed", "运行失败")
+          : runtimeText("No result yet", "尚无结果"),
       "h2r",
     ),
   ];
@@ -2911,8 +2957,14 @@ function updateH2rCalibrationValidation(): void {
   const scope = document.getElementById("calibration-scope");
   if (scope) {
     scope.textContent = state.robot && state.reference
-      ? `配置范围：${state.robot.display_name} + ${referenceLabel(state.reference)}`
-      : "配置范围：目标机器人 + 源参考格式";
+      ? runtimeText(
+        `Scope: ${state.robot.display_name} + ${referenceLabel(state.reference)}`,
+        `配置范围：${state.robot.display_name} + ${referenceLabel(state.reference)}`,
+      )
+      : runtimeText(
+        "Scope: target robot + source reference",
+        "配置范围：目标机器人 + 源参考格式",
+      );
   }
   if (!state.robot) {
     renderValidationSummary(document.getElementById("calibration-validation-summary"), []);
@@ -2935,14 +2987,26 @@ function updateH2rCalibrationValidation(): void {
   const changed = Object.values(state.calibQ).filter((value) => Math.abs(value) > 1e-4).length;
 
   renderValidationSummary(document.getElementById("calibration-validation-summary"), [
-    [mappings.length > 0 ? "ok" : "warn", `语义映射：${mappings.length}/17 个 ik_map 槽位`],
+    [mappings.length > 0 ? "ok" : "warn", runtimeText(
+      `Semantic mapping: ${mappings.length}/17 ik_map slots`,
+      `语义映射：${mappings.length}/17 个 ik_map 槽位`,
+    )],
     [unresolved.length === 0 ? "ok" : "error", unresolved.length === 0
-      ? "映射的机器人 link 均可解析"
-      : `${unresolved.length} 个映射 link 无法解析`],
+      ? runtimeText("All mapped robot links resolve", "映射的机器人 link 均可解析")
+      : runtimeText(
+        `${unresolved.length} mapped links cannot be resolved`,
+        `${unresolved.length} 个映射 link 无法解析`,
+      )],
     [nearLimit.length === 0 ? "ok" : "warn", nearLimit.length === 0
-      ? "当前关节均未接近限位"
-      : `${nearLimit.length} 个关节接近 URDF 限位`],
-    ["ok", `当前编辑：${changed} 个非零关节`],
+      ? runtimeText("No joints are near their limits", "当前关节均未接近限位")
+      : runtimeText(
+        `${nearLimit.length} joints are near their URDF limits`,
+        `${nearLimit.length} 个关节接近 URDF 限位`,
+      )],
+    ["ok", runtimeText(
+      `Current edit: ${changed} non-zero joints`,
+      `当前编辑：${changed} 个非零关节`,
+    )],
     ...calibrationDiagnosticRows(robot),
   ]);
 }
@@ -2985,21 +3049,21 @@ function referenceLabel(ref: string | null | undefined): string {
 }
 
 /** Human-readable adapter / dataset id (basket ``dataset`` field). */
-const DATASET_LABELS: Record<string, string> = {
-  soma: "SOMA BVH",
-  lafan: "LAFAN / Mixamo BVH",
-  mocap: "MOCAP BVH (Spine3 chest)",
-  xsens_mocap: "Xsens mocap BVH",
-  amass: "AMASS (SMPL 参数)",
-  motion_x: "Motion-X (SMPL-X)",
-  phuma: "PHUMA (SMPL)",
-  gvhmr: "GVHMR (SMPL-H)",
-  omomo: "OMOMO (SMPL-X)",
-  glb: "GLB 骨骼",
-  parc_ms: "parc_ms / meshmimic",
-  meshmimic_holosoma: "holosoma NPY",
-  unified_npz: "hhtools NPZ",
-  unknown: "未识别",
+const DATASET_LABELS: Record<string, readonly [string, string]> = {
+  soma: ["SOMA BVH", "SOMA BVH"],
+  lafan: ["LAFAN / Mixamo BVH", "LAFAN / Mixamo BVH"],
+  mocap: ["MOCAP BVH (Spine3 chest)", "MOCAP BVH（Spine3 胸部）"],
+  xsens_mocap: ["Xsens mocap BVH", "Xsens mocap BVH"],
+  amass: ["AMASS (SMPL parameters)", "AMASS（SMPL 参数）"],
+  motion_x: ["Motion-X (SMPL-X)", "Motion-X（SMPL-X）"],
+  phuma: ["PHUMA (SMPL)", "PHUMA（SMPL）"],
+  gvhmr: ["GVHMR (SMPL-H)", "GVHMR（SMPL-H）"],
+  omomo: ["OMOMO (SMPL-X)", "OMOMO（SMPL-X）"],
+  glb: ["GLB skeleton", "GLB 骨骼"],
+  parc_ms: ["parc_ms / meshmimic", "parc_ms / meshmimic"],
+  meshmimic_holosoma: ["holosoma NPY", "holosoma NPY"],
+  unified_npz: ["hhtools NPZ", "hhtools NPZ"],
+  unknown: ["Unknown", "未识别"],
 };
 
 /**
@@ -3051,7 +3115,8 @@ const REFERENCE_HELP: Record<string, { input: string; calib: string; file: strin
 
 function datasetLabel(ds: string | null | undefined): string {
   if (!ds || ds === "unknown") return runtimeText("Unknown", "未识别");
-  return DATASET_LABELS[ds] || ds;
+  const labels = DATASET_LABELS[ds];
+  return labels ? runtimeText(labels[0], labels[1]) : ds;
 }
 
 let referenceCatalog: string[] = [];
@@ -3098,7 +3163,10 @@ function syncRefSelect(): void {
   if (!hint) return;
   if (state.motion?.dataset) {
     const ref = state.reference || "—";
-    hint.textContent = `自动识别数据集: ${state.motion.dataset} → 建议参考 ${ref}`;
+    hint.textContent = runtimeText(
+      `Detected dataset: ${state.motion.dataset} → suggested reference ${ref}`,
+      `自动识别数据集: ${state.motion.dataset} → 建议参考 ${ref}`,
+    );
     hint.style.display = "block";
   } else {
     hint.textContent = "";
@@ -3122,9 +3190,9 @@ async function onReferenceChange(newRef: string): Promise<void> {
 
 function updatePills(): void {
   document.getElementById("motion-pill").textContent = state.motion
-    ? `🎞 ${state.motion.name}` : "未加载动作";
+    ? `🎞 ${state.motion.name}` : runtimeText("No motion loaded", "未加载动作");
   document.getElementById("robot-pill").textContent = state.robot
-    ? `🤖 ${state.robot.display_name}` : "未加载机器人";
+    ? `🤖 ${state.robot.display_name}` : runtimeText("No robot loaded", "未加载机器人");
 }
 
 // =================================================================  NAV
@@ -3233,7 +3301,10 @@ function datasetSceneGlbUrl(token: string | null | undefined, o: SceneObjectPayl
 
 async function loadRobotExportPreview(result: RobotExportPreviewResult): Promise<void> {
   if (state.calibrationMode) {
-    toast("标定模式下无法预览机器人轨迹", true);
+    toast(runtimeText(
+      "Robot trajectories cannot be previewed in calibration mode",
+      "标定模式下无法预览机器人轨迹",
+    ), true);
     return;
   }
 
@@ -3289,7 +3360,10 @@ async function loadRobotExportPreview(result: RobotExportPreviewResult): Promise
   _orbitManualUntil = 0;
   revealStage();
   updatePills();
-  toast(`机器人 mesh 播放：${result.name}`);
+  toast(runtimeText(
+    `Playing robot mesh: ${result.name}`,
+    `机器人 mesh 播放：${result.name}`,
+  ));
 }
 
 async function previewRobotClip(
@@ -3297,7 +3371,10 @@ async function previewRobotClip(
   robotName?: string,
 ): Promise<RobotExportPreviewResult> {
   const label = entry.stem || entry.sequence_id || "";
-  showLoading(`加载机器人轨迹 ${label}`.trim());
+  showLoading(runtimeText(
+    `Loading robot trajectory ${label}`.trim(),
+    `加载机器人轨迹 ${label}`.trim(),
+  ));
   try {
     const body: { source_path: string; robot?: string } = { source_path: entry.source_path };
     if (robotName) body.robot = robotName;
@@ -3305,7 +3382,7 @@ async function previewRobotClip(
     const result = await waitMotionJob<RobotExportPreviewResult>(job_id, (frac, sub) => {
       setLoadingProgress(frac, sub);
     });
-    setLoadingProgress(1, "构建机器人场景…");
+    setLoadingProgress(1, runtimeText("Building robot scene…", "构建机器人场景…"));
     await loadRobotExportPreview(result);
     return result;
   } catch (e) {
@@ -3560,6 +3637,67 @@ window.addEventListener("hhtools:workspace-locale-change", () => {
   if (state.robot && robotMetaCard?.style.display !== "none") {
     renderRobotDetails(state.robot);
   }
+  // Workflow nodes and blocked reasons are emitted by the imperative runtime,
+  // so republish them after Vue switches locale instead of leaving stale copy.
+  publishH2rWorkflowState();
+  publishR2rWorkflowState();
+  updateH2rCalibrationValidation();
+  updateR2rCalibrationValidation();
+  syncRefSelect();
+  updatePills();
+  updateRetargetFpsPlaceholder();
+  publishPlaybackState();
+  updateCalibRestoreButton();
+  if (state.calibrationMode) {
+    refSkel.configureMappings(state.robot?.ik_map ?? {});
+    syncCalibrationNumberInputs("h2r");
+    emitCalibrationEditorState("h2r");
+  }
+  if (r2r.calibrating) {
+    refSkel.configureMappings(r2r.targetPayload?.ik_map ?? {});
+    syncCalibrationNumberInputs("r2r");
+    emitCalibrationEditorState("r2r");
+  }
+  setR2rRobotStatus("source", r2r.sourcePayload
+    ? runtimeText(
+      `Source robot: ${r2r.sourcePayload.display_name}`,
+      `源机器人：${r2r.sourcePayload.display_name}`,
+    )
+    : runtimeText("Not loaded", "未加载"));
+  setR2rRobotStatus("target", r2r.targetPayload
+    ? runtimeText(
+      `Target robot: ${r2r.targetPayload.display_name}`,
+      `目标机器人：${r2r.targetPayload.display_name}`,
+    )
+    : runtimeText("Not loaded", "未加载"));
+  const r2rTrajectoryStatus = document.getElementById("r2r-traj-status");
+  if (r2rTrajectoryStatus) {
+    r2rTrajectoryStatus.textContent = r2rTrajectoryState === "validating"
+      ? runtimeText("Validating trajectory…", "正在校验机器人轨迹……")
+      : r2r.sourceToken
+        ? runtimeText(`Loaded: ${r2r.sourceStem || "trajectory"}`, `已加载：${r2r.sourceStem || "轨迹"}`)
+        : "";
+  }
+  const h2rStatus = document.getElementById("rt-status");
+  if (h2rStatus && h2rRunState !== "idle") {
+    h2rStatus.textContent = h2rRunState === "running"
+      ? runtimeText("Retargeting…", "正在 retarget…")
+      : h2rRunState === "completed"
+        ? runtimeText("Retarget complete; ready to export", "Retarget 完成，可导出")
+        : "";
+  }
+  const r2rStatus = document.getElementById("r2r-status");
+  if (r2rStatus && r2rRunState !== "idle") {
+    r2rStatus.textContent = r2rRunState === "running"
+      ? runtimeText("Retargeting…", "正在 retarget…")
+      : r2rRunState === "completed"
+        ? runtimeText("R2R retarget complete", "R2R Retarget 完成")
+        : "";
+  }
+  r2rRenderBasket();
+  void r2rUpdateRetargetBtn();
+  if (state.calibrationMode && state.reference) updateCalibBanner(state.reference);
+  if (r2r.calibrating) updateR2rCalibBanner();
 });
 
 // drag-drop helpers (folder-aware)
@@ -5032,7 +5170,7 @@ class CalibManipulator {
 
       const head = document.createElement("div");
       head.className = "calib-hud-head calib-hud-drag-handle";
-      head.title = "拖动标题栏移动控件";
+      head.title = runtimeText("Drag the title bar to move the control", "拖动标题栏移动控件");
       const grip = document.createElement("span");
       grip.className = "calib-hud-grip";
       grip.setAttribute("aria-hidden", "true");
@@ -5603,9 +5741,15 @@ function updateCalibBanner(_reference: string): void {
   if (!el) return;
   const message = document.createElement("span");
   message.append(
-    document.createTextNode("标定模式 · 请将灰色机器人对齐到"),
-    textElement("b", "", "蓝色参考骨架"),
-    document.createTextNode(" · 点击关节拖动或右栏滑块调整，完成后保存"),
+    document.createTextNode(runtimeText(
+      "Calibration mode · Align the grey robot to the ",
+      "标定模式 · 请将灰色机器人对齐到",
+    )),
+    textElement("b", "", runtimeText("blue reference skeleton", "蓝色参考骨架")),
+    document.createTextNode(runtimeText(
+      ". Drag joints or use the right-side sliders, then save.",
+      " · 点击关节拖动或右栏滑块调整，完成后保存",
+    )),
   );
   el.replaceChildren(textElement("span", "dot", ""), message);
 }
@@ -5613,15 +5757,20 @@ function updateCalibBanner(_reference: string): void {
 function updateR2rCalibBanner(): void {
   const el = document.getElementById("calib-banner");
   if (!el) return;
-  const src = r2r.sourcePayload?.display_name || r2r.sourceName || "源机器人";
-  const tgt = r2r.targetPayload?.display_name || r2r.targetName || "目标机器人";
+  const src = r2r.sourcePayload?.display_name || r2r.sourceName
+    || runtimeText("source robot", "源机器人");
+  const tgt = r2r.targetPayload?.display_name || r2r.targetName
+    || runtimeText("target robot", "目标机器人");
   const message = document.createElement("span");
   message.append(
-    document.createTextNode("R2R 标定 · 将"),
+    document.createTextNode(runtimeText("R2R calibration · Align ", "R2R 标定 · 将")),
     textElement("b", "", tgt),
-    document.createTextNode("对齐到"),
-    textElement("b", "", `蓝色 ${src} 参考姿态`),
-    document.createTextNode(" · 点击关节拖动或右侧滑块调整，完成后保存"),
+    document.createTextNode(runtimeText(" to the ", "对齐到")),
+    textElement("b", "", runtimeText(`blue ${src} reference pose`, `蓝色 ${src} 参考姿态`)),
+    document.createTextNode(runtimeText(
+      ". Drag joints or use the right-side sliders, then save.",
+      " · 点击关节拖动或右侧滑块调整，完成后保存",
+    )),
   );
   el.replaceChildren(textElement("span", "dot", ""), message);
 }
@@ -5669,7 +5818,7 @@ async function enterCalibrationMode(
   const calCard = document.getElementById("calib-card");
   calCard.style.display = "block";
   document.getElementById("retarget-btn").disabled = true;
-  setCalChip("标定中…", "warn");
+  setCalChip(runtimeText("Calibrating…", "标定中…"), "warn");
 
   if (!state.calibrationMode) {
     state.calibRestore = _snapshotVis();
@@ -5687,7 +5836,10 @@ async function enterCalibrationMode(
   document.getElementById("calib-banner")?.classList.remove("hidden");
   _applyCalibSceneLayout();
   publishH2rWorkflowState();
-  toast("已进入标定模式：请对齐蓝色参考骨架");
+  toast(runtimeText(
+    "Calibration mode started. Align the robot to the blue reference skeleton.",
+    "已进入标定模式：请对齐蓝色参考骨架",
+  ));
   if (player.active) player.seek(0);
 
   let session: import("./types").CalibrationSession;
@@ -5717,7 +5869,10 @@ async function enterCalibrationMode(
 
   state.calibLimits = session.joint_limits || [];
   robot.groundOffset = session.ground_offset_z ?? robot.groundOffset;
-  if (!session.reference) throw new Error("Calibration session did not include a reference pose");
+  if (!session.reference) throw new Error(runtimeText(
+    "Calibration session did not include a reference pose",
+    "标定会话未返回参考姿态",
+  ));
   refSkel.load(session.reference);
   refSkel.configureMappings(state.robot.ik_map ?? {});
   if (session.reference_name) updateCalibBanner(session.reference_name);
@@ -5744,8 +5899,11 @@ function updateCalibRestoreButton(): void {
   if (!btn) return;
   btn.disabled = !state.calibHasSaved;
   btn.title = state.calibHasSaved
-    ? "恢复到上次保存的标定值"
-    : "尚无已保存标定（保存后可重置）";
+    ? runtimeText("Restore the last saved calibration", "恢复到上次保存的标定值")
+    : runtimeText(
+      "No saved calibration yet; save one before resetting",
+      "尚无已保存标定（保存后可重置）",
+    );
 }
 
 async function exitCalibrationMode(): Promise<void> {
@@ -5956,8 +6114,12 @@ async function _runCalibFk(): Promise<void> {
 }
 
 async function refreshRetargetPanel(): Promise<void> {
-  document.getElementById("rt-motion").textContent = state.motion ? state.motion.name : "未加载";
-  document.getElementById("rt-robot").textContent = state.robot ? state.robot.display_name : "未加载";
+  document.getElementById("rt-motion").textContent = state.motion
+    ? state.motion.name
+    : runtimeText("Not loaded", "未加载");
+  document.getElementById("rt-robot").textContent = state.robot
+    ? state.robot.display_name
+    : runtimeText("Not loaded", "未加载");
   syncRefSelect();
   if (state.calibrationMode) {
     publishH2rWorkflowState();
@@ -5980,12 +6142,20 @@ async function refreshRetargetPanel(): Promise<void> {
     );
     state.calibration = st.calibrated;
     if (st.calibrated) {
-      setCalChip(st.bundled && !st.path ? "内置缩放参数" : "已标定", "ok");
+      setCalChip(
+        st.bundled && !st.path
+          ? runtimeText("Built-in scale parameters", "内置缩放参数")
+          : runtimeText("Calibrated", "已标定"),
+        "ok",
+      );
       calCard.style.display = "none";
       btn.disabled = !state.motion;
       if (state.motion) await refreshScaledPreview();
     } else {
-      setCalChip("未标定 — 请先标定", "warn");
+      setCalChip(runtimeText(
+        "Not calibrated — calibration required",
+        "未标定 — 请先标定",
+      ), "warn");
       btn.disabled = true;
       if (state.motion) {
         await enterCalibrationMode(st.joint_q || null);
@@ -5994,7 +6164,7 @@ async function refreshRetargetPanel(): Promise<void> {
       }
     }
   } catch (e) {
-    setCalChip("未标定", "warn");
+    setCalChip(runtimeText("Not calibrated", "未标定"), "warn");
     btn.disabled = true;
     if (state.motion) {
       await enterCalibrationMode(null);
@@ -6025,22 +6195,28 @@ document.getElementById("recalib-btn").onclick = async () => {
 
 document.getElementById("calib-zero").onclick = async () => {
   await applyCalibrationComparison("h2r", "zero");
-  toast("已归零（URDF 零位）");
+  toast(runtimeText("Reset to the URDF zero pose", "已归零（URDF 零位）"));
 };
 
 document.getElementById("calib-restore").onclick = async () => {
   if (!state.calibHasSaved || !state.calibBaselineQ) {
-    toast("尚无已保存标定可恢复", true);
+    toast(runtimeText(
+      "There is no saved calibration to restore",
+      "尚无已保存标定可恢复",
+    ), true);
     return;
   }
   await applyCalibrationComparison("h2r", "saved");
-  toast("已恢复到上次保存的标定");
+  toast(runtimeText(
+    "Restored the last saved calibration",
+    "已恢复到上次保存的标定",
+  ));
 };
 
 document.getElementById("calib-cancel").onclick = async () => {
   await exitCalibrationMode();
   document.getElementById("calib-card").style.display = "none";
-  toast("已取消标定");
+  toast(runtimeText("Calibration cancelled", "已取消标定"));
   refreshRetargetPanel();
 };
 
@@ -6072,7 +6248,10 @@ document.getElementById("calib-save").onclick = async () => {
     publishH2rWorkflowState();
     void syncBatchRefHint();
     const changed = Object.values(savedQ).filter((value) => Math.abs(value) > 1e-4).length;
-    toast(`标定已保存：${changed} 个非零关节 — 请点击 Retarget 后再播放预览`);
+    toast(runtimeText(
+      `Calibration saved: ${changed} non-zero joints. Run Retarget before playing the preview.`,
+      `标定已保存：${changed} 个非零关节 — 请点击 Retarget 后再播放预览`,
+    ));
   } catch (e) { toast(errorMessage(e), true); }
 };
 
@@ -6124,8 +6303,11 @@ document.getElementById("retarget-btn").onclick = async () => {
   renderSpinnerStatus(
     status,
     firstHint
-      ? "正在 retarget…（新机器人首次较慢，进度条可能短暂不动）"
-      : "正在 retarget…",
+      ? runtimeText(
+        "Retargeting… The first run for a new robot is slower, and progress may pause briefly.",
+        "正在 retarget…（新机器人首次较慢，进度条可能短暂不动）",
+      )
+      : runtimeText("Retargeting…", "正在 retarget…"),
   );
   document.getElementById("retarget-btn").disabled = true;
   h2rRunState = "running";
@@ -6152,14 +6334,22 @@ document.getElementById("retarget-btn").onclick = async () => {
     const { job_id } = await API.post("/api/retarget", body);
     const j = await pollJob<RetargetResult>(job_id, (jp) => {
       setRetargetProgress(prog, bar, jp);
-      const msg = jp.message || (firstHint ? "新机器人首次 retarget 编译中，请耐心等待…" : "正在 retarget…");
+      const msg = jp.message || (firstHint
+        ? runtimeText(
+          "Compiling the first retarget for this robot. This may take a moment…",
+          "新机器人首次 retarget 编译中，请耐心等待…",
+        )
+        : runtimeText("Retargeting…", "正在 retarget…"));
       renderSpinnerStatus(status, msg);
     });
     if (state.robot?.name !== retargetRobotName) {
       prog.classList.remove("indet");
       status.textContent = "";
       h2rRunState = "failed";
-      toast("Retarget 已完成，但过程中机器人已变更，结果已丢弃。请重新执行 Retarget。", true);
+      toast(runtimeText(
+        "Retarget completed, but the robot changed while it was running. The result was discarded; run Retarget again.",
+        "Retarget 已完成，但过程中机器人已变更，结果已丢弃。请重新执行 Retarget。",
+      ), true);
       return;
     }
     prog.classList.remove("indet");
@@ -6168,11 +6358,16 @@ document.getElementById("retarget-btn").onclick = async () => {
     const srcFps = j.result.motion_source_fps ?? state.motion?.framerate;
     const rtFps = j.result.retarget_fps ?? j.result.source_fps;
     const effectiveRtFps = rtFps ?? 30;
-    status.textContent =
-      `完成：${j.result.num_frames} 帧 @ ${effectiveRtFps.toFixed(1)} fps` +
-      (srcFps && Math.abs(srcFps - effectiveRtFps) > 0.5
-        ? `（动作原始 ${srcFps.toFixed(1)} fps）`
-        : "");
+    status.textContent = runtimeText(
+      `Completed: ${j.result.num_frames} frames @ ${effectiveRtFps.toFixed(1)} fps`
+        + (srcFps && Math.abs(srcFps - effectiveRtFps) > 0.5
+          ? ` (source motion ${srcFps.toFixed(1)} fps)`
+          : ""),
+      `完成：${j.result.num_frames} 帧 @ ${effectiveRtFps.toFixed(1)} fps`
+        + (srcFps && Math.abs(srcFps - effectiveRtFps) > 0.5
+          ? `（动作原始 ${srcFps.toFixed(1)} fps）`
+          : ""),
+    );
     state.robotTrajectory = j.result.trajectory;
     robot.setTrajectory(j.result.trajectory);
     // Always restart the shared timeline at t=0.  Previously we only called
@@ -6201,7 +6396,10 @@ document.getElementById("retarget-btn").onclick = async () => {
     emitResultDiagnostics("h2r", j.result.diagnostics ?? {
       schema_version: 1,
       available: false,
-      reason: "当前结果未返回可用的 tracking/contact 诊断。",
+      reason: runtimeText(
+        "The current result did not return usable tracking/contact diagnostics.",
+        "当前结果未返回可用的 tracking/contact 诊断。",
+      ),
     });
     player.setPlaying(true);
     robot.group.getWorldPosition(_camFocus);
@@ -6218,34 +6416,46 @@ document.getElementById("retarget-btn").onclick = async () => {
     if (tStartEl) tStartEl.value = "";
     if (tEndEl) tEndEl.value = "";
     const eff = j.result.retarget_fps ?? j.result.source_fps ?? 30;
-    fpsInput.placeholder = `留空 = ${eff.toFixed(0)} fps（Retarget 结果）`;
+    fpsInput.placeholder = runtimeText(
+      `Blank = ${eff.toFixed(0)} fps (Retarget result)`,
+      `留空 = ${eff.toFixed(0)} fps（Retarget 结果）`,
+    );
     const clipSrc = j.result.motion_source_fps ?? state.motion?.framerate;
     const exportHint = document.createDocumentFragment();
     exportHint.append(
-      document.createTextNode("当前缓存："),
+      document.createTextNode(runtimeText("Current cache: ", "当前缓存：")),
       textElement("b", "", `${eff.toFixed(1)} fps`),
-      document.createTextNode("（Retarget 求解帧率）"),
+      document.createTextNode(runtimeText(
+        " (Retarget solve frame rate)",
+        "（Retarget 求解帧率）",
+      )),
     );
     if (clipSrc && Math.abs(clipSrc - eff) > 0.5) {
       exportHint.append(
-        document.createTextNode("；动作文件原始 "),
+        document.createTextNode(runtimeText("; source motion ", "；动作文件原始 ")),
         textElement("b", "", `${clipSrc.toFixed(1)} fps`),
       );
     }
     exportHint.append(
-      document.createTextNode("。"),
-      textElement("b", "", "导出 FPS"),
-      document.createTextNode(" 仅插值机器人轨迹，不重新求解。"),
+      document.createTextNode(runtimeText(". ", "。")),
+      textElement("b", "", runtimeText("Export FPS", "导出 FPS")),
+      document.createTextNode(runtimeText(
+        " only interpolates the robot trajectory; it does not solve it again.",
+        " 仅插值机器人轨迹，不重新求解。",
+      )),
     );
     const bundleHint = document.getElementById("rt-export-bundle-hint");
     if (bundleHint) bundleHint.style.display = j.result.has_scene ? "block" : "none";
     if (j.result.has_scene) {
-      exportHint.append(document.createTextNode(" 含地形/物体时将打包为 ZIP（数据文件 + OBJ）。"));
+      exportHint.append(document.createTextNode(runtimeText(
+        " Results with terrain or objects are packaged as ZIP (data file + OBJ).",
+        " 含地形/物体时将打包为 ZIP（数据文件 + OBJ）。",
+      )));
     }
     document.getElementById("rt-export-srcfps").replaceChildren(exportHint);
     h2rRunState = "completed";
     publishH2rWorkflowState();
-    toast("Retarget 完成，可导出");
+    toast(runtimeText("Retarget complete; ready to export", "Retarget 完成，可导出"));
   } catch (e) {
     status.textContent = "";
     prog.classList.remove("indet");
@@ -6274,7 +6484,10 @@ document.getElementById("rt-export-btn").onclick = async () => {
     : `${state.motion?.name || "clip"}.csv`;
   try {
     await triggerBrowserDownload(url, name);
-    toast("已开始下载（保存到浏览器默认下载目录）");
+    toast(runtimeText(
+      "Download started (saved to the browser's default download directory)",
+      "已开始下载（保存到浏览器默认下载目录）",
+    ));
   } catch (e) { toast(errorMessage(e), true); }
 };
 
@@ -7225,7 +7438,9 @@ function syncCalibrationNumberInputs(workflow: WorkflowId): void {
     row.num.max = String(angleForDisplay(row.hi, unit));
     row.num.step = unit === "deg" ? "0.1" : "0.001";
     row.num.value = formatCalibrationAngle(q[joint] ?? 0, unit);
-    row.num.title = unit === "deg" ? "角度（度）；内部仍以弧度保存" : "角度（弧度）";
+    row.num.title = unit === "deg"
+      ? runtimeText("Angle (degrees); stored internally in radians", "角度（度）；内部仍以弧度保存")
+      : runtimeText("Angle (radians)", "角度（弧度）");
   }
   calibManip.setAngleUnit(unit);
 }
@@ -7270,7 +7485,10 @@ async function applyCalibrationComparison(
   } else if (comparison === "saved") {
     target = workflow === "h2r" ? state.calibBaselineQ : r2r.calibBaselineQ;
     if (!target) {
-      toast("尚无已保存标定可用于对照", true);
+      toast(runtimeText(
+        "There is no saved calibration available for comparison",
+        "尚无已保存标定可用于对照",
+      ), true);
       return;
     }
   } else {
@@ -7301,7 +7519,12 @@ async function resetCalibrationRegion(workflow: WorkflowId): Promise<void> {
     r2r.calibDraftQ = { ...next };
     r2rBuildSliders(next, r2r.calibLimits);
   }
-  toast(changed > 0 ? `当前关节分组已归零：${changed} 个关节` : "当前分组已经是零位");
+  toast(changed > 0
+    ? runtimeText(
+      `Reset ${changed} joints in the current region`,
+      `当前关节分组已归零：${changed} 个关节`,
+    )
+    : runtimeText("The current region is already at zero", "当前分组已经是零位"));
 }
 
 function calibrationCommandValue<T extends string>(detail: CalibrationEditorCommandDetail): T {
@@ -7350,9 +7573,12 @@ function renderCalibrationSaveSummary(
   const changed = Object.values(q).filter((value) => Math.abs(value) > 1e-4).length;
   const mapped = refSkel.mappings.length;
   element.textContent = [
-    `已保存：${scope}`,
-    `${changed} 个非零关节，${mapped} 个映射效应器`,
-    path ? `文件：${path}` : "",
+    runtimeText(`Saved: ${scope}`, `已保存：${scope}`),
+    runtimeText(
+      `${changed} non-zero joints, ${mapped} mapped effectors`,
+      `${changed} 个非零关节，${mapped} 个映射效应器`,
+    ),
+    path ? runtimeText(`File: ${path}`, `文件：${path}`) : "",
   ].filter(Boolean).join(" · ");
   element.classList.add("visible");
 }
@@ -7368,13 +7594,19 @@ function calibrationDiagnosticRows(
   );
   const rows: Array<readonly [ValidationTone, string]> = [];
   const positionCm = mean(diagnostics.map((item) => item.positionResidualM)) * 100;
-  rows.push(["ok", `映射位置残差（诊断值）：平均 ${positionCm.toFixed(1)} cm`]);
+  rows.push(["ok", runtimeText(
+    `Mapped position residual (diagnostic): mean ${positionCm.toFixed(1)} cm`,
+    `映射位置残差（诊断值）：平均 ${positionCm.toFixed(1)} cm`,
+  )]);
 
   const rotations = diagnostics
     .map((item) => item.rotationResidualDeg)
     .filter((value): value is number => value != null && Number.isFinite(value));
   if (rotations.length > 0) {
-    rows.push(["ok", `映射旋转残差（诊断值）：平均 ${mean(rotations).toFixed(1)}°`]);
+    rows.push(["ok", runtimeText(
+      `Mapped rotation residual (diagnostic): mean ${mean(rotations).toFixed(1)}°`,
+      `映射旋转残差（诊断值）：平均 ${mean(rotations).toFixed(1)}°`,
+    )]);
   }
 
   const bySemantic = new Map(
@@ -7390,7 +7622,10 @@ function calibrationDiagnosticRows(
   }
   if (sideDifferences.length > 0) {
     const asymmetryCm = mean(sideDifferences) * 100;
-    rows.push([asymmetryCm <= 8 ? "ok" : "warn", `左右映射差异：平均 ${asymmetryCm.toFixed(1)} cm`]);
+    rows.push([asymmetryCm <= 8 ? "ok" : "warn", runtimeText(
+      `Left/right mapping difference: mean ${asymmetryCm.toFixed(1)} cm`,
+      `左右映射差异：平均 ${asymmetryCm.toFixed(1)} cm`,
+    )]);
   }
 
   const feet = diagnostics.filter((item) => {
@@ -7399,14 +7634,23 @@ function calibrationDiagnosticRows(
   });
   if (feet.length > 0) {
     const groundCm = mean(feet.map((item) => item.verticalResidualM)) * 100;
-    rows.push([groundCm <= 8 ? "ok" : "warn", `脚部高度差：平均 ${groundCm.toFixed(1)} cm`]);
+    rows.push([groundCm <= 8 ? "ok" : "warn", runtimeText(
+      `Foot height difference: mean ${groundCm.toFixed(1)} cm`,
+      `脚部高度差：平均 ${groundCm.toFixed(1)} cm`,
+    )]);
   }
 
   const heading = refSkel.headingResidualDeg(robotView);
   if (heading != null) {
-    rows.push([heading <= 15 ? "ok" : "warn", `躯干朝向差：${heading.toFixed(1)}°`]);
+    rows.push([heading <= 15 ? "ok" : "warn", runtimeText(
+      `Torso heading difference: ${heading.toFixed(1)}°`,
+      `躯干朝向差：${heading.toFixed(1)}°`,
+    )]);
   } else {
-    rows.push(["warn", "躯干朝向差：缺少可用的左右肩 / 髋映射基线"]);
+    rows.push(["warn", runtimeText(
+      "Torso heading difference: no usable left/right shoulder or hip mapping baseline",
+      "躯干朝向差：缺少可用的左右肩 / 髋映射基线",
+    )]);
   }
   return rows;
 }
@@ -7415,13 +7659,30 @@ let r2rRunState: WorkflowRunState = "idle";
 let r2rTrajectoryState: "idle" | "validating" | "failed" = "idle";
 
 function r2rBlockedReason(): string | null {
-  if (!r2r.sourceName) return "缺少源机器人：请先加载轨迹所属的 Robot Model。";
-  if (!r2r.sourceToken) return "缺少源 Robot Trajectory：请上传 CSV、PKL 或 NPZ 轨迹。";
-  if (!r2r.targetName) return "缺少目标机器人：请选择要接收动作的 Robot Model。";
+  if (!r2r.sourceName) return runtimeText(
+    "Source robot is missing. Load the robot model associated with the trajectory first.",
+    "缺少源机器人：请先加载轨迹所属的 Robot Model。",
+  );
+  if (!r2r.sourceToken) return runtimeText(
+    "Source robot trajectory is missing. Upload a CSV, PKL, or NPZ trajectory.",
+    "缺少源 Robot Trajectory：请上传 CSV、PKL 或 NPZ 轨迹。",
+  );
+  if (!r2r.targetName) return runtimeText(
+    "Target robot is missing. Select the robot model that should receive the motion.",
+    "缺少目标机器人：请选择要接收动作的 Robot Model。",
+  );
   if (!r2r.calibrated) {
-    return `缺少 ${r2r.targetPayload?.display_name || r2r.targetName} + ${r2r.sourcePayload?.display_name || r2r.sourceName} R2R 标定配置。`;
+    const target = r2r.targetPayload?.display_name || r2r.targetName;
+    const source = r2r.sourcePayload?.display_name || r2r.sourceName;
+    return runtimeText(
+      `R2R calibration is missing for ${target} + ${source}.`,
+      `缺少 ${target} + ${source} R2R 标定配置。`,
+    );
   }
-  if (r2rRunState === "running") return "R2R Retarget 正在运行，请等待当前任务完成。";
+  if (r2rRunState === "running") return runtimeText(
+    "R2R retarget is running. Wait for the current task to finish.",
+    "R2R Retarget 正在运行，请等待当前任务完成。",
+  );
   return null;
 }
 
@@ -7452,45 +7713,55 @@ function publishR2rWorkflowState(): void {
   const nodes: WorkflowNodeStatus[] = [
     workflowNode(
       "source",
-      "源机器人",
+      runtimeText("Source robot", "源机器人"),
       r2r.sourceName ? "ready" : "missing",
-      r2r.sourcePayload?.display_name || r2r.sourceName || "未选择",
+      r2r.sourcePayload?.display_name || r2r.sourceName || runtimeText("Not selected", "未选择"),
       "r2r",
     ),
     workflowNode(
       "trajectory",
-      "源轨迹",
+      runtimeText("Source trajectory", "源轨迹"),
       trajectoryState,
       r2rTrajectoryState === "validating"
-        ? "正在验证"
+        ? runtimeText("Validating", "正在验证")
         : r2r.sourceToken
-          ? r2r.sourceStem || "已加载"
-          : r2rTrajectoryState === "failed" ? "验证失败" : "未上传",
+          ? r2r.sourceStem || runtimeText("Loaded", "已加载")
+          : r2rTrajectoryState === "failed"
+            ? runtimeText("Validation failed", "验证失败")
+            : runtimeText("Not uploaded", "未上传"),
       "r2r",
     ),
     workflowNode(
       "target",
-      "目标机器人",
+      runtimeText("Target robot", "目标机器人"),
       r2r.targetName ? "ready" : "missing",
-      r2r.targetPayload?.display_name || r2r.targetName || "未选择",
+      r2r.targetPayload?.display_name || r2r.targetName || runtimeText("Not selected", "未选择"),
       "r2r",
     ),
     workflowNode(
       "calibration",
-      "标定",
+      runtimeText("Calibration", "标定"),
       calibrationState,
-      r2r.calibrating ? "正在编辑" : r2r.calibrated ? "已匹配" : "未就绪",
+      r2r.calibrating
+        ? runtimeText("Editing", "正在编辑")
+        : r2r.calibrated
+          ? runtimeText("Matched", "已匹配")
+          : runtimeText("Not ready", "未就绪"),
       "r2r",
     ),
     workflowNode(
       "result",
-      "结果",
+      runtimeText("Result", "结果"),
       resultState,
       r2r.exportToken
-        ? "可预览/导出"
+        ? runtimeText("Ready to preview/export", "可预览/导出")
         : r2rRunState === "running"
-          ? "求解中"
-          : r2rRunState === "failed" ? "运行失败" : blockedReason == null ? "可以运行" : "尚无结果",
+          ? runtimeText("Solving", "求解中")
+          : r2rRunState === "failed"
+            ? runtimeText("Run failed", "运行失败")
+            : blockedReason == null
+              ? runtimeText("Ready to run", "可以运行")
+              : runtimeText("No result yet", "尚无结果"),
       "r2r",
     ),
   ];
@@ -7509,8 +7780,11 @@ function updateR2rCalibrationValidation(): void {
     const target = r2r.targetPayload?.display_name || r2r.targetName;
     const source = r2r.sourcePayload?.display_name || r2r.sourceName;
     scope.textContent = target && source
-      ? `配置范围：${target} + ${source}`
-      : "配置范围：目标机器人 + 源机器人";
+      ? runtimeText(`Scope: ${target} + ${source}`, `配置范围：${target} + ${source}`)
+      : runtimeText(
+        "Scope: target robot + source robot",
+        "配置范围：目标机器人 + 源机器人",
+      );
   }
 
   const container = document.getElementById("r2r-calibration-validation-summary");
@@ -7530,17 +7804,35 @@ function updateR2rCalibrationValidation(): void {
 
   renderValidationSummary(container, [
     [r2r.sourceName ? "ok" : "warn", r2r.sourceName
-      ? `源机器人：${r2r.sourcePayload?.display_name || r2r.sourceName}`
-      : "尚未选择源机器人"],
+      ? runtimeText(
+        `Source robot: ${r2r.sourcePayload?.display_name || r2r.sourceName}`,
+        `源机器人：${r2r.sourcePayload?.display_name || r2r.sourceName}`,
+      )
+      : runtimeText("No source robot selected", "尚未选择源机器人")],
     [r2r.targetName ? "ok" : "warn", r2r.targetName
-      ? `目标机器人：${r2r.targetPayload?.display_name || r2r.targetName}`
-      : "尚未选择目标机器人"],
+      ? runtimeText(
+        `Target robot: ${r2r.targetPayload?.display_name || r2r.targetName}`,
+        `目标机器人：${r2r.targetPayload?.display_name || r2r.targetName}`,
+      )
+      : runtimeText("No target robot selected", "尚未选择目标机器人")],
     [r2r.calibLimits.length > 0 ? "ok" : "warn", r2r.calibLimits.length > 0
-      ? `可编辑关节：${r2r.calibLimits.length} 个`
-      : "进入标定后显示目标机器人关节诊断"],
+      ? runtimeText(
+        `Editable joints: ${r2r.calibLimits.length}`,
+        `可编辑关节：${r2r.calibLimits.length} 个`,
+      )
+      : runtimeText(
+        "Enter calibration to view target-robot joint diagnostics",
+        "进入标定后显示目标机器人关节诊断",
+      )],
     [nearLimit.length === 0 ? "ok" : "warn", nearLimit.length === 0
-      ? `当前编辑：${changed} 个非零关节，均未接近限位`
-      : `${nearLimit.length} 个关节接近 URDF 限位`],
+      ? runtimeText(
+        `Current edit: ${changed} non-zero joints; none are near their limits`,
+        `当前编辑：${changed} 个非零关节，均未接近限位`,
+      )
+      : runtimeText(
+        `${nearLimit.length} joints are near their URDF limits`,
+        `${nearLimit.length} 个关节接近 URDF 限位`,
+      )],
     ...calibrationDiagnosticRows(r2rTgt),
   ]);
 }
@@ -7805,7 +8097,12 @@ async function r2rUpdateRetargetBtn(): Promise<void> {
   }
   r2r.calibrated = calibrated;
   if (!r2r.targetName || !r2r.sourceName) r2rSetCalChip("—", "");
-  else r2rSetCalChip(calibrated ? "已标定" : "未标定 — 请先标定", calibrated ? "ok" : "warn");
+  else r2rSetCalChip(
+    calibrated
+      ? runtimeText("Calibrated", "已标定")
+      : runtimeText("Not calibrated — calibration required", "未标定 — 请先标定"),
+    calibrated ? "ok" : "warn",
+  );
   const batchCalibrationStatus = document.getElementById("r2r-batch-calibration-status");
   if (batchCalibrationStatus) {
     batchCalibrationStatus.textContent = !r2r.targetName || !r2r.sourceName
@@ -7832,7 +8129,9 @@ async function r2rPopulateSelects(): Promise<void> {
     for (const r of data.robots) {
       const opt = document.createElement("option");
       opt.value = r.name;
-      opt.textContent = `${r.display_name} (${r.num_dof} DOF)${r.has_urdf ? "" : " — 无URDF"}`;
+      opt.textContent = `${r.display_name} (${r.num_dof} DOF)${
+        r.has_urdf ? "" : runtimeText(" — no URDF", " — 无 URDF")
+      }`;
       opt.disabled = !r.has_urdf;
       sel.appendChild(opt);
       if (preferG1 && !g1 && r.has_urdf && /g1/i.test(r.name + r.display_name)) g1 = r.name;
@@ -8126,10 +8425,13 @@ async function r2rStartCalib(
   { auto = false }: { auto?: boolean } = {},
 ): Promise<void> {
   if (!r2r.targetName || !r2r.sourceName) {
-    toast("请先加载源机器人与目标机器人", true);
+    toast(runtimeText(
+      "Load both the source and target robots first",
+      "请先加载源机器人与目标机器人",
+    ), true);
     return;
   }
-  if (!auto) toast("准备标定…");
+  if (!auto) toast(runtimeText("Preparing calibration…", "准备标定…"));
   let session: ApiPostResponse<"/api/r2r/calibration/session">;
   try {
     session = await API.post("/api/r2r/calibration/session", {
@@ -8154,14 +8456,17 @@ async function r2rStartCalib(
   applyCalibOrbitLimits();
   updateR2rCalibBanner();
   document.getElementById("calib-banner")?.classList.remove("hidden");
-  r2rSetCalChip("标定中…", "warn");
+  r2rSetCalChip(runtimeText("Calibrating…", "标定中…"), "warn");
   document.getElementById("r2r-retarget-btn").disabled = true;
   publishR2rWorkflowState();
 
   const targetPayload = r2r.targetPayload;
   const reference = session.reference ?? session.reference_pose;
   if (!targetPayload || !reference) {
-    toast("标定会话缺少目标机器人或参考姿态", true);
+    toast(runtimeText(
+      "The calibration session is missing the target robot or reference pose",
+      "标定会话缺少目标机器人或参考姿态",
+    ), true);
     r2rExitCalib();
     return;
   }
@@ -8183,8 +8488,14 @@ async function r2rStartCalib(
   document.getElementById("r2r-calib-edit")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   r2rFocus(r2rTgt);
   toast(auto
-    ? "目标机器人尚未标定：已自动进入标定模式（点击关节拖动或右侧滑块）"
-    : "已进入标定：把目标机器人对齐到蓝色源参考姿态");
+    ? runtimeText(
+      "The target robot is not calibrated. Calibration mode opened automatically; drag joints or use the right-side sliders.",
+      "目标机器人尚未标定：已自动进入标定模式（点击关节拖动或右侧滑块）",
+    )
+    : runtimeText(
+      "Calibration started. Align the target robot to the blue source reference pose.",
+      "已进入标定：把目标机器人对齐到蓝色源参考姿态",
+    ));
 }
 
 function r2rExitCalib(): void {
@@ -8237,7 +8548,7 @@ async function r2rSaveCalib(): Promise<void> {
       response.path ?? null,
       savedQ,
     );
-    toast("R2R 标定已保存");
+    toast(runtimeText("R2R calibration saved", "R2R 标定已保存"));
     await r2rUpdateRetargetBtn();
   } catch (e) { toast(errorMessage(e), true); }
 }
@@ -8247,18 +8558,23 @@ async function r2rEnsureSourceLoaded(): Promise<boolean> {
   if (r2r.sourceName && r2r.sourcePayload) return true;
   const name = document.getElementById("r2r-source-select")?.value;
   if (!name) {
-    toast("请先在「1 · 源机器人」选择并加载 G1（或其它源机器人）", true);
+    toast(runtimeText(
+      "Select and load G1 (or another source robot) in “1 · Source robot” first",
+      "请先在「1 · 源机器人」选择并加载 G1（或其它源机器人）",
+    ), true);
     return false;
   }
-  toast("自动加载源机器人…");
+  toast(runtimeText("Loading source robot automatically…", "自动加载源机器人…"));
   try {
     const sourcePayload = await API.post("/api/robot/select", { name });
     r2r.sourcePayload = sourcePayload;
     r2r.sourceName = name;
     r2r.calibrated = false;
     await r2rSrc.load(sourcePayload);
-    document.getElementById("r2r-source-status").textContent =
-      `源机器人：${sourcePayload.display_name}`;
+    setR2rRobotStatus("source", runtimeText(
+      `Source robot: ${sourcePayload.display_name}`,
+      `源机器人：${sourcePayload.display_name}`,
+    ));
     publishR2rWorkflowState();
     return true;
   } catch (e) {
@@ -8289,8 +8605,8 @@ async function r2rUploadTraj(
   r2rRunState = "idle";
   clearResultDiagnostics("r2r");
   publishR2rWorkflowState();
-  st.textContent = "上传中…";
-  toast("上传源轨迹…");
+  st.textContent = runtimeText("Uploading…", "上传中…");
+  toast(runtimeText("Uploading source trajectory…", "上传源轨迹…"));
   try {
     switchInspectorPanel("r2r");
     if (!r2r.active) r2rEnterPanel();
@@ -8308,7 +8624,10 @@ async function r2rUploadTraj(
       (frac) => {
         const progress = frac ?? 0;
         if (bar) bar.style.width = `${Math.max(2, progress * 18).toFixed(0)}%`;
-        st.textContent = `上传 ${Math.round(progress * 100)}%…`;
+        st.textContent = runtimeText(
+          `Uploading ${Math.round(progress * 100)}%…`,
+          `上传 ${Math.round(progress * 100)}%…`,
+        );
       },
     );
     const data = await waitMotionJob<R2rSourceTrajectoryResult>(job_id, (frac, sub) => {
@@ -8471,12 +8790,18 @@ function r2rIngestTraj(files: UploadFile[], profile = "auto"): void {
 // --------------------------------------------------------------- retarget
 async function r2rRunRetarget(): Promise<void> {
   if (!r2r.sourceToken || !r2r.targetName || !r2r.sourceName) {
-    toast("请先上传源轨迹并加载目标机器人", true);
+    toast(runtimeText(
+      "Upload a source trajectory and load the target robot first",
+      "请先上传源轨迹并加载目标机器人",
+    ), true);
     return;
   }
   await r2rUpdateRetargetBtn();
   if (!r2r.calibrated) {
-    toast("目标机器人尚未针对此源机器人标定，请先完成标定", true);
+    toast(runtimeText(
+      "The target robot is not calibrated for this source robot. Complete calibration first.",
+      "目标机器人尚未针对此源机器人标定，请先完成标定",
+    ), true);
     await r2rStartCalib({ auto: true });
     return;
   }
@@ -8487,7 +8812,10 @@ async function r2rRunRetarget(): Promise<void> {
   prog.style.display = "block";
   prog.classList.add("indet");
   bar.style.width = "0%";
-  renderSpinnerStatus(status, "正在 retarget…（新机器人首次较慢）");
+  renderSpinnerStatus(status, runtimeText(
+    "Retargeting… The first run for a new robot is slower.",
+    "正在 retarget…（新机器人首次较慢）",
+  ));
   document.getElementById("r2r-retarget-btn").disabled = true;
   r2rRunState = "running";
   r2r.exportToken = null;
@@ -8505,7 +8833,7 @@ async function r2rRunRetarget(): Promise<void> {
     const { job_id } = await API.post("/api/r2r/retarget", body);
     const j = await pollJob<RetargetResult>(job_id, (jp) => {
       setRetargetProgress(prog, bar, jp);
-      renderSpinnerStatus(status, jp.message || "正在 retarget…");
+      renderSpinnerStatus(status, jp.message || runtimeText("Retargeting…", "正在 retarget…"));
     });
     prog.classList.remove("indet");
     bar.style.width = "100%";
@@ -8538,14 +8866,19 @@ async function r2rRunRetarget(): Promise<void> {
     emitResultDiagnostics("r2r", j.result.diagnostics ?? {
       schema_version: 1,
       available: false,
-      reason: "当前结果未返回可用的 tracking/contact 诊断。",
+      reason: runtimeText(
+        "The current result did not return usable tracking/contact diagnostics.",
+        "当前结果未返回可用的 tracking/contact 诊断。",
+      ),
     });
     player.seek(0);
     r2rApplyStage();
     r2rFocus(r2rTgt);
     player.setPlaying(true);
-    status.textContent =
-      `完成：${j.result.num_frames} 帧 @ ${(j.result.source_fps || 30).toFixed(1)} fps`;
+    status.textContent = runtimeText(
+      `Completed: ${j.result.num_frames} frames @ ${(j.result.source_fps || 30).toFixed(1)} fps`,
+      `完成：${j.result.num_frames} 帧 @ ${(j.result.source_fps || 30).toFixed(1)} fps`,
+    );
     document.getElementById("r2r-export-card").style.display = "block";
     document.getElementById("r2r-export-fps").value = "";
     const r2rT0 = document.getElementById("r2r-export-t-start");
@@ -8555,7 +8888,10 @@ async function r2rRunRetarget(): Promise<void> {
     const r2rBundleHint = document.getElementById("r2r-export-bundle-hint");
     if (r2rBundleHint) r2rBundleHint.style.display = j.result.has_scene ? "block" : "none";
     publishR2rWorkflowState();
-    toast("R2R Retarget 完成，正在播放目标机器人");
+    toast(runtimeText(
+      "R2R retarget complete; playing the target robot",
+      "R2R Retarget 完成，正在播放目标机器人",
+    ));
   } catch (e) {
     status.textContent = "";
     prog.classList.remove("indet");
@@ -8663,13 +8999,19 @@ async function r2rIngestBasket(
   profile = "auto",
 ): Promise<void> {
   if (!files?.length) return;
-  showLoading(`R2R 批量上传… (${files.length} 个文件)`);
+  showLoading(runtimeText(
+    `Uploading R2R batch… (${files.length} files)`,
+    `R2R 批量上传… (${files.length} 个文件)`,
+  ));
   try {
     const { job_id } = await uploadFilesXHR(
       `/api/r2r/basket/upload?profile=${encodeURIComponent(profile)}`,
       files,
       {},
-      (frac) => setLoadingProgress((frac ?? 0) * 0.4, "上传中…"),
+      (frac) => setLoadingProgress(
+        (frac ?? 0) * 0.4,
+        runtimeText("Uploading…", "上传中…"),
+      ),
     );
     const payload = await waitMotionJob<R2rBasketUploadResult>(job_id, (frac, sub) => {
       setLoadingProgress(0.4 + frac * 0.6, sub);
@@ -8684,7 +9026,10 @@ async function r2rIngestBasket(
       r2rApplySuggestedBackend(r2rSuggestedBackendForProfile(profile));
     }
     r2rRenderBasket();
-    toast(`已加入篮子：${entries.length} 个 clip（${payload.profile || profile}）`);
+    toast(runtimeText(
+      `Added to basket: ${entries.length} clips (${payload.profile || profile})`,
+      `已加入篮子：${entries.length} 个 clip（${payload.profile || profile}）`,
+    ));
   } catch (e) {
     toast(errorMessage(e), true);
   } finally {
@@ -8742,17 +9087,20 @@ function r2rInit(): void {
   document.getElementById("r2r-calib-btn").onclick = () => void r2rStartCalib();
   document.getElementById("r2r-calib-zero").onclick = () => {
     void applyCalibrationComparison("r2r", "zero");
-    toast("已归零（URDF 零位）");
+    toast(runtimeText("Reset to the URDF zero pose", "已归零（URDF 零位）"));
   };
   document.getElementById("r2r-calib-cancel").onclick = () => {
     r2rExitCalib();
-    toast("已取消标定");
+    toast(runtimeText("Calibration cancelled", "已取消标定"));
     void r2rUpdateRetargetBtn();
   };
   document.getElementById("r2r-calib-save").onclick = () => void r2rSaveCalib();
   document.getElementById("r2r-retarget-btn").onclick = () => void r2rRunRetarget();
   document.getElementById("r2r-export-btn").onclick = async () => {
-    if (!r2r.exportToken) { toast("请先完成 Retarget", true); return; }
+    if (!r2r.exportToken) {
+      toast(runtimeText("Complete Retarget first", "请先完成 Retarget"), true);
+      return;
+    }
     const fps = parseFloat(document.getElementById("r2r-export-fps").value);
     const fmt = document.getElementById("r2r-export-format")?.value || "csv";
     let url = `/api/export/${r2r.exportToken}?fmt=${encodeURIComponent(fmt)}`;
@@ -8765,7 +9113,10 @@ function r2rInit(): void {
       : (fmt === "pkl" ? `${stem}.pkl` : `${stem}.csv`);
     try {
       await triggerBrowserDownload(url, name);
-      toast("已开始下载（保存到浏览器默认下载目录）");
+      toast(runtimeText(
+        "Download started (saved to the browser's default download directory)",
+        "已开始下载（保存到浏览器默认下载目录）",
+      ));
     } catch (e) { toast(errorMessage(e), true); }
   };
   document.getElementById("r2r-basket-clear")?.addEventListener("click", () => {
@@ -8785,7 +9136,7 @@ function r2rInit(): void {
     const status = document.getElementById("r2r-batch-status");
     prog.style.display = "block";
     if (bar) bar.style.width = "0%";
-    renderSpinnerStatus(status, "批量 R2R 处理中…");
+    renderSpinnerStatus(status, runtimeText("Processing R2R batch…", "批量 R2R 处理中…"));
     try {
       const body: R2rBatchRequest = {
         target: r2r.targetName,
@@ -8813,10 +9164,13 @@ function r2rInit(): void {
       });
       if (bar) bar.style.width = "100%";
       const r = j.result;
-      status.textContent = `完成：${r.written?.length ?? 0} 个 clip`;
+      status.textContent = runtimeText(
+        `Completed: ${r.written?.length ?? 0} clips`,
+        `完成：${r.written?.length ?? 0} 个 clip`,
+      );
       if (r.download_name) {
         await triggerBrowserDownload(`/api/job/${job_id}/download`, r.download_name);
-        toast("批量 ZIP 已开始下载");
+        toast(runtimeText("Batch ZIP download started", "批量 ZIP 已开始下载"));
       }
     } catch (e) {
       status.textContent = "";

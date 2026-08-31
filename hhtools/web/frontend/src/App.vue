@@ -406,7 +406,10 @@ function showBoot(message: string): void {
   const element = document.getElementById('boot-error')
   if (!element) return
   element.style.display = 'block'
-  element.textContent = `界面未能初始化：${message}（按 F12 查看 Console）`
+  element.textContent = workspaceText(
+    `The interface could not initialize: ${message} (press F12 to view the console)`,
+    `界面未能初始化：${message}（按 F12 查看 Console）`,
+  )
 }
 
 const importTargets: Record<Exclude<ImportCommandTarget, 'job-spec'>, {
@@ -435,7 +438,10 @@ function handleImportCommand(event: WindowEventMap['hhtools:import-command']): v
   window.setTimeout(() => {
     const button = document.querySelector<HTMLButtonElement>(target.selector)
     if (button) button.click()
-    else window.__hhApp?.toast('导入入口尚未准备完成，请稍后重试', true)
+    else window.__hhApp?.toast(workspaceText(
+      'The import entry point is not ready yet. Try again shortly.',
+      '导入入口尚未准备完成，请稍后重试',
+    ), true)
   }, 0)
 }
 
@@ -568,7 +574,12 @@ onBeforeUnmount(() => {
         />
       </div>
     </nav>
-    <div class="col-resizer" id="resize-sidebar" title="拖动调节左栏宽度" @pointerdown="panelLayout.startResize('sidebar', $event)"></div>
+    <div
+      class="col-resizer"
+      id="resize-sidebar"
+      :title="workspaceText('Drag to resize the navigation', '拖动调节左栏宽度')"
+      @pointerdown="panelLayout.startResize('sidebar', $event)"
+    ></div>
     <WorkspaceDrawerHandle
       side="left"
       :expanded="!panelLayout.state.sidebarHidden"
@@ -586,24 +597,24 @@ onBeforeUnmount(() => {
       <div class="stage-top-tools">
         <div class="view-hud" id="view-hud">
           <div class="view-hud-row" data-row="motion">
-            <button class="seg-btn" id="tg-skeleton" title="显示/隐藏原始动作骨架">
+            <button class="seg-btn" id="tg-skeleton" :title="workspaceText('Show/hide the source motion skeleton', '显示/隐藏原始动作骨架')">
               <span class="eye" aria-hidden="true">👁</span><span class="lbl">{{ workspaceText('Skeleton', '骨架') }}</span>
             </button>
-            <button class="seg-btn on" id="tg-mesh" title="显示/隐藏身体 mesh（SMPL 皮肤或管状近似）">
+            <button class="seg-btn on" id="tg-mesh" :title="workspaceText('Show/hide the body mesh (SMPL skin or tubular approximation)', '显示/隐藏身体 mesh（SMPL 皮肤或管状近似）')">
               <span class="eye" aria-hidden="true">👁</span><span class="lbl">{{ workspaceText('Body', '身体') }}</span>
             </button>
-            <button class="seg-btn" id="tg-env" disabled title="显示/隐藏原始动作的地形与交互物体">
+            <button class="seg-btn" id="tg-env" disabled :title="workspaceText('Show/hide source-motion terrain and interaction objects', '显示/隐藏原始动作的地形与交互物体')">
               <span class="eye" aria-hidden="true">👁</span><span class="lbl">{{ workspaceText('Objects/Terrain', '物体/地形') }}</span>
             </button>
           </div>
           <div class="view-hud-row" data-row="robot">
-            <button class="seg-btn" id="tg-scaled" disabled title="按机器人标定缩放后、IK 之前的效应器骨架">
+            <button class="seg-btn" id="tg-scaled" disabled :title="workspaceText('Effector skeleton after robot scaling and before IK', '按机器人标定缩放后、IK 之前的效应器骨架')">
               <span class="eye" aria-hidden="true">👁</span><span class="lbl">{{ workspaceText('Scaled Skeleton', '缩放骨架') }}</span>
             </button>
-            <button class="seg-btn" id="tg-scaled-env" disabled title="缩放后的地形与交互物体（与机器人同坐标系）">
+            <button class="seg-btn" id="tg-scaled-env" disabled :title="workspaceText('Scaled terrain and interaction objects in robot coordinates', '缩放后的地形与交互物体（与机器人同坐标系）')">
               <span class="eye" aria-hidden="true">👁</span><span class="lbl">{{ workspaceText('Scaled Scene', '缩放场景') }}</span>
             </button>
-            <button class="seg-btn" id="tg-robot" disabled title="显示/隐藏重定向后的机器人">
+            <button class="seg-btn" id="tg-robot" disabled :title="workspaceText('Show/hide the retargeted robot', '显示/隐藏重定向后的机器人')">
               <span class="eye" aria-hidden="true">👁</span><span class="lbl">{{ workspaceText('Robot', '机器人') }}</span>
             </button>
           </div>
@@ -611,25 +622,25 @@ onBeforeUnmount(() => {
         <div class="view-hud hidden" id="view-hud-r2r">
           <div class="view-hud-row" data-row="r2r-src">
             <span class="view-hud-tag">{{ workspaceText('Source', '源') }}</span>
-            <button class="seg-btn on" id="r2r-tg-src-robot" title="源机器人 mesh">
+            <button class="seg-btn on" id="r2r-tg-src-robot" :title="workspaceText('Source robot mesh', '源机器人 mesh')">
               <span class="eye" aria-hidden="true">👁</span><span class="lbl">{{ workspaceText('Robot', '机器人') }}</span>
             </button>
-            <button class="seg-btn" id="r2r-tg-src-skel" disabled title="源关键点骨架（FK）">
+            <button class="seg-btn" id="r2r-tg-src-skel" disabled :title="workspaceText('Source landmark skeleton (FK)', '源关键点骨架（FK）')">
               <span class="eye" aria-hidden="true">👁</span><span class="lbl">{{ workspaceText('Skeleton', '骨架') }}</span>
             </button>
-            <button class="seg-btn" id="r2r-tg-src-env" disabled title="源轨迹附带的地形/物体">
+            <button class="seg-btn" id="r2r-tg-src-env" disabled :title="workspaceText('Terrain and objects attached to the source trajectory', '源轨迹附带的地形/物体')">
               <span class="eye" aria-hidden="true">👁</span><span class="lbl">{{ workspaceText('Objects/Terrain', '物体/地形') }}</span>
             </button>
           </div>
           <div class="view-hud-row" data-row="r2r-tgt">
             <span class="view-hud-tag">{{ workspaceText('Target', '目标') }}</span>
-            <button class="seg-btn" id="r2r-tg-tgt-robot" disabled title="目标机器人 mesh">
+            <button class="seg-btn" id="r2r-tg-tgt-robot" disabled :title="workspaceText('Target robot mesh', '目标机器人 mesh')">
               <span class="eye" aria-hidden="true">👁</span><span class="lbl">{{ workspaceText('Robot', '机器人') }}</span>
             </button>
-            <button class="seg-btn" id="r2r-tg-tgt-skel" disabled title="目标缩放骨架（IK 效应器）">
+            <button class="seg-btn" id="r2r-tg-tgt-skel" disabled :title="workspaceText('Scaled target skeleton (IK effectors)', '目标缩放骨架（IK 效应器）')">
               <span class="eye" aria-hidden="true">👁</span><span class="lbl">{{ workspaceText('Skeleton', '骨架') }}</span>
             </button>
-            <button class="seg-btn" id="r2r-tg-tgt-env" disabled title="目标缩放后的地形/物体">
+            <button class="seg-btn" id="r2r-tg-tgt-env" disabled :title="workspaceText('Terrain and objects after target scaling', '目标缩放后的地形/物体')">
               <span class="eye" aria-hidden="true">👁</span><span class="lbl">{{ workspaceText('Objects/Terrain', '物体/地形') }}</span>
             </button>
           </div>
@@ -1358,14 +1369,17 @@ onBeforeUnmount(() => {
 
   <div id="load-overlay" class="hidden">
     <div class="load-card">
-      <div class="load-label" id="load-label">加载中…</div>
+      <div class="load-label" id="load-label">{{ workspaceText('Loading…', '加载中…') }}</div>
       <div class="progress"><div class="bar" id="load-bar"></div></div>
       <div class="load-sub" id="load-sub"></div>
     </div>
   </div>
 
   <div id="calib-banner" class="hidden">
-    <span class="dot"></span>标定模式 · 请将灰色机器人对齐到蓝色参考骨架
+    <span class="dot"></span>{{ workspaceText(
+      'Calibration mode · Align the grey robot to the blue reference skeleton',
+      '标定模式 · 请将灰色机器人对齐到蓝色参考骨架',
+    ) }}
   </div>
 
   <!-- Guided tour overlay -->
