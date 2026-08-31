@@ -12,7 +12,13 @@ from typing import Annotated, Any, Literal
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
 
-from .portability import is_portable_next_action_url, is_portable_resource_uri
+from .portability import (
+    PORTABLE_URI_HOST_PATTERN,
+    PORTABLE_URI_PORT_PATTERN,
+    PORTABLE_URI_TAIL_PATTERN,
+    is_portable_next_action_url,
+    is_portable_resource_uri,
+)
 
 
 class ContractModel(BaseModel):
@@ -65,13 +71,14 @@ ArtifactId = Annotated[
     ),
 ]
 
-_URI_PORT = (
-    r"(?:0|[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|"
-    r"65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])"
+_HTTP_URI = (
+    rf"https?://{PORTABLE_URI_HOST_PATTERN}"
+    rf"(?::{PORTABLE_URI_PORT_PATTERN})?{PORTABLE_URI_TAIL_PATTERN}"
 )
-_URI_HOST = r"(?:\[[0-9A-Fa-f:.%]+\]|[A-Za-z0-9._~-]+)"
-_HTTP_URI = rf"https?://{_URI_HOST}(?::{_URI_PORT})?(?:[/?#][^\s]*)?"
-_HTTPS_URI = rf"https://{_URI_HOST}(?::{_URI_PORT})?(?:[/?#][^\s]*)?"
+_HTTPS_URI = (
+    rf"https://{PORTABLE_URI_HOST_PATTERN}"
+    rf"(?::{PORTABLE_URI_PORT_PATTERN})?{PORTABLE_URI_TAIL_PATTERN}"
+)
 _HHTOOLS_ARTIFACT_URI = (
     r"hhtools://jobs/[A-Za-z0-9._~:-]+/artifacts/[A-Za-z0-9._~:-]+"
 )
@@ -79,7 +86,7 @@ _UI_QUERY_PAIR = r"(?:calibrate|panel|robot|view)=[^&#\s]{0,256}"
 _UI_QUERY = rf"\?(?:{_UI_QUERY_PAIR}(?:&{_UI_QUERY_PAIR})*)?"
 _LOCAL_UI_URL = (
     rf"(?:/(?:{_UI_QUERY})?|http://(?:127\.0\.0\.1|localhost|\[::1\]):"
-    rf"{_URI_PORT}/(?:{_UI_QUERY})?)"
+    rf"{PORTABLE_URI_PORT_PATTERN}/(?:{_UI_QUERY})?)"
 )
 _RESOURCE_URI_PATTERN = rf"^(?:{_HTTP_URI}|{_HHTOOLS_ARTIFACT_URI})$"
 _NEXT_ACTION_URL_PATTERN = rf"^(?:{_LOCAL_UI_URL}|{_HTTPS_URI})$"
