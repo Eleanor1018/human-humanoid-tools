@@ -40,10 +40,6 @@ const editorBusy = ref(false)
 const editorError = ref<string | null>(null)
 const editorValidation = ref<JobReplayCapability | null>(null)
 
-const runningCount = computed(() => jobs.value.filter((job) => job.status === 'running').length)
-const failedCount = computed(() => jobs.value.filter((job) => job.status === 'error').length)
-const doneCount = computed(() => jobs.value.filter((job) => job.status === 'done').length)
-const latestJob = computed(() => jobs.value[0] ?? null)
 const panelStyle = computed(() => (
   props.docked && open.value
     ? { '--job-panel-height': `${panelHeight.value}px` }
@@ -429,20 +425,18 @@ onBeforeUnmount(() => {
       type="button"
       class="job-drawer-summary"
       :aria-expanded="false"
+      aria-controls="job-drawer-panel"
       :title="docked ? text('Toggle Tasks (Ctrl+J)', '切换任务面板 (Ctrl+J)') : '展开任务历史'"
       @click="togglePanel"
     >
       <span class="job-summary-title">{{ text('Tasks', '任务') }}</span>
-      <span v-if="runningCount" class="job-summary-count state-running">{{ runningCount }} {{ text('running', '运行中') }}</span>
-      <span v-if="failedCount" class="job-summary-count state-error">{{ failedCount }} {{ text('failed', '失败') }}</span>
-      <span v-if="doneCount" class="job-summary-count state-done">{{ doneCount }} {{ text('completed', '完成') }}</span>
-      <span class="job-summary-latest">
-        {{ latestJob ? `${kindLabel(latestJob.kind)} · ${latestJob.message || statusLabel(latestJob.status)}` : text('No task history', '暂无任务记录') }}
-      </span>
-      <span class="job-summary-chevron" aria-hidden="true">⌃</span>
+      <!-- Heroicons 24px Outline chevron-up (MIT), copied from the official library. -->
+      <svg class="job-summary-chevron job-chevron-icon" data-icon="chevron-up" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="m4.5 15.75 7.5-7.5 7.5 7.5" />
+      </svg>
     </button>
 
-    <div v-else class="job-drawer-panel">
+    <div v-else id="job-drawer-panel" class="job-drawer-panel">
       <header class="job-drawer-head">
         <div>
           <strong>{{ text('Task History', '任务历史') }}</strong>
@@ -451,7 +445,19 @@ onBeforeUnmount(() => {
         <div class="job-drawer-head-actions">
           <input ref="importInput" class="sr-only" type="file" accept="application/json,.json" @change="importConfig">
           <button type="button" class="job-icon-btn" :title="text('Refresh tasks', '刷新任务')" :aria-label="text('Refresh tasks', '刷新任务')" @click="requestRefresh">↻</button>
-          <button type="button" class="job-icon-btn" :title="text('Collapse tasks', '收起任务')" :aria-label="text('Collapse tasks', '收起任务')" @click="togglePanel">⌄</button>
+          <button
+            type="button"
+            class="job-icon-btn"
+            :title="text('Collapse tasks', '收起任务')"
+            :aria-label="text('Collapse tasks', '收起任务')"
+            :aria-expanded="true"
+            aria-controls="job-drawer-panel"
+            @click="togglePanel"
+          >
+            <svg class="job-chevron-icon" data-icon="chevron-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+            </svg>
+          </button>
         </div>
       </header>
 

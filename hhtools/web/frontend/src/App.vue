@@ -2,6 +2,7 @@
 import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 
 import { usePanelLayout } from './composables/usePanelLayout'
+import AboutDialog from './components/AboutDialog.vue'
 import BatchWorkflow from './components/BatchWorkflow.vue'
 import PlaybackBar from './components/PlaybackBar.vue'
 import CommandPalette from './components/CommandPalette.vue'
@@ -37,6 +38,7 @@ const activePanel = ref<WorkspacePanelId>(initialWorkspacePreferences.activePane
 const workspaceLocale = ref(initialWorkspacePreferences.locale)
 const workspaceTheme = ref<WorkspaceTheme>(initialWorkspacePreferences.theme)
 const settingsOpen = ref(false)
+const aboutOpen = ref(false)
 const jobAdmission = ref<JobAdmissionSnapshot | null>(null)
 const jobAdmissionLoading = ref(false)
 const jobAdmissionSaving = ref(false)
@@ -377,6 +379,10 @@ function openWorkspaceSettings(): void {
   void loadGvhmrComponent()
 }
 
+function openAboutDialog(): void {
+  aboutOpen.value = true
+}
+
 function setActivePanel(panel: string): void {
   // Keep old deep links and saved commands working after workspace consolidation.
   const normalizedPanel = panel === 'robot'
@@ -528,6 +534,7 @@ onBeforeUnmount(() => {
         :locale="workspaceLocale"
         :theme="workspaceTheme"
         @open-settings="openWorkspaceSettings"
+        @open-about="openAboutDialog"
         @toggle-theme="toggleWorkspaceTheme"
       />
       <div class="spacer"></div>
@@ -537,6 +544,7 @@ onBeforeUnmount(() => {
         :theme="workspaceTheme"
         application-mode
         @open-settings="openWorkspaceSettings"
+        @open-about="openAboutDialog"
         @toggle-theme="toggleWorkspaceTheme"
       />
       <span v-show="false" class="pill" id="motion-pill">未加载动作</span>
@@ -1340,6 +1348,11 @@ onBeforeUnmount(() => {
       @select-motion-library-root="chooseMotionLibraryRoot"
       @refresh-gvhmr="loadGvhmrComponent"
       @setup-gvhmr="setupGvhmr"
+    />
+    <AboutDialog
+      :open="aboutOpen"
+      :locale="workspaceLocale"
+      @close="aboutOpen = false"
     />
   </div>
 

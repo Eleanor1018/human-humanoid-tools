@@ -809,31 +809,15 @@ button { font-family: inherit; cursor: pointer; }
   font-size: 12px;
   font-weight: 700;
 }
-.job-summary-count {
-  flex: 0 0 auto;
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-size: 10px;
-  font-weight: 650;
-  background: var(--code-bg);
-  color: var(--ink-secondary);
-}
-.job-summary-count.state-running { background: var(--accent-soft); color: var(--accent); }
-.job-summary-count.state-error { background: color-mix(in srgb, var(--red) 14%, transparent); color: var(--red); }
-.job-summary-count.state-done { background: color-mix(in srgb, var(--green) 14%, transparent); color: var(--green); }
-.job-summary-latest {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 11px;
-  color: var(--ink-secondary);
-}
 .job-summary-chevron {
+  margin-left: auto;
   flex: 0 0 auto;
-  font-size: 14px;
   color: var(--ink-secondary);
+}
+.job-chevron-icon {
+  display: block;
+  width: 16px;
+  height: 16px;
 }
 .job-drawer-panel {
   max-height: min(44vh, 420px);
@@ -1241,6 +1225,62 @@ button { font-family: inherit; cursor: pointer; }
 }
 .workspace-settings-close:hover { background: var(--accent-soft); color: var(--ink); }
 .workspace-settings-body { padding: 4px 20px 14px; overflow-y: auto; }
+.about-dialog { width: min(500px, 100%); }
+.about-dialog-head { align-items: center; }
+.about-dialog-body {
+  display: grid;
+  gap: 18px;
+  padding: 20px;
+}
+.about-dialog-summary {
+  color: var(--ink-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.about-dialog-details {
+  display: grid;
+  margin: 0;
+  border-top: 1px solid var(--hairline);
+}
+.about-dialog-details > div {
+  display: grid;
+  grid-template-columns: 140px minmax(0, 1fr);
+  gap: 16px;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+.about-dialog-details dt {
+  color: var(--ink-tertiary);
+  font-size: 11px;
+  font-weight: 600;
+}
+.about-dialog-details dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--ink);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.about-dialog a { color: var(--accent); text-decoration: none; }
+.about-dialog a:hover { text-decoration: underline; }
+.about-dialog-contact {
+  display: grid;
+  gap: 7px;
+}
+.about-dialog-contact h3 {
+  color: var(--ink-tertiary);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.about-dialog-contact a { width: fit-content; font-size: 12px; }
+@media (max-width: 520px) {
+  .about-dialog-details > div {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+}
 .workspace-settings-section-head {
   padding: 14px 0 6px;
   color: var(--ink-tertiary);

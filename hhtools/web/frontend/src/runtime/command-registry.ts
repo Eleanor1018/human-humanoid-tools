@@ -28,6 +28,7 @@ export interface ApplicationCommand {
 export interface CommandRegistryContext {
   activePanel: WorkspacePanelId
   openSettings: () => void
+  openAbout?: () => void
   theme?: WorkspaceTheme
   toggleTheme?: () => void
   applicationMode?: boolean
@@ -285,15 +286,14 @@ export function createApplicationCommands(
       menu: 'help',
       run: () => window.__hhTour?.start(0),
     }, {
-      id: 'help-contact',
+      id: 'help-about',
       group: localize(locale, 'Help', '帮助'),
-      label: localize(locale, 'Contact', '联系我们'),
-      detail: localize(locale, 'Contact the hhtools team', '联系 hhtools 团队'),
-      keywords: 'help contact support 联系 支持',
+      label: localize(locale, 'About hhtools', '关于 hhtools'),
+      detail: localize(locale, 'Project, license, source, and contact information', '查看项目、许可、源码与联系信息'),
+      keywords: 'help about authors contributors license source contact 关于 作者 贡献者 许可 源码 联系',
       menu: 'help',
-      enabled: false,
-      disabledReason: localize(locale, 'Coming soon', '即将推出'),
-      run: () => undefined,
+      dividerBefore: true,
+      run: context.openAbout ?? (() => undefined),
     })
   }
 
