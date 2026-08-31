@@ -11,7 +11,6 @@ import argparse
 import hashlib
 import json
 import logging
-import os
 from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from pathlib import Path
@@ -98,8 +97,21 @@ def _public_error(exception: Exception) -> ApiError:
     return error if isinstance(error, ApiError) else _internal_error()
 
 
-def _error_result(error: ApiError) -> CallToolResult:
-    document = _model_document(error)
+def _safe_error_document(exception: Exception) -> tuple[ApiError, dict[str, Any]]:
+    """Return one portable public error without echoing rejected service data."""
+
+    error = _public_error(exception)
+    try:
+        return error, _model_document(error)
+    except Exception:  # noqa: BLE001 - the protocol boundary must never leak it
+        # Do not log the rejected error or exception: either may contain the
+        # host path (or other unsafe value) that this boundary is removing.
+        _log.error("discarded a non-portable HHTools MCP service error")
+        error = _internal_error()
+        return error, _model_document(error)
+
+
+def _error_result(document: dict[str, Any]) -> CallToolResult:
     return CallToolResult(
         content=[
             TextContent(
@@ -118,27 +130,39 @@ def _tool_call[T](call: Callable[[], T]) -> T:
     try:
         result = call()
         if isinstance(result, BaseModel):
-            _model_document(result)
+            # Return a detached model rebuilt from the exact portable snapshot
+            # that was checked.  Returning the service-owned instance would let
+            # a concurrently mutated nested dict/list diverge before the SDK's
+            # later serialization step.
+            return cast(T, type(result).model_validate(_model_document(result)))
         return result
     except Exception as exception:  # noqa: BLE001 - protocol boundary
-        error = _public_error(exception)
+        error, document = _safe_error_document(exception)
         if error.code == "INTERNAL_ERROR":
-            _log.exception("unexpected HHTools MCP tool failure")
+            # Exception text can itself contain a host path.  Keep diagnostics
+            # useful without copying untrusted service data to stderr.
+            _log.error(
+                "unexpected HHTools MCP tool failure (%s)",
+                type(exception).__name__,
+            )
         # MCPServer recognises a direct CallToolResult before validating the
         # declared success model, retaining both outputSchema and ApiError.
-        return cast(T, _error_result(error))
+        return cast(T, _error_result(document))
 
 
 def _resource_call[T](call: Callable[[], T]) -> T:
     try:
         return call()
     except Exception as exception:  # noqa: BLE001 - protocol boundary
-        error = _public_error(exception)
+        error, document = _safe_error_document(exception)
         if error.code == "INTERNAL_ERROR":
-            _log.exception("unexpected HHTools MCP resource failure")
+            _log.error(
+                "unexpected HHTools MCP resource failure (%s)",
+                type(exception).__name__,
+            )
         raise ResourceError(
             json.dumps(
-                _model_document(error),
+                document,
                 ensure_ascii=False,
                 separators=(",", ":"),
             )
@@ -194,19 +218,21 @@ def _read_report[T](
     stored = runtime.jobs.get_artifact(job_id, descriptor.artifact_id, verify=False)
     try:
         with stored.path.open("rb") as stream:
-            size = os.fstat(stream.fileno()).st_size
-            if size > _REPORT_LIMIT_BYTES or size != descriptor.size_bytes:
-                raise OSError("unexpected report size")
             payload = stream.read(_REPORT_LIMIT_BYTES + 1)
-            stream.seek(0)
-            digest = hashlib.file_digest(stream, "sha256").hexdigest()
     except OSError as exception:
         raise _job_error(
             "ARTIFACT_HASH_MISMATCH",
             "The managed report no longer matches its descriptor.",
             job_id=job_id,
         ) from exception
-    if len(payload) != size or digest != descriptor.sha256:
+    # Hash exactly the immutable byte string that will be parsed and returned.
+    # A second read of the file would permit a concurrent writer to make the
+    # digest describe different bytes (a classic check/use race).
+    if (
+        len(payload) > _REPORT_LIMIT_BYTES
+        or len(payload) != descriptor.size_bytes
+        or hashlib.sha256(payload).hexdigest() != descriptor.sha256
+    ):
         raise _job_error(
             "ARTIFACT_HASH_MISMATCH",
             "The managed report no longer matches its descriptor.",
@@ -452,7 +478,9 @@ def create_mcp_server(
         mime_type="application/json",
     )
     def capabilities_resource() -> dict[str, Any]:
-        return _model_document(_resource_call(active_runtime().capabilities.get_capabilities))
+        return _resource_call(
+            lambda: _model_document(active_runtime().capabilities.get_capabilities())
+        )
 
     @server.resource(
         "hhtools://schemas/agent/v1/{schema_name}",
@@ -512,7 +540,7 @@ def create_mcp_server(
         asset_id: str,
         context: Context,
     ) -> dict[str, Any]:
-        return _model_document(_resource_call(lambda: _runtime(context).assets.get(asset_id)))
+        return _resource_call(lambda: _model_document(_runtime(context).assets.get(asset_id)))
 
     @server.resource(
         "hhtools://plans/{plan_id}",
@@ -524,7 +552,7 @@ def create_mcp_server(
         plan_id: str,
         context: Context,
     ) -> dict[str, Any]:
-        return _model_document(_resource_call(lambda: _runtime(context).plans.get(plan_id)))
+        return _resource_call(lambda: _model_document(_runtime(context).plans.get(plan_id)))
 
     @server.resource(
         "hhtools://jobs/{job_id}/status",
@@ -536,7 +564,7 @@ def create_mcp_server(
         job_id: str,
         context: Context,
     ) -> dict[str, Any]:
-        return _model_document(_resource_call(lambda: _runtime(context).jobs.get_job(job_id)))
+        return _resource_call(lambda: _model_document(_runtime(context).jobs.get_job(job_id)))
 
     @server.resource(
         "hhtools://jobs/{job_id}/manifest",
@@ -548,8 +576,10 @@ def create_mcp_server(
         job_id: str,
         context: Context,
     ) -> dict[str, Any]:
-        return _model_document(
-            _resource_call(lambda: _read_report(_runtime(context), job_id, "manifest", JobManifest))
+        return _resource_call(
+            lambda: _model_document(
+                _read_report(_runtime(context), job_id, "manifest", JobManifest)
+            )
         )
 
     @server.resource(
@@ -562,9 +592,9 @@ def create_mcp_server(
         job_id: str,
         context: Context,
     ) -> dict[str, Any]:
-        return _model_document(
-            _resource_call(
-                lambda: _read_report(
+        return _resource_call(
+            lambda: _model_document(
+                _read_report(
                     _runtime(context),
                     job_id,
                     "evaluation_report",
@@ -583,9 +613,9 @@ def create_mcp_server(
         job_id: str,
         context: Context,
     ) -> dict[str, Any]:
-        return _model_document(
-            _resource_call(
-                lambda: _read_report(
+        return _resource_call(
+            lambda: _model_document(
+                _read_report(
                     _runtime(context),
                     job_id,
                     "failure_report",
@@ -605,11 +635,9 @@ def create_mcp_server(
         artifact_id: str,
         context: Context,
     ) -> dict[str, Any]:
-        return _model_document(
-            _resource_call(
-                lambda: (
-                    _runtime(context).jobs.get_artifact(job_id, artifact_id, verify=True).descriptor
-                )
+        return _resource_call(
+            lambda: _model_document(
+                _runtime(context).jobs.get_artifact(job_id, artifact_id, verify=True).descriptor
             )
         )
 

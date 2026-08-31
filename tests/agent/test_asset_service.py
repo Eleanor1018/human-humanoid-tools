@@ -49,9 +49,7 @@ def test_plain_npz_register_inspect_and_persist_without_host_paths(
     primary = library / "bundle" / "nested" / "walk.npz"
     _write_unified_npz(primary)
     data_dir = tmp_path / "agent-state"
-    service = AgentAssetService(
-        AssetRegistry(data_dir, {"motion-library": library})
-    )
+    service = AgentAssetService(AssetRegistry(data_dir, {"motion-library": library}))
 
     bundle = service.register(_request("bundle"))
     inspection = service.inspect(AssetInspectionRequest(asset_id=bundle.asset_id))
@@ -65,16 +63,15 @@ def test_plain_npz_register_inspect_and_persist_without_host_paths(
     assert inspection.frame_count == 4
     assert inspection.joint_count == 2
 
-    reopened = AgentAssetService(
-        AssetRegistry(data_dir, {"motion-library": lambda: library})
-    )
+    reopened = AgentAssetService(AssetRegistry(data_dir, {"motion-library": lambda: library}))
     assert reopened.get(bundle.asset_id) == bundle
     assert reopened.resolve_primary(bundle.asset_id) == primary.resolve()
     assert reopened.resolve_file(bundle.asset_id, bundle.primary_file) == primary.resolve()
     assert reopened.search(dataset="unified_npz").assets == [bundle]
-    assert reopened.inspect(
-        AssetInspectionRequest(asset_id=bundle.asset_id)
-    ).asset_id == bundle.asset_id
+    assert (
+        reopened.inspect(AssetInspectionRequest(asset_id=bundle.asset_id)).asset_id
+        == bundle.asset_id
+    )
     serialized = f"{bundle.model_dump_json()} {inspection.model_dump_json()}"
     assert str(tmp_path) not in serialized
     assert service.allowed_root_ids == ("motion-library",)
@@ -88,9 +85,7 @@ def test_registration_translates_every_discovered_sidecar(tmp_path: Path) -> Non
     primary.write_bytes(b"opaque pickle bytes are not executed during discovery")
     mesh = bundle_dir / "largebox_cleaned_simplified.obj"
     mesh.write_text("v 0 0 0\n", encoding="utf-8")
-    service = AgentAssetService(
-        AssetRegistry(tmp_path / "data", {"motion-library": library})
-    )
+    service = AgentAssetService(AssetRegistry(tmp_path / "data", {"motion-library": library}))
 
     bundle = service.register(_request("OMOMO/sub10_largebox_000"))
 
@@ -112,9 +107,7 @@ def test_ambiguous_directory_has_only_relative_candidate_details(
     library = tmp_path / "library"
     _write_unified_npz(library / "ambiguous" / "one.npz")
     _write_unified_npz(library / "ambiguous" / "nested" / "two.npz")
-    service = AgentAssetService(
-        AssetRegistry(tmp_path / "data", {"motion-library": library})
-    )
+    service = AgentAssetService(AssetRegistry(tmp_path / "data", {"motion-library": library}))
 
     with pytest.raises(AssetServiceError) as captured:
         service.register(_request("ambiguous"))
@@ -133,9 +126,7 @@ def test_registration_path_errors_are_preserved_without_host_paths(
     library.mkdir()
     outside = tmp_path / "outside.npz"
     _write_unified_npz(outside)
-    service = AgentAssetService(
-        AssetRegistry(tmp_path / "data", {"motion-library": library})
-    )
+    service = AgentAssetService(AssetRegistry(tmp_path / "data", {"motion-library": library}))
     request = AssetRegistrationRequest.model_construct(
         root_id="motion-library",
         relative_path="../outside.npz",
@@ -156,9 +147,7 @@ def test_inspection_reports_changed_content_as_a_hash_error(tmp_path: Path) -> N
     library = tmp_path / "library"
     primary = library / "walk.npz"
     _write_unified_npz(primary)
-    service = AgentAssetService(
-        AssetRegistry(tmp_path / "data", {"motion-library": library})
-    )
+    service = AgentAssetService(AssetRegistry(tmp_path / "data", {"motion-library": library}))
     bundle = service.register(_request("walk.npz"))
     primary.write_bytes(b"changed after registration")
 

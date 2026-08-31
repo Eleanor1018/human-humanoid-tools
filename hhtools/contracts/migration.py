@@ -38,9 +38,7 @@ class LegacyMigrationReceipt(ContractModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal["1.0"] = "1.0"
-    semantics: Literal["hhtools.legacy-job-upgrade.v1"] = (
-        "hhtools.legacy-job-upgrade.v1"
-    )
+    semantics: Literal["hhtools.legacy-job-upgrade.v1"] = "hhtools.legacy-job-upgrade.v1"
     source_schema_version: Literal[1] = 1
     canonical_v1_sha256: Sha256Hex
     motion_asset_id: AssetId

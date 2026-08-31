@@ -30,8 +30,7 @@ def _client(tmp_path: Path, monkeypatch) -> TestClient:
 def test_h2r_rejects_robot_joint_trajectory(tmp_path: Path, monkeypatch) -> None:
     trajectory = tmp_path / "robot.csv"
     trajectory.write_text(
-        "root_x,root_y,root_z,root_qx,root_qy,root_qz,root_qw,dof_0\n"
-        "0,0,1,0,0,0,1,0\n",
+        "root_x,root_y,root_z,root_qx,root_qy,root_qz,root_qw,dof_0\n0,0,1,0,0,0,1,0\n",
         encoding="utf-8",
     )
 

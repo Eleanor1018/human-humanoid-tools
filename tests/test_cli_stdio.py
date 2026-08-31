@@ -10,10 +10,7 @@ def test_cli_entrypoint_overrides_legacy_windows_encoding() -> None:
     env["PYTHONUTF8"] = "0"
     env["PYTHONIOENCODING"] = "cp1252"
     script = (
-        "import sys; "
-        "sys.argv = ['hhtools', 'web']; "
-        "import hhtools.cli.main; "
-        "print('✓ 中文文件名')"
+        "import sys; sys.argv = ['hhtools', 'web']; import hhtools.cli.main; print('✓ 中文文件名')"
     )
 
     completed = subprocess.run(

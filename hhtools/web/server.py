@@ -553,6 +553,9 @@ def _create_app_owned(
     def _deferred_session_cleanup() -> None:
         """Clean temporary roots once jobs that outlive graceful shutdown finish."""
 
+        # Keep this call outside the release ``finally``.  If shutdown itself
+        # fails, worker liveness is unknown, so retaining the lease until the
+        # process exits is the safe fail-closed outcome.
         scheduler.shutdown(wait=True)
         try:
             _cleanup_session_once()
@@ -566,6 +569,9 @@ def _create_app_owned(
         finally:
             # Do not close admission between a settings file write and its live
             # reconfiguration; one lock makes Save and graceful shutdown linear.
+            # A shutdown exception deliberately leaves the OS lease held: a
+            # competing runtime must not recover jobs while worker state is
+            # unknown.  Normal process exit releases the descriptor.
             with job_settings_update_lock:
                 drained = scheduler.shutdown(wait=True, timeout=5.0)
             if drained:

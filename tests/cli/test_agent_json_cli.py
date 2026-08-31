@@ -261,6 +261,19 @@ def test_portable_output_guard_allows_controlled_resource_uris() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        "prefix%2Fetc%2Fpasswd",
+        "https://example.test/report?path=%252Fetc%252Fpasswd",
+        "https://prefixC:%5CUsers%5CNora%5Csecret@example.test",
+    ],
+)
+def test_portable_output_guard_rejects_encoded_or_userinfo_paths(value: str) -> None:
+    with pytest.raises(agent_transport.PortableJsonError):
+        ensure_portable_json({"message": value})
+
+
 def test_deep_request_json_is_a_parameter_error_instead_of_an_internal_error() -> None:
     transport = FakeTransport([])
     raw = "[" * 2_000 + "0" + "]" * 2_000

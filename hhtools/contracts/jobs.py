@@ -118,7 +118,9 @@ class ArtifactDescriptor(ContractModel):
         Field(
             min_length=1,
             validation_alias=AliasChoices("resource_uri", "uri"),
-            description="Resolvable artifact URI, for example hhtools:// or https://.",
+            description=(
+                "Resolvable canonical job-scoped HHTools artifact URI or portable HTTP(S) URI."
+            ),
         ),
     ]
     media_type: Annotated[str | None, Field(default=None, max_length=255)]
@@ -224,11 +226,7 @@ class AgentJobView(ContractModel):
         if self.parent_job_id is None:
             if self.root_job_id is not None or self.attempt != 1:
                 raise ValueError("root jobs cannot declare retry lineage")
-        elif (
-            self.parent_job_id == self.job_id
-            or self.root_job_id is None
-            or self.attempt < 2
-        ):
+        elif self.parent_job_id == self.job_id or self.root_job_id is None or self.attempt < 2:
             raise ValueError("retry jobs require valid parent/root lineage and attempt")
         if self.started_at is not None and self.started_at < self.submitted_at:
             raise ValueError("started_at cannot precede submitted_at")

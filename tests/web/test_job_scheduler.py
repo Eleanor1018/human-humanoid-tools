@@ -252,10 +252,7 @@ def test_repeated_thread_start_failures_drain_without_recursion(
     release.set()
 
     _wait_until(
-        lambda: (
-            scheduler.snapshot().running_jobs == 0
-            and scheduler.snapshot().queued_jobs == 0
-        ),
+        lambda: scheduler.snapshot().running_jobs == 0 and scheduler.snapshot().queued_jobs == 0,
     )
     assert len(cancelled) == 1_200
     assert scheduler.shutdown(wait=True, timeout=1.0)

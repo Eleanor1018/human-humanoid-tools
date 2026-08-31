@@ -27,9 +27,7 @@ def test_status_requires_licensed_smplx_model(tmp_path: Path, monkeypatch) -> No
     monkeypatch.setattr(gvhmr.shutil, "which", lambda _command: "docker")
     monkeypatch.setattr(gvhmr, "_run_probe", lambda *_args, **_kwargs: (True, "ok"))
 
-    status = gvhmr.gvhmr_status(
-        gvhmr.GvhmrConfig(root=root, body_models_root=body_models)
-    )
+    status = gvhmr.gvhmr_status(gvhmr.GvhmrConfig(root=root, body_models_root=body_models))
 
     assert status["ready"] is False
     assert status["checks"]["smplx_neutral"] is False

@@ -383,9 +383,7 @@ def _normalize_parameters(
         limit_frames: int | None = None
     else:
         requested_limit = (
-            30
-            if supplied_limit is None
-            else _strict_int(supplied_limit, name="limit_frames")
+            30 if supplied_limit is None else _strict_int(supplied_limit, name="limit_frames")
         )
         limit_frames = (
             min(requested_limit, inspection.frame_count)
@@ -437,12 +435,8 @@ def _normalize_parameters(
             name="retarget_fps",
             minimum_exclusive=0.0,
         )
-    no_resample = (
-        requested_fps is None
-        or (
-            source_fps is not None
-            and abs(requested_fps - float(source_fps)) < 1e-6
-        )
+    no_resample = requested_fps is None or (
+        source_fps is not None and abs(requested_fps - float(source_fps)) < 1e-6
     )
     if requested_fps is not None and not no_resample:
         maximum_retarget_fps = float(
@@ -465,12 +459,7 @@ def _normalize_parameters(
             and inspection.frame_count > 1
         ):
             predicted_frames = (
-                math.floor(
-                    (inspection.frame_count - 1)
-                    / float(source_fps)
-                    * requested_fps
-                )
-                + 1
+                math.floor((inspection.frame_count - 1) / float(source_fps) * requested_fps) + 1
             )
             maximum_frames = int(
                 _positive_capability_limit(
@@ -527,13 +516,8 @@ def _output_format(
     capabilities: CapabilityResponse,
 ) -> str:
     output_format = request.output_format.casefold()
-    advertised = set(backend.output_formats).intersection(
-        capabilities.supported_output_formats
-    )
-    if (
-        output_format not in _SUPPORTED_OUTPUT_FORMATS
-        or output_format not in advertised
-    ):
+    advertised = set(backend.output_formats).intersection(capabilities.supported_output_formats)
+    if output_format not in _SUPPORTED_OUTPUT_FORMATS or output_format not in advertised:
         _fail(
             "INVALID_PARAMETER",
             "The requested output format is not supported by the selected backend.",
@@ -596,11 +580,7 @@ def _inspect_motion(
 
 
 def _manifest_hashes(bundle: AssetBundle, *, role: str | None = None) -> set[str]:
-    return {
-        item.sha256
-        for item in bundle.files
-        if role is None or item.role.value == role
-    }
+    return {item.sha256 for item in bundle.files if role is None or item.role.value == role}
 
 
 def _contained_file(path: Path, root: Path) -> Path:
@@ -621,11 +601,7 @@ def _robot_joint_facts(
         root = ElementTree.parse(urdf_path).getroot()
     except (ElementTree.ParseError, OSError) as error:
         raise ValueError("robot URDF is not parseable") from error
-    links = {
-        str(link.get("name"))
-        for link in root.findall("link")
-        if link.get("name")
-    }
+    links = {str(link.get("name")) for link in root.findall("link") if link.get("name")}
     actuated: set[str] = set()
     limits: dict[str, tuple[float | None, float | None]] = {}
     for joint in root.findall("joint"):
@@ -691,9 +667,7 @@ def _robot_bundle_and_preset(
         _raise_inspection_error(
             inspection,
             fallback_code="ROBOT_BUNDLE_INVALID",
-            fallback_message=(
-                "The registered robot bundle did not pass structural inspection."
-            ),
+            fallback_message=("The registered robot bundle did not pass structural inspection."),
         )
 
     advertised_preset = next(
@@ -875,8 +849,7 @@ def _validate_finite_document(value: Any) -> bool:
         return math.isfinite(value)
     if isinstance(value, Mapping):
         return all(
-            isinstance(key, str) and _validate_finite_document(item)
-            for key, item in value.items()
+            isinstance(key, str) and _validate_finite_document(item) for key, item in value.items()
         )
     if isinstance(value, list | tuple):
         return all(_validate_finite_document(item) for item in value)
@@ -918,9 +891,10 @@ def _validate_scaler_semantics(scaler: Any, preset: RobotPreset) -> None:
         if sum(float(component) ** 2 for component in quaternion) <= 1e-12:
             raise ValueError("scaler offset quaternion has zero norm")
     source_body_quat = getattr(scaler, "source_body_quat", ())
-    if len(source_body_quat) != 4 or sum(
-        float(component) ** 2 for component in source_body_quat
-    ) <= 1e-12:
+    if (
+        len(source_body_quat) != 4
+        or sum(float(component) ** 2 for component in source_body_quat) <= 1e-12
+    ):
         raise ValueError("scaler source-body quaternion has zero norm")
     trajectory_scale = getattr(scaler, "root_trajectory_scale", None)
     if trajectory_scale is not None and float(trajectory_scale) <= 0.0:
@@ -928,9 +902,7 @@ def _validate_scaler_semantics(scaler: Any, preset: RobotPreset) -> None:
 
 
 def _calibration_action(robot_id: str, reference: str) -> NextAction:
-    query = urlencode(
-        {"panel": "h2r", "robot": robot_id, "calibrate": reference}
-    )
+    query = urlencode({"panel": "h2r", "robot": robot_id, "calibrate": reference})
     return NextAction(
         actor="human",
         action="open_calibration_ui",
@@ -1014,9 +986,7 @@ def _manual_calibration(
                 details={"joint_name": name},
             )
         lower, upper = limits.get(name, (None, None))
-        if (lower is not None and value < lower) or (
-            upper is not None and value > upper
-        ):
+        if (lower is not None and value < lower) or (upper is not None and value > upper):
             _fail(
                 "CALIBRATION_MISMATCH",
                 "The calibration contains a joint value outside its URDF limit.",
@@ -1302,9 +1272,7 @@ class PreflightService:
 
             from hhtools.retarget.calibration import normalize_calibration_reference
 
-            reference = normalize_calibration_reference(
-                str(motion_inspection.reference_model)
-            )
+            reference = normalize_calibration_reference(str(motion_inspection.reference_model))
             (
                 profile_source,
                 profile_digest,

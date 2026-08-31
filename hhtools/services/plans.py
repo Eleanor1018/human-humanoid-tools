@@ -80,12 +80,7 @@ def _looks_like_absolute_path(value: str) -> bool:
 
     posix = PurePosixPath(value)
     windows = PureWindowsPath(value)
-    return (
-        posix.is_absolute()
-        or windows.is_absolute()
-        or bool(windows.drive)
-        or bool(windows.root)
-    )
+    return posix.is_absolute() or windows.is_absolute() or bool(windows.drive) or bool(windows.root)
 
 
 def _validate_portable_json(value: Any, *, location: str = "$") -> None:
@@ -275,9 +270,7 @@ def _validate_retarget_plan_projection(
         if not isinstance(calibration_id, str):
             raise _InvalidDocumentError("manual calibration must have an id")
         if calibration_id != f"cal:sha256:{profile_digest}":
-            raise _InvalidDocumentError(
-                "manual calibration id must match the profile digest"
-            )
+            raise _InvalidDocumentError("manual calibration id must match the profile digest")
         projected_calibration_digest: Any = profile_digest
     elif profile_source == "bundled_scaler":
         if calibration_id is not None:
@@ -364,8 +357,10 @@ class PlanStore:
             plan_id = row["plan_id"]
             plan_json = row["plan_json"]
             payload_json = row["canonical_payload_json"]
-            if not isinstance(plan_id, str) or not isinstance(plan_json, str) or not isinstance(
-                payload_json, str
+            if (
+                not isinstance(plan_id, str)
+                or not isinstance(plan_json, str)
+                or not isinstance(payload_json, str)
             ):
                 raise _InvalidDocumentError("persisted columns have invalid types")
 
@@ -383,8 +378,7 @@ class PlanStore:
 
             plan = RetargetPlan.model_validate(plan_document)
             expected_id = (
-                "plan:sha256:"
-                f"{hashlib.sha256(canonical_payload_json.encode('utf-8')).hexdigest()}"
+                f"plan:sha256:{hashlib.sha256(canonical_payload_json.encode('utf-8')).hexdigest()}"
             )
             if plan.plan_id != plan_id or plan_id != expected_id:
                 raise _InvalidDocumentError("persisted plan identity is inconsistent")
@@ -415,10 +409,7 @@ class PlanStore:
         """
 
         payload_json, payload_document = _canonical_payload_document(canonical_payload)
-        expected_id = (
-            "plan:sha256:"
-            f"{hashlib.sha256(payload_json.encode('utf-8')).hexdigest()}"
-        )
+        expected_id = f"plan:sha256:{hashlib.sha256(payload_json.encode('utf-8')).hexdigest()}"
         plan_json = _encode_plan(plan)
         if plan.plan_id != expected_id:
             raise _error(

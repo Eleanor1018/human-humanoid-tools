@@ -74,10 +74,7 @@ def _write_robot(
             encoding="utf-8",
         )
         scaler_block = (
-            "retarget:\n"
-            "  references:\n"
-            "    smpl:\n"
-            "      scaler_config: config/smpl_scaler.yaml\n"
+            "retarget:\n  references:\n    smpl:\n      scaler_config: config/smpl_scaler.yaml\n"
         )
     (root / "robot.yaml").write_text(
         "name: test_robot\n"
@@ -208,9 +205,7 @@ def _setup(
             {"motions": motion_root, "robots": robot_root},
         )
     )
-    motion = assets.register(
-        AssetRegistrationRequest(root_id="motions", relative_path=motion_name)
-    )
+    motion = assets.register(AssetRegistrationRequest(root_id="motions", relative_path=motion_name))
     robot_bundle = assets.register(
         AssetRegistrationRequest(
             root_id="robots",
@@ -485,9 +480,7 @@ def test_invalid_parameters_are_rejected_without_coercion(
 ) -> None:
     service, motion_id, robot_id, _ = _setup(tmp_path)
 
-    response = service.preflight_retarget(
-        _request(motion_id, robot_id, parameters=parameters)
-    )
+    response = service.preflight_retarget(_request(motion_id, robot_id, parameters=parameters))
 
     assert response.status is PreflightStatus.REJECTED
     assert response.error is not None
@@ -590,17 +583,13 @@ def test_resampling_that_exceeds_the_backend_frame_ceiling_is_rejected(
 def test_explicit_calibration_id_and_joint_limits_must_match(tmp_path: Path) -> None:
     service, motion_id, robot_id, _ = _setup(tmp_path)
     wrong_id = f"cal:sha256:{'0' * 64}"
-    mismatch = service.preflight_retarget(
-        _request(motion_id, robot_id, calibration_id=wrong_id)
-    )
+    mismatch = service.preflight_retarget(_request(motion_id, robot_id, calibration_id=wrong_id))
 
     limited, limited_motion, limited_robot, _ = _setup(
         tmp_path / "limited",
         calibration_value=2.0,
     )
-    out_of_range = limited.preflight_retarget(
-        _request(limited_motion, limited_robot)
-    )
+    out_of_range = limited.preflight_retarget(_request(limited_motion, limited_robot))
 
     assert mismatch.status is PreflightStatus.REJECTED
     assert mismatch.error is not None
@@ -659,13 +648,7 @@ def test_calibration_changed_while_parsing_cannot_be_bound_to_a_plan(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service, motion_id, robot_id, _ = _setup(tmp_path)
-    calibration = (
-        tmp_path
-        / "robots"
-        / "test_robot"
-        / "urdf"
-        / "retarget_calibration_smpl.yaml"
-    )
+    calibration = tmp_path / "robots" / "test_robot" / "urdf" / "retarget_calibration_smpl.yaml"
     from hhtools.services import preflight as preflight_module
 
     original_hash = preflight_module._sha256_file

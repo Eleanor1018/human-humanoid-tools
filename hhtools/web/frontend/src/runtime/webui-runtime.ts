@@ -121,7 +121,7 @@ function isPlaybackPreview(payload: PlaybackPayload | null | undefined): boolean
 
 /**
  * Downsampled clips spread sparse keys across the full timeline; linear blend
- * between keys that are far apart in the source cuts corners (LAFAN 折返 → 滑步).
+ * between distant source keys can turn a LAFAN direction change into a slide.
  */
 function resolvePlaybackFrame(
   frameIndices: number[] | null | undefined,
@@ -4720,7 +4720,7 @@ function ingestRobotUrdf(files: UploadFile[]): void {
   // Only upload now when the same drop already carried the meshes (a whole
   // robot folder).  A bare .urdf drop must WAIT for step 2 (the meshes/ folder)
   // — uploading immediately used to register a mesh-less robot and reset the
-  // stored URDF, so the subsequent meshes drop hit "请先放入 .urdf 文件".
+  // stored URDF, so the subsequent meshes drop hit the "add a .urdf first" guard.
   if (robotImport.meshes.length) {
     void tryUploadRobot();
   } else {

@@ -197,11 +197,7 @@ def test_robot_metadata_execution_paths_must_be_bundle_relative(
     if path_field == "urdf":
         metadata = f"name: test_robot\nurdf: {urdf.as_posix()}\n"
     elif path_field == "mesh_search_paths":
-        metadata = (
-            "name: test_robot\n"
-            "mesh_search_paths:\n"
-            f"  - {mesh_directory.as_posix()}\n"
-        )
+        metadata = f"name: test_robot\nmesh_search_paths:\n  - {mesh_directory.as_posix()}\n"
     else:
         metadata = (
             "name: test_robot\n"
@@ -339,9 +335,7 @@ def test_absolute_mesh_inside_bundle_is_rejected_for_new_and_persisted_assets(
     inspection = RobotAssetInspector().inspect(manifest, bundle_root)
 
     assert inspection.status is InspectionStatus.INVALID
-    assert "ASSET_OUTSIDE_ALLOWED_ROOT" in {
-        error.code for error in inspection.errors
-    }
+    assert "ASSET_OUTSIDE_ALLOWED_ROOT" in {error.code for error in inspection.errors}
     assert not generated_stl.exists()
     _assert_no_host_path(inspection.model_dump(mode="json"), tmp_path)
 
@@ -378,9 +372,7 @@ def test_mujoco_compiler_directories_must_remain_inside_snapshot(
     persisted_manifest = _bundle(bundle_root, original_discovery)
     inspection = RobotAssetInspector().inspect(persisted_manifest, bundle_root)
     assert inspection.status is InspectionStatus.INVALID
-    assert "ASSET_OUTSIDE_ALLOWED_ROOT" in {
-        error.code for error in inspection.errors
-    }
+    assert "ASSET_OUTSIDE_ALLOWED_ROOT" in {error.code for error in inspection.errors}
     _assert_no_host_path(inspection.model_dump(mode="json"), tmp_path)
 
 

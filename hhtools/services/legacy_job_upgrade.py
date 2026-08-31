@@ -295,10 +295,7 @@ class DynamicRootLocator:
         for root_id in roots:
             if len(root_id) > 128 or _PORTABLE_ID.fullmatch(root_id) is None:
                 raise ValueError("root ids must be portable identifiers")
-        return {
-            root_id: _TrackedRootProvider(provider)
-            for root_id, provider in roots.items()
-        }
+        return {root_id: _TrackedRootProvider(provider) for root_id, provider in roots.items()}
 
     def registry_root_providers(self) -> dict[str, Callable[[], Path]]:
         """Return the tracked providers for the in-process AssetRegistry.
@@ -565,9 +562,7 @@ def _strict_canonical_v1(payload: Any) -> tuple[dict[str, Any], bytes]:
                 fields=unknown_envelope,
             )
         job_id = payload.get("job_id")
-        if job_id is not None and (
-            not isinstance(job_id, str) or not job_id or len(job_id) > 256
-        ):
+        if job_id is not None and (not isinstance(job_id, str) or not job_id or len(job_id) > 256):
             raise _invalid("job_id must be a non-empty bounded string.", field="job_id")
         candidate = payload.get("spec")
     else:
@@ -651,9 +646,7 @@ def _strict_canonical_v1(payload: Any) -> tuple[dict[str, Any], bytes]:
                 )
         parent_job_id = payload.get("parent_job_id")
         if parent_job_id is not None and (
-            not isinstance(parent_job_id, str)
-            or not parent_job_id
-            or len(parent_job_id) > 256
+            not isinstance(parent_job_id, str) or not parent_job_id or len(parent_job_id) > 256
         ):
             raise _invalid(
                 "The downloaded envelope parent_job_id must be a bounded string or null.",
@@ -706,9 +699,7 @@ def _strict_positive_int(value: Any, *, field: str) -> int:
 def _parameters(request: Mapping[str, Any], backend: str) -> dict[str, Any]:
     parameters: dict[str, Any] = {}
     limit = request.get("limit_frames")
-    if limit is not None and (
-        type(limit) is not int or limit < 0
-    ):
+    if limit is not None and (type(limit) is not int or limit < 0):
         raise _invalid("limit_frames must be a non-negative integer or null.", field="limit_frames")
     if limit is None or limit == 0:
         parameters["run_mode"] = "full"
@@ -848,10 +839,9 @@ def _validate_source_inspection_claims(
     dataset = raw.get("dataset")
     if isinstance(dataset, str) and dataset.strip() and dataset.casefold() != "unknown":
         inspected_dataset = inspection.dataset
-        if (
-            not isinstance(inspected_dataset, str)
-            or _normalized_label(dataset) != _normalized_label(inspected_dataset)
-        ):
+        if not isinstance(inspected_dataset, str) or _normalized_label(
+            dataset
+        ) != _normalized_label(inspected_dataset):
             conflict("dataset")
 
     category = raw.get("motion_category")
@@ -907,10 +897,7 @@ def _verified_registration(
         raise LegacyJobUpgradeError(exc.api_error) from exc
 
     source = bundle.source
-    valid_source = (
-        source is not None
-        and source.root_id in allowed_source_root_ids
-    )
+    valid_source = source is not None and source.root_id in allowed_source_root_ids
     if (
         bundle.kind is not kind
         or inspection.asset_id != bundle.asset_id
@@ -981,9 +968,7 @@ def _verify_registered_content(bundle: AssetBundle, match: _RootMatch) -> None:
         else match.resolved_candidate.parent
     )
     try:
-        primary = base.joinpath(*PurePosixPath(bundle.primary_file).parts).resolve(
-            strict=True
-        )
+        primary = base.joinpath(*PurePosixPath(bundle.primary_file).parts).resolve(strict=True)
         primary.relative_to(base)
     except (OSError, RuntimeError, ValueError) as exc:
         raise _upgrade_error(
@@ -1002,9 +987,7 @@ def _verify_registered_content(bundle: AssetBundle, match: _RootMatch) -> None:
 
     for item in bundle.files:
         try:
-            candidate = base.joinpath(*PurePosixPath(item.relative_path).parts).resolve(
-                strict=True
-            )
+            candidate = base.joinpath(*PurePosixPath(item.relative_path).parts).resolve(strict=True)
             candidate.relative_to(base)
         except (OSError, RuntimeError, ValueError) as exc:
             raise _upgrade_error(
@@ -1092,9 +1075,7 @@ class LegacyJobUpgradeService:
         if len(robot_id) > 256 or _PORTABLE_ID.fullmatch(robot_id) is None:
             raise _invalid("robot must be a portable identifier.", field="robot")
 
-        reference = normalize_calibration_reference(
-            _optional_string(request, "reference", "smpl")
-        )
+        reference = normalize_calibration_reference(_optional_string(request, "reference", "smpl"))
         if reference not in _REFERENCES:
             raise _invalid(
                 "reference is not a supported calibration reference.",

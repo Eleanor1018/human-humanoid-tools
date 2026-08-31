@@ -326,11 +326,7 @@ def test_failed_only_replay_filters_batch_entries(
                 {"source_path": str(second), "stem": "second"},
             ],
         },
-        result={
-            "failures": [
-                {"source_path": str(second), "stage": "retarget", "reason": "test"}
-            ]
-        },
+        result={"failures": [{"source_path": str(second), "stage": "retarget", "reason": "test"}]},
     )
     with app.state.session_state.job_lock:
         app.state.session_state.jobs[original.id] = original
@@ -346,6 +342,4 @@ def test_failed_only_replay_filters_batch_entries(
         config = client.get(f"/api/job/{job_id}/config").json()
         assert config["parent_job_id"] == original.id
         assert config["spec"]["request"]["out_dir"] == "original_failed_retry"
-        assert [
-            entry["stem"] for entry in config["spec"]["request"]["entries"]
-        ] == ["second"]
+        assert [entry["stem"] for entry in config["spec"]["request"]["entries"]] == ["second"]

@@ -90,17 +90,13 @@ def test_desktop_sidecar_explicit_limit_overrides_environment(
         lambda **kwargs: captured.update(kwargs),
     )
 
-    desktop_sidecar.main(
-        [*_desktop_args(tmp_path), "--max-running-jobs", "1"]
-    )
+    desktop_sidecar.main([*_desktop_args(tmp_path), "--max-running-jobs", "1"])
 
     assert captured["max_running_jobs"] == 1
 
 
 def test_desktop_sidecar_rejects_negative_job_limit(tmp_path: Path) -> None:
     with pytest.raises(SystemExit) as error:
-        desktop_sidecar.main(
-            [*_desktop_args(tmp_path), "--max-queued-jobs", "-1"]
-        )
+        desktop_sidecar.main([*_desktop_args(tmp_path), "--max-queued-jobs", "-1"])
 
     assert error.value.code == 2

@@ -404,9 +404,7 @@ def _positive_fps(value: Any) -> float:
 def _required_keys(keys: set[str], required: frozenset[str], label: str) -> None:
     missing = sorted(required - keys)
     if missing:
-        raise _ContentValidationError(
-            f"{label} is missing required fields: {', '.join(missing)}"
-        )
+        raise _ContentValidationError(f"{label} is missing required fields: {', '.join(missing)}")
 
 
 def _scalar_value(value: Any, label: str) -> Any:
@@ -477,24 +475,17 @@ def _inspect_unified_npz(archive: Any, keys: set[str]) -> _ContentFacts:
     has_object = False
     if object_fields.issubset(keys):
         object_names = np.asarray(archive["objects_names"])
-        object_positions = _numeric_array(
-            archive["objects_positions"], "objects_positions"
-        )
-        object_quaternions = _numeric_array(
-            archive["objects_quaternions"], "objects_quaternions"
-        )
+        object_positions = _numeric_array(archive["objects_positions"], "objects_positions")
+        object_quaternions = _numeric_array(archive["objects_quaternions"], "objects_quaternions")
         object_extents = _numeric_array(archive["objects_extents"], "objects_extents")
         if object_names.ndim != 1:
             raise _ContentValidationError("objects_names must be one-dimensional")
         object_count = int(object_names.size)
         if object_positions.ndim != 3 or object_positions.shape[1:] != (object_count, 3):
-            raise _ContentValidationError(
-                "objects_positions must have shape (frames, objects, 3)"
-            )
-        if (
-            object_quaternions.ndim != 3
-            or object_quaternions.shape != object_positions.shape[:2] + (4,)
-        ):
+            raise _ContentValidationError("objects_positions must have shape (frames, objects, 3)")
+        if object_quaternions.ndim != 3 or object_quaternions.shape != object_positions.shape[
+            :2
+        ] + (4,):
             raise _ContentValidationError(
                 "objects_quaternions must have shape (frames, objects, 4)"
             )
@@ -540,13 +531,9 @@ def _inspect_amass_npz(archive: Any, keys: set[str]) -> _ContentFacts:
         root_orient = _numeric_array(archive["root_orient"], "root_orient")
         pose_body = _numeric_array(archive["pose_body"], "pose_body")
         if root_orient.shape != (frame_count, 3):
-            raise _ContentValidationError(
-                "AMASS stage-II root_orient must have shape (frames, 3)"
-            )
+            raise _ContentValidationError("AMASS stage-II root_orient must have shape (frames, 3)")
         if pose_body.ndim != 2 or pose_body.shape[0] != frame_count:
-            raise _ContentValidationError(
-                "AMASS stage-II pose_body must be a per-frame matrix"
-            )
+            raise _ContentValidationError("AMASS stage-II pose_body must be a per-frame matrix")
         for key in ("pose_hand", "pose_eye"):
             if key not in keys:
                 continue
@@ -633,20 +620,14 @@ def _holosoma_manifest_facts(path: Path) -> tuple[float, int, int]:
         try:
             parent_indices = np.asarray(parents, dtype=np.int64)
         except (TypeError, ValueError) as exc:
-            raise _ContentValidationError(
-                "Holosoma parent_indices must contain integers"
-            ) from exc
+            raise _ContentValidationError("Holosoma parent_indices must contain integers") from exc
         if parent_indices.shape != (len(names),):
             raise _ContentValidationError("Holosoma parent_indices must be one-dimensional")
         if bool((parent_indices >= len(names)).any()):
-            raise _ContentValidationError(
-                "Holosoma parent_indices references an unknown joint"
-            )
+            raise _ContentValidationError("Holosoma parent_indices references an unknown joint")
         for section in ("coordinate_system", "clip_layout"):
             if section in data and not isinstance(data[section], dict):
-                raise _ContentValidationError(
-                    f"Holosoma {section} must contain a mapping"
-                )
+                raise _ContentValidationError(f"Holosoma {section} must contain a mapping")
         return raw, downsample, len(names)
     except _ContentValidationError:
         raise
@@ -680,9 +661,7 @@ def _inspect_npy(path: Path, dataset: str) -> _ContentFacts:
                 "Holosoma joint positions must have shape (frames, joints, 3)"
             )
         if array.shape[1] != expected_joints:
-            raise _ContentValidationError(
-                "Holosoma joint count does not match source.yaml"
-            )
+            raise _ContentValidationError("Holosoma joint count does not match source.yaml")
         joints = expected_joints
         metadata.update({"raw_frame_count": frames, "downsample": downsample})
         frames = max(1, math.ceil(frames / downsample))
@@ -709,9 +688,7 @@ def _inspect_pickle(path: Path) -> _ContentFacts:
     if not saw_stop:
         raise _ContentValidationError("pickle stream has no STOP opcode")
     return _ContentFacts(
-        warning=(
-            "Pickle structure is valid, but semantic content requires isolated validation."
-        ),
+        warning=("Pickle structure is valid, but semantic content requires isolated validation."),
         metadata={
             "pickle_executed": False,
             "content_validation_code": "CONTENT_REQUIRES_ISOLATED_VALIDATION",
@@ -767,9 +744,7 @@ def _inspect_content(path: Path, dataset: str) -> _ContentFacts:
         return _inspect_npz(path, dataset)
     if suffix in {".pt", ".pth"}:
         return _ContentFacts(
-            warning=(
-                "Torch checkpoint content requires isolated validation before execution."
-            ),
+            warning=("Torch checkpoint content requires isolated validation before execution."),
             metadata={
                 "checkpoint_executed": False,
                 "content_validation_code": "CONTENT_REQUIRES_ISOLATED_VALIDATION",

@@ -113,10 +113,7 @@ def _write_robot(root: Path) -> tuple[Path, Path]:
 def _write_calibration(root: Path) -> Path:
     path = root / "urdf" / "retarget_calibration_smpl.yaml"
     path.write_text(
-        "robot: test_robot\n"
-        "reference: smpl\n"
-        "calibrated_joint_q:\n"
-        "  hip: 0.0\n",
+        "robot: test_robot\nreference: smpl\ncalibrated_joint_q:\n  hip: 0.0\n",
         encoding="utf-8",
     )
     return path
@@ -151,9 +148,7 @@ def _fixture(
     robot_dir = robot_root / "test_robot"
     _write_motion(motion_path)
     robot_urdf, scaler = _write_robot(robot_dir)
-    calibration_path = (
-        _write_calibration(robot_dir) if profile_source == "calibration" else None
-    )
+    calibration_path = _write_calibration(robot_dir) if profile_source == "calibration" else None
 
     assets = AgentAssetService(
         AssetRegistry(
@@ -161,9 +156,7 @@ def _fixture(
             {"motions": motion_root, "robots": robot_root},
         )
     )
-    motion = assets.register(
-        AssetRegistrationRequest(root_id="motions", relative_path="walk.npz")
-    )
+    motion = assets.register(AssetRegistrationRequest(root_id="motions", relative_path="walk.npz"))
     robot = assets.register(
         AssetRegistrationRequest(
             root_id="robots",
@@ -171,9 +164,7 @@ def _fixture(
             kind="robot_bundle",
         )
     )
-    motion_inspection = assets.inspect(
-        AssetInspectionRequest(asset_id=motion.asset_id)
-    )
+    motion_inspection = assets.inspect(AssetInspectionRequest(asset_id=motion.asset_id))
     assert motion_inspection.dataset is not None
     assert motion_inspection.reference_model is not None
 
@@ -182,9 +173,7 @@ def _fixture(
         if calibration_path is not None
         else hashlib.sha256(scaler.read_bytes()).hexdigest()
     )
-    calibration_id = (
-        f"cal:sha256:{profile_digest}" if profile_source == "calibration" else None
-    )
+    calibration_id = f"cal:sha256:{profile_digest}" if profile_source == "calibration" else None
     parameters = {
         "run_mode": "smoke",
         "limit_frames": 30,
@@ -399,9 +388,7 @@ def test_unknown_plan_semantics_are_not_reinterpreted_as_job_spec_v2(
 def test_missing_plan_preserves_the_structured_plan_store_error(tmp_path: Path) -> None:
     motion_root = tmp_path / "motions"
     motion_root.mkdir()
-    assets = AgentAssetService(
-        AssetRegistry(tmp_path / "asset-state", {"motions": motion_root})
-    )
+    assets = AgentAssetService(AssetRegistry(tmp_path / "asset-state", {"motions": motion_root}))
     service = RetargetService(
         PlanStore(tmp_path / "plan-state"),
         assets,

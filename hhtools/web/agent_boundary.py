@@ -91,9 +91,7 @@ def _host_name(value: str) -> str | None:  # noqa: PLR0911
             return None
         name = value[1:closing]
         remainder = value[closing + 1 :]
-        if remainder and (
-            not remainder.startswith(":") or not _valid_port(remainder[1:])
-        ):
+        if remainder and (not remainder.startswith(":") or not _valid_port(remainder[1:])):
             return None
         return name
 
@@ -111,10 +109,7 @@ def _host_name(value: str) -> str | None:  # noqa: PLR0911
 
 def _valid_port(value: str) -> bool:
     return (
-        value.isascii()
-        and value.isdigit()
-        and 1 <= len(value) <= 5
-        and 1 <= int(value) <= 65_535
+        value.isascii() and value.isdigit() and 1 <= len(value) <= 5 and 1 <= int(value) <= 65_535
     )
 
 

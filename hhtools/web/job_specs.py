@@ -70,9 +70,7 @@ def normalize_job_spec(payload: Any) -> dict[str, Any]:
     except (TypeError, ValueError) as err:
         raise JobSpecError("schema_version 必须是整数。") from err
     if version != JOB_SPEC_SCHEMA_VERSION:
-        raise JobSpecError(
-            f"不支持 JobSpec v{version}；当前只支持 v{JOB_SPEC_SCHEMA_VERSION}。"
-        )
+        raise JobSpecError(f"不支持 JobSpec v{version}；当前只支持 v{JOB_SPEC_SCHEMA_VERSION}。")
 
     kind = candidate.get("kind")
     if not isinstance(kind, str) or not kind.strip():

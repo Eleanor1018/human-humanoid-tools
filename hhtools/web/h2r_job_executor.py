@@ -551,9 +551,7 @@ class H2RJobExecutor:
                 parameters.human_height,
                 parameters.limit_frames,
                 progress,
-                foot_clamp_anti_penetration=(
-                    parameters.foot_clamp_anti_penetration
-                ),
+                foot_clamp_anti_penetration=(parameters.foot_clamp_anti_penetration),
             )
             context.raise_if_cancelled()
             num_frames = int(retargeted.num_frames)
@@ -656,12 +654,9 @@ class H2RJobExecutor:
                 )
             context.raise_if_cancelled()
 
-            outcome, evaluation_summary, metrics, checks = _quality_verdict(
-                preview.diagnostics
-            )
+            outcome, evaluation_summary, metrics, checks = _quality_verdict(preview.diagnostics)
             has_scene = bool(
-                getattr(motion, "terrain", None) is not None
-                or getattr(motion, "objects", ())
+                getattr(motion, "terrain", None) is not None or getattr(motion, "objects", ())
             )
             return JobExecutionResult(
                 outcome=outcome,

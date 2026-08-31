@@ -129,9 +129,7 @@ class JobScheduler:
             if self._closed:
                 raise JobSchedulerClosedError("job scheduler is shutting down")
             if self.max_running_jobs > 0 and self.max_queued_jobs > 0:
-                admitted = (
-                    self._running + len(self._pending) + len(self._reservations)
-                )
+                admitted = self._running + len(self._pending) + len(self._reservations)
                 capacity = self.max_running_jobs + self.max_queued_jobs
                 if admitted >= capacity:
                     raise JobQueueFullError(
@@ -197,9 +195,7 @@ class JobScheduler:
             self.max_queued_jobs = queued_limit
 
             available = (
-                len(self._pending)
-                if running_limit == 0
-                else max(0, running_limit - self._running)
+                len(self._pending) if running_limit == 0 else max(0, running_limit - self._running)
             )
             for _ in range(min(available, len(self._pending))):
                 call = self._pending.popleft()
@@ -282,10 +278,7 @@ class JobScheduler:
             if self._closed:
                 raise JobSchedulerClosedError("job scheduler is shutting down")
 
-            starts_now = (
-                self.max_running_jobs == 0
-                or self._running < self.max_running_jobs
-            )
+            starts_now = self.max_running_jobs == 0 or self._running < self.max_running_jobs
             if starts_now:
                 self._running += 1
                 self._running_tokens.add(token)

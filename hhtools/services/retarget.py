@@ -344,11 +344,7 @@ class RetargetService:
         profile_digest = profile_payload.get("digest")
         profile_relative_path = profile_payload.get("relative_path")
         profile_file = next(
-            (
-                item
-                for item in robot_bundle.files
-                if item.relative_path == profile_relative_path
-            ),
+            (item for item in robot_bundle.files if item.relative_path == profile_relative_path),
             None,
         )
         if (

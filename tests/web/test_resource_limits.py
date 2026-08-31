@@ -31,10 +31,7 @@ def _create_test_app(tmp_path: Path, monkeypatch, **limits):
 
 
 def _upload_files(*items: tuple[str, bytes]):
-    return [
-        ("files", (name, payload, "application/octet-stream"))
-        for name, payload in items
-    ]
+    return [("files", (name, payload, "application/octet-stream")) for name, payload in items]
 
 
 def _wait_for_job_status(
@@ -51,9 +48,7 @@ def _wait_for_job_status(
         if payload.get("status") in statuses:
             return payload
         time.sleep(0.005)
-    raise AssertionError(
-        f"job {job_id} did not reach {sorted(statuses)}; last payload: {payload}"
-    )
+    raise AssertionError(f"job {job_id} did not reach {sorted(statuses)}; last payload: {payload}")
 
 
 def test_upload_rejects_too_many_files(tmp_path: Path, monkeypatch) -> None:
@@ -358,9 +353,7 @@ def test_full_queue_rejects_motion_before_upload_or_library_write(
             assert response.status_code == 429
             assert marker.read_bytes() == b"existing"
             assert not (library / "replacement.bvh").exists()
-            assert not list(
-                app.state.session_state.upload_root.rglob("replacement.bvh")
-            )
+            assert not list(app.state.session_state.upload_root.rglob("replacement.bvh"))
         finally:
             release.set()
 
@@ -562,9 +555,7 @@ def test_manual_library_link_waits_for_motion_publish_lock(
 
     def call_manual_link() -> None:
         link_call_started.set()
-        link_result.update(
-            link_endpoint({"path": str(tmp_path), "folder_label": "manual-link"})
-        )
+        link_result.update(link_endpoint({"path": str(tmp_path), "folder_label": "manual-link"}))
 
     with TestClient(app) as client:
         try:

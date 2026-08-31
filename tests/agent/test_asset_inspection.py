@@ -333,10 +333,7 @@ def test_object_interaction_requires_and_discovers_object_mesh(tmp_path: Path) -
     assert inspection.metadata["recommended_backend"] == "interaction_mesh"
     assert inspection.metadata["pickle_executed"] is False
     assert inspection.metadata["content_parsed"] is False
-    assert (
-        inspection.metadata["content_validation_code"]
-        == "CONTENT_REQUIRES_ISOLATED_VALIDATION"
-    )
+    assert inspection.metadata["content_validation_code"] == "CONTENT_REQUIRES_ISOLATED_VALIDATION"
 
 
 def test_terrain_scene_inspection_keeps_terrain_sidecar_bound_to_bundle(

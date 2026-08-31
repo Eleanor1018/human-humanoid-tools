@@ -281,17 +281,13 @@ def test_agent_router_rejects_duplicate_keys_and_nonfinite_json() -> None:
     duplicate = client.post(
         "/api/agent/v1/assets",
         content=(
-            b'{"root_id":"motion-library","root_id":"motion-library",'
-            b'"relative_path":"walk.npz"}'
+            b'{"root_id":"motion-library","root_id":"motion-library","relative_path":"walk.npz"}'
         ),
         headers={"Content-Type": "application/json"},
     )
     nonfinite = client.post(
         "/api/agent/v1/assets",
-        content=(
-            b'{"root_id":"motion-library","relative_path":"walk.npz",'
-            b'"recursive":NaN}'
-        ),
+        content=(b'{"root_id":"motion-library","relative_path":"walk.npz","recursive":NaN}'),
         headers={"Content-Type": "application/json"},
     )
     too_deep = client.post(
@@ -301,10 +297,7 @@ def test_agent_router_rejects_duplicate_keys_and_nonfinite_json() -> None:
     )
     overflowed_float = client.post(
         "/api/agent/v1/assets",
-        content=(
-            b'{"root_id":"motion-library","relative_path":"walk.npz",'
-            b'"recursive":1e9999}'
-        ),
+        content=(b'{"root_id":"motion-library","relative_path":"walk.npz","recursive":1e9999}'),
         headers={"Content-Type": "application/json"},
     )
 
@@ -325,11 +318,7 @@ def test_agent_router_blocks_host_paths_in_success_and_error_json() -> None:
         def get(self, asset_id: str) -> AssetBundle:
             bundle = super().get(asset_id)
             return bundle.model_copy(
-                update={
-                    "metadata": {
-                        "debug_path": "debug:C:\\Users\\Nora\\secret"
-                    }
-                }
+                update={"metadata": {"debug_path": "debug:C:\\Users\\Nora\\secret"}}
             )
 
     class UnsafeErrorAssets(_FakeAssets):
@@ -349,9 +338,7 @@ def test_agent_router_blocks_host_paths_in_success_and_error_json() -> None:
     class UnsafeFileUriAssets(_FakeAssets):
         def get(self, asset_id: str) -> AssetBundle:
             bundle = super().get(asset_id)
-            return bundle.model_copy(
-                update={"metadata": {"debug_uri": "file:///etc/passwd"}}
-            )
+            return bundle.model_copy(update={"metadata": {"debug_uri": "file:///etc/passwd"}})
 
     class UnsafeEmbeddedFileUriAssets(_FakeAssets):
         def get(self, asset_id: str) -> AssetBundle:
@@ -374,9 +361,7 @@ def test_agent_router_blocks_host_paths_in_success_and_error_json() -> None:
 
     blocked_success = TestClient(success_app).get(f"/api/agent/v1/assets/{_ASSET_ID}")
     blocked_error = TestClient(error_app).get(f"/api/agent/v1/assets/{_ASSET_ID}")
-    blocked_file_uri = TestClient(file_uri_app).get(
-        f"/api/agent/v1/assets/{_ASSET_ID}"
-    )
+    blocked_file_uri = TestClient(file_uri_app).get(f"/api/agent/v1/assets/{_ASSET_ID}")
     blocked_embedded_file_uri = TestClient(embedded_file_uri_app).get(
         f"/api/agent/v1/assets/{_ASSET_ID}"
     )
@@ -413,6 +398,9 @@ def test_agent_router_blocks_host_paths_in_success_and_error_json() -> None:
         "path{/srv/secret}",
         "path|/srv/secret",
         "path[//remote/share]",
+        "prefix%2Fetc%2Fpasswd",
+        "https://example.com/report?path=%252Fetc%252Fpasswd",
+        "https://prefixC:%5CUsers%5CNora%5Csecret@example.com",
         "https://example.com/path]C:\\Users\\Nora\\secret",
         "hhtools://jobs/job:1/artifacts/report|/srv/secret",
     ],
@@ -429,6 +417,9 @@ def test_agent_portable_guard_detects_paths_after_punctuation(value: str) -> Non
         "debug:https://example.com/path",
         "path[https://example.com/path]",
         "path{hhtools://jobs/job:1/artifacts/report}",
+        "https://[2001:db8::1]/docs",
+        "https://example.com/callback?next=/agent/v1",
+        "https://example.com/docs?next=https%3A%2F%2Fdocs.example%2Fguide",
     ],
 )
 def test_agent_portable_guard_preserves_allowlisted_uri_fragments(value: str) -> None:
@@ -543,12 +534,10 @@ def test_agent_artifact_streams_the_verified_open_handle_with_strong_headers(
 
     with TestClient(app) as client:
         response = client.get(
-            f"/api/agent/v1/jobs/{descriptor.job_id}/artifacts/"
-            f"{descriptor.artifact_id}/content"
+            f"/api/agent/v1/jobs/{descriptor.job_id}/artifacts/{descriptor.artifact_id}/content"
         )
         ranged = client.get(
-            f"/api/agent/v1/jobs/{descriptor.job_id}/artifacts/"
-            f"{descriptor.artifact_id}/content",
+            f"/api/agent/v1/jobs/{descriptor.job_id}/artifacts/{descriptor.artifact_id}/content",
             headers={"Range": "bytes=0-3"},
         )
 
@@ -589,8 +578,7 @@ def test_agent_artifact_rejects_unsafe_descriptor_headers(tmp_path: Path) -> Non
     app.include_router(router)
 
     response = TestClient(app).get(
-        f"/api/agent/v1/jobs/{descriptor.job_id}/artifacts/"
-        f"{descriptor.artifact_id}/content"
+        f"/api/agent/v1/jobs/{descriptor.job_id}/artifacts/{descriptor.artifact_id}/content"
     )
 
     assert response.status_code == 500
@@ -740,9 +728,7 @@ def test_agent_job_rest_lifecycle_idempotency_retry_and_canonical_artifacts(
             assert artifact_page.json()["total"] == 4
             assert len(artifact_page.json()["artifacts"]) == 2
 
-            motion = next(
-                item for item in root["artifacts"] if item["kind"] == "retargeted_motion"
-            )
+            motion = next(item for item in root["artifacts"] if item["kind"] == "retargeted_motion")
             descriptor = client.get(
                 f"/api/agent/v1/jobs/{root_job_id}/artifacts/{motion['artifact_id']}"
             )
@@ -796,15 +782,12 @@ def test_agent_job_rest_lifecycle_idempotency_retry_and_canonical_artifacts(
                 item for item in child["artifacts"] if item["kind"] == "retargeted_motion"
             )
             denied_cross_job = client.get(
-                f"/api/agent/v1/jobs/{root_job_id}/artifacts/"
-                f"{child_motion['artifact_id']}"
+                f"/api/agent/v1/jobs/{root_job_id}/artifacts/{child_motion['artifact_id']}"
             )
             assert denied_cross_job.status_code == 404
             assert denied_cross_job.json()["code"] == "ARTIFACT_NOT_FOUND"
 
-            terminal_cancel = client.post(
-                f"/api/agent/v1/jobs/{root_job_id}/cancel"
-            )
+            terminal_cancel = client.post(f"/api/agent/v1/jobs/{root_job_id}/cancel")
             assert terminal_cancel.status_code == 409
             assert terminal_cancel.json()["code"] == "JOB_CANCEL_UNSUPPORTED"
 
@@ -982,9 +965,7 @@ def test_agent_phase4_routes_and_examples_are_visible_in_openapi() -> None:
         ("/api/agent/v1/jobs/{job_id}/retry", "post"),
         ("/api/agent/v1/legacy/jobspec-v1/upgrade", "post"),
     ):
-        media = schema["paths"][path][method]["requestBody"]["content"][
-            "application/json"
-        ]
+        media = schema["paths"][path][method]["requestBody"]["content"]["application/json"]
         assert media["examples"]
 
 
@@ -1036,9 +1017,7 @@ def test_full_web_app_registers_agent_api_before_the_static_root(
         job_id="job:boundary-stream",
         kind="report",
         format="bin",
-        resource_uri=(
-            "hhtools://jobs/job:boundary-stream/artifacts/boundary-stream"
-        ),
+        resource_uri=("hhtools://jobs/job:boundary-stream/artifacts/boundary-stream"),
         media_type="application/octet-stream",
         size_bytes=len(boundary_payload),
         sha256=hashlib.sha256(boundary_payload).hexdigest(),
@@ -1065,9 +1044,7 @@ def test_full_web_app_registers_agent_api_before_the_static_root(
             "/api/agent/v1/assets",
             json={"root_id": "source", "relative_path": "walk.npz"},
         )
-        inspected = client.get(
-            f"/api/agent/v1/assets/{registered.json()['asset_id']}/inspect"
-        )
+        inspected = client.get(f"/api/agent/v1/assets/{registered.json()['asset_id']}/inspect")
         try:
             app.state.agent_job_manager = boundary_manager
             streamed_artifact = client.get(
@@ -1109,9 +1086,7 @@ def test_full_web_app_registers_agent_api_before_the_static_root(
     assert app.state.agent_artifact_store.database_path.parent == (
         tmp_path / "save" / ".hhtools-agent"
     )
-    assert app.state.agent_job_store.database_path.parent == (
-        tmp_path / "save" / ".hhtools-agent"
-    )
+    assert app.state.agent_job_store.database_path.parent == (tmp_path / "save" / ".hhtools-agent")
     assert app.state.agent_job_manager.execution_available is True
     assert app.state.agent_job_manager._scheduler is app.state.job_scheduler  # noqa: SLF001
     assert (
@@ -1263,9 +1238,7 @@ def test_agent_robot_loader_uses_and_releases_an_isolated_manifest_snapshot(
             tmp_path / "save" / ".hhtools-agent" / "temporary" / "robots"
         )
         assert source_urdf.read_text(encoding="utf-8") == original_urdf
-        assert "floating_base_joint" not in model.preset.urdf_path.read_text(
-            encoding="utf-8"
-        )
+        assert "floating_base_joint" not in model.preset.urdf_path.read_text(encoding="utf-8")
         assert (snapshot_root / "mesh-conversion.marker").is_file()
         assert not (robot_root / "mesh-conversion.marker").exists()
 

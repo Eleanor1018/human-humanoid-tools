@@ -143,9 +143,7 @@ def test_invalid_motion_upload_returns_400_without_publishing_library_data(
     assert marker.read_bytes() == b"existing library data"
     assert not (library_dir / "readme.definitely-not-motion").exists()
     assert not list(
-        web_client.app.state.session_state.upload_root.rglob(
-            "readme.definitely-not-motion"
-        )
+        web_client.app.state.session_state.upload_root.rglob("readme.definitely-not-motion")
     )
 
 

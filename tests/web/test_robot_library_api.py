@@ -9,7 +9,6 @@ from fastapi.testclient import TestClient
 from hhtools.robot import registry
 from hhtools.web import server
 
-
 CURATED_ROBOT_NAMES = (
     "g1_29dof",
     "roboto_origin",
