@@ -20,6 +20,33 @@ MAX_PORTABLE_CONTAINER_ITEMS = 10_000
 MAX_PORTABLE_NODES = 262_144
 MAX_PORTABLE_DEPTH = 64
 
+PORTABLE_URI_PORT_PATTERN = (
+    r"(?:0|[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|"
+    r"65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])"
+)
+_IPV6_ADDRESS_PATTERN = (
+    r"(?:"
+    r"(?:[0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}|"
+    r"(?:[0-9A-Fa-f]{1,4}:){1,7}:|"
+    r"(?:[0-9A-Fa-f]{1,4}:){1,6}:[0-9A-Fa-f]{1,4}|"
+    r"(?:[0-9A-Fa-f]{1,4}:){1,5}(?::[0-9A-Fa-f]{1,4}){1,2}|"
+    r"(?:[0-9A-Fa-f]{1,4}:){1,4}(?::[0-9A-Fa-f]{1,4}){1,3}|"
+    r"(?:[0-9A-Fa-f]{1,4}:){1,3}(?::[0-9A-Fa-f]{1,4}){1,4}|"
+    r"(?:[0-9A-Fa-f]{1,4}:){1,2}(?::[0-9A-Fa-f]{1,4}){1,5}|"
+    r"[0-9A-Fa-f]{1,4}:(?:(?::[0-9A-Fa-f]{1,4}){1,6})|"
+    r":(?:(?::[0-9A-Fa-f]{1,4}){1,7}|:)"
+    r")"
+)
+PORTABLE_URI_HOST_PATTERN = (
+    rf"(?:\[(?:{_IPV6_ADDRESS_PATTERN})\]|[A-Za-z0-9._~-]+)"
+)
+_URI_PCHAR_PATTERN = (
+    r"(?:[A-Za-z0-9._~!$&'()*+,;=:@-]|%[0-9A-Fa-f]{2})"
+)
+PORTABLE_URI_TAIL_PATTERN = (
+    rf"(?:[/?#](?:{_URI_PCHAR_PATTERN}|[/?#])*)?"
+)
+
 _MAX_PERCENT_DECODE_ROUNDS = 8
 _MAX_NESTED_URI_DEPTH = 4
 _CONTROLLED_URI_TOKEN = re.compile(
@@ -56,6 +83,12 @@ _SAFE_WEB_ROUTE_QUERY_KEYS = frozenset({"callback", "next", "redirect", "return"
 _SENSITIVE_PUBLIC_KEY = re.compile(
     r"(?:api[_-]?key|authorization|credential|password|secret|token)$",
     re.IGNORECASE,
+)
+_PORTABLE_IPV6_ADDRESS = re.compile(rf"^(?:{_IPV6_ADDRESS_PATTERN})$")
+_PORTABLE_HOSTNAME = re.compile(r"^[A-Za-z0-9._~-]+$")
+_PORTABLE_HTTP_PATH = re.compile(rf"^(?:{_URI_PCHAR_PATTERN}|/)*$")
+_PORTABLE_HTTP_QUERY_FRAGMENT = re.compile(
+    rf"^(?:{_URI_PCHAR_PATTERN}|[/?])*$"
 )
 
 
@@ -177,6 +210,18 @@ def _http_uri_has_host_path(  # noqa: PLR0911 - fail closed at each URI boundary
         return True
     if not parsed.hostname or parsed.username is not None or parsed.password is not None:
         return True
+    if (
+        _PORTABLE_IPV6_ADDRESS.fullmatch(parsed.hostname) is None
+        if ":" in parsed.hostname
+        else _PORTABLE_HOSTNAME.fullmatch(parsed.hostname) is None
+    ):
+        return True
+    if (
+        _PORTABLE_HTTP_PATH.fullmatch(parsed.path) is None
+        or _PORTABLE_HTTP_QUERY_FRAGMENT.fullmatch(parsed.query) is None
+        or _PORTABLE_HTTP_QUERY_FRAGMENT.fullmatch(parsed.fragment) is None
+    ):
+        return True
 
     # A URL path is portable, but Windows/file syntax in it is not. Query values
     # and fragments are data, so absolute path syntax there is always a leak.
@@ -265,14 +310,23 @@ def _looks_like_host_path_once(value: str) -> bool:
 
     unsafe_uri = False
 
-    def mask_uri(match: re.Match[str]) -> str:
-        nonlocal unsafe_uri
-        uri = match.group(0)
-        safe = (
+    def portable_uri(uri: str) -> bool:
+        return (
             _canonical_hhtools_uri(uri)
             if uri.casefold().startswith("hhtools://")
             else not _http_uri_has_host_path(uri)
         )
+
+    def mask_uri(match: re.Match[str]) -> str:
+        nonlocal unsafe_uri
+        uri = match.group(0)
+        safe = portable_uri(uri)
+        # Square brackets commonly wrap a URI in prose and tests.  Keep a
+        # single closing wrapper outside the mask only when removing it turns
+        # the complete URI into a valid portable token; malformed IPv6 remains
+        # fail-closed because its truncated candidate is invalid too.
+        if not safe and uri.endswith("]") and portable_uri(uri[:-1]):
+            return "]"
         if not safe:
             unsafe_uri = True
             return uri
@@ -461,6 +515,9 @@ __all__ = [
     "MAX_PORTABLE_DOCUMENT_STRING_BYTES",
     "MAX_PORTABLE_NODES",
     "MAX_PORTABLE_STRING_BYTES",
+    "PORTABLE_URI_HOST_PATTERN",
+    "PORTABLE_URI_PORT_PATTERN",
+    "PORTABLE_URI_TAIL_PATTERN",
     "PortableJsonError",
     "is_portable_next_action_url",
     "is_portable_resource_uri",
