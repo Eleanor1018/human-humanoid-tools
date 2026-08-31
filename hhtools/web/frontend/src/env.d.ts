@@ -99,7 +99,6 @@ export type HHToolsKnownId =
   | `tour-${string}`
   | `view-${string}`
   | 'add-to-basket'
-  | 'nav-tour'
   | 'recalib-btn'
   | 'retarget-btn'
   | 'toast'
@@ -108,7 +107,6 @@ export type HHToolsKnownId =
 export type HHToolsButtonId =
   | 'toggle-sidebar'
   | 'toggle-inspector'
-  | 'nav-tour'
   | 'view-reset-btn'
   | 'tg-skeleton'
   | 'tg-mesh'

@@ -1,110 +1,154 @@
-/** Interactive first-run guide for the hhtools web UI. */
+/** Interactive first-run guide for the hhtools workspace. */
 
-const STORAGE_KEY = "hhtools.web.tutorial.v1.done";
+const STORAGE_KEY = "hhtools.web.tutorial.v2.seen";
+const LEGACY_DONE_STORAGE_KEY = "hhtools.web.tutorial.v1.done";
 
 type ToastFunction = (message: string, isError?: boolean) => void;
 type TourPlacement = "top" | "right" | "bottom" | "left";
+type TutorialStorage = Pick<Storage, "getItem" | "setItem">;
+
+interface LocalizedCopy {
+  en: string;
+  zh: string;
+}
 
 interface TourStepContext {
   revealViewHud: (visible: boolean) => void;
   revealExportCard: (visible: boolean) => void;
-  revealNavTour: (visible: boolean) => void;
+  revealDetails: (detailsId: string, visible: boolean) => void;
 }
 
 interface TourStep {
   id: string;
   panel: string;
   anchor: string;
-  title: string;
-  body: string;
+  title: LocalizedCopy;
+  body: LocalizedCopy;
   placement: TourPlacement;
   last?: boolean;
   beforeShow?: (context: TourStepContext) => void;
   afterLeave?: (context: TourStepContext) => void;
 }
 
+function copy(en: string, zh: string): LocalizedCopy {
+  return { en, zh };
+}
+
+function localized(value: LocalizedCopy): string {
+  return document.documentElement.lang.toLowerCase().startsWith("zh") ? value.zh : value.en;
+}
+
+function browserStorage(): TutorialStorage | undefined {
+  try {
+    return window.localStorage;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Treat the legacy completion flag as seen so existing users do not receive
+ * the revised first-run guide again after upgrading.
+ */
+export function hasSeenFirstRunTutorial(storage: TutorialStorage | undefined = browserStorage()): boolean {
+  if (!storage) return false;
+  try {
+    return storage.getItem(STORAGE_KEY) === "1" || storage.getItem(LEGACY_DONE_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** Record the automatic guide as soon as it is scheduled, not only when it finishes. */
+export function markFirstRunTutorialSeen(storage: TutorialStorage | undefined = browserStorage()): void {
+  if (!storage) return;
+  try {
+    storage.setItem(STORAGE_KEY, "1");
+  } catch {
+    // Storage can be unavailable in a private or restricted renderer.
+  }
+}
+
 const STEPS: readonly TourStep[] = [
   {
     id: "welcome",
     panel: "motion",
-    anchor: "#sidebar-body",
-    title: "欢迎使用 hhtools Web",
-    body:
-      "本教程按推荐工作流介绍界面：<b>动作数据 → 机器人 → 标定 → Retarget → 3D 可视化 → 导出</b>。" +
-      "点击「知道了」进入下一步；可随时「跳过教程」，之后可在左侧栏「操作教程」重新打开。",
-    placement: "right",
+    anchor: "#topbar",
+    title: copy("1. Welcome to hhtools", "1. 欢迎使用 hhtools"),
+    body: copy(
+      "This guide introduces the workspace in its recommended order: <b>Motion → Robot → Calibration → Retarget → Preview → Export</b>. Use the top menu for application commands and the left navigation to switch assets, workflows, and analysis tools.",
+      "本教程按推荐顺序介绍工作区：<b>动作 → 机器人 → 标定 → Retarget → 预览 → 导出</b>。顶部菜单用于应用命令，左侧导航用于切换资产、工作流与分析工具。",
+    ),
+    placement: "bottom",
   },
   {
     id: "motion",
     panel: "motion",
     anchor: "#tour-motion-import",
-    title: "① 人体动作数据来源",
-    body:
-      "在右侧 <b>动作 Motion</b> 面板加载 clip：<br>" +
-      "• <b>intermimic</b>：OMOMO 等人体+物体（<code>.pkl</code> + 物体 <code>.obj</code>）<br>" +
-      "• <b>meshmimic</b>：跑酷地形（<code>.pkl/.npz</code> + <code>_terrain.obj</code>）<br>" +
-      "• <b>mimic 通用</b>：AMASS / BVH / GLB / NPZ 等<br>" +
-      "也可直接拖到中间舞台预览。下一步介绍资源库。",
+    title: copy("2. Import motion", "2. 导入动作"),
+    body: copy(
+      "Choose the matching motion profile, then import a file or folder:<br>• <b>mimic</b>: BVH / GLB / NPZ and common motion datasets<br>• <b>intermimic</b>: human-object interaction clips<br>• <b>meshmimic</b>: terrain-aware motion clips<br>You can also drop compatible data directly onto the 3D stage.",
+      "先选择对应的动作类型，再导入文件或文件夹：<br>• <b>mimic</b>：BVH / GLB / NPZ 与常见动作数据集<br>• <b>intermimic</b>：人体与物体交互动作<br>• <b>meshmimic</b>：包含地形的动作<br>也可以把兼容数据直接拖到中间 3D 舞台。",
+    ),
     placement: "left",
   },
   {
     id: "motion-library",
     panel: "motion",
     anchor: "#tour-motion-library",
-    title: "② 资源库直接打开",
-    body:
-      "下方 <b>资源库</b> 列出 <code>assets/motions/</code> 里已有的 clip，无需重复上传：<br>" +
-      "• <b>目录下拉</b>：按 intermimic / meshmimic / mimic 等子目录筛选<br>" +
-      "• <b>搜索框</b>：按名称过滤（如 kick、kungfu）<br>" +
-      "• <b>点击一行</b>：加载到中间舞台；行末 <b>＋</b> 可加入批量篮子",
+    title: copy("3. Reuse the Motion Library", "3. 复用动作资源库"),
+    body: copy(
+      "The Motion Library lists reusable clips without requiring another upload. Filter by motion type, search by name, or choose a different local library directory. Select a row to load it into the stage.",
+      "动作资源库会列出可直接复用的 clip，无需重复上传。你可以按类型筛选、按名称搜索，或切换本地资源库目录；选择一行即可加载到舞台。",
+    ),
     placement: "left",
   },
   {
     id: "robot",
     panel: "robot-assets",
     anchor: "#tour-robot-import",
-    title: "③ 机器人来源",
-    body:
-      "切换到 <b>Robot Registry</b>：拖入 <code>.urdf</code>，再拖入 <code>meshes/</code> 网格文件夹。" +
-      "系统自动识别并生成配置，无需手调 <code>robot.yaml</code>。" +
-      "也可在「已注册机器人」下拉框选择此前注册的机器人，点 <b>加载选中机器人</b>。" +
-      "加载后中间舞台会显示机器人模型。",
+    title: copy("4. Import or load a robot", "4. 导入或加载机器人"),
+    body: copy(
+      "Import the robot <code>.urdf</code> first, then its <code>meshes/</code> directory. Built-in and previously registered robots can be loaded directly from the robot library, keeping reusable robot assets separate from a workflow run.",
+      "先导入机器人的 <code>.urdf</code>，再导入对应的 <code>meshes/</code> 目录。内置或已经注册的机器人可直接从机器人资源库加载，让可复用资产与具体工作流分开管理。",
+    ),
     placement: "left",
   },
   {
     id: "calibration",
     panel: "h2r",
     anchor: "#tour-calibration",
-    title: "④ 标定 Calibration",
-    body:
-      "首次 Retarget 前需标定：把<b>灰色机器人</b>对齐到画面中的<b>蓝色参考骨架</b>（当前参考格式的标准姿态，不是动作播放帧）。" +
-      "在右栏滑块或 3D 画面中点击关节并拖动旋转；<b>归零</b> 为 URDF 零位，<b>重置</b> 恢复上次保存的标定。" +
-      "调整完成后点 <b>保存标定</b>。",
+    title: copy("5. Calibrate the target robot", "5. 标定目标机器人"),
+    body: copy(
+      "Before the first retarget, align the gray robot with the blue reference skeleton. Select a joint in the 3D stage or use the controls in this step, then save the calibration for this robot and source reference.",
+      "首次 Retarget 前，需要把灰色机器人对齐到蓝色参考骨架。可以在 3D 舞台选择关节，或使用本步骤中的控制项进行调整，最后保存当前机器人与源参考骨架的标定。",
+    ),
     placement: "left",
+    beforeShow: ({ revealDetails }) => revealDetails("h2r-step-calibration", true),
+    afterLeave: ({ revealDetails }) => revealDetails("h2r-step-calibration", false),
   },
   {
     id: "retarget",
     panel: "h2r",
-    anchor: "#tour-retarget",
-    title: "⑤ Retarget 重映射",
-    body:
-      "动作与机器人就绪且已标定后，选择后端：<br>" +
-      "• <b>Newton IK</b>：纯骨架（跳舞、行走等 mimic）<br>" +
-      "• <b>Interaction-Mesh</b>：含交互物体或地形（OMOMO / meshmimic）<br>" +
-      "可设置 Retarget FPS 加速求解；点击 <b>开始 Retarget</b>，完成后舞台会播放机器人动画。",
+    anchor: "#h2r-step-result",
+    title: copy("6. Run Human → Robot", "6. 执行人体 → 机器人"),
+    body: copy(
+      "With a motion, robot, and calibration ready, choose the solver and optional Retarget FPS, then start Retarget. <b>Newton IK</b> handles regular motion; <b>Interaction-Mesh</b> handles clips with interaction objects or terrain.",
+      "动作、机器人和标定就绪后，选择求解器与可选的 Retarget FPS，再开始 Retarget。<b>Newton IK</b> 适合常规动作，<b>Interaction-Mesh</b> 适合带交互物体或地形的动作。",
+    ),
     placement: "left",
+    beforeShow: ({ revealDetails }) => revealDetails("h2r-step-result", true),
+    afterLeave: ({ revealDetails }) => revealDetails("h2r-step-result", false),
   },
   {
     id: "view",
     panel: "motion",
     anchor: "#view-hud",
-    title: "⑥ 3D 可视化开关",
-    body:
-      "舞台左上角可切换显示层：<br>" +
-      "<b>骨架 / 身体</b>：原始人体动作<br>" +
-      "<b>物体/地形</b>：交互物体与跑酷地形<br>" +
-      "<b>缩放骨架 / 缩放场景</b>：按机器人标定缩放后的预览<br>" +
-      "<b>机器人</b>：Retarget 结果。可多层同时打开对比。",
+    title: copy("7. Inspect the 3D layers", "7. 检查 3D 显示层"),
+    body: copy(
+      "Use the stage controls to compare the source skeleton or body, objects and terrain, the calibrated reference, and the retargeted robot. Multiple layers can remain visible for alignment checks.",
+      "使用舞台控制项对比源骨架或身体、物体与地形、标定后的参考层以及 Retarget 机器人。多个显示层可以同时打开，便于检查对齐效果。",
+    ),
     placement: "bottom",
     beforeShow: ({ revealViewHud }) => revealViewHud(true),
     afterLeave: ({ revealViewHud }) => revealViewHud(false),
@@ -113,26 +157,32 @@ const STEPS: readonly TourStep[] = [
     id: "export",
     panel: "h2r",
     anchor: "#rt-export-card",
-    title: "⑦ 导出保存",
-    body:
-      "Retarget 完成后在 <b>4 · 导出</b> 区域下载结果：默认 <b>CSV</b>（机器人 + 交互物体轨迹）；" +
-      "含地形/物体时可打 ZIP 包（机器人 CSV/PKL、物体轨迹、缩放后的 OBJ）。" +
-      "导出 FPS 仅对轨迹插值，不会重新求解。文件保存到浏览器默认下载目录。",
+    title: copy("8. Export the result", "8. 导出结果"),
+    body: copy(
+      "After Retarget finishes, the Result step exposes export controls. Choose CSV or PKL, adjust the output range or FPS when needed, and download the generated trajectory.",
+      "Retarget 完成后，结果步骤会显示导出控制项。可以选择 CSV 或 PKL，并按需调整导出区间或 FPS，然后下载生成的轨迹。",
+    ),
     placement: "left",
-    beforeShow: ({ revealExportCard }) => revealExportCard(true),
-    afterLeave: ({ revealExportCard }) => revealExportCard(false),
+    beforeShow: ({ revealDetails, revealExportCard }) => {
+      revealDetails("h2r-step-result", true);
+      revealExportCard(true);
+    },
+    afterLeave: ({ revealDetails, revealExportCard }) => {
+      revealExportCard(false);
+      revealDetails("h2r-step-result", false);
+    },
   },
   {
     id: "done",
     panel: "motion",
-    anchor: "#nav-tour",
-    title: "教程完成",
-    body:
-      "之后可随时点击左侧 <b>操作教程</b> 重新查看。" +
-      "批量处理请用 <b>批量 Batch</b> 栏：把多个 clip 加入篮子后一次性 Retarget 并导出 ZIP。",
-    placement: "right",
+    anchor: '[data-menu-trigger="help"]',
+    title: copy("9. Tutorial complete", "9. 教程完成"),
+    body: copy(
+      "The guide is shown automatically only on the first launch. To review it later, open <b>Help → Tutorial</b>. Video → Motion, Robot → Robot, Batch, and Data Analysis are available as separate workspaces in the left navigation.",
+      "教程只会在首次启动时自动显示。以后需要复习时，请打开顶部 <b>帮助 → 操作教程</b>。视频 → 动作、机器人 → 机器人、批量处理和数据分析均可从左侧导航进入。",
+    ),
+    placement: "bottom",
     last: true,
-    beforeShow: ({ revealNavTour }) => revealNavTour(true),
   },
 ];
 
@@ -151,7 +201,6 @@ export class GuidedTour {
   private readonly stepEl: HTMLElement;
   private readonly nextBtn: HTMLButtonElement;
   private readonly skipBtn: HTMLButtonElement;
-  private readonly navBtn: HTMLButtonElement;
   private readonly _onResize: () => void;
   private idx = 0;
   private active = false;
@@ -166,27 +215,18 @@ export class GuidedTour {
     this.stepEl = document.getElementById("tour-step");
     this.nextBtn = document.getElementById("tour-next");
     this.skipBtn = document.getElementById("tour-skip");
-    this.navBtn = document.getElementById("nav-tour");
     this._onResize = () => { if (this.active) this._positionCurrent(); };
     window.addEventListener("resize", this._onResize);
     this.skipBtn?.addEventListener("click", () => this.finish(true));
     this.nextBtn?.addEventListener("click", () => this.next());
-    this.navBtn?.addEventListener("click", () => this.start(0));
   }
 
-  isDone(): boolean {
-    try {
-      return localStorage.getItem(STORAGE_KEY) === "1";
-    } catch {
-      return false;
-    }
+  hasBeenShown(): boolean {
+    return hasSeenFirstRunTutorial();
   }
 
-  markDone(): void {
-    try {
-      localStorage.setItem(STORAGE_KEY, "1");
-    } catch { /* private mode */ }
-    this.navBtn?.classList.remove("hidden");
+  markShown(): void {
+    markFirstRunTutorialSeen();
   }
 
   revealViewHud(on: boolean): void {
@@ -222,33 +262,45 @@ export class GuidedTour {
     delete card.dataset.tourPrevDisplay;
   }
 
-  revealNavTour(on: boolean): void {
-    const btn = this.navBtn;
-    if (!btn) return;
+  revealDetails(detailsId: string, on: boolean): void {
+    const details = document.getElementById(detailsId);
+    if (!(details instanceof HTMLDetailsElement)) return;
     if (on) {
-      btn.classList.remove("hidden");
-      btn.dataset.tourPreview = "1";
+      if (!details.dataset.tourForced) {
+        details.dataset.tourWasOpen = details.open ? "1" : "0";
+      }
+      details.open = true;
+      details.dataset.tourForced = "1";
+      return;
     }
+    if (!details.dataset.tourForced) return;
+    details.open = details.dataset.tourWasOpen === "1";
+    delete details.dataset.tourForced;
+    delete details.dataset.tourWasOpen;
   }
 
   private _stepCtx(): TourStepContext {
     return {
       revealViewHud: (v) => this.revealViewHud(v),
       revealExportCard: (v) => this.revealExportCard(v),
-      revealNavTour: (v) => this.revealNavTour(v),
+      revealDetails: (id, v) => this.revealDetails(id, v),
     };
   }
 
   maybeAutoStart(): void {
-    this.navBtn?.classList.toggle("hidden", !this.isDone());
-    if (!this.isDone()) {
-      requestAnimationFrame(() => {
-        setTimeout(() => this.start(0), 400);
-      });
-    }
+    if (this.hasBeenShown()) return;
+    // Mark before scheduling so a refresh during the guide does not replay it.
+    this.markShown();
+    requestAnimationFrame(() => {
+      setTimeout(() => this.start(0), 400);
+    });
   }
 
   start(fromIdx = 0): void {
+    if (this.active) {
+      STEPS[this.idx]?.afterLeave?.(this._stepCtx());
+    }
+    this.markShown();
     this.idx = fromIdx;
     this.active = true;
     this.root?.classList.add("active");
@@ -266,9 +318,9 @@ export class GuidedTour {
     document.body.classList.remove("tour-active");
     this.highlight?.classList.remove("visible");
     this.popover?.classList.remove("visible");
-    this.markDone();
-    if (!skipped) this._toast?.("教程已完成，祝使用愉快！");
-    else this._toast?.("已跳过教程，可随时从左侧栏重新打开");
+    this.markShown();
+    if (!skipped) this._toast?.(localized(copy("Tutorial complete.", "教程已完成。")));
+    else this._toast?.(localized(copy("Tutorial skipped. Reopen it from Help → Tutorial.", "已跳过教程，可从帮助 → 操作教程重新打开。")));
   }
 
   next(): void {
@@ -288,15 +340,20 @@ export class GuidedTour {
       this.finish(false);
       return;
     }
+    this.highlight?.classList.remove("visible");
+    this.popover?.classList.remove("visible");
     switchPanel(step.panel);
     step.beforeShow?.(this._stepCtx());
     requestAnimationFrame(() => {
       requestAnimationFrame(() => this._positionCurrent());
     });
-    this.titleEl.textContent = step.title;
-    this.bodyEl.innerHTML = step.body;
+    this.titleEl.textContent = localized(step.title);
+    this.bodyEl.innerHTML = localized(step.body);
     this.stepEl.textContent = `${this.idx + 1} / ${STEPS.length}`;
-    this.nextBtn.textContent = step.last ? "完成" : "知道了";
+    this.skipBtn.textContent = localized(copy("Skip tutorial", "跳过教程"));
+    this.nextBtn.textContent = step.last
+      ? localized(copy("Finish", "完成"))
+      : localized(copy("Next", "下一步"));
   }
 
   private _positionCurrent(): void {
@@ -309,6 +366,10 @@ export class GuidedTour {
     }
     el.scrollIntoView({ block: "nearest", behavior: "auto" });
     const rect = el.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) {
+      this._centerPopover();
+      return;
+    }
     const pad = 8;
     const h = this.highlight;
     h.style.left = `${Math.max(0, rect.left - pad)}px`;
@@ -319,18 +380,17 @@ export class GuidedTour {
 
     const pop = this.popover;
     const margin = 14;
-    const pw = pop.offsetWidth || 300;
+    const pw = pop.offsetWidth || 320;
     const ph = pop.offsetHeight || 160;
     let left = 0;
     let top = 0;
-    const place = step.placement || "bottom";
-    if (place === "left") {
+    if (step.placement === "left") {
       left = rect.left - pw - margin;
       top = rect.top + rect.height / 2 - ph / 2;
-    } else if (place === "right") {
+    } else if (step.placement === "right") {
       left = rect.right + margin;
       top = rect.top + rect.height / 2 - ph / 2;
-    } else if (place === "top") {
+    } else if (step.placement === "top") {
       left = rect.left + rect.width / 2 - pw / 2;
       top = rect.top - ph - margin;
     } else {
@@ -340,7 +400,7 @@ export class GuidedTour {
     const vw = window.innerWidth;
     const vh = window.innerHeight;
     left = Math.min(vw - pw - 12, Math.max(12, left));
-    top = Math.min(vh - ph - 12, Math.max(64, top));
+    top = Math.min(vh - ph - 12, Math.max(56, top));
     pop.style.left = `${left}px`;
     pop.style.top = `${top}px`;
     pop.classList.add("visible");
@@ -349,10 +409,10 @@ export class GuidedTour {
   private _centerPopover(): void {
     this.highlight?.classList.remove("visible");
     const pop = this.popover;
-    const pw = pop.offsetWidth || 300;
+    const pw = pop.offsetWidth || 320;
     const ph = pop.offsetHeight || 160;
-    pop.style.left = `${(window.innerWidth - pw) / 2}px`;
-    pop.style.top = `${(window.innerHeight - ph) / 2}px`;
+    pop.style.left = `${Math.max(12, (window.innerWidth - pw) / 2)}px`;
+    pop.style.top = `${Math.max(56, (window.innerHeight - ph) / 2)}px`;
     pop.classList.add("visible");
   }
 }

@@ -121,21 +121,5 @@ function disabledReason(item: NavigationItem): string | undefined {
       </button>
     </section>
 
-    <section
-      class="nav-group nav-help-group"
-      role="group"
-      :aria-label="workspace ? (locale === 'zh-CN' ? '帮助' : 'Help') : '帮助 Help'"
-    >
-      <button
-        id="nav-tour"
-        type="button"
-        class="nav-item nav-tour"
-        :class="{ hidden: !workspace }"
-        :title="locale === 'zh-CN' ? '重新查看操作教程' : 'Run the tutorial again'"
-      >
-        <span class="icon" aria-hidden="true">?</span>
-        <span class="nav-item-label">{{ locale === 'zh-CN' ? '操作教程' : 'Tutorial' }}</span>
-      </button>
-    </section>
   </div>
 </template>

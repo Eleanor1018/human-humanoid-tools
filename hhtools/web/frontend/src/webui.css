@@ -3872,7 +3872,6 @@ select.search {
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* guided tour */
-.nav-tour.hidden { display: none; }
 .tour-root {
   position: fixed;
   inset: 0;

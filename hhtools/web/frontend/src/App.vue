@@ -1374,11 +1374,15 @@ onBeforeUnmount(() => {
     <div id="tour-popover" class="tour-popover" role="dialog" aria-labelledby="tour-title">
       <div class="tour-popover-head">
         <span class="tour-step-badge" id="tour-step">1 / 9</span>
-        <button type="button" class="tour-skip" id="tour-skip">跳过教程</button>
+        <button type="button" class="tour-skip" id="tour-skip">
+          {{ workspaceText('Skip tutorial', '跳过教程') }}
+        </button>
       </div>
-      <h3 class="tour-title" id="tour-title">标题</h3>
+      <h3 class="tour-title" id="tour-title">{{ workspaceText('Tutorial', '操作教程') }}</h3>
       <p class="tour-body" id="tour-body"></p>
-      <button type="button" class="btn tour-next" id="tour-next">知道了</button>
+      <button type="button" class="btn tour-next" id="tour-next">
+        {{ workspaceText('Next', '下一步') }}
+      </button>
     </div>
   </div>
 

@@ -21,8 +21,8 @@ describe('SidebarNavigation', () => {
       '资产 Assets',
       '工作流 Workflows',
       '分析 Analysis',
-      '帮助 Help',
     ])
+    expect(wrapper.find('#nav-tour').exists()).toBe(false)
     expect(wrapper.get('[data-panel="motion"]').classes()).toContain('active')
     expect(wrapper.get('#basket-badge').text()).toBe('0')
     await wrapper.get('[data-panel="h2r"]').trigger('click')
@@ -41,8 +41,8 @@ describe('SidebarNavigation', () => {
       'Assets',
       'Workflows',
       'Analysis',
-      'Help',
     ])
+    expect(wrapper.find('#nav-tour').exists()).toBe(false)
     const videoToMotion = wrapper.findAll<HTMLButtonElement>('.nav-item')
       .find((item) => item.text().includes('Video → Motion'))
     expect(wrapper.text()).not.toContain('PAE Analysis')
