@@ -14,11 +14,12 @@ lease; closing the descriptor, including at process termination, releases it.
 from __future__ import annotations
 
 import errno
+import importlib
 import os
 import threading
 from pathlib import Path
 from types import TracebackType
-from typing import BinaryIO, Self
+from typing import Any, BinaryIO, Self
 
 from hhtools.contracts import ApiError, ErrorStage
 
@@ -80,6 +81,12 @@ def _is_contention(error: OSError) -> bool:
     )
 
 
+def _fcntl_module() -> Any:
+    """Load the POSIX-only module without applying Windows stub types."""
+
+    return importlib.import_module("fcntl")
+
+
 def _lock(stream: BinaryIO) -> None:
     stream.seek(0)
     if os.name == "nt":
@@ -88,8 +95,7 @@ def _lock(stream: BinaryIO) -> None:
         msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
         return
 
-    import fcntl
-
+    fcntl = _fcntl_module()
     fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
 
 
@@ -101,8 +107,7 @@ def _unlock(stream: BinaryIO) -> None:
         msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
         return
 
-    import fcntl
-
+    fcntl = _fcntl_module()
     fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
 
 

@@ -49,10 +49,10 @@ token.
 4. Branch on the preflight `status`.
    - `ready`: retain the returned immutable smoke `plan_id` and continue.
    - `human_action_required`: pause and present every entry in `required_actions`. Stop or
-     disconnect the
-     current stdio MCP runtime, ask the human to start the WebUI with the same `save_dir`, and
-     present the loopback calibration URL when supplied. After calibration, the human must close
-     the WebUI before MCP reconnects; then call capabilities again and perform a new preflight.
+     disconnect the current stdio MCP runtime, ask the human to start the WebUI with the same
+     `save_dir`, and present the loopback calibration URL when supplied. After calibration, the
+     human must close the WebUI before MCP reconnects; then call capabilities again and perform
+     a new preflight.
    - `rejected`: stop and explain the structured error and checks.
 5. Generate one caller-owned idempotency key for this logical submission. Call
    `start_retarget(request={schema_version: "1.0", plan_id, idempotency_key})`; the nested request
