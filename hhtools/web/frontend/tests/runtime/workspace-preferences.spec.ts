@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 
 import {
   loadWorkspacePreferences,
+  resolveSystemLocale,
   updateWorkspacePreferences,
 } from '../../src/runtime/workspace-preferences'
 
@@ -10,6 +11,15 @@ const STORAGE_KEY = 'hhtools-workspace-preferences-v1'
 beforeEach(() => localStorage.clear())
 
 describe('workspace preferences', () => {
+  it('uses the system language until the user saves a supported preference', () => {
+    expect(loadWorkspacePreferences(['zh-CN']).locale).toBe('zh-CN')
+    expect(resolveSystemLocale(['zh-TW'])).toBe('zh-CN')
+    expect(resolveSystemLocale(['fr-FR', 'en-US'])).toBe('en')
+
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ locale: 'en' }))
+    expect(loadWorkspacePreferences(['zh-CN']).locale).toBe('en')
+  })
+
   it('persists the active workspace, playback state, and comparison presets', () => {
     updateWorkspacePreferences({
       activePanel: 'r2r',
@@ -45,7 +55,7 @@ describe('workspace preferences', () => {
       },
     }))
 
-    expect(loadWorkspacePreferences()).toEqual({
+    expect(loadWorkspacePreferences(['en-US'])).toEqual({
       activePanel: 'motion',
       locale: 'en',
       theme: 'light',

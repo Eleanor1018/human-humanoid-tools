@@ -67,6 +67,9 @@ desktop/.runtime/
 desktop/.vite/
 desktop/test-results/
 desktop/playwright-report/
+!desktop/build/
+desktop/build/*
+!desktop/build/installer.nsh
 
 # Vue renderer dependencies (compiled assets are packaged by Python).
 hhtools/web/frontend/node_modules/
