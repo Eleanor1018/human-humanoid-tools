@@ -60,6 +60,15 @@ def _markdown_table(document: str, heading: str) -> dict[str, list[str]]:
     return rows
 
 
+def _text_code_block(document: str, heading: str) -> set[str]:
+    marker = f"## {heading}\n"
+    assert marker in document
+    section = document.split(marker, 1)[1].split("\n## ", 1)[0]
+    match = re.search(r"```text\n(?P<body>.*?)\n```", section, flags=re.DOTALL)
+    assert match is not None
+    return {line.strip() for line in match.group("body").splitlines() if line.strip()}
+
+
 def test_skill_has_minimal_repo_scoped_structure_and_trigger_metadata() -> None:
     files = {
         path.relative_to(SKILL_ROOT).as_posix()
@@ -115,7 +124,7 @@ def test_all_skill_references_resolve_and_contract_map_covers_public_schemas() -
 
 
 @pytest.mark.anyio
-async def test_contract_map_names_exactly_the_tools_discovered_from_mcp() -> None:
+async def test_contract_map_matches_tools_and_resources_discovered_from_mcp() -> None:
     @asynccontextmanager
     async def runtime_factory() -> AsyncIterator[AgentRuntime]:
         yield cast(AgentRuntime, object())
@@ -130,10 +139,23 @@ async def test_contract_map_names_exactly_the_tools_discovered_from_mcp() -> Non
         for operation in (item.strip() for item in group.split(" / "))
     }
 
+    documented_resources = _text_code_block(
+        CONTRACTS_FILE.read_text(encoding="utf-8"),
+        "Read-only resources",
+    )
+
     async with Client(create_mcp_server(runtime_factory=runtime_factory)) as client:
         discovered_tools = {tool.name for tool in (await client.list_tools()).tools}
+        discovered_resources = {
+            str(resource.uri) for resource in (await client.list_resources()).resources
+        }
+        discovered_resources.update(
+            str(template.uri_template)
+            for template in (await client.list_resource_templates()).resource_templates
+        )
 
     assert documented_tools == discovered_tools
+    assert documented_resources == discovered_resources
 
 
 def test_workflow_invariants_preserve_transport_and_execution_boundaries() -> None:
@@ -141,9 +163,11 @@ def test_workflow_invariants_preserve_transport_and_execution_boundaries() -> No
     assert set(rules) == {
         "MCP_ONLY",
         "ALLOWLISTED_ASSETS",
+        "PLAIN_H2R_ONLY",
         "PREFLIGHT_OWNS_MODE",
         "OUTPUT_CREATE_NEW",
         "IDEMPOTENT_START",
+        "IDEMPOTENT_RETRY",
         "NEW_FULL_PLAN",
         "JOB_SCOPED_ARTIFACTS",
         "NO_BINARY_CONTEXT",
@@ -160,6 +184,10 @@ def test_workflow_invariants_preserve_transport_and_execution_boundaries() -> No
         for term in ("root_id", "relative_path", "absolute path")
     )
     assert all(
+        term in normalized["PLAIN_H2R_ONLY"]
+        for term in ("plain_motion", "interaction_mesh", "object interaction", "terrain scenes")
+    )
+    assert all(
         term in normalized["PREFLIGHT_OWNS_MODE"]
         for term in ("run_mode", "preflight", "plan_id", "idempotency_key")
     )
@@ -168,6 +196,10 @@ def test_workflow_invariants_preserve_transport_and_execution_boundaries() -> No
         for term in ("output_policy", "create_new", "unsupported")
     )
     assert "same plan and idempotency key" in normalized["IDEMPOTENT_START"]
+    assert all(
+        term in normalized["IDEMPOTENT_RETRY"]
+        for term in ("same parent job", "retry idempotency key", "second child attempt")
+    )
     assert all(
         term in normalized["NEW_FULL_PLAN"]
         for term in ("explicit approval", "new full preflight", "new plan", "new idempotency key")
@@ -213,6 +245,10 @@ def test_stop_matrix_blocks_unsafe_continuation_and_duplicate_work() -> None:
     assert "run mcp and web against the same directory" in human_required
     assert "request a webui session token" in human_required
 
+    active_runtime = " ".join(rows["RUNTIME_ALREADY_ACTIVE"]).casefold()
+    assert all(term in active_runtime for term in ("stop", "same `save_dir`", "close"))
+    assert all(term in active_runtime for term in ("do not bypass", "mcp and web together"))
+
     rejected = " ".join(rows["rejected"]).casefold()
     assert "stop" in rejected and "do not start a job" in rejected
 
@@ -227,9 +263,16 @@ def test_stop_matrix_blocks_unsafe_continuation_and_duplicate_work() -> None:
     assert all(term in stale for term in ("new preflight", "new plan", "new start key"))
     assert "do not reuse the old plan" in stale
 
-    ambiguous = " ".join(rows["transport ambiguity"]).casefold()
-    assert all(term in ambiguous for term in ("same `plan_id`", "idempotency key"))
-    assert all(term in ambiguous for term in ("do not call `retry_job`", "new key"))
+    ambiguous_start = " ".join(rows["ambiguous start"]).casefold()
+    assert all(term in ambiguous_start for term in ("same `plan_id`", "idempotency key"))
+    assert all(term in ambiguous_start for term in ("do not substitute `retry_job`", "new key"))
+
+    ambiguous_retry = " ".join(rows["ambiguous retry"]).casefold()
+    assert all(
+        term in ambiguous_retry
+        for term in ("same parent `job_id`", "retry idempotency key", "returned child")
+    )
+    assert all(term in ambiguous_retry for term in ("new key", "another child attempt"))
 
     conflict = " ".join(rows["JOB_CONFLICT"]).casefold()
     assert all(term in conflict for term in ("stop", "different plan or retry parent"))

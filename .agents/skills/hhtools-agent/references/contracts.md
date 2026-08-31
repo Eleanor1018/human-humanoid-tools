@@ -43,6 +43,9 @@ hhtools://jobs/{job_id}/failures
 hhtools://jobs/{job_id}/artifacts/{artifact_id}
 ```
 
+For the schema resource, `{schema_name}` is the exact registry slug with no filename suffix—for
+example, `capabilities` or `job-spec-v2`, never `capabilities.schema.json`.
+
 The report resources validate managed bytes before returning the versioned
 [evaluation report](../../../../docs/schemas/agent/v1/evaluation-report.schema.json),
 [failure report](../../../../docs/schemas/agent/v1/failure-report.schema.json), or
