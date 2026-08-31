@@ -1,5 +1,6 @@
 """Stable, transport-neutral contracts for HHTools agent integrations."""
 
+from .artifact_exports import ArtifactExportReceipt
 from .artifacts import EvaluationReport, FailureItem, FailureReport, JobManifest
 from .assets import (
     AssetBundle,
@@ -27,6 +28,12 @@ from .capabilities import (
     SchedulerCapability,
     SchedulerMode,
 )
+from .cli import (
+    AgentCliArgumentDiagnostic,
+    AgentCliHelp,
+    AgentCliHelpArgument,
+    AgentCliHelpSubcommand,
+)
 from .common import (
     ApiError,
     ArtifactId,
@@ -52,6 +59,7 @@ from .jobs import (
     AgentJobView,
     ArtifactDescriptor,
     ArtifactListResponse,
+    JobLookupRequest,
     JobOutcome,
     JobProgress,
     JobQueueView,
@@ -76,9 +84,14 @@ from .preflight import (
 )
 
 __all__ = [
+    "AgentCliArgumentDiagnostic",
+    "AgentCliHelp",
+    "AgentCliHelpArgument",
+    "AgentCliHelpSubcommand",
     "AgentJobView",
     "ApiError",
     "ArtifactDescriptor",
+    "ArtifactExportReceipt",
     "ArtifactListResponse",
     "ArtifactId",
     "AssetBundle",
@@ -119,6 +132,7 @@ __all__ = [
     "JobState",
     "JobStartRequest",
     "JobManifest",
+    "JobLookupRequest",
     "LegacyJobUpgradeRequest",
     "LegacyJobUpgradeResponse",
     "LegacyMigrationReceipt",

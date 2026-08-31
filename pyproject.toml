@@ -152,6 +152,12 @@ hhtools = [
 [tool.setuptools.dynamic]
 version = { attr = "hhtools._version.__version__" }
 
+[tool.pytest.ini_options]
+# The packaged desktop runtime contains third-party ``test_*.py`` modules.
+# Keep a bare ``pytest`` invocation inside the repository-owned suite instead
+# of importing tests from ``desktop/release`` or other generated artifacts.
+testpaths = ["tests"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"

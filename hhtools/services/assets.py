@@ -395,6 +395,84 @@ class AssetRegistry:
 
         return tuple(sorted(self._roots))
 
+    def registration_hint(
+        self,
+        trusted_path: Path,
+        *,
+        kind: AssetKind | None = None,
+        category: AssetCategory | None = None,
+        recursive: bool = True,
+    ) -> AssetRegistrationRequest:
+        """Convert one trusted local path to a portable registration request.
+
+        This is an in-process service boundary, not a public path resolver.  It
+        accepts a path already selected by trusted application code, proves the
+        path is below a configured root, and returns only ``root_id`` plus a
+        normalized relative path.  When roots overlap, the deepest usable root
+        wins.  Equally specific root identifiers are rejected instead of being
+        selected by an arbitrary ordering.
+        """
+
+        try:
+            resolved = Path(trusted_path).resolve(strict=True)
+            if not resolved.is_file() and not resolved.is_dir():
+                raise OSError("trusted asset source is not a regular file or directory")
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            raise _asset_error(
+                "ASSET_NOT_FOUND",
+                "The trusted asset source is unavailable.",
+            ) from exc
+
+        candidates: list[tuple[int, str, Path]] = []
+        for root_id in sorted(self._roots):
+            # Fail closed when any configured provider cannot be resolved.  A
+            # silent fallback to a broader root could change the portable
+            # identity selected for the same installed preset.
+            root = self._root(root_id)
+            try:
+                relative = resolved.relative_to(root)
+            except ValueError:
+                continue
+            candidates.append((len(root.parts), root_id, relative))
+
+        if not candidates:
+            raise _asset_error(
+                "ASSET_OUTSIDE_ALLOWED_ROOT",
+                "The trusted asset source is not addressable below an allowed root.",
+            )
+
+        specificity = max(depth for depth, _root_id, _relative in candidates)
+        selected = [candidate for candidate in candidates if candidate[0] == specificity]
+        if len(selected) != 1:
+            raise _asset_error(
+                "ASSET_ROOT_AMBIGUOUS",
+                "Multiple equally specific allowed roots identify the trusted asset source.",
+                details={"root_ids": sorted(root_id for _depth, root_id, _relative in selected)},
+            )
+
+        _depth, root_id, relative = selected[0]
+        if not relative.parts:
+            raise _asset_error(
+                "ASSET_ROOT_UNREPRESENTABLE",
+                "The most specific allowed root cannot name itself as a portable relative path.",
+                details={"root_id": root_id},
+            )
+        relative_path = relative.as_posix()
+        try:
+            return AssetRegistrationRequest(
+                root_id=root_id,
+                relative_path=relative_path,
+                display_name=None,
+                kind=kind,
+                category=category,
+                recursive=recursive,
+            )
+        except (TypeError, ValueError) as exc:
+            raise _asset_error(
+                "INVALID_PARAMETER",
+                "The trusted asset source cannot be represented by the registration contract.",
+            ) from exc
+
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self._database_path, timeout=30.0)
         connection.row_factory = sqlite3.Row

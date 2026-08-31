@@ -10,6 +10,7 @@ from types import MappingProxyType
 
 from pydantic import BaseModel
 
+from .artifact_exports import ArtifactExportReceipt
 from .artifacts import EvaluationReport, FailureReport, JobManifest
 from .assets import (
     AssetBundle,
@@ -24,6 +25,7 @@ from .jobs import (
     AgentJobView,
     ArtifactDescriptor,
     ArtifactListResponse,
+    JobLookupRequest,
     JobRetryRequest,
     JobStartRequest,
 )
@@ -39,6 +41,7 @@ PUBLIC_AGENT_SCHEMAS: MappingProxyType[str, type[BaseModel]] = MappingProxyType(
         "agent-job-view": AgentJobView,
         "api-error": ApiError,
         "artifact": ArtifactDescriptor,
+        "artifact-export-receipt": ArtifactExportReceipt,
         "artifact-list-response": ArtifactListResponse,
         "asset-bundle": AssetBundle,
         "asset-inspection": AssetInspection,
@@ -48,6 +51,7 @@ PUBLIC_AGENT_SCHEMAS: MappingProxyType[str, type[BaseModel]] = MappingProxyType(
         "evaluation-report": EvaluationReport,
         "failure-report": FailureReport,
         "job-manifest": JobManifest,
+        "job-lookup-request": JobLookupRequest,
         "job-retry-request": JobRetryRequest,
         "job-start-request": JobStartRequest,
         "job-spec-v2": JobSpecV2,

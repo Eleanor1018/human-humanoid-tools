@@ -496,6 +496,9 @@ class _SingleArtifactManager:
     def get_job(self, *args, **kwargs):
         raise AssertionError("not called")
 
+    def lookup_job(self, *args, **kwargs):
+        raise AssertionError("not called")
+
     def cancel_job(self, *args, **kwargs):
         raise AssertionError("not called")
 
@@ -708,6 +711,28 @@ def test_agent_job_rest_lifecycle_idempotency_retry_and_canonical_artifacts(
             )
             assert unchanged.status_code == 200
             assert unchanged.json()["progress"]["revision"] == root["progress"]["revision"]
+
+            recovered = client.post(
+                "/api/agent/v1/jobs/lookup",
+                json={
+                    "schema_version": "1.0",
+                    "plan_id": first.plan_id,
+                    "idempotency_key": "rest-root-1",
+                    "after_revision": root["progress"]["revision"],
+                },
+            )
+            assert recovered.status_code == 200
+            assert recovered.json()["job_id"] == root_job_id
+
+            lookup_conflict = client.post(
+                "/api/agent/v1/jobs/lookup",
+                json={
+                    "plan_id": second.plan_id,
+                    "idempotency_key": "rest-root-1",
+                },
+            )
+            assert lookup_conflict.status_code == 409
+            assert lookup_conflict.json()["code"] == "JOB_CONFLICT"
 
             conflict = client.post(
                 "/api/agent/v1/jobs",
@@ -950,6 +975,7 @@ def test_agent_phase4_routes_and_examples_are_visible_in_openapi() -> None:
     schema = TestClient(_agent_app()).get("/openapi.json").json()
     expected_paths = {
         "/api/agent/v1/jobs",
+        "/api/agent/v1/jobs/lookup",
         "/api/agent/v1/jobs/{job_id}",
         "/api/agent/v1/jobs/{job_id}/cancel",
         "/api/agent/v1/jobs/{job_id}/retry",
@@ -962,6 +988,7 @@ def test_agent_phase4_routes_and_examples_are_visible_in_openapi() -> None:
 
     for path, method in (
         ("/api/agent/v1/jobs", "post"),
+        ("/api/agent/v1/jobs/lookup", "post"),
         ("/api/agent/v1/jobs/{job_id}/retry", "post"),
         ("/api/agent/v1/legacy/jobspec-v1/upgrade", "post"),
     ):

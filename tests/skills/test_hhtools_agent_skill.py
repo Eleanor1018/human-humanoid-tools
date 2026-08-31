@@ -260,8 +260,21 @@ def test_stop_matrix_blocks_unsafe_continuation_and_duplicate_work() -> None:
     assert "do not reuse the old plan" in stale
 
     ambiguous_start = " ".join(rows["ambiguous start"]).casefold()
-    assert all(term in ambiguous_start for term in ("same `plan_id`", "idempotency key"))
-    assert all(term in ambiguous_start for term in ("do not substitute `retry_job`", "new key"))
+    assert all(
+        term in ambiguous_start
+        for term in (
+            "`lookup_job`",
+            "exact recorded `plan_id`",
+            "idempotency key",
+            "`job_not_found`",
+            "replay `start_retarget`",
+            "same pair",
+        )
+    )
+    assert all(
+        term in ambiguous_start
+        for term in ("do not substitute `retry_job`", "new key", "replay before lookup")
+    )
 
     ambiguous_retry = " ".join(rows["ambiguous retry"]).casefold()
     assert all(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 
@@ -17,10 +18,15 @@ def _create_test_app(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(server, "_tmpdir", local_tmpdir)
     monkeypatch.setattr(server, "_robot_library_root", lambda: tmp_path / "robots")
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     return server.create_app(
         source_root=tmp_path / "motions",
         save_dir=tmp_path / "save",
         cache_dir=tmp_path / "cache",
+        # Never let a developer's HHTOOLS/XDG environment select the persistent
+        # user history during a test.  The explicit argument also makes restart
+        # tests share only this test's temporary store.
+        job_history_dir=tmp_path / "job-history",
     )
 
 
@@ -158,6 +164,53 @@ def test_mark_terminal_records_wall_clock_completion() -> None:
     assert job.terminal_since is not None
     assert job.finished_wall_time is not None
     assert job.finished_wall_time >= job.created_wall_time
+
+
+def test_job_history_fixture_ignores_user_directory_overrides(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    simulated_user_history = tmp_path / "simulated-user-history"
+    user_records = simulated_user_history / "records"
+    user_records.mkdir(parents=True)
+    user_record = user_records / "real-user-active.json"
+    user_record.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "id": "real-user-active",
+                "status": "running",
+                "created_at": 1.0,
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    original_user_bytes = user_record.read_bytes()
+    monkeypatch.setenv("HHTOOLS_JOB_HISTORY_DIR", str(simulated_user_history))
+
+    app = _create_test_app(tmp_path, monkeypatch)
+    isolated_store = app.state.session_state.job_history
+    assert isolated_store.root == (tmp_path / "job-history").resolve()
+
+    with TestClient(app) as client:
+        listing = client.get("/api/jobs").json()
+        assert all(record["id"] != "real-user-active" for record in listing["jobs"])
+        isolated_store.put(
+            {
+                "id": "isolated-test-job",
+                "status": "done",
+                "created_at": 2.0,
+            }
+        )
+
+    # The listing above proves the record was not loaded. Opening the user store
+    # would also recover this active record and rewrite it as an error, so byte
+    # equality plus the absent test record proves there was no write-back.
+    assert user_record.read_bytes() == original_user_bytes
+    assert not (user_records / "isolated-test-job.json").exists()
+    assert (isolated_store.records_dir / "isolated-test-job.json").is_file()
 
 
 def test_job_history_survives_app_restart(tmp_path: Path, monkeypatch) -> None:

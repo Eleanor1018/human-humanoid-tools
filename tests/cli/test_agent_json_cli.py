@@ -31,6 +31,8 @@ from hhtools.cli.agent_transport import (
     loads_strict_json,
 )
 from hhtools.contracts import (
+    AgentCliArgumentDiagnostic,
+    AgentCliHelp,
     AgentJobView,
     ApiError,
     ArtifactDescriptor,
@@ -166,6 +168,104 @@ def test_capabilities_is_one_contract_and_accepts_global_options_anywhere() -> N
     assert transport.requests == [("GET", "/capabilities", {}, None)]
 
 
+@pytest.mark.parametrize(
+    ("arguments", "command", "required_entry"),
+    [
+        (["--help"], "hhtools agent", "job"),
+        (["job", "--help"], "hhtools agent job", "start"),
+        (["job", "start", "--help"], "hhtools agent job start", "--plan"),
+        (
+            ["job", "lookup", "--help"],
+            "hhtools agent job lookup",
+            "--idempotency-key",
+        ),
+        (
+            ["asset", "register", "-h"],
+            "hhtools agent asset register",
+            "--request",
+        ),
+        (
+            ["artifact", "get", "--help"],
+            "hhtools agent artifact get",
+            "ARTIFACT_ID",
+        ),
+    ],
+)
+def test_help_is_one_versioned_json_document_without_transport(
+    arguments: list[str],
+    command: str,
+    required_entry: str,
+) -> None:
+    transport = FakeTransport([])
+
+    code, document, selected = _invoke(arguments, transport)
+
+    help_document = AgentCliHelp.model_validate(document)
+    serialized = json.dumps(document)
+    assert code == EXIT_SUCCESS
+    assert selected == []
+    assert help_document.kind == "agent_cli_help"
+    assert help_document.command == command
+    assert required_entry in serialized
+    assert "--help" in help_document.usage
+    assert transport.requests == []
+
+
+@pytest.mark.parametrize(
+    ("arguments", "reason_code", "command", "argument"),
+    [
+        ([], "MISSING_COMMAND", "hhtools agent", "COMMAND"),
+        (["not-a-command"], "UNKNOWN_COMMAND", "hhtools agent", "COMMAND"),
+        (["job"], "MISSING_COMMAND", "hhtools agent job", "COMMAND"),
+        (["job", "not-a-command"], "UNKNOWN_COMMAND", "hhtools agent job", "COMMAND"),
+        (["job", "start"], "MISSING_ARGUMENT", "hhtools agent job start", "--plan"),
+        (
+            ["job", "start", "--plan", _PLAN_ID],
+            "MISSING_ARGUMENT",
+            "hhtools agent job start",
+            "--idempotency-key",
+        ),
+        (
+            ["job", "lookup"],
+            "MISSING_ARGUMENT",
+            "hhtools agent job lookup",
+            "--plan",
+        ),
+        (
+            ["job", "lookup", "--plan", _PLAN_ID],
+            "MISSING_ARGUMENT",
+            "hhtools agent job lookup",
+            "--idempotency-key",
+        ),
+        (
+            ["artifact", "list"],
+            "MISSING_ARGUMENT",
+            "hhtools agent artifact list",
+            "JOB_ID",
+        ),
+    ],
+)
+def test_parse_failures_have_sanitized_actionable_diagnostics(
+    arguments: list[str],
+    reason_code: str,
+    command: str,
+    argument: str,
+) -> None:
+    transport = FakeTransport([])
+
+    code, document, selected = _invoke(arguments, transport)
+
+    diagnostic = AgentCliArgumentDiagnostic.model_validate(document["details"])
+    assert code == EXIT_PARAMETER_ERROR
+    assert selected == []
+    assert diagnostic.reason_code == reason_code
+    assert diagnostic.command == command
+    assert diagnostic.argument == argument
+    assert diagnostic.expected
+    assert diagnostic.usage.startswith(command)
+    assert transport.requests == []
+
+
 def test_request_validation_fails_before_transport_without_echoing_input() -> None:
     transport = FakeTransport([])
     raw = json.dumps(
@@ -183,6 +283,8 @@ def test_request_validation_fails_before_transport_without_echoing_input() -> No
 
     assert code == EXIT_PARAMETER_ERROR
     assert document["code"] == "INVALID_PARAMETER"
+    assert document["details"]["reason_code"] == "REQUEST_CONTRACT_INVALID"
+    assert document["details"]["argument"] == "--request"
     assert "do-not-echo" not in json.dumps(document)
     assert transport.requests == []
 
@@ -215,8 +317,204 @@ def test_cli_argument_errors_never_echo_argv_or_request_paths(
     assert code == EXIT_PARAMETER_ERROR
     assert document["code"] == "INVALID_PARAMETER"
     assert document["message"] == "The Agent command arguments are invalid."
+    assert document["details"]["reason_code"] in {
+        "UNKNOWN_ARGUMENT",
+        "REQUEST_FILE_UNREADABLE",
+    }
+    assert document["details"]["usage"].startswith("hhtools agent ")
     assert sensitive_value not in json.dumps(document)
     assert transport.requests == []
+
+
+def test_unknown_option_never_echoes_option_or_following_secret() -> None:
+    secret_option = "--access-token=agent-secret-value"
+    secret_path = r"C:\Users\Nora\private\request.json"
+
+    code, document, _selected = _invoke(
+        ["capabilities", secret_option, secret_path],
+        FakeTransport([]),
+    )
+
+    assert code == EXIT_PARAMETER_ERROR
+    assert document["details"] == {
+        "reason_code": "UNKNOWN_ARGUMENT",
+        "command": "hhtools agent capabilities",
+        "argument": "<unrecognized>",
+        "expected": "Only the documented options and positional arguments are accepted.",
+        "usage": (
+            "hhtools agent capabilities [--json] [--base-url URL] [--timeout SECONDS] [--help]"
+        ),
+    }
+    serialized = json.dumps(document)
+    assert secret_option not in serialized
+    assert secret_path not in serialized
+
+
+def test_inline_json_is_diagnosed_as_request_file_misuse_without_echoing_it() -> None:
+    inline = '{"api_key":"agent-secret-value"}'
+
+    code, document, _selected = _invoke(
+        ["asset", "register", "--request", inline],
+        FakeTransport([]),
+    )
+
+    assert code == EXIT_PARAMETER_ERROR
+    assert document["details"]["reason_code"] == "REQUEST_FILE_UNREADABLE"
+    assert document["details"]["argument"] == "--request"
+    assert "JSON_FILE_OR_DASH" in document["details"]["usage"]
+    assert inline not in json.dumps(document)
+
+
+def test_request_file_errors_distinguish_encoding_json_and_contract(
+    tmp_path: Path,
+) -> None:
+    invalid_utf8 = tmp_path / "private-request.json"
+    invalid_utf8.write_bytes(b"\xff\xfe")
+
+    encoding_code, encoding_document, _ = _invoke(
+        ["asset", "register", "--request", str(invalid_utf8)],
+        FakeTransport([]),
+    )
+    json_code, json_document, _ = _invoke(
+        ["asset", "register", "--request", "-"],
+        FakeTransport([]),
+        stdin="{not-json}",
+    )
+    contract_code, contract_document, _ = _invoke(
+        ["asset", "register", "--request", "-"],
+        FakeTransport([]),
+        stdin='{"secret_field":"secret-value"}',
+    )
+
+    assert {encoding_code, json_code, contract_code} == {EXIT_PARAMETER_ERROR}
+    assert encoding_document["details"]["reason_code"] == "REQUEST_ENCODING_INVALID"
+    assert json_document["details"]["reason_code"] == "REQUEST_JSON_INVALID"
+    assert contract_document["details"]["reason_code"] == "REQUEST_CONTRACT_INVALID"
+    serialized = json.dumps([encoding_document, json_document, contract_document])
+    assert str(invalid_utf8) not in serialized
+    assert "secret_field" not in serialized
+    assert "secret-value" not in serialized
+
+
+@pytest.mark.parametrize(
+    ("arguments", "argument"),
+    [
+        (
+            [
+                "job",
+                "start",
+                "--plan",
+                "private-plan.json",
+                "--idempotency-key",
+                "valid-key",
+            ],
+            "--plan",
+        ),
+        (
+            [
+                "job",
+                "start",
+                "--plan",
+                _PLAN_ID,
+                "--idempotency-key",
+                "secret key with spaces",
+            ],
+            "--idempotency-key",
+        ),
+    ],
+)
+def test_job_start_contract_errors_name_only_the_safe_argument(
+    arguments: list[str],
+    argument: str,
+) -> None:
+    code, document, _selected = _invoke(arguments, FakeTransport([]))
+
+    assert code == EXIT_PARAMETER_ERROR
+    assert document["details"]["reason_code"] == "INVALID_VALUE"
+    assert document["details"]["command"] == "hhtools agent job start"
+    assert document["details"]["argument"] == argument
+    serialized = json.dumps(document)
+    assert "private-plan.json" not in serialized
+    assert "secret key with spaces" not in serialized
+
+
+@pytest.mark.parametrize(
+    ("arguments", "argument", "secret"),
+    [
+        (
+            [
+                "job",
+                "lookup",
+                "--plan",
+                r"C:\Users\Nora\private-plan.json",
+                "--idempotency-key",
+                "recover-key",
+            ],
+            "--plan",
+            r"C:\Users\Nora\private-plan.json",
+        ),
+        (
+            [
+                "job",
+                "lookup",
+                "--plan",
+                _PLAN_ID,
+                "--idempotency-key",
+                "secret key with spaces",
+            ],
+            "--idempotency-key",
+            "secret key with spaces",
+        ),
+        (
+            [
+                "job",
+                "lookup",
+                "--plan",
+                _PLAN_ID,
+                "--idempotency-key",
+                "recover-key",
+                "--after-revision",
+                "-1",
+            ],
+            "--after-revision",
+            "-1",
+        ),
+    ],
+)
+def test_job_lookup_contract_errors_never_echo_raw_identifiers(
+    arguments: list[str],
+    argument: str,
+    secret: str,
+) -> None:
+    code, document, _selected = _invoke(arguments, FakeTransport([]))
+
+    assert code == EXIT_PARAMETER_ERROR
+    assert document["details"]["reason_code"] == "INVALID_VALUE"
+    assert document["details"]["command"] == "hhtools agent job lookup"
+    assert document["details"]["argument"] == argument
+    assert secret not in json.dumps(document)
+
+
+def test_job_lookup_rejects_unrelated_options_without_echoing_their_values() -> None:
+    secret_path = r"C:\Users\Nora\private-output.csv"
+    code, document, _selected = _invoke(
+        [
+            "job",
+            "lookup",
+            "--plan",
+            _PLAN_ID,
+            "--idempotency-key",
+            "recover-key",
+            "--output",
+            secret_path,
+        ],
+        FakeTransport([]),
+    )
+
+    assert code == EXIT_PARAMETER_ERROR
+    assert document["details"]["reason_code"] == "UNKNOWN_ARGUMENT"
+    assert document["details"]["argument"] == "<unrecognized>"
+    assert secret_path not in json.dumps(document)
 
 
 @pytest.mark.parametrize(
@@ -594,10 +892,23 @@ def test_valid_remote_success_contract_with_host_path_fails_closed_on_stdout() -
 
 
 def test_job_commands_use_public_requests_and_versioned_routes() -> None:
-    transport = FakeTransport([_job(), _job(), _job(), _job("job_retry")])
+    transport = FakeTransport([_job(), _job(), _job(), _job(), _job("job_retry")])
 
     start_code, _, _ = _invoke(
         ["job", "start", "--plan", _PLAN_ID, "--idempotency-key", "cli:start-1"],
+        transport,
+    )
+    lookup_code, lookup_document, _ = _invoke(
+        [
+            "job",
+            "lookup",
+            "--plan",
+            _PLAN_ID,
+            "--idempotency-key",
+            "cli:start-1",
+            "--after-revision",
+            "7",
+        ],
         transport,
     )
     get_code, _, _ = _invoke(["job", "get", "job_cli", "--after-revision", "0"], transport)
@@ -607,7 +918,8 @@ def test_job_commands_use_public_requests_and_versioned_routes() -> None:
         transport,
     )
 
-    assert {start_code, get_code, cancel_code, retry_code} == {EXIT_SUCCESS}
+    assert {start_code, lookup_code, get_code, cancel_code, retry_code} == {EXIT_SUCCESS}
+    assert lookup_document["job_id"] == "job_cli"
     assert transport.requests == [
         (
             "POST",
@@ -619,6 +931,17 @@ def test_job_commands_use_public_requests_and_versioned_routes() -> None:
                 "idempotency_key": "cli:start-1",
             },
         ),
+        (
+            "POST",
+            "/jobs/lookup",
+            {},
+            {
+                "schema_version": "1.0",
+                "plan_id": _PLAN_ID,
+                "idempotency_key": "cli:start-1",
+                "after_revision": 7,
+            },
+        ),
         ("GET", "/jobs/job_cli", {"after_revision": 0}, None),
         ("POST", "/jobs/job_cli/cancel", {}, {}),
         (
@@ -627,6 +950,37 @@ def test_job_commands_use_public_requests_and_versioned_routes() -> None:
             {},
             {"schema_version": "1.0", "idempotency_key": "cli:retry-1"},
         ),
+    ]
+
+
+def test_job_lookup_omits_the_optional_revision_when_not_supplied() -> None:
+    transport = FakeTransport([_job()])
+
+    code, document, _selected = _invoke(
+        [
+            "job",
+            "lookup",
+            "--plan",
+            _PLAN_ID,
+            "--idempotency-key",
+            "cli:recover-without-revision",
+        ],
+        transport,
+    )
+
+    assert code == EXIT_SUCCESS
+    assert document["job_id"] == "job_cli"
+    assert transport.requests == [
+        (
+            "POST",
+            "/jobs/lookup",
+            {},
+            {
+                "schema_version": "1.0",
+                "plan_id": _PLAN_ID,
+                "idempotency_key": "cli:recover-without-revision",
+            },
+        )
     ]
 
 
@@ -716,12 +1070,17 @@ def test_installed_hhtools_agent_group_keeps_success_and_parse_errors_json(
     runner = CliRunner()
 
     success = runner.invoke(hhtools_app, ["agent", "capabilities", "--json"])
+    help_result = runner.invoke(hhtools_app, ["agent", "job", "start", "--help"])
     failure = runner.invoke(hhtools_app, ["agent", "job", "start", "--json"])
 
     assert success.exit_code == EXIT_SUCCESS
     assert json.loads(success.stdout)["service_version"] == "test"
     assert success.stdout.count("\n") == 1
     assert success.stderr == ""
+    assert help_result.exit_code == EXIT_SUCCESS
+    assert json.loads(help_result.stdout)["command"] == "hhtools agent job start"
+    assert help_result.stdout.count("\n") == 1
+    assert help_result.stderr == ""
     assert failure.exit_code == EXIT_PARAMETER_ERROR
     assert json.loads(failure.stdout)["code"] == "INVALID_PARAMETER"
     assert failure.stdout.count("\n") == 1
@@ -807,6 +1166,16 @@ class _ParityJobManager:
         self.calls.append(("get", job_id, after_revision))
         return _job(job_id)
 
+    def lookup_job(
+        self,
+        plan_id: str,
+        *,
+        idempotency_key: str,
+        after_revision: int | None = None,
+    ) -> AgentJobView:
+        self.calls.append(("lookup", plan_id, idempotency_key, after_revision))
+        return _job()
+
     def cancel_job(self, job_id: str) -> AgentJobView:
         self.calls.append(("cancel", job_id))
         return _job(job_id)
@@ -885,6 +1254,34 @@ def test_cli_rest_service_parity_for_jobs_and_artifact_membership() -> None:
     assert manager.calls[:2] == [
         ("start", _PLAN_ID, "cli:parity-start"),
         ("start", _PLAN_ID, "cli:parity-start"),
+    ]
+
+    manager.calls.clear()
+    lookup_args = [
+        "job",
+        "lookup",
+        "--plan",
+        _PLAN_ID,
+        "--idempotency-key",
+        "cli:parity-start",
+        "--after-revision",
+        "7",
+    ]
+    lookup_code, lookup_document, _ = _invoke(lookup_args, transport)
+    direct_lookup = client.post(
+        "/api/agent/v1/jobs/lookup",
+        json={
+            "schema_version": "1.0",
+            "plan_id": _PLAN_ID,
+            "idempotency_key": "cli:parity-start",
+            "after_revision": 7,
+        },
+    )
+    assert lookup_code == EXIT_SUCCESS
+    assert lookup_document == direct_lookup.json()
+    assert manager.calls == [
+        ("lookup", _PLAN_ID, "cli:parity-start", 7),
+        ("lookup", _PLAN_ID, "cli:parity-start", 7),
     ]
 
     manager.calls.clear()

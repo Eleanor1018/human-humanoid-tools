@@ -508,18 +508,14 @@ class JobManager:
                 if not submitted:
                     reservation.cancel()
 
-    def get_job(
+    def _project_polled_job(
         self,
-        job_id: str,
+        stored: StoredJob,
         *,
-        after_revision: int | None = None,
+        after_revision: int | None,
     ) -> AgentJobView:
-        """Return one compact view; large output bytes remain in artifacts."""
+        """Apply the shared revision contract to an already-authorized job."""
 
-        try:
-            stored = self._job_store.get(job_id)
-        except JobStoreError as exc:
-            raise _wrap_service_error(exc.api_error) from exc
         if after_revision is not None and (
             isinstance(after_revision, bool)
             or not isinstance(after_revision, int)
@@ -536,6 +532,41 @@ class JobManager:
             stored,
             unchanged=after_revision is not None and after_revision == stored.revision,
         )
+
+    def get_job(
+        self,
+        job_id: str,
+        *,
+        after_revision: int | None = None,
+    ) -> AgentJobView:
+        """Return one compact view; large output bytes remain in artifacts."""
+
+        try:
+            stored = self._job_store.get(job_id)
+        except JobStoreError as exc:
+            raise _wrap_service_error(exc.api_error) from exc
+        return self._project_polled_job(stored, after_revision=after_revision)
+
+    def lookup_job(
+        self,
+        plan_id: str,
+        *,
+        idempotency_key: str,
+        after_revision: int | None = None,
+    ) -> AgentJobView:
+        """Recover one known submission without exposing a global job listing."""
+
+        try:
+            stored = self._job_store.get_by_idempotency_key(idempotency_key)
+        except JobStoreError as exc:
+            raise _wrap_service_error(exc.api_error) from exc
+        if stored.spec.plan_id != plan_id:
+            raise _error(
+                "JOB_CONFLICT",
+                "The idempotency key is bound to another immutable plan.",
+                stage=ErrorStage.REQUEST,
+            )
+        return self._project_polled_job(stored, after_revision=after_revision)
 
     def list_artifacts(
         self,

@@ -33,6 +33,7 @@ _RUNTIME = AgentRuntime(
     preflight=_UNUSED,
     plans=_UNUSED,
     jobs=_UNUSED,
+    exports=_UNUSED,
 )
 
 

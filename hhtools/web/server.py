@@ -1323,6 +1323,7 @@ def _create_app_owned(
     )
     from hhtools.services import (
         AgentAssetService,
+        ArtifactExportService,
         ArtifactStore,
         AssetRegistry,
         AssetServiceError,
@@ -1715,6 +1716,10 @@ def _create_app_owned(
         app.state.agent_retarget_service,
         scheduler,
         executor=agent_executor,
+    )
+    app.state.agent_artifact_export_service = ArtifactExportService(
+        app.state.agent_job_manager,
+        state.save_dir / "agent-exports",
     )
     app.state.agent_capabilities_service = CapabilitiesService(
         scheduler_snapshot=scheduler.snapshot,

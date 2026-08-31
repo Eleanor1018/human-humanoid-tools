@@ -13,14 +13,19 @@ import math
 import os
 import sys
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Never, TextIO
+from typing import Any, Never, TextIO, cast
 from urllib.parse import quote
 
 import typer
 from pydantic import BaseModel, ValidationError
 
 from hhtools.contracts import (
+    AgentCliArgumentDiagnostic,
+    AgentCliHelp,
+    AgentCliHelpArgument,
+    AgentCliHelpSubcommand,
     AgentJobView,
     ApiError,
     ArtifactDescriptor,
@@ -31,6 +36,7 @@ from hhtools.contracts import (
     AssetSearchResponse,
     CapabilityResponse,
     ErrorStage,
+    JobLookupRequest,
     JobRetryRequest,
     JobStartRequest,
     LegacyJobUpgradeRequest,
@@ -38,6 +44,11 @@ from hhtools.contracts import (
     PreflightResponse,
     PreflightStatus,
     RetargetPreflightRequest,
+)
+from hhtools.contracts.cli import (
+    AgentCliCommandName,
+    AgentCliDiagnosticArgument,
+    AgentCliReasonCode,
 )
 
 from .agent_transport import (
@@ -61,18 +72,508 @@ _MAX_REQUEST_BYTES = 8 * 1024 * 1024
 TransportFactory = Callable[[str, float], AgentTransport]
 
 
+@dataclass(frozen=True, slots=True)
+class _CliArgumentSpec:
+    name: AgentCliDiagnosticArgument
+    description: str
+    value_name: str | None = None
+    required: bool = False
+    expected: str | None = None
+    value_kind: str = "string"
+
+
+@dataclass(frozen=True, slots=True)
+class _CliCommandSpec:
+    path: tuple[str, ...]
+    summary: str
+    positionals: tuple[_CliArgumentSpec, ...] = ()
+    options: tuple[_CliArgumentSpec, ...] = ()
+
+
+_REQUEST_ARGUMENT = _CliArgumentSpec(
+    "--request",
+    "Read one strict UTF-8 JSON request from this file, or from stdin when the value is '-'.",
+    value_name="JSON_FILE_OR_DASH",
+    required=True,
+    expected="A readable UTF-8 JSON file, or '-' for stdin.",
+)
+_PLAN_ARGUMENT = _CliArgumentSpec(
+    "--plan",
+    "Use the immutable plan id returned by retarget preflight.",
+    value_name="PLAN_ID",
+    required=True,
+    expected="A plan id matching 'plan:sha256:' followed by 64 lowercase hex characters.",
+)
+_IDEMPOTENCY_ARGUMENT = _CliArgumentSpec(
+    "--idempotency-key",
+    "Bind this caller-generated key to one logical submission.",
+    value_name="KEY",
+    required=True,
+    expected=(
+        "A 1-256 character key beginning with a letter or digit and containing only "
+        "letters, digits, '.', '_', '~', ':', or '-'."
+    ),
+)
+_JOB_ID_ARGUMENT = _CliArgumentSpec(
+    "JOB_ID",
+    "Use a job id returned by job start or retry.",
+    required=True,
+    expected="A job id returned by job start or retry.",
+)
+_ASSET_ID_ARGUMENT = _CliArgumentSpec(
+    "ASSET_ID",
+    "Use a content-addressed asset id returned by asset register or search.",
+    required=True,
+    expected="An asset id returned by asset register or search.",
+)
+_ARTIFACT_ID_ARGUMENT = _CliArgumentSpec(
+    "ARTIFACT_ID",
+    "Use an artifact id returned by artifact list.",
+    required=True,
+    expected="An artifact id returned by artifact list.",
+)
+_AFTER_REVISION_ARGUMENT = _CliArgumentSpec(
+    "--after-revision",
+    "Mark a response unchanged when this revision is still current.",
+    value_name="INTEGER",
+    expected="A non-negative integer revision.",
+    value_kind="int",
+)
+
+_COMMAND_SPECS: dict[tuple[str, ...], _CliCommandSpec] = {
+    (): _CliCommandSpec((), "Call the versioned Agent API with strict JSON input and output."),
+    ("capabilities",): _CliCommandSpec(
+        ("capabilities",), "Return the live Agent capability document."
+    ),
+    ("asset",): _CliCommandSpec(("asset",), "Register, inspect, get, or search assets."),
+    ("asset", "register"): _CliCommandSpec(
+        ("asset", "register"),
+        "Register one allowlisted content-addressed asset bundle.",
+        options=(_REQUEST_ARGUMENT,),
+    ),
+    ("asset", "get"): _CliCommandSpec(
+        ("asset", "get"),
+        "Return one registered asset manifest.",
+        positionals=(_ASSET_ID_ARGUMENT,),
+    ),
+    ("asset", "inspect"): _CliCommandSpec(
+        ("asset", "inspect"),
+        "Verify and inspect one registered asset bundle.",
+        positionals=(_ASSET_ID_ARGUMENT,),
+        options=(
+            _CliArgumentSpec("--no-verify-hashes", "Skip content hash verification."),
+            _CliArgumentSpec("--no-parse-content", "Skip bounded content parsing."),
+        ),
+    ),
+    ("asset", "search"): _CliCommandSpec(
+        ("asset", "search"),
+        "Search registered assets with bounded scalar filters.",
+        options=(
+            _CliArgumentSpec("--query", "Filter by text query.", value_name="TEXT"),
+            _CliArgumentSpec("--kind", "Filter by asset kind.", value_name="KIND"),
+            _CliArgumentSpec("--category", "Filter by workflow category.", value_name="CATEGORY"),
+            _CliArgumentSpec("--dataset", "Filter by dataset identity.", value_name="DATASET"),
+            _CliArgumentSpec("--reference", "Filter by reference model.", value_name="REFERENCE"),
+            _CliArgumentSpec(
+                "--limit",
+                "Limit the returned page.",
+                value_name="INTEGER",
+                expected="An integer page limit.",
+                value_kind="int",
+            ),
+            _CliArgumentSpec(
+                "--offset",
+                "Start the returned page at this offset.",
+                value_name="INTEGER",
+                expected="A non-negative integer offset.",
+                value_kind="int",
+            ),
+        ),
+    ),
+    ("preflight",): _CliCommandSpec(("preflight",), "Validate and freeze an execution plan."),
+    ("preflight", "retarget"): _CliCommandSpec(
+        ("preflight", "retarget"),
+        "Validate one retarget request and freeze an immutable plan.",
+        options=(_REQUEST_ARGUMENT,),
+    ),
+    ("job",): _CliCommandSpec(("job",), "Start, recover, inspect, cancel, or retry jobs."),
+    ("job", "start"): _CliCommandSpec(
+        ("job", "start"),
+        "Submit one immutable preflight plan.",
+        options=(_PLAN_ARGUMENT, _IDEMPOTENCY_ARGUMENT),
+    ),
+    ("job", "get"): _CliCommandSpec(
+        ("job", "get"),
+        "Return one compact revision-aware job snapshot.",
+        positionals=(_JOB_ID_ARGUMENT,),
+        options=(_AFTER_REVISION_ARGUMENT,),
+    ),
+    ("job", "lookup"): _CliCommandSpec(
+        ("job", "lookup"),
+        "Recover one caller-owned submission without enumerating jobs.",
+        options=(_PLAN_ARGUMENT, _IDEMPOTENCY_ARGUMENT, _AFTER_REVISION_ARGUMENT),
+    ),
+    ("job", "cancel"): _CliCommandSpec(
+        ("job", "cancel"),
+        "Request queued or cooperative-running cancellation.",
+        positionals=(_JOB_ID_ARGUMENT,),
+    ),
+    ("job", "retry"): _CliCommandSpec(
+        ("job", "retry"),
+        "Create one idempotent child attempt for a terminal job.",
+        positionals=(_JOB_ID_ARGUMENT,),
+        options=(_IDEMPOTENCY_ARGUMENT,),
+    ),
+    ("artifact",): _CliCommandSpec(("artifact",), "List, verify, or download job artifacts."),
+    ("artifact", "list"): _CliCommandSpec(
+        ("artifact", "list"),
+        "List a bounded page of artifacts attached to one job.",
+        positionals=(_JOB_ID_ARGUMENT,),
+        options=(
+            _CliArgumentSpec(
+                "--limit",
+                "Limit the returned page.",
+                value_name="INTEGER",
+                expected="An integer page limit.",
+                value_kind="int",
+            ),
+            _CliArgumentSpec(
+                "--offset",
+                "Start the returned page at this offset.",
+                value_name="INTEGER",
+                expected="A non-negative integer offset.",
+                value_kind="int",
+            ),
+        ),
+    ),
+    ("artifact", "get"): _CliCommandSpec(
+        ("artifact", "get"),
+        "Return one descriptor and optionally download its verified bytes.",
+        positionals=(_JOB_ID_ARGUMENT, _ARTIFACT_ID_ARGUMENT),
+        options=(
+            _CliArgumentSpec("--verify", "Verify managed bytes before returning the descriptor."),
+            _CliArgumentSpec(
+                "--output",
+                "Download artifact bytes to this destination.",
+                value_name="PATH",
+                expected="A destination path supplied by the caller.",
+            ),
+            _CliArgumentSpec("--force", "Replace an existing --output destination."),
+        ),
+    ),
+    ("legacy",): _CliCommandSpec(("legacy",), "Upgrade supported legacy Agent documents."),
+    ("legacy", "upgrade"): _CliCommandSpec(
+        ("legacy", "upgrade"),
+        "Upgrade one legacy JobSpec v1 document through preflight.",
+        options=(_REQUEST_ARGUMENT,),
+    ),
+}
+
+_GLOBAL_HELP_ARGUMENTS = (
+    _CliArgumentSpec("--json", "Compatibility flag; Agent CLI output is always strict JSON."),
+    _CliArgumentSpec(
+        "--base-url",
+        "Override the resident Agent REST base URL.",
+        value_name="URL",
+        expected="A configured Agent REST base URL.",
+    ),
+    _CliArgumentSpec(
+        "--timeout",
+        "Set the request timeout in seconds.",
+        value_name="SECONDS",
+        expected="A finite number from 0.1 through 3600.",
+        value_kind="float",
+    ),
+    _CliArgumentSpec("--help", "Return machine-readable JSON help without contacting the service."),
+    _CliArgumentSpec("-h", "Alias for --help."),
+)
+
+
+def _command_name(path: tuple[str, ...]) -> AgentCliCommandName:
+    return cast(AgentCliCommandName, " ".join(("hhtools", "agent", *path)))
+
+
+def _child_specs(spec: _CliCommandSpec) -> list[_CliCommandSpec]:
+    child_length = len(spec.path) + 1
+    return [
+        candidate
+        for path, candidate in _COMMAND_SPECS.items()
+        if len(path) == child_length and path[: len(spec.path)] == spec.path
+    ]
+
+
+def _usage(spec: _CliCommandSpec) -> str:
+    parts: list[str] = [_command_name(spec.path)]
+    if _child_specs(spec):
+        parts.append("COMMAND")
+    for argument in spec.positionals:
+        parts.append(argument.name if argument.required else f"[{argument.name}]")
+    for argument in spec.options:
+        rendered: str = argument.name
+        if argument.value_name is not None:
+            rendered = f"{rendered} {argument.value_name}"
+        parts.append(rendered if argument.required else f"[{rendered}]")
+    parts.extend(("[--json]", "[--base-url URL]", "[--timeout SECONDS]", "[--help]"))
+    return " ".join(parts)
+
+
+def _help_argument(argument: _CliArgumentSpec) -> AgentCliHelpArgument:
+    return AgentCliHelpArgument(
+        name=argument.name,
+        value_name=argument.value_name,
+        required=argument.required,
+        description=argument.description,
+    )
+
+
+def _command_spec_from_argv(arguments: Sequence[str]) -> _CliCommandSpec:
+    """Resolve only static command tokens, skipping global option values."""
+
+    path: tuple[str, ...] = ()
+    index = 0
+    while index < len(arguments):
+        value = arguments[index]
+        if value in {"--json", "--help", "-h"}:
+            index += 1
+            continue
+        if value in {"--base-url", "--timeout"}:
+            index += 2
+            continue
+        if value.startswith(("--base-url=", "--timeout=")):
+            index += 1
+            continue
+        children = {
+            candidate.path[-1]: candidate for candidate in _child_specs(_COMMAND_SPECS[path])
+        }
+        child = children.get(value)
+        if child is None:
+            break
+        path = child.path
+        index += 1
+        if not _child_specs(child):
+            break
+    return _COMMAND_SPECS[path]
+
+
+def _help_document(arguments: Sequence[str]) -> AgentCliHelp | None:
+    if not any(value in {"--help", "-h"} for value in arguments):
+        return None
+    spec = _command_spec_from_argv(arguments)
+    return AgentCliHelp(
+        command=_command_name(spec.path),
+        summary=spec.summary,
+        usage=_usage(spec),
+        positionals=[_help_argument(argument) for argument in spec.positionals],
+        options=[_help_argument(argument) for argument in (*spec.options, *_GLOBAL_HELP_ARGUMENTS)],
+        subcommands=[
+            AgentCliHelpSubcommand(name=child.path[-1], summary=child.summary)
+            for child in _child_specs(spec)
+        ],
+    )
+
+
 class _ArgumentError(RuntimeError):
-    pass
+    def __init__(
+        self,
+        reason_code: AgentCliReasonCode = "INVALID_VALUE",
+        *,
+        argument: AgentCliDiagnosticArgument | None = None,
+        expected: str | None = None,
+    ) -> None:
+        self.reason_code = reason_code
+        self.argument = argument
+        self.expected = expected
+        super().__init__(reason_code)
 
 
 class _JsonArgumentParser(argparse.ArgumentParser):
     """Raise parse failures so stdout can remain one structured document."""
 
     def error(self, message: str) -> Never:
-        raise _ArgumentError(message)
+        del message
+        raise _ArgumentError("INVALID_VALUE")
 
     def exit(self, status: int = 0, message: str | None = None) -> Never:
-        raise _ArgumentError(message or "Help is available in the project documentation.")
+        del status, message
+        raise _ArgumentError("INVALID_VALUE")
+
+
+def _expected_subcommands(spec: _CliCommandSpec) -> str:
+    names = ", ".join(child.path[-1] for child in _child_specs(spec))
+    return f"One of: {names}."
+
+
+def _diagnostic(
+    spec: _CliCommandSpec,
+    reason_code: AgentCliReasonCode,
+    *,
+    argument: AgentCliDiagnosticArgument | None = None,
+    expected: str | None = None,
+) -> AgentCliArgumentDiagnostic:
+    return AgentCliArgumentDiagnostic(
+        reason_code=reason_code,
+        command=_command_name(spec.path),
+        argument=argument,
+        expected=expected,
+        usage=_usage(spec),
+    )
+
+
+def _diagnose_parse_failure(  # noqa: PLR0911 - one safe branch per parser failure
+    arguments: Sequence[str],
+) -> AgentCliArgumentDiagnostic:
+    """Classify argparse rejection without copying any caller-supplied token."""
+
+    spec = _COMMAND_SPECS[()]
+    index = 0
+    while children := _child_specs(spec):
+        if index >= len(arguments):
+            return _diagnostic(
+                spec,
+                "MISSING_COMMAND",
+                argument="COMMAND",
+                expected=_expected_subcommands(spec),
+            )
+        by_name = {child.path[-1]: child for child in children}
+        child = by_name.get(arguments[index])
+        if child is None:
+            if arguments[index].startswith("-"):
+                return _diagnostic(
+                    spec,
+                    "UNKNOWN_ARGUMENT",
+                    argument="<unrecognized>",
+                    expected="Only the documented global options are accepted here.",
+                )
+            return _diagnostic(
+                spec,
+                "UNKNOWN_COMMAND",
+                argument="COMMAND",
+                expected=_expected_subcommands(spec),
+            )
+        spec = child
+        index += 1
+
+    option_by_name: dict[str, _CliArgumentSpec] = {
+        argument.name: argument for argument in spec.options
+    }
+    seen_options: set[str] = set()
+    positional_count = 0
+    positional_only = False
+    while index < len(arguments):
+        raw = arguments[index]
+        if raw == "--" and not positional_only:
+            positional_only = True
+            index += 1
+            continue
+        if not positional_only and raw.startswith("-"):
+            name, separator, inline_value = raw.partition("=")
+            argument = option_by_name.get(name)
+            if argument is None:
+                return _diagnostic(
+                    spec,
+                    "UNKNOWN_ARGUMENT",
+                    argument="<unrecognized>",
+                    expected="Only the documented options and positional arguments are accepted.",
+                )
+            seen_options.add(name)
+            if argument.value_name is None:
+                if separator:
+                    return _diagnostic(
+                        spec,
+                        "INVALID_VALUE",
+                        argument=argument.name,
+                        expected=f"{argument.name} is a flag and does not take a value.",
+                    )
+                index += 1
+                continue
+            if separator:
+                if not inline_value:
+                    return _diagnostic(
+                        spec,
+                        "MISSING_VALUE",
+                        argument=argument.name,
+                        expected=argument.expected or f"A value for {argument.name}.",
+                    )
+                value = inline_value
+                index += 1
+            else:
+                if index + 1 >= len(arguments) or arguments[index + 1].startswith("-"):
+                    return _diagnostic(
+                        spec,
+                        "MISSING_VALUE",
+                        argument=argument.name,
+                        expected=argument.expected or f"A value for {argument.name}.",
+                    )
+                value = arguments[index + 1]
+                index += 2
+            try:
+                if argument.value_kind == "int":
+                    int(value)
+                elif argument.value_kind == "float":
+                    parsed = float(value)
+                    if not math.isfinite(parsed):
+                        raise ValueError
+            except ValueError:
+                return _diagnostic(
+                    spec,
+                    "INVALID_VALUE",
+                    argument=argument.name,
+                    expected=argument.expected or f"A valid value for {argument.name}.",
+                )
+            continue
+        positional_count += 1
+        index += 1
+
+    for argument in spec.options:
+        if argument.required and argument.name not in seen_options:
+            return _diagnostic(
+                spec,
+                "MISSING_ARGUMENT",
+                argument=argument.name,
+                expected=argument.expected or f"The required {argument.name} option.",
+            )
+    if positional_count < len(spec.positionals):
+        argument = spec.positionals[positional_count]
+        return _diagnostic(
+            spec,
+            "MISSING_ARGUMENT",
+            argument=argument.name,
+            expected=argument.expected,
+        )
+    if positional_count > len(spec.positionals):
+        return _diagnostic(
+            spec,
+            "UNEXPECTED_ARGUMENT",
+            argument="<unrecognized>",
+            expected="No additional positional arguments.",
+        )
+    return _diagnostic(
+        spec,
+        "INVALID_VALUE",
+        argument="<unrecognized>",
+        expected="Arguments matching the documented command usage.",
+    )
+
+
+def _argument_api_error(
+    error: _ArgumentError,
+    arguments: Sequence[str],
+) -> ApiError:
+    if error.reason_code == "INVALID_VALUE" and error.argument is None:
+        diagnostic = _diagnose_parse_failure(arguments)
+    else:
+        diagnostic = _diagnostic(
+            _command_spec_from_argv(arguments),
+            error.reason_code,
+            argument=error.argument,
+            expected=error.expected,
+        )
+    return ApiError(
+        code="INVALID_PARAMETER",
+        message="The Agent command arguments are invalid.",
+        stage=ErrorStage.REQUEST,
+        details=diagnostic.model_dump(mode="json", exclude_none=True),
+    )
 
 
 def _parser() -> _JsonArgumentParser:
@@ -121,6 +622,11 @@ def _parser() -> _JsonArgumentParser:
     get_job.add_argument("job_id")
     get_job.add_argument("--after-revision", type=int)
     get_job.set_defaults(operation="job_get")
+    lookup_job = job_commands.add_parser("lookup", add_help=False)
+    lookup_job.add_argument("--plan", required=True)
+    lookup_job.add_argument("--idempotency-key", required=True)
+    lookup_job.add_argument("--after-revision", type=int)
+    lookup_job.set_defaults(operation="job_lookup")
     cancel = job_commands.add_parser("cancel", add_help=False)
     cancel.add_argument("job_id")
     cancel.set_defaults(operation="job_cancel")
@@ -162,20 +668,43 @@ def _extract_global_option(
 
     remaining: list[str] = []
     selected: str | None = None
+    expected = next(
+        argument.expected for argument in _GLOBAL_HELP_ARGUMENTS if argument.name == name
+    )
     index = 0
     while index < len(arguments):
         value = arguments[index]
         if value == name:
-            if selected is not None or index + 1 >= len(arguments):
-                raise _ArgumentError(f"{name} must be provided exactly once with a value")
+            if selected is not None:
+                raise _ArgumentError(
+                    "DUPLICATE_ARGUMENT",
+                    argument=cast(AgentCliDiagnosticArgument, name),
+                    expected=f"Provide {name} at most once.",
+                )
+            if index + 1 >= len(arguments) or arguments[index + 1].startswith("--"):
+                raise _ArgumentError(
+                    "MISSING_VALUE",
+                    argument=cast(AgentCliDiagnosticArgument, name),
+                    expected=expected,
+                )
             selected = arguments[index + 1]
             index += 2
             continue
         prefix = f"{name}="
         if value.startswith(prefix):
             if selected is not None:
-                raise _ArgumentError(f"{name} must be provided at most once")
+                raise _ArgumentError(
+                    "DUPLICATE_ARGUMENT",
+                    argument=cast(AgentCliDiagnosticArgument, name),
+                    expected=f"Provide {name} at most once.",
+                )
             selected = value[len(prefix) :]
+            if not selected:
+                raise _ArgumentError(
+                    "MISSING_VALUE",
+                    argument=cast(AgentCliDiagnosticArgument, name),
+                    expected=expected,
+                )
             index += 1
             continue
         remaining.append(value)
@@ -200,9 +729,17 @@ def _normalize_argv(argv: Sequence[str]) -> tuple[list[str], str, float]:
     try:
         timeout = float(raw_timeout)
     except ValueError as error:
-        raise _ArgumentError("--timeout must be a finite number") from error
+        raise _ArgumentError(
+            "INVALID_VALUE",
+            argument="--timeout",
+            expected="A finite number from 0.1 through 3600.",
+        ) from error
     if not math.isfinite(timeout) or not 0.1 <= timeout <= 3_600:
-        raise _ArgumentError("--timeout must be between 0.1 and 3600 seconds")
+        raise _ArgumentError(
+            "INVALID_VALUE",
+            argument="--timeout",
+            expected="A finite number from 0.1 through 3600.",
+        )
     return arguments, base_url, timeout
 
 
@@ -213,18 +750,40 @@ def _request_document(location: str, stdin: TextIO) -> Any:
         try:
             with Path(location).open("r", encoding="utf-8") as stream:
                 raw = stream.read(_MAX_REQUEST_BYTES + 1)
-        except (OSError, UnicodeError) as error:
-            raise _ArgumentError("--request could not be read as a UTF-8 JSON file") from error
+        except UnicodeError as error:
+            raise _ArgumentError(
+                "REQUEST_ENCODING_INVALID",
+                argument="--request",
+                expected="A request encoded as UTF-8 JSON.",
+            ) from error
+        except OSError as error:
+            raise _ArgumentError(
+                "REQUEST_FILE_UNREADABLE",
+                argument="--request",
+                expected="A readable UTF-8 JSON file, or '-' for stdin.",
+            ) from error
     try:
         encoded_size = len(raw.encode("utf-8"))
     except UnicodeError as error:
-        raise _ArgumentError("--request must be valid UTF-8 JSON") from error
+        raise _ArgumentError(
+            "REQUEST_ENCODING_INVALID",
+            argument="--request",
+            expected="A request encoded as UTF-8 JSON.",
+        ) from error
     if encoded_size > _MAX_REQUEST_BYTES:
-        raise _ArgumentError("--request exceeds the 8 MiB CLI safety limit")
+        raise _ArgumentError(
+            "REQUEST_TOO_LARGE",
+            argument="--request",
+            expected="A UTF-8 JSON request no larger than 8 MiB.",
+        )
     try:
         return loads_strict_json(raw)
     except StrictJsonError as error:
-        raise _ArgumentError("--request must contain exactly one valid JSON document") from error
+        raise _ArgumentError(
+            "REQUEST_JSON_INVALID",
+            argument="--request",
+            expected="Exactly one strict UTF-8 JSON document.",
+        ) from error
 
 
 def _validated_request[ContractT: BaseModel](
@@ -233,20 +792,10 @@ def _validated_request[ContractT: BaseModel](
     try:
         return model.model_validate(_request_document(location, stdin))
     except ValidationError as error:
-        issues = [
-            {
-                "location": ".".join(str(part) for part in issue["loc"]),
-                "type": issue["type"],
-            }
-            for issue in error.errors(include_url=False, include_input=False)
-        ]
-        raise AgentTransportError(
-            ApiError(
-                code="INVALID_PARAMETER",
-                message="The CLI request does not match the versioned contract.",
-                stage=ErrorStage.REQUEST,
-                details={"issues": issues},
-            )
+        raise _ArgumentError(
+            "REQUEST_CONTRACT_INVALID",
+            argument="--request",
+            expected=f"A JSON document matching the {model.__name__} contract.",
         ) from error
 
 
@@ -279,11 +828,15 @@ def _execute(  # noqa: PLR0911 - one explicit branch per public CLI operation
         return _response(CapabilityResponse, transport.request_json("GET", "/capabilities"))
 
     if operation == "asset_register":
-        request = _validated_request(AssetRegistrationRequest, namespace.request, stdin)
+        registration_request = _validated_request(
+            AssetRegistrationRequest, namespace.request, stdin
+        )
         return _response(
             AssetBundle,
             transport.request_json(
-                "POST", "/assets", document=request.model_dump(mode="json", exclude_none=True)
+                "POST",
+                "/assets",
+                document=registration_request.model_dump(mode="json", exclude_none=True),
             ),
         )
     if operation == "asset_get":
@@ -321,34 +874,36 @@ def _execute(  # noqa: PLR0911 - one explicit branch per public CLI operation
         )
 
     if operation == "preflight_retarget":
-        request = _validated_request(RetargetPreflightRequest, namespace.request, stdin)
+        preflight_request = _validated_request(RetargetPreflightRequest, namespace.request, stdin)
         return _response(
             PreflightResponse,
             transport.request_json(
                 "POST",
                 "/preflight/retarget",
-                document=request.model_dump(mode="json", exclude_none=True),
+                document=preflight_request.model_dump(mode="json", exclude_none=True),
             ),
         )
 
     if operation == "job_start":
         try:
-            request = JobStartRequest(
+            start_request = JobStartRequest(
                 plan_id=namespace.plan,
                 idempotency_key=namespace.idempotency_key,
             )
         except ValidationError as error:
-            raise AgentTransportError(
-                ApiError(
-                    code="INVALID_PARAMETER",
-                    message="The job start parameters do not match the versioned contract.",
-                    stage=ErrorStage.REQUEST,
-                )
+            invalid_fields = {issue["loc"][0] for issue in error.errors() if issue["loc"]}
+            argument = _PLAN_ARGUMENT if "plan_id" in invalid_fields else _IDEMPOTENCY_ARGUMENT
+            raise _ArgumentError(
+                "INVALID_VALUE",
+                argument=argument.name,
+                expected=argument.expected,
             ) from error
         return _response(
             AgentJobView,
             transport.request_json(
-                "POST", "/jobs", document=request.model_dump(mode="json", exclude_none=True)
+                "POST",
+                "/jobs",
+                document=start_request.model_dump(mode="json", exclude_none=True),
             ),
         )
     if operation == "job_get":
@@ -357,25 +912,53 @@ def _execute(  # noqa: PLR0911 - one explicit branch per public CLI operation
             AgentJobView,
             transport.request_json("GET", path, query={"after_revision": namespace.after_revision}),
         )
+    if operation == "job_lookup":
+        try:
+            lookup_request = JobLookupRequest(
+                plan_id=namespace.plan,
+                idempotency_key=namespace.idempotency_key,
+                after_revision=namespace.after_revision,
+            )
+        except ValidationError as error:
+            invalid_fields = {issue["loc"][0] for issue in error.errors() if issue["loc"]}
+            if "plan_id" in invalid_fields:
+                argument = _PLAN_ARGUMENT
+            elif "idempotency_key" in invalid_fields:
+                argument = _IDEMPOTENCY_ARGUMENT
+            else:
+                argument = _AFTER_REVISION_ARGUMENT
+            raise _ArgumentError(
+                "INVALID_VALUE",
+                argument=argument.name,
+                expected=argument.expected,
+            ) from error
+        return _response(
+            AgentJobView,
+            transport.request_json(
+                "POST",
+                "/jobs/lookup",
+                document=lookup_request.model_dump(mode="json", exclude_none=True),
+            ),
+        )
     if operation == "job_cancel":
         path = f"/jobs/{_path_segment(namespace.job_id)}/cancel"
         return _response(AgentJobView, transport.request_json("POST", path, document={}))
     if operation == "job_retry":
         try:
-            request = JobRetryRequest(idempotency_key=namespace.idempotency_key)
+            retry_request = JobRetryRequest(idempotency_key=namespace.idempotency_key)
         except ValidationError as error:
-            raise AgentTransportError(
-                ApiError(
-                    code="INVALID_PARAMETER",
-                    message="The job retry parameters do not match the versioned contract.",
-                    stage=ErrorStage.REQUEST,
-                )
+            raise _ArgumentError(
+                "INVALID_VALUE",
+                argument=_IDEMPOTENCY_ARGUMENT.name,
+                expected=_IDEMPOTENCY_ARGUMENT.expected,
             ) from error
         path = f"/jobs/{_path_segment(namespace.job_id)}/retry"
         return _response(
             AgentJobView,
             transport.request_json(
-                "POST", path, document=request.model_dump(mode="json", exclude_none=True)
+                "POST",
+                path,
+                document=retry_request.model_dump(mode="json", exclude_none=True),
             ),
         )
 
@@ -413,12 +996,10 @@ def _execute(  # noqa: PLR0911 - one explicit branch per public CLI operation
                 overwrite=namespace.force,
             )
         elif namespace.force:
-            raise AgentTransportError(
-                ApiError(
-                    code="INVALID_PARAMETER",
-                    message="--force is only valid together with --output.",
-                    stage=ErrorStage.REQUEST,
-                )
+            raise _ArgumentError(
+                "INVALID_COMBINATION",
+                argument="--force",
+                expected="Use --force only together with --output PATH.",
             )
         return descriptor
 
@@ -427,7 +1008,9 @@ def _execute(  # noqa: PLR0911 - one explicit branch per public CLI operation
         # wrapper), not a second transport wrapper users must manufacture.  The
         # CLI adds the versioned request envelope before crossing REST.
         try:
-            request = LegacyJobUpgradeRequest(payload=_request_document(namespace.request, stdin))
+            upgrade_request = LegacyJobUpgradeRequest(
+                payload=_request_document(namespace.request, stdin)
+            )
         except ValidationError as error:
             raise AgentTransportError(
                 ApiError(
@@ -441,7 +1024,7 @@ def _execute(  # noqa: PLR0911 - one explicit branch per public CLI operation
             transport.request_json(
                 "POST",
                 "/legacy/jobspec-v1/upgrade",
-                document=request.model_dump(mode="json", exclude_none=True),
+                document=upgrade_request.model_dump(mode="json", exclude_none=True),
             ),
         )
     raise RuntimeError("unknown Agent CLI operation")
@@ -525,19 +1108,24 @@ def run(
     # Retained as an explicit dependency boundary for future progress logging;
     # no current command emits human prose during a successful invocation.
     _ = stderr or sys.stderr
+    raw_arguments = list(argv or ())
+    arguments: list[str] | None = None
     try:
-        arguments, base_url, timeout = _normalize_argv(list(argv or ()))
+        help_document = _help_document(raw_arguments)
+        if help_document is not None:
+            safe = _write_document(help_document, output_stream)
+            return EXIT_SUCCESS if safe else EXIT_INTERNAL_ERROR
+        arguments, base_url, timeout = _normalize_argv(raw_arguments)
         namespace = _parser().parse_args(arguments)
         factory = transport_factory or _default_transport_factory
         transport = factory(base_url, timeout)
         result = _execute(namespace, transport, stdin=input_stream)
         safe = _write_document(result, output_stream)
         return _result_exit_code(result) if safe else EXIT_INTERNAL_ERROR
-    except _ArgumentError:
-        api_error = ApiError(
-            code="INVALID_PARAMETER",
-            message="The Agent command arguments are invalid.",
-            stage=ErrorStage.REQUEST,
+    except _ArgumentError as error:
+        api_error = _argument_api_error(
+            error,
+            arguments if arguments is not None else raw_arguments,
         )
     except AgentTransportError as error:
         api_error = error.error
@@ -658,6 +1246,11 @@ def job_start_command(ctx: typer.Context) -> None:
 @job_app.command("get", context_settings=_PASSTHROUGH_CONTEXT)
 def job_get_command(ctx: typer.Context) -> None:
     _passthrough(["job", "get"], ctx)
+
+
+@job_app.command("lookup", context_settings=_PASSTHROUGH_CONTEXT)
+def job_lookup_command(ctx: typer.Context) -> None:
+    _passthrough(["job", "lookup"], ctx)
 
 
 @job_app.command("cancel", context_settings=_PASSTHROUGH_CONTEXT)

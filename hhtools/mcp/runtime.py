@@ -15,6 +15,7 @@ from typing import Any
 
 from hhtools.services import (
     AgentAssetService,
+    ArtifactExportService,
     CapabilitiesService,
     JobManager,
     PlanStore,
@@ -44,6 +45,7 @@ class AgentRuntime:
     preflight: PreflightService
     plans: PlanStore
     jobs: JobManager
+    exports: ArtifactExportService
 
     @classmethod
     def from_application(cls, app: Any) -> AgentRuntime:
@@ -55,6 +57,7 @@ class AgentRuntime:
             preflight=app.state.agent_preflight_service,
             plans=app.state.agent_plan_store,
             jobs=app.state.agent_job_manager,
+            exports=app.state.agent_artifact_export_service,
         )
 
 
@@ -63,6 +66,15 @@ async def local_agent_runtime(
     config: LocalRuntimeConfig,
 ) -> AsyncIterator[AgentRuntime]:
     """Create one service owner and drain its scheduler when stdio closes."""
+
+    # Warp prints its device banner to stdout on first initialization.  stdout
+    # is the MCP JSON-RPC wire, so configure the library before importing the
+    # Web composition root (and therefore before any lazy Newton import can
+    # initialize Warp).  ``quiet`` is deliberately MCP-only: normal CLI/WebUI
+    # processes keep Warp's useful startup diagnostics.
+    from hhtools.retarget.newton_basic._warp_config import configure as configure_warp_cache
+
+    configure_warp_cache(quiet=True)
 
     # Keep FastAPI and heavy Web/solver imports outside normal ``hhtools``
     # imports.  The MCP extra is useful only together with the local H2R stack.

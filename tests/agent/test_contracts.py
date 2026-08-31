@@ -8,6 +8,10 @@ import pytest
 from pydantic import ValidationError
 
 from hhtools.contracts import (
+    AgentCliArgumentDiagnostic,
+    AgentCliHelp,
+    AgentCliHelpArgument,
+    AgentCliHelpSubcommand,
     AgentJobView,
     ApiError,
     ArtifactDescriptor,
@@ -119,6 +123,41 @@ def test_common_contracts_use_stable_machine_values_and_forbid_extra_fields() ->
         ApiError(code="BAD_INPUT", message="Bad input", stage="request", typo=True)
     with pytest.raises(ValidationError):
         ApiError(code="calibration_missing", message="Bad machine code", stage="request")
+
+
+def test_cli_metadata_contracts_are_versioned_and_reject_unlisted_diagnostics() -> None:
+    diagnostic = AgentCliArgumentDiagnostic(
+        reason_code="MISSING_ARGUMENT",
+        command="hhtools agent job start",
+        argument="--plan",
+        expected="A preflight plan id.",
+        usage="hhtools agent job start --plan PLAN_ID --idempotency-key KEY",
+    )
+    help_document = AgentCliHelp(
+        command="hhtools agent job",
+        summary="Manage jobs.",
+        usage="hhtools agent job COMMAND --help",
+        options=[AgentCliHelpArgument(name="--help", description="Return JSON help.")],
+        subcommands=[AgentCliHelpSubcommand(name="start", summary="Start a job.")],
+    )
+
+    assert diagnostic.model_dump(mode="json")["reason_code"] == "MISSING_ARGUMENT"
+    assert help_document.model_dump(mode="json")["schema_version"] == "1.0"
+    with pytest.raises(ValidationError):
+        AgentCliArgumentDiagnostic(
+            reason_code="MISSING_ARGUMENT",
+            command="hhtools agent job start",
+            argument=r"C:\Users\Nora\secret.txt",
+            usage="hhtools agent job start",
+        )
+    with pytest.raises(ValidationError, match="Extra inputs"):
+        AgentCliArgumentDiagnostic(
+            reason_code="MISSING_ARGUMENT",
+            command="hhtools agent job start",
+            argument="--plan",
+            usage="hhtools agent job start",
+            raw_argv=["secret"],
+        )
 
 
 def test_public_url_contracts_match_the_portable_transport_boundary() -> None:
@@ -658,6 +697,10 @@ def test_legacy_upgrade_transport_request_is_wrapped_and_strict() -> None:
 @pytest.mark.parametrize(
     "model",
     [
+        AgentCliArgumentDiagnostic,
+        AgentCliHelpArgument,
+        AgentCliHelpSubcommand,
+        AgentCliHelp,
         ApiError,
         NextAction,
         AssetFile,
