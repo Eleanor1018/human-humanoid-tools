@@ -11,6 +11,7 @@ from hhtools.contracts import (
     AgentJobView,
     ApiError,
     ArtifactDescriptor,
+    ArtifactListResponse,
     AssetBundle,
     AssetCategory,
     AssetFile,
@@ -23,16 +24,25 @@ from hhtools.contracts import (
     BackendCapability,
     CapabilityResponse,
     DeviceCapability,
+    EvaluationReport,
+    FailureItem,
+    FailureReport,
     InspectionStatus,
+    JobManifest,
     JobOutcome,
     JobProgress,
     JobQueueView,
+    JobRetryRequest,
     JobSpecCalibration,
     JobSpecInput,
     JobSpecProvenance,
     JobSpecRobot,
     JobSpecV2,
+    JobStartRequest,
     JobState,
+    LegacyJobUpgradeRequest,
+    LegacyJobUpgradeResponse,
+    LegacyMigrationReceipt,
     NextAction,
     OutputPolicy,
     PreflightCheck,
@@ -42,6 +52,7 @@ from hhtools.contracts import (
     RetargetPlan,
     RetargetPreflightRequest,
     RobotCapability,
+    RobotListResponse,
     SchedulerCapability,
     SchedulerMode,
     SchemaVersion,
@@ -433,6 +444,8 @@ def test_agent_job_view_separates_lifecycle_from_outcome() -> None:
         poll_after_ms=1500,
     )
     assert running.outcome is None
+    assert running.cancellation_requested is False
+    assert running.attempt == 1
     assert running.model_dump(mode="json")["state"] == "running"
 
     completed = AgentJobView(
@@ -450,6 +463,7 @@ def test_agent_job_view_separates_lifecycle_from_outcome() -> None:
                 sha256=SHA_A,
             )
         ],
+        artifact_count=1,
         submitted_at=NOW,
         started_at=NOW + timedelta(seconds=1),
         completed_at=NOW + timedelta(seconds=20),
@@ -460,6 +474,22 @@ def test_agent_job_view_separates_lifecycle_from_outcome() -> None:
     artifact_payload = completed.artifacts[0].model_dump(mode="json")
     assert "resource_uri" in artifact_payload
     assert "uri" not in artifact_payload
+    with pytest.raises(ValidationError, match="safe MIME type"):
+        ArtifactDescriptor(
+            artifact_id=ARTIFACT_ID,
+            job_id="job_01",
+            kind="preview",
+            resource_uri=f"hhtools://jobs/job_01/artifacts/{ARTIFACT_ID}",
+            media_type="text/plain\r\nX-Injected: true",
+        )
+    with pytest.raises(ValidationError):
+        ArtifactDescriptor(
+            artifact_id=ARTIFACT_ID,
+            job_id="job_01",
+            kind="../preview",
+            format="csv\r\nX-Injected",
+            resource_uri=f"hhtools://jobs/job_01/artifacts/{ARTIFACT_ID}",
+        )
 
 
 def test_agent_job_view_rejects_inconsistent_terminal_states() -> None:
@@ -487,6 +517,121 @@ def test_agent_job_view_rejects_inconsistent_terminal_states() -> None:
         )
 
 
+def test_agent_job_view_enforces_timestamps_lineage_and_compact_artifact_count() -> None:
+    with pytest.raises(ValidationError, match="queued jobs cannot"):
+        AgentJobView(
+            job_id="job_queued",
+            state="queued",
+            progress=JobProgress(),
+            submitted_at=NOW,
+            started_at=NOW,
+        )
+    with pytest.raises(ValidationError, match="running jobs must"):
+        AgentJobView(
+            job_id="job_running",
+            state="running",
+            progress=JobProgress(),
+            submitted_at=NOW,
+        )
+    with pytest.raises(ValidationError, match="terminal jobs must"):
+        AgentJobView(
+            job_id="job_cancelled",
+            state="cancelled",
+            progress=JobProgress(),
+            submitted_at=NOW,
+        )
+    with pytest.raises(ValidationError, match="artifact_count"):
+        AgentJobView(
+            job_id="job_done",
+            state="completed",
+            outcome="success",
+            progress=JobProgress(fraction=1.0),
+            artifacts=[
+                ArtifactDescriptor(
+                    artifact_id=ARTIFACT_ID,
+                    job_id="job_done",
+                    kind="manifest",
+                    resource_uri=f"hhtools://jobs/job_done/artifacts/{ARTIFACT_ID}",
+                )
+            ],
+            artifact_count=0,
+            submitted_at=NOW,
+            completed_at=NOW + timedelta(seconds=1),
+        )
+    with pytest.raises(ValidationError, match="retry jobs require"):
+        AgentJobView(
+            job_id="job_child",
+            parent_job_id="job_parent",
+            state="queued",
+            progress=JobProgress(),
+            submitted_at=NOW,
+        )
+
+    child = AgentJobView(
+        job_id="job_child",
+        parent_job_id="job_parent",
+        root_job_id="job_root",
+        attempt=3,
+        state="queued",
+        progress=JobProgress(),
+        submitted_at=NOW,
+        cancellation_requested=True,
+        cancellable=True,
+    )
+    assert child.parent_job_id == "job_parent"
+    assert child.root_job_id == "job_root"
+    assert child.attempt == 3
+
+
+def test_job_operation_requests_and_artifact_pages_are_strict_and_versioned() -> None:
+    start = JobStartRequest(plan_id=PLAN_ID, idempotency_key="agent:run-001")
+    retry = JobRetryRequest(idempotency_key="agent:retry-001")
+    descriptor = ArtifactDescriptor(
+        artifact_id=ARTIFACT_ID,
+        job_id="job_01",
+        kind="retargeted_motion",
+        format="csv",
+        resource_uri=f"hhtools://jobs/job_01/artifacts/{ARTIFACT_ID}",
+    )
+    page = ArtifactListResponse(
+        job_id="job_01",
+        artifacts=[descriptor],
+        total=1,
+    )
+
+    assert start.model_dump(mode="json")["schema_version"] == "1.0"
+    assert retry.idempotency_key == "agent:retry-001"
+    assert page.artifacts == [descriptor]
+    with pytest.raises(ValidationError):
+        JobStartRequest(plan_id=PLAN_ID, idempotency_key="contains whitespace")
+    with pytest.raises(ValidationError, match="requested job"):
+        ArtifactListResponse(job_id="job_other", artifacts=[descriptor], total=1)
+    with pytest.raises(ValidationError, match="exceed limit"):
+        ArtifactListResponse(
+            job_id="job_01",
+            artifacts=[descriptor, descriptor],
+            total=2,
+            limit=1,
+        )
+    with pytest.raises(ValidationError, match="beyond total"):
+        ArtifactListResponse(
+            job_id="job_01",
+            artifacts=[descriptor],
+            total=1,
+            offset=1,
+        )
+
+
+def test_legacy_upgrade_transport_request_is_wrapped_and_strict() -> None:
+    request = LegacyJobUpgradeRequest(
+        payload={"schema_version": 1, "kind": "h2r", "request": {}}
+    )
+
+    assert request.schema_version is SchemaVersion.V1
+    with pytest.raises(ValidationError, match="Extra inputs"):
+        LegacyJobUpgradeRequest(payload={}, typo=True)
+
+
 @pytest.mark.parametrize(
     "model",
     [
@@ -500,7 +645,11 @@ def test_agent_job_view_rejects_inconsistent_terminal_states() -> None:
         AssetSearchResponse,
         BackendCapability,
         DeviceCapability,
+        EvaluationReport,
+        FailureItem,
+        FailureReport,
         RobotCapability,
+        RobotListResponse,
         SchedulerCapability,
         CapabilityResponse,
         RetargetPreflightRequest,
@@ -508,9 +657,16 @@ def test_agent_job_view_rejects_inconsistent_terminal_states() -> None:
         RetargetPlan,
         PreflightResponse,
         JobProgress,
+        JobManifest,
         ArtifactDescriptor,
+        ArtifactListResponse,
         JobQueueView,
+        JobRetryRequest,
+        JobStartRequest,
         AgentJobView,
+        LegacyJobUpgradeRequest,
+        LegacyJobUpgradeResponse,
+        LegacyMigrationReceipt,
         JobSpecInput,
         JobSpecRobot,
         JobSpecCalibration,

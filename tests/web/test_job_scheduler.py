@@ -114,6 +114,85 @@ def test_zero_queue_limit_means_unbounded_waiting_when_running_is_limited() -> N
     assert scheduler.shutdown(wait=True, timeout=2.0)
 
 
+def test_handle_reports_fifo_position_and_cancels_exact_waiter() -> None:
+    scheduler = JobScheduler(max_running_jobs=1, max_queued_jobs=3)
+    release = threading.Event()
+    ran: list[str] = []
+    cancelled: list[str] = []
+    scheduler.submit(lambda: release.wait(timeout=2.0))
+    first = scheduler.submit(lambda: ran.append("first"))
+    middle = scheduler.submit(
+        lambda: ran.append("middle"),
+        on_cancel=cancelled.append,
+    )
+    last = scheduler.submit(lambda: ran.append("last"))
+    _wait_until(lambda: scheduler.snapshot().queued_jobs == 3)
+
+    assert first.queue_position() == 1
+    assert middle.queue_position() == 2
+    assert last.queue_position() == 3
+    assert middle.cancel() is True
+    assert middle.cancel() is False
+    assert middle.queue_position() is None
+    assert first.queue_position() == 1
+    assert last.queue_position() == 2
+    assert len(cancelled) == 1
+
+    release.set()
+    _wait_until(lambda: ran == ["first", "last"])
+    assert scheduler.shutdown(wait=True, timeout=2.0)
+    assert ran == ["first", "last"]
+
+
+def test_handle_cannot_claim_a_running_thread_was_cancelled() -> None:
+    scheduler = JobScheduler(max_running_jobs=1, max_queued_jobs=1)
+    started = threading.Event()
+    release = threading.Event()
+
+    def run() -> None:
+        started.set()
+        release.wait(timeout=2.0)
+
+    handle = scheduler.submit(run)
+    assert started.wait(timeout=1.0)
+
+    assert handle.queue_position() is None
+    assert handle.cancel() is False
+    assert scheduler.snapshot().running_jobs == 1
+    release.set()
+    assert scheduler.shutdown(wait=True, timeout=2.0)
+
+
+def test_cancelled_waiter_immediately_releases_bounded_queue_capacity() -> None:
+    scheduler = JobScheduler(max_running_jobs=1, max_queued_jobs=1)
+    release = threading.Event()
+    scheduler.submit(lambda: release.wait(timeout=2.0))
+    waiter = scheduler.submit(lambda: None)
+    _wait_until(lambda: scheduler.snapshot().queued_jobs == 1)
+    with pytest.raises(JobQueueFullError):
+        scheduler.reserve()
+
+    assert waiter.cancel() is True
+    replacement = scheduler.reserve()
+    replacement.cancel()
+    release.set()
+    assert scheduler.shutdown(wait=True, timeout=2.0)
+
+
+def test_reserved_submission_returns_a_cancellable_handle() -> None:
+    scheduler = JobScheduler(max_running_jobs=1, max_queued_jobs=1)
+    release = threading.Event()
+    scheduler.submit(lambda: release.wait(timeout=2.0))
+    reservation = scheduler.reserve()
+    handle = reservation.submit(lambda: None)
+    _wait_until(lambda: scheduler.snapshot().queued_jobs == 1)
+
+    assert handle.queue_position() == 1
+    assert handle.cancel() is True
+    release.set()
+    assert scheduler.shutdown(wait=True, timeout=2.0)
+
+
 def test_shutdown_cancels_pending_and_rejects_new_work() -> None:
     scheduler = JobScheduler(max_running_jobs=1, max_queued_jobs=2)
     release = threading.Event()

@@ -69,6 +69,8 @@ def test_plain_npz_register_inspect_and_persist_without_host_paths(
         AssetRegistry(data_dir, {"motion-library": lambda: library})
     )
     assert reopened.get(bundle.asset_id) == bundle
+    assert reopened.resolve_primary(bundle.asset_id) == primary.resolve()
+    assert reopened.resolve_file(bundle.asset_id, bundle.primary_file) == primary.resolve()
     assert reopened.search(dataset="unified_npz").assets == [bundle]
     assert reopened.inspect(
         AssetInspectionRequest(asset_id=bundle.asset_id)
@@ -165,3 +167,53 @@ def test_inspection_reports_changed_content_as_a_hash_error(tmp_path: Path) -> N
     assert inspection.status is InspectionStatus.INVALID
     assert "ASSET_HASH_MISMATCH" in {error.code for error in inspection.errors}
     assert str(tmp_path) not in str(inspection.model_dump(mode="json"))
+
+    with pytest.raises(AssetServiceError) as captured:
+        service.resolve_primary(bundle.asset_id)
+    assert captured.value.code == "ASSET_HASH_MISMATCH"
+    assert str(tmp_path) not in captured.value.api_error.model_dump_json()
+
+
+def test_robot_bundle_registers_urdf_metadata_meshes_and_inspects(tmp_path: Path) -> None:
+    library = tmp_path / "robots"
+    robot = library / "test_robot"
+    (robot / "urdf").mkdir(parents=True)
+    (robot / "meshes").mkdir()
+    (robot / "robot.yaml").write_text(
+        "name: test_robot\nurdf: urdf/robot.urdf\ndof_order: [hip]\n",
+        encoding="utf-8",
+    )
+    (robot / "meshes" / "body.stl").write_text(
+        "solid body\nendsolid body\n",
+        encoding="utf-8",
+    )
+    (robot / "urdf" / "robot.urdf").write_text(
+        """<robot name="test_robot">
+  <link name="base">
+    <visual><geometry><mesh filename="../meshes/body.stl"/></geometry></visual>
+  </link>
+  <link name="hip_link"/>
+  <joint name="hip" type="revolute">
+    <parent link="base"/><child link="hip_link"/>
+    <limit lower="-1" upper="1" effort="1" velocity="1"/>
+  </joint>
+</robot>
+""",
+        encoding="utf-8",
+    )
+    service = AgentAssetService(AssetRegistry(tmp_path / "data", {"robots": library}))
+
+    bundle = service.register(
+        AssetRegistrationRequest(root_id="robots", relative_path="test_robot")
+    )
+    inspection = service.inspect(AssetInspectionRequest(asset_id=bundle.asset_id))
+
+    assert bundle.kind.value == "robot_bundle"
+    assert bundle.category.value == "robot_model"
+    assert {item.role.value for item in bundle.files} == {
+        "metadata",
+        "robot_description",
+        "visual_mesh",
+    }
+    assert inspection.status is InspectionStatus.VALID
+    assert inspection.joint_count == 1

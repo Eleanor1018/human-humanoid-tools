@@ -17,6 +17,8 @@ import WorkspaceDrawerHandle from './components/WorkspaceDrawerHandle.vue'
 import WorkspaceSettingsDialog from './components/WorkspaceSettingsDialog.vue'
 import type {
   ImportCommandTarget,
+  GvhmrOptionalComponentState,
+  GvhmrRuntimeStatus,
   JobAdmissionSettings,
   JobAdmissionSnapshot,
   MotionLibrarySettingsSnapshot,
@@ -46,6 +48,11 @@ const motionLibrarySettingsLoading = ref(false)
 const motionLibrarySettingsSaving = ref(false)
 const motionLibrarySettingsError = ref<string | null>(null)
 const motionLibrarySettingsSaved = ref(false)
+const gvhmrComponent = ref<GvhmrOptionalComponentState | null>(null)
+const gvhmrRuntime = ref<GvhmrRuntimeStatus | null>(null)
+const gvhmrLoading = ref(false)
+const gvhmrSetupRunning = ref(false)
+const gvhmrError = ref<string | null>(null)
 const motionLibrarySearch = ref('')
 const robotLibrarySearch = ref('')
 type MotionUploadProfile = 'intermimic' | 'meshmimic' | 'mimic'
@@ -281,6 +288,45 @@ async function loadMotionLibrarySettings(): Promise<void> {
   }
 }
 
+async function loadGvhmrComponent(): Promise<void> {
+  if (!window.hhtoolsDesktop || gvhmrLoading.value || gvhmrSetupRunning.value) return
+  gvhmrLoading.value = true
+  gvhmrError.value = null
+  try {
+    const components = await window.hhtoolsDesktop.getOptionalComponents()
+    gvhmrComponent.value = components.gvhmr
+
+    const response = await fetch('/api/video-to-motion/status')
+    if (!response.ok) throw await jobAdmissionHttpError(response)
+    gvhmrRuntime.value = await response.json() as GvhmrRuntimeStatus
+  } catch (error) {
+    gvhmrError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    gvhmrLoading.value = false
+  }
+}
+
+async function setupGvhmr(): Promise<void> {
+  if (!window.hhtoolsDesktop || gvhmrSetupRunning.value) return
+  gvhmrSetupRunning.value = true
+  gvhmrError.value = null
+  try {
+    const result = await window.hhtoolsDesktop.setupGvhmr()
+    gvhmrComponent.value = result.state
+    // setupGvhmr keeps its own busy flag while the native folder picker is open.
+    // Clear it before the runtime probe, otherwise loadGvhmrComponent correctly
+    // treats the setup operation as still active and skips the refresh.
+    if (result.action === 'configured') {
+      gvhmrSetupRunning.value = false
+      await loadGvhmrComponent()
+    }
+  } catch (error) {
+    gvhmrError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    gvhmrSetupRunning.value = false
+  }
+}
+
 async function chooseMotionLibraryRoot(): Promise<void> {
   if (motionLibrarySettingsLoading.value || motionLibrarySettingsSaving.value) return
   motionLibrarySettingsError.value = null
@@ -328,6 +374,7 @@ function openWorkspaceSettings(): void {
   settingsOpen.value = true
   void loadJobAdmission()
   void loadMotionLibrarySettings()
+  void loadGvhmrComponent()
 }
 
 function setActivePanel(panel: string): void {
@@ -423,6 +470,16 @@ onMounted(async () => {
   // Load capability metadata up front so the always-visible library control
   // cannot advertise a write action on a read-only server connection.
   void loadMotionLibrarySettings()
+  if (window.hhtoolsDesktop) {
+    try {
+      const components = await window.hhtoolsDesktop.getOptionalComponents()
+      gvhmrComponent.value = components.gvhmr
+      if (components.gvhmr.requested && !components.gvhmr.configured) settingsOpen.value = true
+      void loadGvhmrComponent()
+    } catch (error) {
+      gvhmrError.value = error instanceof Error ? error.message : String(error)
+    }
+  }
 
   try {
     // The renderer owns UI markup; the runtime modules own Three.js and long-running workflows.
@@ -1268,6 +1325,11 @@ onBeforeUnmount(() => {
       :motion-library-saving="motionLibrarySettingsSaving"
       :motion-library-error="motionLibrarySettingsError"
       :motion-library-saved="motionLibrarySettingsSaved"
+      :gvhmr-component="gvhmrComponent"
+      :gvhmr-runtime="gvhmrRuntime"
+      :gvhmr-loading="gvhmrLoading"
+      :gvhmr-setup-running="gvhmrSetupRunning"
+      :gvhmr-error="gvhmrError"
       @close="settingsOpen = false"
       @set-locale="setWorkspaceLocale"
       @set-hidden="panelLayout.setHidden"
@@ -1276,6 +1338,8 @@ onBeforeUnmount(() => {
       @save-job-admission="saveJobAdmission"
       @refresh-motion-library="loadMotionLibrarySettings"
       @select-motion-library-root="chooseMotionLibraryRoot"
+      @refresh-gvhmr="loadGvhmrComponent"
+      @setup-gvhmr="setupGvhmr"
     />
   </div>
 
@@ -1307,6 +1371,6 @@ onBeforeUnmount(() => {
 
   <div id="toast"></div>
   <div id="boot-error" style="display:none;position:fixed;inset:auto 16px 16px 16px;z-index:200;
-    background:#ff3b30;color:#fff;padding:12px 16px;border-radius:12px;font:14px/1.5 -apple-system,sans-serif">
+    background:#ff3b30;color:#fff;padding:12px 16px;border-radius:8px;font:14px/1.5 -apple-system,sans-serif">
   </div>
 </template>

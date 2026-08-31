@@ -18,6 +18,7 @@ function isExternalHttpUrl(url: string): boolean {
 }
 
 export function createMainWindow(options: {
+  iconPath: string
   preloadPath: string
   trustedOrigin: string
   stateStore: WindowStateStore
@@ -37,6 +38,7 @@ export function createMainWindow(options: {
     show: false,
     autoHideMenuBar: true,
     backgroundColor: '#ffffff',
+    icon: options.iconPath,
     title: 'hhtools',
     webPreferences: {
       // The WebUI is treated as untrusted web content and reaches desktop APIs only via preload.

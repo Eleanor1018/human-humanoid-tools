@@ -6,34 +6,23 @@ from pathlib import Path
 import pytest
 
 from hhtools.contracts import (
-    AgentJobView,
-    ApiError,
-    ArtifactDescriptor,
     AssetBundle,
-    AssetInspection,
-    AssetRegistrationRequest,
-    AssetSearchResponse,
-    CapabilityResponse,
-    JobSpecV2,
     PreflightResponse,
     RetargetPreflightRequest,
 )
+from hhtools.contracts.schema_registry import PUBLIC_AGENT_SCHEMAS
 
 FIXTURES = Path(__file__).parent / "fixtures"
 SCHEMAS = Path(__file__).parents[2] / "docs" / "schemas" / "agent" / "v1"
-PUBLIC_SCHEMAS = {
-    "agent-job-view": AgentJobView,
-    "api-error": ApiError,
-    "artifact": ArtifactDescriptor,
-    "asset-bundle": AssetBundle,
-    "asset-inspection": AssetInspection,
-    "asset-registration-request": AssetRegistrationRequest,
-    "asset-search-response": AssetSearchResponse,
-    "capabilities": CapabilityResponse,
-    "job-spec-v2": JobSpecV2,
-    "preflight-response": PreflightResponse,
-    "retarget-preflight-request": RetargetPreflightRequest,
-}
+PUBLIC_SCHEMAS = PUBLIC_AGENT_SCHEMAS
+
+
+def test_public_schema_directory_contains_exactly_the_exported_contracts() -> None:
+    snapshots = {path.name for path in SCHEMAS.glob("*.schema.json")}
+    expected = {f"{name}.schema.json" for name in PUBLIC_SCHEMAS}
+
+    assert snapshots == expected
+    assert len(snapshots) == 21
 
 
 @pytest.mark.parametrize(

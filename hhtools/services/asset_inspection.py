@@ -57,6 +57,20 @@ _SUPPORTED_PRIMARY_EXTENSIONS = frozenset(
     }
 )
 
+_UNIFIED_NPZ_REQUIRED_KEYS = frozenset(
+    {
+        "schema_version",
+        "name",
+        "framerate",
+        "up_axis",
+        "bone_names",
+        "parent_indices",
+        "positions",
+        "quaternions",
+    }
+)
+
+
 @dataclass(frozen=True, slots=True)
 class MotionAssetDiscovery:
     """Cheap routing facts for one unambiguous motion candidate.
@@ -387,69 +401,195 @@ def _positive_fps(value: Any) -> float:
     return fps
 
 
-def _inspect_npz(path: Path) -> _ContentFacts:
-    with np.load(path, allow_pickle=False) as archive:
-        keys = set(archive.files)
-        if {"positions", "quaternions", "bone_names", "parent_indices"}.issubset(keys):
-            positions = np.asarray(archive["positions"])
-            quaternions = np.asarray(archive["quaternions"])
-            bone_names = np.asarray(archive["bone_names"])
-            parents = np.asarray(archive["parent_indices"])
-            if positions.ndim != 3 or positions.shape[-1] != 3:
-                raise _ContentValidationError("positions must have shape (frames, joints, 3)")
-            if quaternions.ndim != 3 or quaternions.shape[-1] != 4:
-                raise _ContentValidationError("quaternions must have shape (frames, joints, 4)")
-            if positions.shape[:2] != quaternions.shape[:2]:
-                raise _ContentValidationError("positions and quaternions have incompatible shapes")
-            if positions.shape[0] == 0 or positions.shape[1] == 0:
-                raise _ContentValidationError("motion must contain at least one frame and joint")
-            if bone_names.reshape(-1).size != positions.shape[1]:
-                raise _ContentValidationError("bone_names does not match the motion joint count")
-            if parents.reshape(-1).size != positions.shape[1]:
-                raise _ContentValidationError(
-                    "parent_indices does not match the motion joint count"
-                )
-            _finite_or_raise(positions, quaternions)
-            fps = _positive_fps(archive["framerate"]) if "framerate" in keys else None
-            object_names = archive["objects_names"] if "objects_names" in keys else None
-            has_object = bool(object_names is not None and np.asarray(object_names).size)
-            return _ContentFacts(
-                frame_count=int(positions.shape[0]),
-                frame_rate_hz=fps,
-                joint_count=int(positions.shape[1]),
-                has_object=has_object,
-                has_terrain=bool("terrain_heightfield" in keys),
-            )
-
-        # Raw AMASS/stage-II parameters can be checked without invoking the
-        # SMPL/SMPL-X forward engine.  Joint positions remain unknown until that
-        # later, GPU-capable stage.
-        frame_array: np.ndarray | None = None
-        for key in ("trans", "poses", "pose_body", "root_orient"):
-            if key in keys:
-                array = np.asarray(archive[key])
-                _finite_or_raise(array)
-                if array.ndim >= 1:
-                    if frame_array is not None and array.shape[0] != frame_array.shape[0]:
-                        raise _ContentValidationError("motion parameter arrays disagree on frames")
-                    frame_array = array
-        if frame_array is None or frame_array.shape[0] == 0:
-            raise _ContentValidationError("NPZ contains no recognized motion arrays")
-        fps = None
-        for key in ("mocap_frame_rate", "mocap_framerate", "framerate"):
-            if key in keys:
-                fps = _positive_fps(archive[key])
-                break
-        warning = None if fps is not None else "Frame rate is not declared in the NPZ archive."
-        return _ContentFacts(
-            frame_count=int(frame_array.shape[0]),
-            frame_rate_hz=fps,
-            warning=warning,
-            metadata={"joint_positions_available": False},
+def _required_keys(keys: set[str], required: frozenset[str], label: str) -> None:
+    missing = sorted(required - keys)
+    if missing:
+        raise _ContentValidationError(
+            f"{label} is missing required fields: {', '.join(missing)}"
         )
 
 
-def _holosoma_timing(path: Path) -> tuple[float, int] | None:
+def _scalar_value(value: Any, label: str) -> Any:
+    array = np.asarray(value)
+    if array.shape != ():
+        raise _ContentValidationError(f"{label} must be a scalar value")
+    return array.item()
+
+
+def _numeric_array(value: Any, label: str) -> np.ndarray:
+    array = np.asarray(value)
+    if not np.issubdtype(array.dtype, np.number):
+        raise _ContentValidationError(f"{label} must be a numeric array")
+    _finite_or_raise(array)
+    return array
+
+
+def _inspect_unified_npz(archive: Any, keys: set[str]) -> _ContentFacts:
+    """Mirror the structure consumed by :func:`hhtools.io.npz.load_npz`."""
+
+    _required_keys(keys, _UNIFIED_NPZ_REQUIRED_KEYS, "Unified NPZ")
+    schema = str(_scalar_value(archive["schema_version"], "schema_version"))
+    if schema != "1":
+        raise _ContentValidationError("Unified NPZ schema_version must be '1'")
+    _scalar_value(archive["name"], "name")
+    fps = _positive_fps(archive["framerate"])
+    up_axis = str(_scalar_value(archive["up_axis"], "up_axis"))
+    if up_axis not in {"X", "Y", "Z"}:
+        raise _ContentValidationError("up_axis must be one of X, Y, or Z")
+
+    positions = _numeric_array(archive["positions"], "positions")
+    quaternions = _numeric_array(archive["quaternions"], "quaternions")
+    bone_names = np.asarray(archive["bone_names"])
+    parents = np.asarray(archive["parent_indices"])
+    if positions.ndim != 3 or positions.shape[-1] != 3:
+        raise _ContentValidationError("positions must have shape (frames, joints, 3)")
+    if quaternions.ndim != 3 or quaternions.shape[-1] != 4:
+        raise _ContentValidationError("quaternions must have shape (frames, joints, 4)")
+    if positions.shape[:2] != quaternions.shape[:2]:
+        raise _ContentValidationError("positions and quaternions have incompatible shapes")
+    if positions.shape[0] == 0 or positions.shape[1] == 0:
+        raise _ContentValidationError("motion must contain at least one frame and joint")
+    joint_count = int(positions.shape[1])
+    if bone_names.ndim != 1 or bone_names.size != joint_count:
+        raise _ContentValidationError("bone_names must be a one-dimensional joint list")
+    if parents.shape != (joint_count,):
+        raise _ContentValidationError("parent_indices must have shape (joints,)")
+    try:
+        parent_indices = parents.astype(np.int64, copy=False)
+    except (TypeError, ValueError) as exc:
+        raise _ContentValidationError("parent_indices must contain integers") from exc
+    if bool((parent_indices >= joint_count).any()):
+        raise _ContentValidationError("parent_indices references an unknown joint")
+
+    # load_npz accesses meta_json when it is present.  Touching it here with
+    # allow_pickle=False rejects object arrays without executing them.
+    if "meta_json" in keys:
+        _scalar_value(archive["meta_json"], "meta_json")
+    if "source_format" in keys:
+        _scalar_value(archive["source_format"], "source_format")
+
+    object_fields = {
+        "objects_names",
+        "objects_positions",
+        "objects_quaternions",
+        "objects_extents",
+    }
+    has_object = False
+    if object_fields.issubset(keys):
+        object_names = np.asarray(archive["objects_names"])
+        object_positions = _numeric_array(
+            archive["objects_positions"], "objects_positions"
+        )
+        object_quaternions = _numeric_array(
+            archive["objects_quaternions"], "objects_quaternions"
+        )
+        object_extents = _numeric_array(archive["objects_extents"], "objects_extents")
+        if object_names.ndim != 1:
+            raise _ContentValidationError("objects_names must be one-dimensional")
+        object_count = int(object_names.size)
+        if object_positions.ndim != 3 or object_positions.shape[1:] != (object_count, 3):
+            raise _ContentValidationError(
+                "objects_positions must have shape (frames, objects, 3)"
+            )
+        if (
+            object_quaternions.ndim != 3
+            or object_quaternions.shape != object_positions.shape[:2] + (4,)
+        ):
+            raise _ContentValidationError(
+                "objects_quaternions must have shape (frames, objects, 4)"
+            )
+        if object_extents.shape != (object_count, 3):
+            raise _ContentValidationError("objects_extents must have shape (objects, 3)")
+        if "objects_mesh_paths" in keys:
+            mesh_paths = np.asarray(archive["objects_mesh_paths"])
+            if mesh_paths.ndim != 1:
+                raise _ContentValidationError("objects_mesh_paths must be one-dimensional")
+        if "objects_scales" in keys:
+            scales = _numeric_array(archive["objects_scales"], "objects_scales")
+            if scales.ndim != 1:
+                raise _ContentValidationError("objects_scales must be one-dimensional")
+        has_object = object_count > 0
+    return _ContentFacts(
+        frame_count=int(positions.shape[0]),
+        frame_rate_hz=fps,
+        joint_count=joint_count,
+        has_object=has_object,
+        has_terrain=bool("terrain_heightfield" in keys),
+    )
+
+
+def _inspect_amass_npz(archive: Any, keys: set[str]) -> _ContentFacts:
+    """Validate the arrays required by ``AmassAdapter.load_params`` safely."""
+
+    _required_keys(keys, frozenset({"trans", "betas"}), "AMASS NPZ")
+    trans = _numeric_array(archive["trans"], "trans")
+    betas = _numeric_array(archive["betas"], "betas")
+    if trans.ndim != 2 or trans.shape[1] != 3 or trans.shape[0] == 0:
+        raise _ContentValidationError("AMASS trans must have shape (frames, 3)")
+    if betas.size == 0:
+        raise _ContentValidationError("AMASS betas must not be empty")
+    frame_count = int(trans.shape[0])
+
+    is_stageii = "pose_body" in keys or "surface_model_type" in keys
+    if is_stageii:
+        _required_keys(
+            keys,
+            frozenset({"pose_body", "root_orient"}),
+            "AMASS stage-II NPZ",
+        )
+        root_orient = _numeric_array(archive["root_orient"], "root_orient")
+        pose_body = _numeric_array(archive["pose_body"], "pose_body")
+        if root_orient.shape != (frame_count, 3):
+            raise _ContentValidationError(
+                "AMASS stage-II root_orient must have shape (frames, 3)"
+            )
+        if pose_body.ndim != 2 or pose_body.shape[0] != frame_count:
+            raise _ContentValidationError(
+                "AMASS stage-II pose_body must be a per-frame matrix"
+            )
+        for key in ("pose_hand", "pose_eye"):
+            if key not in keys:
+                continue
+            optional_pose = _numeric_array(archive[key], key)
+            if optional_pose.ndim != 2 or optional_pose.shape[0] != frame_count:
+                raise _ContentValidationError(f"AMASS {key} must be a per-frame matrix")
+        parameter_schema = "stageii"
+    else:
+        _required_keys(keys, frozenset({"poses"}), "AMASS legacy NPZ")
+        poses = _numeric_array(archive["poses"], "poses")
+        if poses.ndim != 2 or poses.shape[0] != frame_count or poses.shape[1] < 66:
+            raise _ContentValidationError(
+                "AMASS legacy poses must have shape (frames, at least 66)"
+            )
+        parameter_schema = "legacy"
+
+    fps = 30.0
+    for key in ("mocap_frame_rate", "mocap_framerate"):
+        if key in keys:
+            fps = _positive_fps(archive[key])
+            break
+    return _ContentFacts(
+        frame_count=frame_count,
+        frame_rate_hz=fps,
+        metadata={
+            "joint_positions_available": False,
+            "parameter_schema": parameter_schema,
+        },
+    )
+
+
+def _inspect_npz(path: Path, dataset: str) -> _ContentFacts:
+    with np.load(path, allow_pickle=False) as archive:
+        keys = set(archive.files)
+        unified_markers = {"positions", "quaternions", "bone_names", "parent_indices"}
+        if dataset in {"unified_npz", "parc_ms"} or bool(keys & unified_markers):
+            return _inspect_unified_npz(archive, keys)
+        return _inspect_amass_npz(archive, keys)
+
+
+def _holosoma_manifest_facts(path: Path) -> tuple[float, int, int]:
+    """Safely read the same manifest fields required by the Holosoma adapter."""
+
     current = path.parent
     manifest: Path | None = None
     for _ in range(4):
@@ -461,23 +601,64 @@ def _holosoma_timing(path: Path) -> tuple[float, int] | None:
             break
         current = current.parent
     if manifest is None:
-        return None
+        raise _ContentValidationError("Holosoma source.yaml is required")
     try:
-        import yaml
+        import yaml  # type: ignore[import-untyped]
 
         data = yaml.safe_load(manifest.read_text(encoding="utf-8"))
-        framerate = data.get("framerate", {}) if isinstance(data, dict) else {}
+        if not isinstance(data, dict):
+            raise _ContentValidationError("Holosoma source.yaml must contain a mapping")
+        framerate = data.get("framerate", {})
+        if not isinstance(framerate, dict):
+            raise _ContentValidationError("Holosoma framerate must contain a mapping")
         raw = float(framerate.get("raw_hz", 120.0))
-        downsample = max(1, int(framerate.get("recommended_downsample", 1)))
+        downsample = int(framerate.get("recommended_downsample", 1))
+        downsample = max(1, downsample)
         if not math.isfinite(raw) or raw <= 0:
-            return None
-        return raw, downsample
-    except (OSError, TypeError, ValueError, yaml.YAMLError):
-        return None
+            raise _ContentValidationError("Holosoma raw frame rate must be positive")
+
+        skeleton = data.get("skeleton")
+        if not isinstance(skeleton, dict):
+            raise _ContentValidationError("Holosoma source.yaml requires a skeleton mapping")
+        names = skeleton.get("joint_names", [])
+        parents = skeleton.get("parent_indices", [])
+        if not isinstance(names, list) or not isinstance(parents, list) or not names:
+            raise _ContentValidationError(
+                "Holosoma skeleton requires non-empty joint_names and parent_indices lists"
+            )
+        if len(names) != len(parents):
+            raise _ContentValidationError(
+                "Holosoma joint_names and parent_indices must have equal length"
+            )
+        try:
+            parent_indices = np.asarray(parents, dtype=np.int64)
+        except (TypeError, ValueError) as exc:
+            raise _ContentValidationError(
+                "Holosoma parent_indices must contain integers"
+            ) from exc
+        if parent_indices.shape != (len(names),):
+            raise _ContentValidationError("Holosoma parent_indices must be one-dimensional")
+        if bool((parent_indices >= len(names)).any()):
+            raise _ContentValidationError(
+                "Holosoma parent_indices references an unknown joint"
+            )
+        for section in ("coordinate_system", "clip_layout"):
+            if section in data and not isinstance(data[section], dict):
+                raise _ContentValidationError(
+                    f"Holosoma {section} must contain a mapping"
+                )
+        return raw, downsample, len(names)
+    except _ContentValidationError:
+        raise
+    except (OSError, TypeError, ValueError, yaml.YAMLError) as exc:
+        raise _ContentValidationError("Holosoma source.yaml is malformed") from exc
 
 
 def _inspect_npy(path: Path, dataset: str) -> _ContentFacts:
-    array = np.load(path, mmap_mode="r", allow_pickle=False)
+    array = _numeric_array(
+        np.load(path, mmap_mode="r", allow_pickle=False),
+        "NPY motion",
+    )
     if array.ndim < 2 or array.shape[0] == 0:
         raise _ContentValidationError("NPY motion must be a non-empty array with at least 2 axes")
     _finite_or_raise(array)
@@ -493,12 +674,19 @@ def _inspect_npy(path: Path, dataset: str) -> _ContentFacts:
         raise _ContentValidationError("PHUMA rows must contain 69 values")
 
     if dataset == "meshmimic_holosoma":
-        timing = _holosoma_timing(path)
-        if timing is not None:
-            raw_fps, downsample = timing
-            metadata.update({"raw_frame_count": frames, "downsample": downsample})
-            frames = max(1, math.ceil(frames / downsample))
-            fps = raw_fps / downsample
+        raw_fps, downsample, expected_joints = _holosoma_manifest_facts(path)
+        if array.ndim != 3 or array.shape[2] != 3:
+            raise _ContentValidationError(
+                "Holosoma joint positions must have shape (frames, joints, 3)"
+            )
+        if array.shape[1] != expected_joints:
+            raise _ContentValidationError(
+                "Holosoma joint count does not match source.yaml"
+            )
+        joints = expected_joints
+        metadata.update({"raw_frame_count": frames, "downsample": downsample})
+        frames = max(1, math.ceil(frames / downsample))
+        fps = raw_fps / downsample
     warning = None if fps is not None else "Frame rate could not be determined without a manifest."
     return _ContentFacts(
         frame_count=frames,
@@ -564,6 +752,10 @@ def _inspect_csv(path: Path) -> _ContentFacts:
     return _ContentFacts(
         frame_count=max(0, len(rows) - 1),
         warning="CSV columns require a workflow-specific schema before joints can be identified.",
+        metadata={
+            "content_validation_code": "CONTENT_REQUIRES_WORKFLOW_SCHEMA",
+        },
+        semantically_parsed=False,
     )
 
 
@@ -571,6 +763,8 @@ def _inspect_content(path: Path, dataset: str) -> _ContentFacts:
     suffix = path.suffix.lower()
     if suffix == ".npy":
         return _inspect_npy(path, dataset)
+    if suffix == ".npz":
+        return _inspect_npz(path, dataset)
     if suffix in {".pt", ".pth"}:
         return _ContentFacts(
             warning=(
@@ -587,7 +781,6 @@ def _inspect_content(path: Path, dataset: str) -> _ContentFacts:
         ".csv": _inspect_csv,
         ".glb": _inspect_glb,
         ".gltf": _inspect_glb,
-        ".npz": _inspect_npz,
         ".pickle": _inspect_pickle,
         ".pkl": _inspect_pickle,
     }
@@ -755,9 +948,9 @@ class MotionAssetInspector:
 
         role_paths: dict[AssetFileRole, list[Path]] = {}
         for manifest_file in bundle.files:
-            resolved = resolved_files.get(manifest_file.relative_path)
-            if resolved is not None:
-                role_paths.setdefault(manifest_file.role, []).append(resolved)
+            resolved_manifest_file = resolved_files.get(manifest_file.relative_path)
+            if resolved_manifest_file is not None:
+                role_paths.setdefault(manifest_file.role, []).append(resolved_manifest_file)
 
         has_object_sidecar = bool(
             role_paths.get(AssetFileRole.OBJECT_MESH)

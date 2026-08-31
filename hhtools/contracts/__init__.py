@@ -1,5 +1,6 @@
 """Stable, transport-neutral contracts for HHTools agent integrations."""
 
+from .artifacts import EvaluationReport, FailureItem, FailureReport, JobManifest
 from .assets import (
     AssetBundle,
     AssetCategory,
@@ -22,6 +23,7 @@ from .capabilities import (
     DeviceCapability,
     DeviceKind,
     RobotCapability,
+    RobotListResponse,
     SchedulerCapability,
     SchedulerMode,
 )
@@ -49,10 +51,18 @@ from .job_spec import (
 from .jobs import (
     AgentJobView,
     ArtifactDescriptor,
+    ArtifactListResponse,
     JobOutcome,
     JobProgress,
     JobQueueView,
+    JobRetryRequest,
+    JobStartRequest,
     JobState,
+)
+from .migration import (
+    LegacyJobUpgradeRequest,
+    LegacyJobUpgradeResponse,
+    LegacyMigrationReceipt,
 )
 from .preflight import (
     OutputPolicy,
@@ -69,6 +79,7 @@ __all__ = [
     "AgentJobView",
     "ApiError",
     "ArtifactDescriptor",
+    "ArtifactListResponse",
     "ArtifactId",
     "AssetBundle",
     "AssetCategory",
@@ -91,10 +102,14 @@ __all__ = [
     "DeviceCapability",
     "DeviceKind",
     "ErrorStage",
+    "EvaluationReport",
+    "FailureItem",
+    "FailureReport",
     "InspectionStatus",
     "JobOutcome",
     "JobProgress",
     "JobQueueView",
+    "JobRetryRequest",
     "JobSpecCalibration",
     "JobSpecInput",
     "JobSpecKind",
@@ -102,6 +117,11 @@ __all__ = [
     "JobSpecRobot",
     "JobSpecV2",
     "JobState",
+    "JobStartRequest",
+    "JobManifest",
+    "LegacyJobUpgradeRequest",
+    "LegacyJobUpgradeResponse",
+    "LegacyMigrationReceipt",
     "NextAction",
     "OutputPolicy",
     "PreflightCheck",
@@ -114,6 +134,7 @@ __all__ = [
     "RetargetPlan",
     "RetargetPreflightRequest",
     "RobotCapability",
+    "RobotListResponse",
     "SchedulerCapability",
     "SchedulerMode",
     "SchemaVersion",

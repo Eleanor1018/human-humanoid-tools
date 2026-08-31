@@ -45,6 +45,23 @@ describe('registerDesktopHandlers', () => {
       mainWindow,
       trustedOrigin: 'http://127.0.0.1:43100',
       getRuntimeState: () => ({ appPhase: 'ready', backendState: 'ready' }),
+      getOptionalComponents: () => ({
+        gvhmr: {
+          requested: false,
+          configured: false,
+          guideUrl: 'https://example.com/gvhmr',
+          estimatedAdditionalBytes: 22,
+        },
+      }),
+      setupGvhmr: async () => ({
+        action: 'cancelled',
+        state: {
+          requested: false,
+          configured: false,
+          guideUrl: 'https://example.com/gvhmr',
+          estimatedAdditionalBytes: 22,
+        },
+      }),
       restartBackend: async () => ({ appPhase: 'ready', backendState: 'ready' })
     })
     return { event, mainWindow }
@@ -88,6 +105,23 @@ describe('registerDesktopHandlers', () => {
       mainWindow,
       trustedOrigin: 'http://127.0.0.1:43100',
       getRuntimeState: () => ({ appPhase: 'ready', backendState: 'ready' }),
+      getOptionalComponents: () => ({
+        gvhmr: {
+          requested: false,
+          configured: false,
+          guideUrl: 'https://example.com/gvhmr',
+          estimatedAdditionalBytes: 22,
+        },
+      }),
+      setupGvhmr: async () => ({
+        action: 'cancelled',
+        state: {
+          requested: false,
+          configured: false,
+          guideUrl: 'https://example.com/gvhmr',
+          estimatedAdditionalBytes: 22,
+        },
+      }),
       restartBackend: async () => ({ appPhase: 'ready', backendState: 'ready' })
     })
 

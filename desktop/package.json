@@ -2,18 +2,19 @@
   "name": "hhtools-desktop",
   "version": "0.1.0",
   "private": true,
-  "description": "Electron desktop shell for human-humanoid-tools",
+  "description": "Standalone desktop GUI for human-humanoid-tools",
   "author": "hhtools contributors",
   "type": "module",
   "main": "out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
+    "prepare:runtime": "node scripts/prepare-runtime.mjs",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --config vitest.config.ts",
     "test:e2e": "npm run build && playwright test --config playwright.config.ts",
-    "dist:win": "npm run build && electron-builder --win nsis"
+    "dist:win": "npm run build && npm run prepare:runtime && electron-builder --win nsis"
   },
   "devDependencies": {
     "@playwright/test": "1.62.1",
@@ -29,14 +30,28 @@
     "appId": "com.roboparty.hhtools.desktop.alpha",
     "productName": "hhtools Desktop Alpha",
     "asar": true,
+    "electronDist": "node_modules/electron/dist",
     "directories": {
       "output": "release"
     },
+    "compression": "maximum",
+    "artifactName": "hhtools-${version}-${arch}-setup.${ext}",
     "files": [
       "out/**/*",
+      "resources/icon.png",
       "package.json"
     ],
+    "extraResources": [
+      {
+        "from": ".runtime",
+        "to": "runtime",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
     "win": {
+      "icon": "resources/icon.ico",
       "target": [
         "nsis"
       ]
@@ -44,6 +59,10 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
+      "include": "build/installer.nsh",
+      "installerIcon": "resources/icon.ico",
+      "uninstallerIcon": "resources/icon.ico",
+      "installerHeaderIcon": "resources/icon.ico",
       "deleteAppDataOnUninstall": false
     }
   }

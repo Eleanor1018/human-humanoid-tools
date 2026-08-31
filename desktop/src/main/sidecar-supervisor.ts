@@ -112,6 +112,15 @@ export class SidecarSupervisor {
     return () => this.emitter.off('state', listener)
   }
 
+  updateEnvironment(environment: NodeJS.ProcessEnv): void {
+    if (this.currentState === 'starting' || this.currentState === 'stopping') {
+      throw new Error('Cannot replace the sidecar environment during a state transition')
+    }
+    // Optional components are configured after the window opens. Replacing the
+    // spawn environment lets restart() pick up those paths without relaunching Electron.
+    this.config.env = environment
+  }
+
   start(): Promise<SidecarSnapshot> {
     if (this.currentState === 'ready') return Promise.resolve(this.snapshot)
 

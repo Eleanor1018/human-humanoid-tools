@@ -18,6 +18,31 @@ describe('resolveRuntime', () => {
 
     expect(runtime.repoRoot).toBe(resolve(root))
     expect(runtime.sourceRoot).toBe(join(root, 'assets', 'motions'))
+    expect(runtime.cacheDirectory).toBe(join(root, '.test-user-data', 'hhtools-cache'))
+    expect(runtime.bundled).toBe(false)
+  })
+
+  it('uses the bundled application and Python runtime in a packaged build', () => {
+    const resourcesPath = mkdtempSync(join(tmpdir(), 'hhtools-packaged-runtime-test-'))
+    const repoRoot = join(resourcesPath, 'runtime', 'app')
+    const pythonExecutable = join(resourcesPath, 'runtime', 'python', 'python.exe')
+    mkdirSync(join(repoRoot, 'hhtools'), { recursive: true })
+    mkdirSync(join(resourcesPath, 'runtime', 'python'), { recursive: true })
+    writeFileSync(join(repoRoot, 'pyproject.toml'), '', 'utf8')
+    writeFileSync(pythonExecutable, '', 'utf8')
+
+    const runtime = resolveRuntime({
+      appPath: 'C:\\Program Files\\hhtools',
+      cwd: 'C:\\Program Files\\hhtools',
+      userData: join(resourcesPath, 'user-data'),
+      isPackaged: true,
+      resourcesPath,
+      env: {},
+    })
+
+    expect(runtime.repoRoot).toBe(repoRoot)
+    expect(runtime.pythonExecutable).toBe(pythonExecutable)
+    expect(runtime.bundled).toBe(true)
   })
 
   it('honors an explicit checkout and Python runtime', () => {
@@ -60,6 +85,8 @@ describe('resolveRuntime', () => {
     expect(environment.XDG_DATA_HOME).toBe('C:\\data')
     expect(environment.HHTOOLS_ARBITRARY_SECRET).toBeUndefined()
     expect(environment.AWS_SECRET_ACCESS_KEY).toBeUndefined()
+    expect(environment.PYTHONDONTWRITEBYTECODE).toBe('1')
+    expect(environment.PYTHONNOUSERSITE).toBe('1')
     expect(environment.PYTHONUTF8).toBe('1')
   })
 })

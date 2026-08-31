@@ -8,6 +8,7 @@ import type {
 } from './types'
 
 export type DesktopMenuId = 'file' | 'workflows' | 'analysis' | 'settings' | 'help'
+export type DesktopSubmenuId = 'file-import' | 'file-export'
 
 export interface ApplicationCommand {
   id: string
@@ -17,6 +18,7 @@ export interface ApplicationCommand {
   keywords: string
   shortcut?: string
   menu?: DesktopMenuId
+  submenu?: DesktopSubmenuId
   dividerBefore?: boolean
   enabled?: boolean
   disabledReason?: string
@@ -30,6 +32,10 @@ export interface CommandRegistryContext {
   toggleTheme?: () => void
   applicationMode?: boolean
   locale?: WorkspaceLocale
+  canExportResult?: boolean
+  exportResult?: () => void
+  canExitApplication?: boolean
+  exitApplication?: () => void
 }
 
 export const DESKTOP_MENUS: ReadonlyArray<{ id: DesktopMenuId; label: string }> = [
@@ -130,6 +136,7 @@ function importCommand(options: {
     ...options,
     group: localize(locale, 'File', '文件'),
     menu: 'file',
+    submenu: 'file-import',
     keywords: `file import upload ${options.label} ${options.detail}`,
     run: () => requestImport(options.target),
   }
@@ -194,6 +201,34 @@ export function createApplicationCommands(
         detail: localize(locale, 'Import a reproducible JobSpec JSON file', '导入可验证和重放的 JobSpec JSON'),
         target: 'job-spec',
       }, locale),
+      {
+        id: 'export-current-result',
+        group: localize(locale, 'File', '文件'),
+        label: localize(locale, 'Current Result…', '当前结果……'),
+        detail: localize(locale, 'Download the result of the active workflow', '下载当前工作流的处理结果'),
+        keywords: 'file export result download 文件 导出 结果 下载',
+        menu: 'file',
+        submenu: 'file-export',
+        enabled: context.canExportResult === true,
+        disabledReason: context.canExportResult === true
+          ? undefined
+          : localize(locale, 'No exportable result', '暂无可导出的结果'),
+        run: context.exportResult ?? (() => undefined),
+      },
+      {
+        id: 'exit-application',
+        group: localize(locale, 'File', '文件'),
+        label: localize(locale, 'Exit', '退出'),
+        detail: localize(locale, 'Close HHTOOLS', '关闭 HHTOOLS'),
+        keywords: 'file exit quit close 文件 退出 关闭',
+        menu: 'file',
+        dividerBefore: true,
+        enabled: context.canExitApplication === true,
+        disabledReason: context.canExitApplication === true
+          ? undefined
+          : localize(locale, 'Desktop app only', '仅桌面应用可用'),
+        run: context.exitApplication ?? (() => undefined),
+      },
       {
         id: 'open-settings',
         group: localize(locale, 'Settings', '设置'),
