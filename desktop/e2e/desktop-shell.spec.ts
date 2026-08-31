@@ -53,7 +53,7 @@ test('loads the existing WebUI and shuts down its Python sidecar', async ({}, te
     await expect(page.locator('#motion-pill')).toBeHidden()
     await expect(page.locator('#robot-pill')).toBeHidden()
     await expect(page.locator('.desktop-menu-trigger')).toHaveCount(5)
-    await expect(page.locator('.nav-item[data-panel]')).toHaveCount(6)
+    await expect(page.locator('.nav-item[data-panel]')).toHaveCount(7)
     await expect(page.locator('#stage-empty .big')).toContainText('Drop a motion here to preview')
 
     const stage = page.locator('#stage')
@@ -403,9 +403,9 @@ test('loads the existing WebUI and shuts down its Python sidecar', async ({}, te
     await page.screenshot({ path: testInfo.outputPath('desktop-drawers.png'), fullPage: true })
 
     await page.locator('[data-menu-trigger="analysis"]').click()
-    const pae = page.locator('.desktop-menu-item', { hasText: 'PAE Analysis' })
-    await expect(pae).toBeDisabled()
-    await expect(pae).toContainText('Coming soon')
+    const dataAnalysis = page.locator('.desktop-menu-item', { hasText: 'Data Analysis' })
+    await expect(dataAnalysis).toBeEnabled()
+    await expect(dataAnalysis).toHaveAttribute('title', 'Analyze motion and robot trajectory datasets')
     await page.screenshot({ path: testInfo.outputPath('desktop-analysis-menu.png'), fullPage: true })
     await page.keyboard.press('Escape')
 
@@ -413,9 +413,9 @@ test('loads the existing WebUI and shuts down its Python sidecar', async ({}, te
     await page.locator('.desktop-menu-item', { hasText: 'Settings' }).click()
     const settings = page.locator('.workspace-settings-dialog')
     await expect(settings).toBeVisible()
-    await expect(settings.locator('.workspace-setting-row')).toHaveCount(6)
+    await expect(settings.locator('.workspace-setting-row')).toHaveCount(7)
     await expect(settings.locator('.workspace-library-root')).not.toHaveText('—')
-    await expect(settings.locator('.workspace-library-select')).toBeEnabled()
+    await expect(settings.getByRole('button', { name: 'Choose directory' })).toBeEnabled()
     await expect(settings.locator('.workspace-language-select')).toHaveValue('en')
     const stateBeforeSettingsSave = await page.evaluate(() =>
       (window.hhtoolsDesktop as HHToolsDesktopApi).getRuntimeState()
