@@ -42,38 +42,7 @@ uv sync --extra all
 uv run hhtools web
 ```
 
-### Electron desktop alpha
-
-The desktop shell reuses the same FastAPI routes and three.js UI without a parallel renderer.
-
-```powershell
-cd desktop
-npm install
-npm run dev
-```
-
-See [`desktop/README.md`](desktop/README.md) for runtime overrides, tests, and Windows packaging.
-
 Open `http://127.0.0.1:8009`.
-
-Web jobs are unlimited by default. To enable FIFO admission control on a shared or
-memory-constrained GPU, set positive concurrency and an optional queue capacity:
-
-```bash
-uv run hhtools web --max-running-jobs 1 --max-queued-jobs 32
-```
-
-`0` means unlimited for both options; the queue setting only applies when running concurrency is
-limited. The same settings are available as `HHTOOLS_MAX_RUNNING_JOBS` and
-`HHTOOLS_MAX_QUEUED_JOBS` (including in the Electron sidecar).
-They can also be edited under **Settings → Background-job scheduling** from local Web/Electron
-or an SSH loopback tunnel; ordinary remote-browser sessions are shown read-only until authenticated
-remote administration is implemented. Saving hot-applies the limits without restarting Python or Electron: lower running limits grandfather active jobs,
-while higher limits immediately promote FIFO waiters. The backend persists the values in the
-platform user-config directory; `HHTOOLS_WEB_SETTINGS_PATH` selects another file. Explicit CLI
-or environment values remain startup overrides and will win again on the next launch.
-The cap applies to scheduled Web jobs, not the optional Warp/Newton robot prewarm thread, so it
-is admission control rather than a process-wide GPU concurrency guarantee.
 
 | Panel | Flow |
 |-------|------|

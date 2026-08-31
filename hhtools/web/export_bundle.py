@@ -73,9 +73,6 @@ OBJECT_CSV_HEADER = (
     "quat_y",
     "quat_z",
     "quat_w",
-    "ext_x",
-    "ext_y",
-    "ext_z",
 )
 
 
@@ -298,11 +295,12 @@ def _save_object_track_csv(
     path.parent.mkdir(parents=True, exist_ok=True)
     positions = np.asarray(blob["positions"], dtype=np.float64)
     quats_wxyz = np.asarray(blob["quaternions"], dtype=np.float64)
-    extents = np.asarray(blob["extents"], dtype=np.float64).reshape(3)
     sample_rate = float(blob["sample_rate"])
     num_frames = int(positions.shape[0])
     times = np.arange(num_frames, dtype=np.float64) / max(sample_rate, 1.0)
 
+    # ``ext_*`` cuboid dimensions are intentionally not written: consumers read
+    # the object geometry from the sidecar ``.obj`` mesh instead.
     header_meta = {
         "object": str(blob["name"]),
         "sample_rate": f"{sample_rate:.6f}",
@@ -320,9 +318,6 @@ def _save_object_track_csv(
             writer.writerow(OBJECT_CSV_HEADER)
         for frame in range(num_frames):
             q = quats_wxyz[frame]
-            # Repeat the constant object dimensions on every row.  This keeps a
-            # clipped or concatenated CSV self-describing even when its OBJ
-            # sidecar or metadata header is not available to the consumer.
             writer.writerow([
                 f"{times[frame]:.6f}",
                 f"{positions[frame, 0]:.6f}",
@@ -332,9 +327,6 @@ def _save_object_track_csv(
                 f"{q[2]:.6f}",
                 f"{q[3]:.6f}",
                 f"{q[0]:.6f}",
-                f"{extents[0]:.6f}",
-                f"{extents[1]:.6f}",
-                f"{extents[2]:.6f}",
             ])
     return path
 

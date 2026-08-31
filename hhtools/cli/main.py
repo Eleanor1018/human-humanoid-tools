@@ -12,11 +12,6 @@ import sys
 import typer
 
 from hhtools._version import __version__
-from hhtools.cli._stdio import configure_utf8_stdio
-
-# Configure streams before importing a selected subcommand. Rich consoles created by
-# those modules then inherit UTF-8 instead of a locale-dependent Windows code page.
-configure_utf8_stdio()
 
 app = typer.Typer(
     help="hhtools - Human-to-Humanoid Tools.",
@@ -47,7 +42,7 @@ _SUBCOMMANDS: list[tuple[str, str, str]] = [
 
 def _attach(name: str, module_path: str, help_text: str) -> None:
     module = importlib.import_module(module_path)
-    app.add_typer(module.app, name=name, help=help_text)
+    app.add_typer(getattr(module, "app"), name=name, help=help_text)
 
 
 def _subcommands_for_argv() -> list[tuple[str, str, str]]:
@@ -55,11 +50,6 @@ def _subcommands_for_argv() -> list[tuple[str, str, str]]:
     if len(sys.argv) < 2:
         return _SUBCOMMANDS
     arg = sys.argv[1]
-    if arg == "agent":
-        # The strict Agent command is registered directly below and lazily
-        # imports its transport adapter.  Do not import unrelated solver/UI
-        # command trees for a lightweight JSON request.
-        return []
     if arg.startswith("-"):
         return _SUBCOMMANDS
     for name, path, help_text in _SUBCOMMANDS:
@@ -70,25 +60,6 @@ def _subcommands_for_argv() -> list[tuple[str, str, str]]:
 
 for _name, _path, _help in _subcommands_for_argv():
     _attach(_name, _path, _help)
-
-
-@app.command(
-    "agent",
-    context_settings={
-        "allow_extra_args": True,
-        "ignore_unknown_options": True,
-        "help_option_names": [],
-    },
-)
-def _agent(ctx: typer.Context) -> None:
-    """Call the resident Agent REST service with strict JSON input/output."""
-
-    # One passthrough Click command is deliberate: argparse inside the JSON
-    # adapter converts *all* malformed or unknown tails into ApiError stdout,
-    # instead of allowing Click/Rich to emit a second, non-JSON document.
-    from hhtools.cli.agent import run
-
-    raise typer.Exit(code=run(ctx.args))
 
 
 @app.callback(invoke_without_command=True)

@@ -32,24 +32,6 @@ def launch(
     ),
     host: str = typer.Option("127.0.0.1", "--host"),
     port: int = typer.Option(8009, "--port"),
-    max_running_jobs: int | None = typer.Option(
-        None,
-        "--max-running-jobs",
-        min=0,
-        envvar="HHTOOLS_MAX_RUNNING_JOBS",
-        show_envvar=True,
-        help="Concurrent background jobs; 0 selects unlimited mode.",
-    ),
-    max_queued_jobs: int | None = typer.Option(
-        None,
-        "--max-queued-jobs",
-        min=0,
-        envvar="HHTOOLS_MAX_QUEUED_JOBS",
-        show_envvar=True,
-        help=(
-            "Waiting jobs when concurrency is limited; 0 means an unlimited queue."
-        ),
-    ),
 ) -> None:
     """Start the web UI on ``host:port`` and open a browser."""
     if ctx.invoked_subcommand is not None:
@@ -71,8 +53,6 @@ def launch(
         cache_dir=cache,
         host=host,
         port=port,
-        max_running_jobs=max_running_jobs,
-        max_queued_jobs=max_queued_jobs,
     )
 
 

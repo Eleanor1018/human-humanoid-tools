@@ -66,9 +66,7 @@ def _scale_context_cache_key(preset) -> tuple[object, ...]:
         except OSError:
             pass
     cal_mtime = _newest_calibration_mtime(Path(preset.root_dir))
-    agent_asset_id = preset.meta.get("_agent_asset_id")
     return (
-        agent_asset_id if isinstance(agent_asset_id, str) else None,
         preset.name,
         y_mtime,
         urdf_mtime,
