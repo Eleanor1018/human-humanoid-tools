@@ -42,7 +42,35 @@ uv sync --extra all
 uv run hhtools web
 ```
 
+### Human-Humanoid Tools 桌面应用
+
+桌面壳直接复用同一套 FastAPI 接口和 three.js 页面，不维护第二套 Renderer。
+
+```powershell
+cd desktop
+npm install
+npm run dev
+```
+
+运行时覆盖、自动化测试和 Windows 打包说明见 [`desktop/README.md`](desktop/README.md)。
+
 浏览器打开 `http://127.0.0.1:8009`。
+
+Web 后台任务默认不限制并发。共享服务器或显存紧张时，可以显式启用 FIFO 调度：
+
+```bash
+uv run hhtools web --max-running-jobs 1 --max-queued-jobs 32
+```
+
+两个参数的 `0` 都表示不限；只有运行并发为正数时，等待队列设置才生效。也可以使用
+`HHTOOLS_MAX_RUNNING_JOBS` 和 `HHTOOLS_MAX_QUEUED_JOBS` 环境变量，Electron sidecar 同样支持。
+也可以从本机 Web/Electron 或 SSH 本地回环隧道，在 **设置 → 后台任务调度** 中直接修改；
+在未实现远程管理鉴权前，普通远程浏览器会显示为只读。保存会热更新调度器，无需重启 Python 或
+Electron：降低并发不会中断正在运行的任务，提高上限会立即按 FIFO 补跑等待任务。后端会将
+配置写入平台用户配置目录，也可用 `HHTOOLS_WEB_SETTINGS_PATH` 指定文件。显式 CLI/环境变量
+仍是启动覆盖项，只要保留这些覆盖项，下次启动时就会再次覆盖 GUI 保存值。
+该上限只约束调度器管理的 Web Job，不包含选择机器人时可选的 Warp/Newton 预热线程，
+因此它是任务准入控制，并非整个进程的严格 GPU 并发上限。
 
 | 面板 | 流程 |
 |------|------|

@@ -1,4 +1,4 @@
-"""User motion library under ``~/.config/hhtools/motions``.
+"""Managed user Motion Library with a live, platform-aware root.
 
 Drag-and-drop from the browser cannot expose client absolute paths.  When the
 same files already exist on the **server** (e.g. under ``~/下载``), we locate
@@ -15,24 +15,44 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 _DEFAULT_LOOSE_LABEL = "用户数据集"
-_MOTIONS_DIRNAME = "motions"
 
 
 def motions_library_root() -> Path:
-    xdg = os.environ.get("XDG_CONFIG_HOME")
-    user_cfg = Path(xdg).expanduser() if xdg else Path.home() / ".config"
-    return user_cfg / "hhtools" / _MOTIONS_DIRNAME
+    """Return the live, server-owned Motion Library root.
+
+    The setting is resolved on every operation so a locally authorized Settings
+    change takes effect without restarting the Python service. Atomic settings
+    replacement keeps concurrent readers on either the old or new complete
+    value; the server serializes root changes with library publication.
+    """
+
+    from hhtools.utils.paths import user_motion_library_settings_path
+    from hhtools.web.motion_library_settings import (
+        MotionLibrarySettingsStore,
+        effective_motion_library_root,
+    )
+
+    settings = MotionLibrarySettingsStore(user_motion_library_settings_path()).load()
+    return effective_motion_library_root(settings)
 
 
-def ensure_motions_library() -> Path:
-    root = motions_library_root()
+def ensure_motions_library(root: str | Path | None = None) -> Path:
+    """Create and return ``root``, or the current configured root when omitted."""
+
+    root = (
+        Path(root).expanduser().resolve(strict=False)
+        if root is not None
+        else motions_library_root()
+    )
     root.mkdir(parents=True, exist_ok=True)
     return root
 
 
 def _safe_folder_name(label: str) -> str:
-    cleaned = re.sub(r"[^\w.\-+/]+", "_", str(label or "").strip())
-    cleaned = cleaned.strip("._/") or _DEFAULT_LOOSE_LABEL
+    # A library label is one directory name, never a relative path.  Replacing
+    # separators also keeps remove/link operations inside the motions root.
+    cleaned = re.sub(r"[^\w.\-+]+", "_", str(label or "").strip())
+    cleaned = cleaned.strip("._") or _DEFAULT_LOOSE_LABEL
     return cleaned[:120]
 
 
@@ -252,7 +272,7 @@ def resolve_clip_on_disk(
 ) -> Path:
     """Return an existing clip path, searching server motion trees when stale.
 
-    Batch baskets often store ``~/.config/hhtools/motions/<label>/<clip>.bvh``
+    Older batch baskets often store ``~/.config/hhtools/motions/<label>/<clip>.bvh``
     even when only one clip was copied during a multi-file browser drop.  When
     the recorded path is missing, locate the same basename under
     :func:`candidate_search_roots` (``~/syj/motions``, ``HHTOOLS_MOTION_SEARCH_PATHS``, …).
@@ -463,15 +483,50 @@ def _remove_path(path: Path) -> None:
         shutil.rmtree(path)
 
 
-def materialize_symlink_dir(source_dir: Path, folder_label: str | None = None) -> Path:
-    """Symlink ``source_dir`` into ``~/.config/hhtools/motions/<label>/``."""
+def _materialize_file_reference(source: Path, dest: Path) -> str:
+    """Reference ``source`` without requiring Windows symlink privileges.
 
-    ensure_motions_library()
+    A symbolic link keeps the library lightweight and remains the preferred
+    representation.  Windows may reject it unless Developer Mode is enabled or
+    the process is elevated, so files fall back to a same-volume hard link and
+    finally to a regular copy.  A hard link is not an independent snapshot:
+    modifying either path changes the same file contents.
+    """
+
+    try:
+        dest.symlink_to(source)
+        return "symlink"
+    except OSError:
+        # A failed symlink normally leaves no entry, but remove one defensively
+        # before trying link/copy fallbacks.
+        if dest.exists() or dest.is_symlink():
+            dest.unlink(missing_ok=True)
+
+    try:
+        os.link(source, dest)
+        return "hardlink"
+    except OSError:
+        if dest.exists() or dest.is_symlink():
+            dest.unlink(missing_ok=True)
+
+    shutil.copy2(source, dest)
+    return "copy"
+
+
+def materialize_symlink_dir(
+    source_dir: Path,
+    folder_label: str | None = None,
+    *,
+    library_root: str | Path | None = None,
+) -> Path:
+    """Symlink ``source_dir`` into the selected managed library root."""
+
+    root = ensure_motions_library(library_root)
     source_dir = source_dir.resolve()
     if not source_dir.is_dir():
         raise NotADirectoryError(f"不是目录: {source_dir}")
     label = _safe_folder_name(folder_label or source_dir.name)
-    dest = motions_library_root() / label
+    dest = root / label
     if dest.exists() or dest.is_symlink():
         try:
             if dest.resolve() == source_dir:
@@ -499,7 +554,7 @@ def _upload_tree_root(drop_dir: Path) -> Path:
 
 
 def materialize_upload_tree(drop_dir: Path, folder_label: str | None = None) -> Path:
-    """Copy an upload drop into ``~/.config/hhtools/motions/<label>/``."""
+    """Copy an upload drop into the selected managed library root."""
 
     ensure_motions_library()
     drop_dir = drop_dir.resolve()
@@ -514,6 +569,9 @@ def materialize_upload_tree(drop_dir: Path, folder_label: str | None = None) -> 
             label = _safe_folder_name(tree.name)
     dest = motions_library_root() / label
     if dest.exists() or dest.is_symlink():
+        # Replacement is intentionally simple but not transactional.  If the
+        # following copy fails, the previous same-named library entry is gone;
+        # callers should surface the error rather than claim a completed import.
         _remove_path(dest)
     # Avoid ``motions/<label>/<label>/…`` when the drop wraps one folder.
     if _safe_folder_name(tree.name) == label:
@@ -529,6 +587,41 @@ def _uploaded_path_for_rel(upload_drop: Path, rel: str) -> Path:
     if direct.is_file():
         return direct
     return upload_drop / PurePosixPath(rel).name
+
+
+def _materialize_single_loose_file(
+    source_file: Path,
+    folder_label: str | None,
+) -> tuple[Path, str, str]:
+    """Place one resolved loose clip in the library using the best link type."""
+
+    lib_root = motions_library_root().resolve()
+    try:
+        source_file.relative_to(lib_root)
+        parent = source_file.parent
+        return parent, parent.name, "symlink"
+    except ValueError:
+        pass
+
+    parent = source_file.parent.resolve()
+    existing = _existing_library_link_for_dir(parent)
+    if existing is not None:
+        return existing, existing.name, "symlink"
+
+    clip_label = _safe_folder_name(folder_label or parent.name)
+    dest_root = ensure_motions_library() / clip_label
+    dest_root.mkdir(parents=True, exist_ok=True)
+    dest = dest_root / source_file.name
+    try:
+        if dest.exists() and os.path.samefile(dest, source_file):
+            mode = "symlink" if dest.is_symlink() else "hardlink"
+            return dest_root, dest_root.name, mode
+    except OSError:
+        pass
+    if dest.exists() or dest.is_symlink():
+        dest.unlink(missing_ok=True)
+    mode = _materialize_file_reference(source_file, dest)
+    return dest_root, dest_root.name, mode
 
 
 def _resolved_matches_upload(resolved: Path, upload_drop: Path, rel: str) -> bool:
@@ -551,7 +644,7 @@ def materialize_drop(
     """Locate or copy data into the user motions library.
 
     Returns ``(library_dir, folder_label, mode)`` where ``mode`` is
-    ``"symlink"`` or ``"copy"``.
+    ``"symlink"``, ``"hardlink"``, or ``"copy"``.
     """
 
     label = _infer_folder_label(_normalize_relpaths(relative_paths), folder_label)
@@ -564,17 +657,20 @@ def materialize_drop(
             resolved = auto_resolve_source_files(rels)
             dest_root = ensure_motions_library() / label
             dest_root.mkdir(parents=True, exist_ok=True)
+            mode = "symlink"
             for rel, src in zip(rels, resolved, strict=True):
                 dest = dest_root / PurePosixPath(rel).name
                 try:
-                    if dest.exists() and dest.resolve() == src.resolve():
+                    if dest.exists() and os.path.samefile(dest, src):
                         continue
                 except OSError:
                     pass
                 if dest.exists() or dest.is_symlink():
                     dest.unlink(missing_ok=True)
-                dest.symlink_to(src)
-            return dest_root, dest_root.name, "symlink"
+                file_mode = _materialize_file_reference(src, dest)
+                if file_mode == "copy" or (file_mode == "hardlink" and mode == "symlink"):
+                    mode = file_mode
+            return dest_root, dest_root.name, mode
         except FileNotFoundError:
             pass
 
@@ -587,20 +683,7 @@ def materialize_drop(
                 source_file, upload_drop, rels[0],
             ):
                 raise FileNotFoundError("auto-resolved file does not match upload")
-            lib_root = motions_library_root().resolve()
-            try:
-                source_file.relative_to(lib_root)
-                parent = source_file.parent
-                return parent, parent.name, "symlink"
-            except ValueError:
-                pass
-            parent = source_file.parent.resolve()
-            existing = _existing_library_link_for_dir(parent)
-            if existing is not None:
-                return existing, existing.name, "symlink"
-            clip_label = _safe_folder_name(folder_label or parent.name)
-            dest_root = link_to_library(source_file, folder_label=clip_label)
-            return dest_root, dest_root.name, "symlink"
+            return _materialize_single_loose_file(source_file, folder_label)
         except FileNotFoundError:
             pass
 
@@ -618,20 +701,38 @@ def materialize_drop(
             raise
         dest = materialize_upload_tree(upload_drop, label)
         return dest, dest.name, "copy"
+    except OSError:
+        # Directory symlinks have no hard-link equivalent.  A browser upload
+        # already contains the exact tree, so use that safe copy when Windows
+        # denies symlink creation.
+        if upload_drop is None:
+            raise
+        dest = materialize_upload_tree(upload_drop, label)
+        return dest, dest.name, "copy"
 
 
-def link_to_library(path: str | Path, *, folder_label: str | None = None) -> Path:
+def link_to_library(
+    path: str | Path,
+    *,
+    folder_label: str | None = None,
+    library_root: str | Path | None = None,
+) -> Path:
+    root = ensure_motions_library(library_root)
     target = Path(path).expanduser().resolve()
     if target.is_dir():
-        return materialize_symlink_dir(target, folder_label or target.name)
+        return materialize_symlink_dir(
+            target,
+            folder_label or target.name,
+            library_root=root,
+        )
     if target.is_file():
         label = _safe_folder_name(folder_label or _DEFAULT_LOOSE_LABEL)
-        dest_root = ensure_motions_library() / label
+        dest_root = root / label
         dest_root.mkdir(parents=True, exist_ok=True)
         dest = dest_root / target.name
         # Already materialised (upload copy) — never replace with a self-symlink.
         try:
-            if dest.exists() and dest.resolve() == target.resolve():
+            if dest.exists() and os.path.samefile(dest, target):
                 return dest_root
         except OSError:
             pass
@@ -642,7 +743,7 @@ def link_to_library(path: str | Path, *, folder_label: str | None = None) -> Pat
             pass
         if dest.exists() or dest.is_symlink():
             dest.unlink(missing_ok=True)
-        dest.symlink_to(target)
+        _materialize_file_reference(target, dest)
         return dest_root
     raise FileNotFoundError(f"路径不存在: {target}")
 
@@ -656,12 +757,14 @@ def remove_library_folder(folder_label: str) -> bool:
     return True
 
 
-def scan_motions_library() -> list[dict[str, Any]]:
-    """Scan ``~/.config/hhtools/motions`` for library entries."""
+def scan_motions_library(
+    library_root: str | Path | None = None,
+) -> list[dict[str, Any]]:
+    """Scan the selected managed library root for library entries."""
 
     from hhtools.web.dataset_analysis import build_entries
 
-    root = ensure_motions_library()
+    root = ensure_motions_library(library_root)
     entries: list[dict[str, Any]] = []
     seen: set[str] = set()
     if not root.is_dir():

@@ -279,6 +279,48 @@ class R2rClipRef:
     has_scene: bool = False
 
 
+def r2r_clip_ref_for_path(path: Path, profile: str = "auto") -> R2rClipRef:
+    """Validate one exact robot trajectory and preserve its scene semantics.
+
+    Library selection differs from folder upload: the user has selected one
+    concrete row, so resolving the first clip below its parent would be wrong.
+    This helper validates that exact path and derives only the sidecars that
+    belong to it.
+    """
+
+    picked = Path(path).resolve()
+    if not _is_robot_export_trajectory(picked):
+        raise ValueError(
+            "所选资源不是机器人轨迹（需要包含 root pose 与机器人关节 DoF 的 "
+            "`.csv` / `.pkl` / `.npz`）"
+        )
+
+    requested = (profile or "auto").strip().lower()
+    if requested not in {"auto", "mimic", "intermimic", "meshmimic"}:
+        raise ValueError(f"unsupported R2R profile: {requested}")
+
+    if requested == "auto":
+        if _has_terrain_obj(picked.parent, picked.stem):
+            requested = "meshmimic"
+        elif _has_intermimic_obj(picked.parent, picked.stem):
+            requested = "intermimic"
+        else:
+            requested = "mimic"
+
+    has_scene = requested in {"intermimic", "meshmimic"}
+    if requested == "meshmimic" and not _has_terrain_obj(picked.parent, picked.stem):
+        raise ValueError("meshmimic 轨迹缺少 `*_terrain.obj` 场景文件")
+    if requested == "intermimic" and not _has_intermimic_obj(picked.parent, picked.stem):
+        raise ValueError("intermimic 轨迹缺少 `*_cleaned_simplified.obj` 交互物体")
+
+    return R2rClipRef(
+        path=picked,
+        profile=requested,
+        clip_kind=picked.suffix.lstrip("."),
+        has_scene=has_scene,
+    )
+
+
 def export_subdir_for_r2r_clip(drop_dir: Path, picked: Path) -> str:
     drop_dir = Path(drop_dir).resolve()
     picked = Path(picked).resolve()
