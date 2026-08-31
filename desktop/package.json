@@ -28,7 +28,7 @@
   },
   "build": {
     "appId": "com.roboparty.hhtools.desktop.alpha",
-    "productName": "hhtools Desktop Alpha",
+    "productName": "Human-Humanoid Tools",
     "asar": true,
     "electronDist": "node_modules/electron/dist",
     "directories": {

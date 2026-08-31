@@ -50,6 +50,15 @@ class JobRetryRequest(ContractModel):
     idempotency_key: IdempotencyKey
 
 
+class JobLookupRequest(ContractModel):
+    """Recover one caller-owned submission without enumerating other jobs."""
+
+    schema_version: SchemaVersion = SchemaVersion.V1
+    plan_id: PlanId
+    idempotency_key: IdempotencyKey
+    after_revision: Annotated[int | None, Field(default=None, ge=0)]
+
+
 class JobState(StrEnum):
     """Execution lifecycle, independent from output quality."""
 

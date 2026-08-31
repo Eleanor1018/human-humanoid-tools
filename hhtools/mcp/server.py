@@ -11,6 +11,7 @@ import argparse
 import hashlib
 import json
 import logging
+import sys
 from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from pathlib import Path
@@ -21,13 +22,14 @@ from mcp.server import MCPServer
 from mcp.server.mcpserver import Context
 from mcp.server.mcpserver.exceptions import ResourceError
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from hhtools._version import __version__
 from hhtools.contracts import (
     AgentJobView,
     ApiError,
     ArtifactDescriptor,
+    ArtifactExportReceipt,
     ArtifactListResponse,
     AssetBundle,
     AssetCategory,
@@ -40,6 +42,7 @@ from hhtools.contracts import (
     ErrorStage,
     EvaluationReport,
     FailureReport,
+    JobLookupRequest,
     JobManifest,
     JobRetryRequest,
     JobStartRequest,
@@ -50,6 +53,7 @@ from hhtools.contracts import (
 from hhtools.contracts.portability import validate_portable_json
 from hhtools.contracts.schema_registry import PUBLIC_AGENT_SCHEMAS
 from hhtools.services.jobs import JobManagerError
+from hhtools.services.runtime_lease import RuntimeLeaseError
 
 from .runtime import AgentRuntime, LocalRuntimeConfig, local_agent_runtime
 
@@ -75,6 +79,36 @@ _CANCEL = ToolAnnotations(
     idempotent_hint=True,
     open_world_hint=False,
 )
+
+
+def _harden_tool_argument_models(server: MCPServer[Any]) -> None:
+    """Reject unknown MCP arguments without echoing their values.
+
+    The MCP SDK currently derives a dynamic Pydantic model for every function
+    signature with Pydantic's default ``extra='ignore'`` behavior.  That makes
+    a misspelled or wrongly wrapped request silently fall back to defaults.
+    Harden the registered models at this composition boundary so the live
+    validator and the advertised JSON Schema enforce the same closed shape.
+
+    ``hide_input_in_errors`` is equally important: validation failures are
+    returned to the MCP client, so rejected paths, tokens, or other caller data
+    must not be copied into the error prose.
+    """
+
+    # MCPServer does not yet expose a public hook for configuring its generated
+    # argument models.  Keep the SDK-specific access isolated here and cover it
+    # with contract tests so an SDK upgrade fails loudly rather than weakening
+    # validation unnoticed.
+    manager = cast(Any, server)._tool_manager
+    for tool in manager.list_tools():
+        argument_model = tool.fn_metadata.arg_model
+        argument_model.model_config = ConfigDict(
+            **argument_model.model_config,
+            extra="forbid",
+            hide_input_in_errors=True,
+        )
+        argument_model.model_rebuild(force=True)
+        tool.parameters = argument_model.model_json_schema(by_alias=True)
 
 
 def _model_document(model: BaseModel) -> dict[str, Any]:
@@ -253,11 +287,15 @@ def _server_instructions(web_ui_url: str) -> str:
     return (
         "For every new H2R run: get capabilities, register/search and inspect assets, "
         "preflight a smoke plan, start only a ready plan, poll by revision, then read "
-        "evaluation and manifest for human review. On human_action_required, stop and "
+        "evaluation and manifest for human review. Persist each plan_id plus idempotency "
+        "key before start; use lookup_job to recover an ambiguous submission without job "
+        "enumeration. On human_action_required, stop and "
         "present next_action; never guess calibration. run_mode is frozen at preflight, "
         "and full requires a new full preflight plus explicit user approval. Completed "
         "does not mean quality-approved. Never use host paths, Base64 binary artifacts, "
-        "or real-robot deployment. Cancellation is cooperative while native code runs. "
+        "or real-robot deployment. For user-requested files, export only by job_id and "
+        "artifact_id and return the portable agent-exports receipt. Cancellation is "
+        "cooperative while native code runs. "
         "Only one local runtime may own a save directory. If calibration is required, "
         "ask the human to disconnect this stdio server before starting the WebUI with "
         f"the same save directory at {web_ui_url}; after WebUI exit, reconnect and run "
@@ -418,6 +456,21 @@ def create_mcp_server(
             )
         )
 
+    @server.tool(annotations=_READ_ONLY)
+    def lookup_job(
+        request: JobLookupRequest,
+        context: Context[AgentRuntime, Any],
+    ) -> AgentJobView:
+        """Recover one caller-owned submission by its immutable plan and key."""
+
+        return _tool_call(
+            lambda: _runtime(context).jobs.lookup_job(
+                request.plan_id,
+                idempotency_key=request.idempotency_key,
+                after_revision=request.after_revision,
+            )
+        )
+
     @server.tool(annotations=_CANCEL)
     def cancel_job(
         job_id: str,
@@ -470,6 +523,21 @@ def create_mcp_server(
             )
 
         return _tool_call(list_page)
+
+    @server.tool(annotations=_SAFE_WRITE)
+    def export_artifact(
+        job_id: str,
+        artifact_id: str,
+        context: Context[AgentRuntime, Any],
+    ) -> ArtifactExportReceipt:
+        """Materialize verified bytes below the fixed agent-exports root.
+
+        The tool never returns bytes or a host path.  Its receipt identifies a
+        deterministic path below ``<save-dir>/agent-exports`` so the caller can
+        hand the result to the human without inspecting HHTools' private store.
+        """
+
+        return _tool_call(lambda: _runtime(context).exports.export(job_id, artifact_id))
 
     @server.resource(
         "hhtools://capabilities",
@@ -641,6 +709,7 @@ def create_mcp_server(
             )
         )
 
+    _harden_tool_argument_models(server)
     return server
 
 
@@ -657,6 +726,47 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-queued-jobs", type=int, default=None)
     parser.add_argument("--web-ui-url", default="http://127.0.0.1:8009")
     return parser
+
+
+_RUNTIME_LEASE_EXIT_CODE = 3
+
+
+def _runtime_lease_failure(exception: BaseException) -> RuntimeLeaseError | None:
+    """Unwrap an expected lease failure from the MCP SDK's task group."""
+
+    if isinstance(exception, RuntimeLeaseError):
+        return exception
+    if not isinstance(exception, BaseExceptionGroup):
+        return None
+
+    matched, remainder = exception.split(RuntimeLeaseError)
+    # Do not hide an unrelated sibling failure.  The MCP/AnyIO startup path
+    # currently wraps the single lifespan exception in an ExceptionGroup.
+    if matched is None or remainder is not None:
+        return None
+    pending: list[BaseException] = [matched]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, RuntimeLeaseError):
+            return item
+        if isinstance(item, BaseExceptionGroup):
+            pending.extend(item.exceptions)
+    return None
+
+
+def _runtime_lease_message(error: RuntimeLeaseError) -> str:
+    """Return one actionable stderr line without echoing a host path."""
+
+    if error.code == "RUNTIME_ALREADY_ACTIVE":
+        return (
+            "ERROR RUNTIME_ALREADY_ACTIVE: Another HHTools runtime owns this Agent "
+            "data directory. Close the existing WebUI or other HHTools runtime, then "
+            "reconnect hhtools-mcp with the same --save-dir."
+        )
+    return (
+        "ERROR RUNTIME_LEASE_UNAVAILABLE: HHTools could not establish exclusive runtime "
+        "ownership. Check the configured --save-dir permissions and retry."
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -676,7 +786,14 @@ def main(argv: Sequence[str] | None = None) -> None:
         job_settings_path=arguments.job_settings,
         web_ui_url=arguments.web_ui_url,
     )
-    create_mcp_server(config).run("stdio")
+    try:
+        create_mcp_server(config).run("stdio")
+    except BaseException as exception:
+        lease_error = _runtime_lease_failure(exception)
+        if lease_error is None:
+            raise
+        print(_runtime_lease_message(lease_error), file=sys.stderr)
+        raise SystemExit(_RUNTIME_LEASE_EXIT_CODE) from None
 
 
 if __name__ == "__main__":

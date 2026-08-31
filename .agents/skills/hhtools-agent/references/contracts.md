@@ -18,13 +18,28 @@ The architectural workflow and supported boundaries are documented in the
 | `inspect_asset_bundle` | `asset_id`, `verify_hashes`, and `parse_content` from the live tool schema | [asset inspection](../../../../docs/schemas/agent/v1/asset-inspection.schema.json) |
 | `preflight_retarget` | [retarget preflight request](../../../../docs/schemas/agent/v1/retarget-preflight-request.schema.json) | [preflight response](../../../../docs/schemas/agent/v1/preflight-response.schema.json) |
 | `start_retarget` | [job start request](../../../../docs/schemas/agent/v1/job-start-request.schema.json) | [agent job view](../../../../docs/schemas/agent/v1/agent-job-view.schema.json) |
+| `lookup_job` | [job lookup request](../../../../docs/schemas/agent/v1/job-lookup-request.schema.json) | [agent job view](../../../../docs/schemas/agent/v1/agent-job-view.schema.json) |
 | `get_job` / `cancel_job` | Scalar job identity and live tool fields | [agent job view](../../../../docs/schemas/agent/v1/agent-job-view.schema.json) |
 | `retry_job` | [job retry request](../../../../docs/schemas/agent/v1/job-retry-request.schema.json) | [agent job view](../../../../docs/schemas/agent/v1/agent-job-view.schema.json) |
 | `list_job_artifacts` | `job_id`, `limit`, and `offset` | [artifact list response](../../../../docs/schemas/agent/v1/artifact-list-response.schema.json) |
+| `export_artifact` | Scalar `job_id` and `artifact_id` | [artifact export receipt](../../../../docs/schemas/agent/v1/artifact-export-receipt.schema.json) |
 
 Expected tool failures use the [API error](../../../../docs/schemas/agent/v1/api-error.schema.json)
 contract rather than a prose-only exception. Inspect `code`, `retryable`, `stage`, `details`, and
 `next_action`; do not recover from the human-readable message alone.
+
+## Executable next-action mapping
+
+`NextAction.action` is executable only when it has an exact mapping in this table:
+
+| `actor` | `action` | Tool | Parameter contract |
+|---|---|---|---|
+| `agent` | `register_asset_bundle` | `register_asset_bundle` | `parameters` is the complete tool argument object: `{"request": <AssetRegistrationRequest>}`. Pass it unchanged. |
+
+The returned request contains only a capability-advertised `root_id` and normalized
+`relative_path`; it never contains the installed preset's host path. After registration, inspect
+the returned bundle and rerun preflight with its `asset_id`. An unknown action or malformed
+parameter object is a stop condition, not permission to infer another tool or browse a root.
 
 ## Read-only resources
 
@@ -70,11 +85,16 @@ binary content.
 - Use `output_policy: create_new`. The current PreflightService rejects `overwrite` and
   `fail_if_exists` as unsupported rather than treating them as user-selectable alternatives.
 - An idempotency key binds one logical start request. Reuse it only with the exact same plan
-  when delivery of the response is uncertain.
+  when delivery of the response is uncertain. Persist that pair before calling `start_retarget`;
+  `lookup_job` accepts only the exact pair and recovers one submission without listing other jobs.
 - `AgentJobView.artifacts` is compact and may contain only the first page. Use
   `artifact_count` and `list_job_artifacts` for canonical pagination.
 - Every artifact lookup requires the owning `job_id` and `artifact_id`; verify one descriptor by
   reading its exact job-scoped resource URI. Binary data is never embedded as Base64.
+- `export_artifact` is the MCP file-delivery boundary. It verifies canonical managed bytes, writes
+  them only below the service-configured `agent-exports` root, and returns a portable
+  `root_id + relative_path` receipt with size and SHA-256. It accepts no caller-selected host path
+  and exposes neither the private content-addressed store nor file bytes.
 
 ## Audit-only public schemas
 
@@ -95,5 +115,6 @@ local runtime owner. A returned loopback WebUI URL is solely for human calibrati
 the stdio MCP owner, let the human run the WebUI against that same `save_dir`, close the WebUI
 after calibration, reconnect MCP, and preflight again. Never request a WebUI session token or run
 MCP and Web concurrently against the same directory. There is no authenticated remote MCP
-transport, multi-user authorization, cross-process active-job resume, or guaranteed actual-GPU
-provenance in this phase.
+transport, multi-user authorization, cross-process native-worker resume, or guaranteed actual-GPU
+provenance in this phase. `lookup_job` can recover the persisted identity and truthful status of a
+known submission; it cannot resume interrupted native execution.

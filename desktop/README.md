@@ -1,4 +1,4 @@
-# hhtools Desktop Alpha
+# Human-Humanoid Tools
 
 This directory contains the standalone Electron GUI for the existing FastAPI and three.js WebUI.
 The desktop app keeps the current HTTP routes and Python business logic while supervising its own
@@ -80,8 +80,8 @@ not included.
 Installed files use this shape:
 
 ```text
-hhtools Desktop Alpha/
-├── hhtools Desktop Alpha.exe
+Human-Humanoid Tools/
+├── Human-Humanoid Tools.exe
 └── resources/
     ├── app.asar
     └── runtime/

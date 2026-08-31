@@ -291,6 +291,38 @@ def test_idempotency_key_conflict_does_not_resolve_or_schedule_another_plan(
     assert scheduler.shutdown(wait=True, timeout=2.0)
 
 
+def test_lookup_recovers_one_submission_without_enumerating_jobs(tmp_path: Path) -> None:
+    first = _spec("1")
+    second = _spec("2")
+    scheduler = JobScheduler()
+    manager, _job_store, _artifact_store = _manager(
+        tmp_path,
+        retarget=_RetargetService(first, second),
+        scheduler=scheduler,
+        executor=lambda _spec_value, _context: JobExecutionResult(outcome=JobOutcome.SUCCESS),
+    )
+    submitted = manager.start_retarget(first.plan_id, idempotency_key="recover-me")
+    completed = _terminal(manager, submitted.job_id)
+
+    recovered = manager.lookup_job(
+        first.plan_id,
+        idempotency_key="recover-me",
+        after_revision=completed.progress.revision,
+    )
+
+    assert recovered.job_id == completed.job_id
+    assert recovered.progress.revision == completed.progress.revision
+    assert recovered.progress.message == completed.progress.message
+    assert recovered.poll_after_ms is None
+    with pytest.raises(JobManagerError) as conflict:
+        manager.lookup_job(second.plan_id, idempotency_key="recover-me")
+    assert conflict.value.code == "JOB_CONFLICT"
+    with pytest.raises(JobManagerError) as missing:
+        manager.lookup_job(first.plan_id, idempotency_key="not-created")
+    assert missing.value.code == "JOB_NOT_FOUND"
+    assert scheduler.shutdown(wait=True, timeout=2.0)
+
+
 def test_queued_cancel_is_precise_releases_capacity_and_never_runs_executor(
     tmp_path: Path,
 ) -> None:

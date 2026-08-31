@@ -22,7 +22,7 @@ def test_public_schema_directory_contains_exactly_the_exported_contracts() -> No
     expected = {f"{name}.schema.json" for name in PUBLIC_SCHEMAS}
 
     assert snapshots == expected
-    assert len(snapshots) == 21
+    assert len(snapshots) == 23
 
 
 @pytest.mark.parametrize(

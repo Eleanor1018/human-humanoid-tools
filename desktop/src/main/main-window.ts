@@ -39,7 +39,7 @@ export function createMainWindow(options: {
     autoHideMenuBar: true,
     backgroundColor: '#ffffff',
     icon: options.iconPath,
-    title: 'hhtools',
+    title: 'Human-Humanoid Tools',
     webPreferences: {
       // The WebUI is treated as untrusted web content and reaches desktop APIs only via preload.
       preload: options.preloadPath,

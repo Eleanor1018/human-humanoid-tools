@@ -43,7 +43,7 @@ test('loads the existing WebUI and shuts down its Python sidecar', async ({}, te
     page.on('pageerror', (error) => pageErrors.push(error.message))
     await page.evaluate(() => localStorage.setItem('hhtools.web.tutorial.v1.done', '1'))
 
-    await expect(page).toHaveTitle('hhtools')
+    await expect(page).toHaveTitle('Human-Humanoid Tools')
     await expect(page.locator('#app')).toBeVisible()
     await expect(page.locator('#app')).toHaveClass(/workspace-shell/)
     await expect(page.locator('#app')).toHaveClass(/electron-host/)

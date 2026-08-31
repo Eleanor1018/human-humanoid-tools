@@ -20,6 +20,7 @@ from hhtools.contracts import (
     AgentJobView,
     ApiError,
     ArtifactDescriptor,
+    ArtifactExportReceipt,
     CapabilityResponse,
     ErrorStage,
     JobProgress,
@@ -34,7 +35,7 @@ from hhtools.services.jobs import JobManagerError
 _DIGEST = "a" * 64
 _ASSET_ID = f"asset:sha256:{_DIGEST}"
 _PLAN_ID = f"plan:sha256:{_DIGEST}"
-_JOB_ID = "job-mcp-test"
+_JOB_ID = "job:mcp-test"
 _ARTIFACT_ID = "artifact:retargeted_motion:mcp-test"
 _NOW = datetime(2026, 8, 31, tzinfo=UTC)
 
@@ -47,9 +48,11 @@ _EXPECTED_TOOLS = {
     "preflight_retarget",
     "start_retarget",
     "get_job",
+    "lookup_job",
     "cancel_job",
     "retry_job",
     "list_job_artifacts",
+    "export_artifact",
 }
 _EXPECTED_RESOURCES = {"hhtools://capabilities"}
 _EXPECTED_RESOURCE_TEMPLATES = {
@@ -199,15 +202,46 @@ class _Plans:
         raise AssertionError("plan resource is outside this focused fixture")
 
 
+class _Exports:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    def export(self, job_id: str, artifact_id: str) -> ArtifactExportReceipt:
+        self.calls.append((job_id, artifact_id))
+        job_token = hashlib.sha256(job_id.encode("utf-8")).hexdigest()
+        artifact_token = hashlib.sha256(artifact_id.encode("utf-8")).hexdigest()
+        return ArtifactExportReceipt(
+            relative_path=f"jobs/{job_token}/{artifact_token}.csv",
+            job_id=job_id,
+            artifact_id=artifact_id,
+            kind="retargeted_motion",
+            format="csv",
+            media_type="text/csv",
+            size_bytes=3,
+            sha256=_DIGEST,
+        )
+
+
 class _Jobs:
     def __init__(self) -> None:
         self.start_calls: list[tuple[str, str]] = []
         self.get_calls: list[tuple[str, int | None]] = []
+        self.lookup_calls: list[tuple[str, str, int | None]] = []
         self.list_calls: list[tuple[str, int, int]] = []
         self.artifact_calls: list[tuple[str, str, bool]] = []
 
     def start_retarget(self, plan_id: str, *, idempotency_key: str) -> AgentJobView:
         self.start_calls.append((plan_id, idempotency_key))
+        return _job()
+
+    def lookup_job(
+        self,
+        plan_id: str,
+        *,
+        idempotency_key: str,
+        after_revision: int | None = None,
+    ) -> AgentJobView:
+        self.lookup_calls.append((plan_id, idempotency_key, after_revision))
         return _job()
 
     def get_job(
@@ -279,12 +313,14 @@ class _Fixture:
         self.preflight = _PreflightService()
         self.plans = _Plans()
         self.jobs = _Jobs()
+        self.exports = _Exports()
         self.runtime = AgentRuntime(
             capabilities=cast(Any, self.capabilities),
             assets=cast(Any, self.assets),
             preflight=cast(Any, self.preflight),
             plans=cast(Any, self.plans),
             jobs=cast(Any, self.jobs),
+            exports=cast(Any, self.exports),
         )
 
     def server(self):
@@ -302,6 +338,7 @@ class _Fixture:
             preflight=cast(Any, self.preflight),
             plans=cast(Any, self.plans),
             jobs=cast(Any, jobs),
+            exports=cast(Any, self.exports),
         )
 
 
@@ -347,6 +384,8 @@ async def test_mcp_tool_schemas_are_generated_from_public_pydantic_contracts() -
     async with Client(fixture.server(), raise_exceptions=True) as client:
         tools = (await client.list_tools()).tools
 
+    assert all(tool.input_schema["additionalProperties"] is False for tool in tools)
+
     register = _tool_by_name(tools, "register_asset_bundle")
     registration = register.input_schema["$defs"]["AssetRegistrationRequest"]
     assert register.input_schema["required"] == ["request"]
@@ -373,6 +412,24 @@ async def test_mcp_tool_schemas_are_generated_from_public_pydantic_contracts() -
     capabilities = _tool_by_name(tools, "get_capabilities")
     assert capabilities.output_schema["title"] == "CapabilityResponse"
     assert "features" in capabilities.output_schema["properties"]
+
+
+@pytest.mark.anyio
+async def test_mcp_rejects_unknown_arguments_without_echoing_their_values() -> None:
+    fixture = _Fixture()
+    sensitive_value = r"C:\Users\Nora\secret.txt"
+
+    async with Client(fixture.server(), raise_exceptions=True) as client:
+        result = await client.call_tool(
+            "search_assets",
+            {"request": {"query": sensitive_value, "limit": 5}},
+        )
+
+    assert result.is_error is True
+    message = result.content[0].text
+    assert "request" in message
+    assert "Extra inputs are not permitted" in message
+    assert sensitive_value not in message
 
 
 @pytest.mark.anyio
@@ -442,6 +499,28 @@ async def test_revision_polling_forwards_after_revision_and_stays_compact() -> N
 
 
 @pytest.mark.anyio
+async def test_lookup_job_recovers_only_the_caller_owned_submission() -> None:
+    fixture = _Fixture()
+
+    async with Client(fixture.server(), raise_exceptions=True) as client:
+        result = await client.call_tool(
+            "lookup_job",
+            {
+                "request": {
+                    "schema_version": "1.0",
+                    "plan_id": _PLAN_ID,
+                    "idempotency_key": "caller-owned-key",
+                    "after_revision": 7,
+                }
+            },
+        )
+
+    assert result.is_error is False
+    assert result.structured_content["job_id"] == _JOB_ID
+    assert fixture.jobs.lookup_calls == [(_PLAN_ID, "caller-owned-key", 7)]
+
+
+@pytest.mark.anyio
 async def test_artifacts_remain_job_scoped_and_errors_are_structured() -> None:
     fixture = _Fixture()
 
@@ -476,6 +555,28 @@ async def test_artifacts_remain_job_scoped_and_errors_are_structured() -> None:
     assert denied.structured_content["code"] == "JOB_NOT_FOUND"
     assert denied.structured_content["stage"] == "artifact"
     assert json.loads(denied.content[0].text) == denied.structured_content
+
+
+@pytest.mark.anyio
+async def test_export_artifact_returns_only_a_portable_delivery_receipt() -> None:
+    fixture = _Fixture()
+
+    async with Client(fixture.server(), raise_exceptions=True) as client:
+        result = await client.call_tool(
+            "export_artifact",
+            {"job_id": _JOB_ID, "artifact_id": _ARTIFACT_ID},
+        )
+
+    assert result.is_error is False
+    receipt = result.structured_content
+    assert receipt["root_id"] == "agent-exports"
+    assert receipt["relative_path"].startswith("jobs/")
+    assert receipt["sha256"] == _DIGEST
+    assert fixture.exports.calls == [(_JOB_ID, _ARTIFACT_ID)]
+    serialized = json.dumps(receipt).casefold()
+    assert "base64" not in serialized
+    assert "artifact-objects" not in serialized
+    assert "c:\\" not in serialized
 
 
 @pytest.mark.anyio

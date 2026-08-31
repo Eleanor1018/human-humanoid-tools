@@ -42,7 +42,7 @@ uv sync --extra all
 uv run hhtools web
 ```
 
-### Electron 桌面 Alpha
+### Human-Humanoid Tools 桌面应用
 
 桌面壳直接复用同一套 FastAPI 接口和 three.js 页面，不维护第二套 Renderer。
 

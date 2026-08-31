@@ -5,6 +5,11 @@ than importing one another.  Solver and calibration algorithms stay in their
 existing modules; services only discover capabilities and orchestrate them.
 """
 
+from .artifact_exports import (
+    AGENT_EXPORT_ROOT_ID,
+    ArtifactExportError,
+    ArtifactExportService,
+)
 from .artifacts import ArtifactStore, ArtifactStoreError, StoredArtifact
 from .asset_service import AgentAssetService
 from .assets import AssetRegistry, AssetServiceError
@@ -32,12 +37,15 @@ from .retarget import RetargetService, RetargetServiceError
 from .runtime_lease import AgentRuntimeLease, RuntimeLeaseError
 
 __all__ = [
+    "AGENT_EXPORT_ROOT_ID",
     "AgentAssetService",
     "AgentRuntimeLease",
     "AssetRegistry",
     "AssetServiceError",
     "ArtifactStore",
     "ArtifactStoreError",
+    "ArtifactExportError",
+    "ArtifactExportService",
     "CapabilitiesService",
     "JobCancelledError",
     "JobExecutionContext",

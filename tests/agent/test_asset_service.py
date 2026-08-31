@@ -6,8 +6,10 @@ import numpy as np
 import pytest
 
 from hhtools.contracts import (
+    AssetCategory,
     AssetFileRole,
     AssetInspectionRequest,
+    AssetKind,
     AssetRegistrationRequest,
     ErrorStage,
     InspectionStatus,
@@ -75,6 +77,144 @@ def test_plain_npz_register_inspect_and_persist_without_host_paths(
     serialized = f"{bundle.model_dump_json()} {inspection.model_dump_json()}"
     assert str(tmp_path) not in serialized
     assert service.allowed_root_ids == ("motion-library",)
+
+
+def test_trusted_registration_hint_prefers_the_unique_most_specific_root(
+    tmp_path: Path,
+) -> None:
+    assets_root = tmp_path / "private-assets"
+    robot_root = assets_root / "robots"
+    preset_root = robot_root / "test_robot"
+    preset_root.mkdir(parents=True)
+    service = AgentAssetService(
+        AssetRegistry(
+            tmp_path / "data",
+            {
+                "all-assets": assets_root,
+                "robot-library": robot_root,
+            },
+        )
+    )
+
+    hint = service.registration_hint(
+        preset_root,
+        kind=AssetKind.ROBOT_BUNDLE,
+        category=AssetCategory.ROBOT_MODEL,
+    )
+
+    assert hint == AssetRegistrationRequest(
+        root_id="robot-library",
+        relative_path="test_robot",
+        kind=AssetKind.ROBOT_BUNDLE,
+        category=AssetCategory.ROBOT_MODEL,
+    )
+    assert str(tmp_path) not in hint.model_dump_json()
+
+
+def test_trusted_registration_hint_rejects_ambiguous_and_outside_paths_safely(
+    tmp_path: Path,
+) -> None:
+    robot_root = tmp_path / "private-robots"
+    preset_root = robot_root / "test_robot"
+    preset_root.mkdir(parents=True)
+    ambiguous = AgentAssetService(
+        AssetRegistry(
+            tmp_path / "ambiguous-data",
+            {
+                "robot-library-a": robot_root,
+                "robot-library-b": lambda: robot_root,
+            },
+        )
+    )
+
+    with pytest.raises(AssetServiceError) as ambiguous_error:
+        ambiguous.registration_hint(preset_root, kind=AssetKind.ROBOT_BUNDLE)
+
+    assert ambiguous_error.value.code == "ASSET_ROOT_AMBIGUOUS"
+    assert ambiguous_error.value.api_error.details == {
+        "root_ids": ["robot-library-a", "robot-library-b"]
+    }
+    assert str(tmp_path) not in ambiguous_error.value.api_error.model_dump_json()
+
+    allowed = tmp_path / "other-allowed-root"
+    allowed.mkdir()
+    outside = AgentAssetService(
+        AssetRegistry(tmp_path / "outside-data", {"robot-library": allowed})
+    )
+    with pytest.raises(AssetServiceError) as outside_error:
+        outside.registration_hint(preset_root, kind=AssetKind.ROBOT_BUNDLE)
+
+    assert outside_error.value.code == "ASSET_OUTSIDE_ALLOWED_ROOT"
+    assert str(tmp_path) not in outside_error.value.api_error.model_dump_json()
+
+
+def test_trusted_registration_hint_does_not_fall_back_when_a_root_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    broad_root = tmp_path / "private-assets"
+    preset_root = broad_root / "robots" / "test_robot"
+    preset_root.mkdir(parents=True)
+
+    def unavailable_root() -> Path:
+        raise RuntimeError("private provider failure")
+
+    service = AgentAssetService(
+        AssetRegistry(
+            tmp_path / "data",
+            {
+                "all-assets": broad_root,
+                "robot-library": unavailable_root,
+            },
+        )
+    )
+
+    with pytest.raises(AssetServiceError) as captured:
+        service.registration_hint(preset_root, kind=AssetKind.ROBOT_BUNDLE)
+
+    assert captured.value.code == "ASSET_NOT_FOUND"
+    assert captured.value.api_error.details == {"root_id": "robot-library"}
+    assert str(tmp_path) not in captured.value.api_error.model_dump_json()
+
+
+def test_trusted_registration_hint_checks_exact_root_ambiguity_before_contract_shape(
+    tmp_path: Path,
+) -> None:
+    broad_root = tmp_path / "private-assets"
+    preset_root = broad_root / "robots" / "test_robot"
+    preset_root.mkdir(parents=True)
+    ambiguous = AgentAssetService(
+        AssetRegistry(
+            tmp_path / "ambiguous-data",
+            {
+                "all-assets": broad_root,
+                "preset-a": preset_root,
+                "preset-b": lambda: preset_root,
+            },
+        )
+    )
+
+    with pytest.raises(AssetServiceError) as ambiguous_error:
+        ambiguous.registration_hint(preset_root, kind=AssetKind.ROBOT_BUNDLE)
+
+    assert ambiguous_error.value.code == "ASSET_ROOT_AMBIGUOUS"
+    assert ambiguous_error.value.api_error.details == {"root_ids": ["preset-a", "preset-b"]}
+    assert str(tmp_path) not in ambiguous_error.value.api_error.model_dump_json()
+
+    exact = AgentAssetService(
+        AssetRegistry(
+            tmp_path / "exact-data",
+            {
+                "all-assets": broad_root,
+                "preset": preset_root,
+            },
+        )
+    )
+    with pytest.raises(AssetServiceError) as exact_error:
+        exact.registration_hint(preset_root, kind=AssetKind.ROBOT_BUNDLE)
+
+    assert exact_error.value.code == "ASSET_ROOT_UNREPRESENTABLE"
+    assert exact_error.value.api_error.details == {"root_id": "preset"}
+    assert str(tmp_path) not in exact_error.value.api_error.model_dump_json()
 
 
 def test_registration_translates_every_discovered_sidecar(tmp_path: Path) -> None:

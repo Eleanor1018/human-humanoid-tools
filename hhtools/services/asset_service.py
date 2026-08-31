@@ -149,6 +149,29 @@ class AgentAssetService:
 
         return self._registry.allowed_root_ids
 
+    def registration_hint(
+        self,
+        trusted_path: Path,
+        *,
+        kind: AssetKind | None = None,
+        category: AssetCategory | None = None,
+        recursive: bool = True,
+    ) -> AssetRegistrationRequest:
+        """Return a portable request for a path chosen by trusted service code.
+
+        Transport adapters must never expose ``trusted_path`` as an Agent
+        parameter.  This method exists for composition code such as preflight,
+        where an installed preset already owns the local path and an Agent
+        needs an executable ``register_asset_bundle`` continuation.
+        """
+
+        return self._registry.registration_hint(
+            trusted_path,
+            kind=kind,
+            category=category,
+            recursive=recursive,
+        )
+
     def register(self, request: AssetRegistrationRequest) -> AssetBundle:
         """Discover and persist one motion bundle below an allowlisted root."""
 

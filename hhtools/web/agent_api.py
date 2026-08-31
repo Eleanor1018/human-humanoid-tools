@@ -34,6 +34,7 @@ from hhtools.contracts import (
     AssetSearchResponse,
     CapabilityResponse,
     ErrorStage,
+    JobLookupRequest,
     JobRetryRequest,
     JobStartRequest,
     LegacyJobUpgradeRequest,
@@ -338,6 +339,14 @@ class _JobProvider(Protocol):
         after_revision: int | None = None,
     ) -> AgentJobView: ...
 
+    def lookup_job(
+        self,
+        plan_id: str,
+        *,
+        idempotency_key: str,
+        after_revision: int | None = None,
+    ) -> AgentJobView: ...
+
     def cancel_job(self, job_id: str) -> AgentJobView: ...
 
     def retry_job(self, job_id: str, *, idempotency_key: str) -> AgentJobView: ...
@@ -390,6 +399,7 @@ def _job_manager(request: Request) -> _JobProvider:
     required = (
         "start_retarget",
         "get_job",
+        "lookup_job",
         "cancel_job",
         "retry_job",
         "list_artifacts",
@@ -537,6 +547,39 @@ def start_retarget_job(
     return _job_manager(request).start_retarget(
         submission.plan_id,
         idempotency_key=submission.idempotency_key,
+    )
+
+
+@router.post(
+    "/jobs/lookup",
+    response_model=AgentJobView,
+    response_model_exclude_none=True,
+)
+def lookup_retarget_job(
+    request: Request,
+    lookup: Annotated[
+        JobLookupRequest,
+        Body(
+            openapi_examples={
+                "recover": {
+                    "summary": "Recover one caller-owned submission",
+                    "value": {
+                        "schema_version": "1.0",
+                        "plan_id": f"plan:sha256:{'1' * 64}",
+                        "idempotency_key": "agent-smoke-001",
+                        "after_revision": 4,
+                    },
+                }
+            }
+        ),
+    ],
+) -> AgentJobView:
+    """Recover a known submission without exposing a global job listing."""
+
+    return _job_manager(request).lookup_job(
+        lookup.plan_id,
+        idempotency_key=lookup.idempotency_key,
+        after_revision=lookup.after_revision,
     )
 
 

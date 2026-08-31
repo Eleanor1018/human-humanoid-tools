@@ -437,10 +437,86 @@ def test_robot_asset_is_required_and_backend_cannot_override_routing(
     assert missing_robot.error is not None
     assert missing_robot.error.code == "ROBOT_ASSET_REQUIRED"
     assert missing_robot.error.next_action is not None
-    assert missing_robot.error.next_action.action == "register_robot_bundle"
+    assert missing_robot.error.next_action.action == "register_asset_bundle"
+    assert set(missing_robot.error.next_action.parameters) == {"request"}
+    registration = AssetRegistrationRequest.model_validate(
+        missing_robot.error.next_action.parameters["request"]
+    )
+    assert registration.root_id == "robots"
+    assert registration.relative_path == "test_robot"
+    assert registration.kind is not None
+    assert registration.kind.value == "robot_bundle"
+    assert registration.category is not None
+    assert registration.category.value == "robot_model"
+    assert str(tmp_path) not in missing_robot.model_dump_json()
+    registered = service._asset_service.register(  # noqa: SLF001 - convergence boundary
+        registration
+    )
+    converged = service.preflight_retarget(_request(motion_id, registered.asset_id))
+    assert converged.status is PreflightStatus.READY
     assert wrong_backend.status is PreflightStatus.REJECTED
     assert wrong_backend.error is not None
     assert wrong_backend.error.code == "BACKEND_INCOMPATIBLE"
+
+
+def test_missing_robot_asset_validates_the_installed_preset_before_suggesting_registration(
+    tmp_path: Path,
+) -> None:
+    service, motion_id, _robot_id, _ = _setup(tmp_path)
+
+    response = service.preflight_retarget(_request(motion_id, None, robot_id="not-installed"))
+
+    assert response.status is PreflightStatus.REJECTED
+    assert response.error is not None
+    assert response.error.code == "ROBOT_NOT_FOUND"
+    assert response.error.next_action is None
+    assert str(tmp_path) not in response.model_dump_json()
+
+
+def test_robot_bundle_mismatch_reuses_its_portable_source_for_registration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, motion_id, robot_id, _ = _setup(tmp_path)
+    from hhtools.services import preflight as preflight_module
+
+    original_manifest_hashes = preflight_module._manifest_hashes
+
+    def omit_calibration_binding(bundle, *, role=None):
+        hashes = original_manifest_hashes(bundle, role=role)
+        if role == "metadata":
+            calibration_hashes = {
+                item.sha256 for item in bundle.files if "retarget_calibration" in item.relative_path
+            }
+            return hashes - calibration_hashes
+        return hashes
+
+    monkeypatch.setattr(preflight_module, "_manifest_hashes", omit_calibration_binding)
+
+    response = service.preflight_retarget(_request(motion_id, robot_id))
+
+    assert response.status is PreflightStatus.REJECTED
+    assert response.error is not None
+    assert response.error.code == "ROBOT_BUNDLE_MISMATCH"
+    assert response.error.next_action is not None
+    assert response.error.next_action.action == "register_asset_bundle"
+    assert set(response.error.next_action.parameters) == {"request"}
+    registration = AssetRegistrationRequest.model_validate(
+        response.error.next_action.parameters["request"]
+    )
+    assert registration.root_id == "robots"
+    assert registration.relative_path == "test_robot"
+    assert registration.kind is not None
+    assert registration.kind.value == "robot_bundle"
+    assert registration.category is not None
+    assert registration.category.value == "robot_model"
+    assert str(tmp_path) not in response.model_dump_json()
+    monkeypatch.setattr(preflight_module, "_manifest_hashes", original_manifest_hashes)
+    registered = service._asset_service.register(  # noqa: SLF001 - convergence boundary
+        registration
+    )
+    converged = service.preflight_retarget(_request(motion_id, registered.asset_id))
+    assert converged.status is PreflightStatus.READY
 
 
 def test_robot_id_must_be_portable_and_is_not_reflected_in_errors(

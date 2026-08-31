@@ -42,7 +42,7 @@ uv sync --extra all
 uv run hhtools web
 ```
 
-### Electron desktop alpha
+### Human-Humanoid Tools desktop app
 
 The desktop shell reuses the same FastAPI routes and three.js UI without a parallel renderer.
 

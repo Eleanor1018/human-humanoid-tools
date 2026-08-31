@@ -31,6 +31,8 @@ from hhtools.contracts import (
     AssetInspection,
     AssetInspectionRequest,
     AssetKind,
+    AssetRegistrationRequest,
+    AssetSourceScheme,
     BackendCapability,
     CapabilityResponse,
     ErrorStage,
@@ -625,17 +627,89 @@ def _robot_joint_facts(
     return actuated, limits, links
 
 
+def _installed_robot_preset(
+    presets: Iterable[RobotPreset],
+    robot_id: str,
+) -> RobotPreset:
+    preset = next((item for item in presets if item.name == robot_id), None)
+    if preset is None:
+        _fail(
+            "ROBOT_NOT_FOUND",
+            "The selected robot preset is not installed on this service.",
+            details={"robot_id": robot_id},
+        )
+    return preset
+
+
+def _register_asset_action(
+    request: AssetRegistrationRequest,
+    *,
+    message: str,
+) -> NextAction:
+    """Map a portable registration request directly to the public MCP tool."""
+
+    return NextAction(
+        actor="agent",
+        action="register_asset_bundle",
+        message=message,
+        parameters={"request": request.model_dump(mode="json")},
+    )
+
+
+def _bundle_registration_request(bundle: AssetBundle) -> AssetRegistrationRequest:
+    """Reconstruct a strict registration request from one portable source."""
+
+    source = bundle.source
+    if (
+        source is None
+        or source.scheme is not AssetSourceScheme.MANAGED_FILE
+        or source.logical_path is None
+    ):
+        _fail(
+            "ROBOT_BUNDLE_INVALID",
+            "The robot bundle has no reusable allowed-root registration source.",
+        )
+    try:
+        return AssetRegistrationRequest(
+            root_id=source.root_id,
+            relative_path=source.logical_path,
+            display_name=None,
+            kind=bundle.kind,
+            category=bundle.category,
+            recursive=True,
+        )
+    except (TypeError, ValueError) as error:
+        raise _PreflightFailureError(
+            _error(
+                "ROBOT_BUNDLE_INVALID",
+                "The robot bundle registration source is not portable.",
+            ),
+            _check(
+                "ROBOT_BUNDLE_INVALID",
+                PreflightCheckLevel.ERROR,
+                "The robot bundle registration source is not portable.",
+            ),
+        ) from error
+
+
 def _robot_bundle_and_preset(
     asset_service: AgentAssetService,
     request: RetargetPreflightRequest,
     presets: Iterable[RobotPreset],
 ) -> tuple[AssetBundle, RobotPreset, dict[str, tuple[float | None, float | None]]]:
     if request.robot_asset_id is None:
-        action = NextAction(
-            actor="agent",
-            action="register_robot_bundle",
-            message="Register the robot directory, including robot YAML, URDF, and meshes.",
-            parameters={"robot_id": request.robot_id},
+        advertised_preset = _installed_robot_preset(presets, request.robot_id)
+        try:
+            registration = asset_service.registration_hint(
+                advertised_preset.root_dir,
+                kind=AssetKind.ROBOT_BUNDLE,
+                category=AssetCategory.ROBOT_MODEL,
+            )
+        except AssetServiceError as error:
+            _raise_asset_error(error)
+        action = _register_asset_action(
+            registration,
+            message="Register the installed robot directory, including YAML, URDF, and meshes.",
         )
         _fail(
             "ROBOT_ASSET_REQUIRED",
@@ -670,16 +744,7 @@ def _robot_bundle_and_preset(
             fallback_message=("The registered robot bundle did not pass structural inspection."),
         )
 
-    advertised_preset = next(
-        (item for item in presets if item.name == request.robot_id),
-        None,
-    )
-    if advertised_preset is None:
-        _fail(
-            "ROBOT_NOT_FOUND",
-            "The selected robot preset is not installed on this service.",
-            details={"robot_id": request.robot_id},
-        )
+    advertised_preset = _installed_robot_preset(presets, request.robot_id)
     yaml_value = advertised_preset.meta.get("yaml_path")
     if not isinstance(yaml_value, str) or not yaml_value:
         _fail(
@@ -993,11 +1058,9 @@ def _manual_calibration(
                 details={"joint_name": name},
             )
     if digest not in _manifest_hashes(robot_bundle, role="metadata"):
-        action = NextAction(
-            actor="agent",
-            action="register_robot_bundle",
+        action = _register_asset_action(
+            _bundle_registration_request(robot_bundle),
             message="Register the robot bundle again so the calibration is content-bound.",
-            parameters={"robot_id": preset.name},
         )
         _fail(
             "ROBOT_BUNDLE_MISMATCH",

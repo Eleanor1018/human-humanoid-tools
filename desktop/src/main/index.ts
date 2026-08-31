@@ -71,7 +71,7 @@ async function offerCrashRecovery(snapshot: SidecarSnapshot): Promise<void> {
   try {
     const result = await dialog.showMessageBox(mainWindow, {
       type: 'error',
-      title: 'hhtools backend stopped',
+      title: 'Human-Humanoid Tools backend stopped',
       message: 'The local Python backend stopped unexpectedly.',
       detail: snapshot.error ?? 'See the desktop log for details.',
       buttons: ['Restart backend', 'Close'],
@@ -227,7 +227,7 @@ async function showStartupFailure(reason: unknown): Promise<void> {
   }
   await mainWindow.loadURL(
     diagnosticsDataUrl({
-      title: 'hhtools could not start',
+      title: 'Human-Humanoid Tools could not start',
       message,
       stage: lifecycle.phase,
       logPath: logger?.filePath,
