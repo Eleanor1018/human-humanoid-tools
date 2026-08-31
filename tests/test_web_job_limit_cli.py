@@ -1,0 +1,102 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+from typer.testing import CliRunner
+
+from hhtools.cli import desktop_sidecar, web
+from hhtools.web import server
+
+
+def test_web_cli_defers_default_job_settings_to_persistent_backend_config(monkeypatch) -> None:
+    captured: dict = {}
+    monkeypatch.setattr(server, "run_web", lambda **kwargs: captured.update(kwargs))
+
+    result = CliRunner().invoke(web.app, [])
+
+    assert result.exit_code == 0, result.output
+    assert captured["max_running_jobs"] is None
+    assert captured["max_queued_jobs"] is None
+
+
+def test_web_cli_reads_env_and_explicit_options_override_it(monkeypatch) -> None:
+    captured: dict = {}
+    monkeypatch.setattr(server, "run_web", lambda **kwargs: captured.update(kwargs))
+
+    result = CliRunner().invoke(
+        web.app,
+        ["--max-running-jobs", "3"],
+        env={
+            "HHTOOLS_MAX_RUNNING_JOBS": "7",
+            "HHTOOLS_MAX_QUEUED_JOBS": "24",
+        },
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["max_running_jobs"] == 3
+    assert captured["max_queued_jobs"] == 24
+
+
+def test_web_cli_rejects_negative_job_limits() -> None:
+    result = CliRunner().invoke(web.app, ["--max-running-jobs", "-1"])
+
+    assert result.exit_code == 2
+
+
+def _desktop_args(tmp_path: Path) -> list[str]:
+    return [
+        "--source",
+        str(tmp_path / "source"),
+        "--save-dir",
+        str(tmp_path / "save"),
+        "--cache",
+        str(tmp_path / "cache"),
+        "--port",
+        "43123",
+        "--session-secret",
+        "unit-test-secret",
+    ]
+
+
+def test_desktop_sidecar_reads_job_limits_from_environment(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    captured: dict = {}
+    monkeypatch.setenv("HHTOOLS_MAX_RUNNING_JOBS", "2")
+    monkeypatch.setenv("HHTOOLS_MAX_QUEUED_JOBS", "32")
+    monkeypatch.setattr(
+        server,
+        "run_desktop_sidecar",
+        lambda **kwargs: captured.update(kwargs),
+    )
+
+    desktop_sidecar.main(_desktop_args(tmp_path))
+
+    assert captured["max_running_jobs"] == 2
+    assert captured["max_queued_jobs"] == 32
+
+
+def test_desktop_sidecar_explicit_limit_overrides_environment(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    captured: dict = {}
+    monkeypatch.setenv("HHTOOLS_MAX_RUNNING_JOBS", "8")
+    monkeypatch.setattr(
+        server,
+        "run_desktop_sidecar",
+        lambda **kwargs: captured.update(kwargs),
+    )
+
+    desktop_sidecar.main([*_desktop_args(tmp_path), "--max-running-jobs", "1"])
+
+    assert captured["max_running_jobs"] == 1
+
+
+def test_desktop_sidecar_rejects_negative_job_limit(tmp_path: Path) -> None:
+    with pytest.raises(SystemExit) as error:
+        desktop_sidecar.main([*_desktop_args(tmp_path), "--max-queued-jobs", "-1"])
+
+    assert error.value.code == 2
