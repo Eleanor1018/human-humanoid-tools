@@ -299,6 +299,21 @@ button { font-family: inherit; cursor: pointer; }
   margin: 4px 6px;
   background: var(--hairline);
 }
+.desktop-submenu-root {
+  position: relative;
+}
+.desktop-menu-submenu-trigger.is-submenu-open {
+  background: var(--accent-soft);
+}
+.desktop-menu-submenu-arrow {
+  color: var(--ink-tertiary);
+  font-size: 17px;
+  line-height: 1;
+}
+.desktop-submenu-popup {
+  top: -5px;
+  left: calc(100% + 4px);
+}
 .ui-build {
   font-size: 11px;
   font-weight: 600;
@@ -1234,6 +1249,7 @@ button { font-family: inherit; cursor: pointer; }
   text-transform: uppercase;
 }
 .workspace-settings-library-head,
+.workspace-settings-optional-head,
 .workspace-settings-jobs-head {
   display: grid;
   gap: 4px;
@@ -1241,6 +1257,7 @@ button { font-family: inherit; cursor: pointer; }
   border-top: 1px solid var(--hairline);
 }
 .workspace-settings-library-head small,
+.workspace-settings-optional-head small,
 .workspace-settings-jobs-head small {
   color: var(--ink-secondary);
   font-size: 11px;
@@ -3387,6 +3404,8 @@ body:has(#app.workspace-shell) #calib-banner { top: 52px; }
   grid-template-columns: repeat(3, minmax(0, 1fr));
   margin-bottom: 10px;
 }
+.workspace-optional-component-row > span { min-width: 0; }
+.workspace-component-ready { color: var(--green) !important; font-weight: 650; }
 .batch-mode-content { min-width: 0; }
 
 .v2m-batch-stage-toolbar {
@@ -4204,8 +4223,8 @@ body.tour-active { overflow: hidden; }
 }
 
 /* ----------------------------------------------------------------- control geometry
-   Action buttons use a square silhouette. Navigation and selection menus keep
-   a small radius so layered choices remain visually distinct from commands. */
+   Primary commands and application navigation use a square silhouette.
+   Transient selection surfaces retain a small radius to preserve hierarchy. */
 #app button,
 .tour-root button {
   border-radius: var(--button-radius);
@@ -4213,14 +4232,20 @@ body.tour-active { overflow: hidden; }
 
 #app button.nav-item,
 #app button.desktop-menu-trigger,
-#app button.desktop-menu-item,
+#app button.desktop-menu-item {
+  border-radius: var(--button-radius);
+}
+
 #app button.command-palette-trigger,
 #app button.command-palette-item,
 #app button.motion-picker-row {
   border-radius: var(--menu-radius);
 }
 
-.desktop-menu-popup,
+.desktop-menu-popup {
+  border-radius: var(--button-radius);
+}
+
 .command-palette,
 .motion-picker-dialog,
 .job-spec-dialog,

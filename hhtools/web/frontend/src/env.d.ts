@@ -16,6 +16,7 @@ import type {
   UploadFile,
   VideoToMotionStateDetail,
   WorkflowStateDetail,
+  GvhmrOptionalComponentState,
 } from './runtime/types'
 import type { GuidedTour } from './runtime/tutorial'
 
@@ -187,7 +188,12 @@ declare global {
   interface Window {
     hhtoolsDesktop?: {
       getRuntimeState: () => Promise<unknown>
+      getOptionalComponents: () => Promise<{ gvhmr: GvhmrOptionalComponentState }>
       restartBackend: () => Promise<unknown>
+      setupGvhmr: () => Promise<{
+        action: 'cancelled' | 'configured' | 'guide-opened'
+        state: GvhmrOptionalComponentState
+      }>
       selectDirectory: () => Promise<string | null>
       openExternal: (url: string) => Promise<void>
       onRuntimeStateChanged: (listener: (state: unknown) => void) => () => void

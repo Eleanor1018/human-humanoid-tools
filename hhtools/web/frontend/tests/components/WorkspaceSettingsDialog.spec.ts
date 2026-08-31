@@ -31,6 +31,11 @@ const defaultProps = {
   motionLibrarySaving: false,
   motionLibraryError: null,
   motionLibrarySaved: false,
+  gvhmrComponent: null,
+  gvhmrRuntime: null,
+  gvhmrLoading: false,
+  gvhmrSetupRunning: false,
+  gvhmrError: null,
 }
 
 async function setTeleportedInput(
@@ -52,6 +57,28 @@ afterEach(() => {
 })
 
 describe('WorkspaceSettingsDialog', () => {
+  it('shows GVHMR as an optional component and requests native setup', () => {
+    const wrapper = mount(WorkspaceSettingsDialog, {
+      props: {
+        ...defaultProps,
+        gvhmrComponent: {
+          requested: true,
+          configured: false,
+          guideUrl: 'https://example.com/gvhmr',
+          estimatedAdditionalBytes: 22,
+        },
+      },
+      attachTo: document.body,
+    })
+    wrappers.push(wrapper)
+
+    const button = document.body.querySelector<HTMLButtonElement>('.workspace-optional-component-row button')
+    expect(document.body.textContent).toContain('Optional components')
+    expect(document.body.textContent).toContain('installer selected this component')
+    button?.click()
+    expect(wrapper.emitted('setupGvhmr')).toHaveLength(1)
+  })
+
   it('emits panel visibility and reset commands', () => {
     const wrapper = mount(WorkspaceSettingsDialog, {
       props: defaultProps,

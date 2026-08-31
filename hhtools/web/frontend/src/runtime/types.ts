@@ -680,6 +680,22 @@ export interface MotionLibrarySettingsSnapshot {
   source?: string | null
 }
 
+export interface GvhmrOptionalComponentState {
+  requested: boolean
+  configured: boolean
+  root?: string
+  guideUrl: string
+  estimatedAdditionalBytes: number
+}
+
+export interface GvhmrRuntimeStatus {
+  ready: boolean
+  missing: string[]
+  root: string
+  body_models_root: string
+  image: string
+}
+
 export interface HealthResponse {
   ok: boolean
   ui_build?: string

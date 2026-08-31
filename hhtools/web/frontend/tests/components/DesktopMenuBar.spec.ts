@@ -88,18 +88,35 @@ describe('DesktopMenuBar', () => {
     window.addEventListener('hhtools:import-command', receive)
 
     await wrapper.get('[data-menu-trigger="file"]').trigger('click')
-    const items = wrapper.findAll('.desktop-menu-item')
     const fileMenu = wrapper.get('[data-menu-popup="file"]')
-    expect(items.some((item) => item.text().includes('Settings'))).toBe(false)
-    expect(items.some((item) => item.text().includes('Import Video'))).toBe(true)
+    const rootItems = fileMenu.findAll('[data-menu-level="root"]')
+    expect(rootItems.map((item) => item.text())).toEqual([
+      expect.stringContaining('Import'),
+      expect.stringContaining('Export'),
+      expect.stringContaining('Exit'),
+    ])
+    expect(rootItems.some((item) => item.text().includes('Settings'))).toBe(false)
     expect(fileMenu.element.firstElementChild?.classList.contains('desktop-menu-separator')).toBe(false)
     expect(fileMenu.findAll('.desktop-menu-item-copy small')).toHaveLength(0)
-    const motionFile = items.find((item) => item.text().includes('Import Motion File'))
+
+    const importTrigger = fileMenu.get('[data-submenu-trigger="file-import"]')
+    await importTrigger.trigger('mouseenter')
+    await importTrigger.trigger('click')
+    const importMenu = fileMenu.get('[data-submenu-popup="file-import"]')
+    const importItems = importMenu.findAll('.desktop-menu-item')
+    expect(importItems.some((item) => item.text().includes('Import Video'))).toBe(true)
+    const motionFile = importItems.find((item) => item.text().includes('Import Motion File'))
     expect(motionFile?.attributes('title')).toContain('BVH, GLB, NPZ')
     await motionFile?.trigger('click')
     window.removeEventListener('hhtools:import-command', receive)
 
     expect(imports).toEqual(['motion-file'])
+
+    await wrapper.get('[data-menu-trigger="file"]').trigger('click')
+    await wrapper.get('[data-submenu-trigger="file-export"]').trigger('click')
+    const exportResult = wrapper.get('[data-submenu-popup="file-export"] .desktop-menu-item')
+    expect(exportResult.attributes('disabled')).toBeDefined()
+    expect(exportResult.attributes('title')).toBe('No exportable result')
 
     await wrapper.get('[data-menu-trigger="settings"]').trigger('click')
     const settingsItems = wrapper.findAll('.desktop-menu-item')
@@ -117,5 +134,31 @@ describe('DesktopMenuBar', () => {
       .find((item) => item.text().includes('Dark Mode'))
     await darkMode?.trigger('click')
     expect(wrapper.emitted('toggleTheme')).toHaveLength(1)
+  })
+
+  it('reuses the active workflow export control when a result is available', async () => {
+    const result = document.createElement('div')
+    const download = document.createElement('button')
+    result.id = 'rt-export-card'
+    download.id = 'rt-export-btn'
+    result.append(download)
+    document.body.append(result)
+    let downloadCount = 0
+    download.addEventListener('click', () => { downloadCount += 1 })
+
+    const wrapper = mount(DesktopMenuBar, {
+      props: { activePanel: 'h2r' },
+      attachTo: document.body,
+    })
+    wrappers.push(wrapper)
+
+    await wrapper.get('[data-menu-trigger="file"]').trigger('click')
+    await wrapper.get('[data-submenu-trigger="file-export"]').trigger('click')
+    const exportResult = wrapper.get('[data-submenu-popup="file-export"] .desktop-menu-item')
+    expect(exportResult.attributes('disabled')).toBeUndefined()
+    await exportResult.trigger('click')
+
+    expect(downloadCount).toBe(1)
+    result.remove()
   })
 })

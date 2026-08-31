@@ -2,6 +2,8 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import type {
+  GvhmrOptionalComponentState,
+  GvhmrRuntimeStatus,
   JobAdmissionSettings,
   JobAdmissionSnapshot,
   MotionLibrarySettingsSnapshot,
@@ -24,6 +26,11 @@ const props = defineProps<{
   motionLibrarySaving: boolean
   motionLibraryError: string | null
   motionLibrarySaved: boolean
+  gvhmrComponent: GvhmrOptionalComponentState | null
+  gvhmrRuntime: GvhmrRuntimeStatus | null
+  gvhmrLoading: boolean
+  gvhmrSetupRunning: boolean
+  gvhmrError: string | null
 }>()
 
 const emit = defineEmits<{
@@ -35,6 +42,8 @@ const emit = defineEmits<{
   saveJobAdmission: [settings: JobAdmissionSettings]
   refreshMotionLibrary: []
   selectMotionLibraryRoot: []
+  refreshGvhmr: []
+  setupGvhmr: []
 }>()
 
 const maxRunningJobsDraft = ref('0')
@@ -106,6 +115,9 @@ const motionLibraryReadOnlyKind = computed<MotionLibraryReadOnlyKind>(() => {
   return 'generic'
 })
 
+const gvhmrReady = computed(() => props.gvhmrRuntime?.ready === true)
+const gvhmrMissingSummary = computed(() => props.gvhmrRuntime?.missing.slice(0, 2).join(' · ') ?? '')
+
 const copy = computed(() => props.locale === 'zh-CN'
   ? {
       title: '工作区设置',
@@ -129,6 +141,17 @@ const copy = computed(() => props.locale === 'zh-CN'
       libraryReadOnlyRemote: '当前为远程只读连接。请在服务器本机、Electron，或 SSH 本地回环隧道中修改目录。',
       libraryReadOnlyEnvironment: '当前目录由 HHTOOLS_MOTION_LIBRARY_ROOT 管理。请修改或移除该环境变量，然后重启服务。',
       libraryRetry: '重新读取',
+      optionalSection: '可选组件',
+      optionalSectionDetail: '大型模型与受许可约束的资源独立安装，不会增加基础安装包体积。',
+      gvhmr: 'GVHMR 视频转动作',
+      gvhmrReady: '已就绪',
+      gvhmrConfigured: '已找到 GVHMR，仍需完成运行依赖检查。',
+      gvhmrMissing: '尚未配置；需要 Docker Desktop、官方权重与 SMPL-X 文件（约额外 22 GB）。',
+      gvhmrRequested: '安装程序已记录此选项，请继续完成 GVHMR 配置。',
+      gvhmrChecking: '正在检查…',
+      gvhmrSetup: '配置 / 修复',
+      gvhmrSettingUp: '配置中…',
+      gvhmrRefresh: '重新检查',
       jobsSection: '后台任务调度',
       jobsSectionDetail: '本机 Web/Electron（或 SSH 本地回环隧道）保存后立即生效，不会中断正在运行的任务，也无需重启。',
       running: '最大并发任务数',
@@ -169,6 +192,17 @@ const copy = computed(() => props.locale === 'zh-CN'
       libraryReadOnlyRemote: 'This remote connection is read-only. Change the directory on the server, in Electron, or through an SSH loopback tunnel.',
       libraryReadOnlyEnvironment: 'This directory is managed by HHTOOLS_MOTION_LIBRARY_ROOT. Change or remove that environment variable, then restart the service.',
       libraryRetry: 'Reload',
+      optionalSection: 'Optional components',
+      optionalSectionDetail: 'Large models and licensed resources install separately and do not enlarge the core installer.',
+      gvhmr: 'GVHMR video-to-motion',
+      gvhmrReady: 'Ready',
+      gvhmrConfigured: 'GVHMR was found; remaining runtime dependencies still need attention.',
+      gvhmrMissing: 'Not configured; requires Docker Desktop, official weights, and SMPL-X files (about 22 GB extra).',
+      gvhmrRequested: 'The installer selected this component. Continue with GVHMR setup.',
+      gvhmrChecking: 'Checking…',
+      gvhmrSetup: 'Set up / repair',
+      gvhmrSettingUp: 'Configuring…',
+      gvhmrRefresh: 'Check again',
       jobsSection: 'Background-job scheduling',
       jobsSectionDetail: 'Local Web/Electron (or an SSH loopback tunnel) applies saved limits immediately without interrupting active jobs; no restart is required.',
       running: 'Maximum running jobs',
@@ -281,6 +315,37 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleKeydown))
             >{{ copy.libraryRetry }}</button>
           </div>
           <p v-else-if="motionLibrarySaved" class="workspace-settings-message success" role="status">{{ copy.librarySaved }}</p>
+
+          <template v-if="gvhmrComponent">
+            <div class="workspace-settings-section-head workspace-settings-optional-head">
+              <span>{{ copy.optionalSection }}</span>
+              <small>{{ copy.optionalSectionDetail }}</small>
+            </div>
+            <div class="workspace-setting-row workspace-optional-component-row">
+              <span>
+                <strong>{{ copy.gvhmr }}</strong>
+                <small v-if="gvhmrReady" class="workspace-component-ready">{{ copy.gvhmrReady }}</small>
+                <small v-else-if="gvhmrLoading">{{ copy.gvhmrChecking }}</small>
+                <small v-else-if="gvhmrComponent.configured">{{ copy.gvhmrConfigured }}</small>
+                <small v-else>{{ copy.gvhmrMissing }}</small>
+              </span>
+              <button
+                type="button"
+                class="workspace-library-select"
+                :disabled="gvhmrLoading || gvhmrSetupRunning"
+                @click="emit('setupGvhmr')"
+              >{{ gvhmrSetupRunning ? copy.gvhmrSettingUp : copy.gvhmrSetup }}</button>
+            </div>
+            <p v-if="gvhmrComponent.requested && !gvhmrComponent.configured" class="workspace-settings-note">{{ copy.gvhmrRequested }}</p>
+            <div v-if="gvhmrError" class="workspace-settings-message error" role="alert">
+              <span>{{ gvhmrError }}</span>
+              <button type="button" class="workspace-settings-retry" @click="emit('refreshGvhmr')">{{ copy.gvhmrRefresh }}</button>
+            </div>
+            <div v-else-if="!gvhmrReady && gvhmrMissingSummary" class="workspace-settings-message">
+              <span>{{ gvhmrMissingSummary }}</span>
+              <button type="button" class="workspace-settings-retry" @click="emit('refreshGvhmr')">{{ copy.gvhmrRefresh }}</button>
+            </div>
+          </template>
 
           <div class="workspace-settings-section-head workspace-settings-jobs-head">
             <span>{{ copy.jobsSection }}</span>
