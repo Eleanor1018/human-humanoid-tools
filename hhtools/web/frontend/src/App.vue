@@ -2,6 +2,7 @@
 import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 
 import { usePanelLayout } from './composables/usePanelLayout'
+import AboutDialog from './components/AboutDialog.vue'
 import BatchWorkflow from './components/BatchWorkflow.vue'
 import PlaybackBar from './components/PlaybackBar.vue'
 import CommandPalette from './components/CommandPalette.vue'
@@ -37,6 +38,7 @@ const activePanel = ref<WorkspacePanelId>(initialWorkspacePreferences.activePane
 const workspaceLocale = ref(initialWorkspacePreferences.locale)
 const workspaceTheme = ref<WorkspaceTheme>(initialWorkspacePreferences.theme)
 const settingsOpen = ref(false)
+const aboutOpen = ref(false)
 const jobAdmission = ref<JobAdmissionSnapshot | null>(null)
 const jobAdmissionLoading = ref(false)
 const jobAdmissionSaving = ref(false)
@@ -377,6 +379,10 @@ function openWorkspaceSettings(): void {
   void loadGvhmrComponent()
 }
 
+function openAboutDialog(): void {
+  aboutOpen.value = true
+}
+
 function setActivePanel(panel: string): void {
   // Keep old deep links and saved commands working after workspace consolidation.
   const normalizedPanel = panel === 'robot'
@@ -528,6 +534,7 @@ onBeforeUnmount(() => {
         :locale="workspaceLocale"
         :theme="workspaceTheme"
         @open-settings="openWorkspaceSettings"
+        @open-about="openAboutDialog"
         @toggle-theme="toggleWorkspaceTheme"
       />
       <div class="spacer"></div>
@@ -537,6 +544,7 @@ onBeforeUnmount(() => {
         :theme="workspaceTheme"
         application-mode
         @open-settings="openWorkspaceSettings"
+        @open-about="openAboutDialog"
         @toggle-theme="toggleWorkspaceTheme"
       />
       <span v-show="false" class="pill" id="motion-pill">未加载动作</span>
@@ -1341,6 +1349,11 @@ onBeforeUnmount(() => {
       @refresh-gvhmr="loadGvhmrComponent"
       @setup-gvhmr="setupGvhmr"
     />
+    <AboutDialog
+      :open="aboutOpen"
+      :locale="workspaceLocale"
+      @close="aboutOpen = false"
+    />
   </div>
 
   <div id="load-overlay" class="hidden">
@@ -1361,11 +1374,15 @@ onBeforeUnmount(() => {
     <div id="tour-popover" class="tour-popover" role="dialog" aria-labelledby="tour-title">
       <div class="tour-popover-head">
         <span class="tour-step-badge" id="tour-step">1 / 9</span>
-        <button type="button" class="tour-skip" id="tour-skip">跳过教程</button>
+        <button type="button" class="tour-skip" id="tour-skip">
+          {{ workspaceText('Skip tutorial', '跳过教程') }}
+        </button>
       </div>
-      <h3 class="tour-title" id="tour-title">标题</h3>
+      <h3 class="tour-title" id="tour-title">{{ workspaceText('Tutorial', '操作教程') }}</h3>
       <p class="tour-body" id="tour-body"></p>
-      <button type="button" class="btn tour-next" id="tour-next">知道了</button>
+      <button type="button" class="btn tour-next" id="tour-next">
+        {{ workspaceText('Next', '下一步') }}
+      </button>
     </div>
   </div>
 

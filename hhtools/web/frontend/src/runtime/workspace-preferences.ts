@@ -42,12 +42,35 @@ const PRESETS = new Set<ComparisonPreset>(['source', 'target', 'result', 'overla
 const LOCALES = new Set<WorkspaceLocale>(['en', 'zh-CN'])
 const THEMES = new Set<WorkspaceTheme>(['light', 'dark'])
 
+function readSystemLanguageTags(): readonly string[] {
+  if (typeof navigator === 'undefined') return []
+  return [...navigator.languages, navigator.language]
+}
+
+export function resolveSystemLocale(
+  languageTags: readonly string[] = readSystemLanguageTags(),
+): WorkspaceLocale {
+  for (const languageTag of languageTags) {
+    const primaryLanguage = languageTag.trim().toLowerCase().split(/[-_]/, 1)[0]
+    if (primaryLanguage === 'zh') return 'zh-CN'
+    if (primaryLanguage === 'en') return 'en'
+  }
+  return DEFAULT_PREFERENCES.locale
+}
+
 function clampSpeed(value: unknown): number {
   const speed = Number(value)
   return Number.isFinite(speed) ? Math.min(4, Math.max(0.1, speed)) : 1
 }
 
-export function loadWorkspacePreferences(): WorkspacePreferences {
+export function loadWorkspacePreferences(
+  systemLanguageTags: readonly string[] = readSystemLanguageTags(),
+): WorkspacePreferences {
+  const defaultPreferences: WorkspacePreferences = {
+    ...structuredClone(DEFAULT_PREFERENCES),
+    locale: resolveSystemLocale(systemLanguageTags),
+  }
+
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}') as Partial<WorkspacePreferences>
     const storedPanel = saved.activePanel as unknown
@@ -56,8 +79,8 @@ export function loadWorkspacePreferences(): WorkspacePreferences {
       ? 'video-to-motion'
       : PANELS.has(storedPanel as WorkspacePanelId)
         ? storedPanel as WorkspacePanelId
-        : DEFAULT_PREFERENCES.activePanel
-    const comparisonPresets = { ...DEFAULT_PREFERENCES.comparisonPresets }
+        : defaultPreferences.activePanel
+    const comparisonPresets = { ...defaultPreferences.comparisonPresets }
     for (const workflow of ['h2r', 'r2r'] as const) {
       const preset = saved.comparisonPresets?.[workflow]
       if (PRESETS.has(preset as ComparisonPreset)) comparisonPresets[workflow] = preset as ComparisonPreset
@@ -66,18 +89,18 @@ export function loadWorkspacePreferences(): WorkspacePreferences {
       activePanel,
       locale: LOCALES.has(saved.locale as WorkspaceLocale)
         ? saved.locale as WorkspaceLocale
-        : DEFAULT_PREFERENCES.locale,
+        : defaultPreferences.locale,
       theme: THEMES.has(saved.theme as WorkspaceTheme)
         ? saved.theme as WorkspaceTheme
-        : DEFAULT_PREFERENCES.theme,
+        : defaultPreferences.theme,
       playbackSpeed: clampSpeed(saved.playbackSpeed),
       playbackLoop: typeof saved.playbackLoop === 'boolean'
         ? saved.playbackLoop
-        : DEFAULT_PREFERENCES.playbackLoop,
+        : defaultPreferences.playbackLoop,
       comparisonPresets,
     }
   } catch {
-    return structuredClone(DEFAULT_PREFERENCES)
+    return defaultPreferences
   }
 }
 

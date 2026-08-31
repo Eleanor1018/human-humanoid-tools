@@ -27,6 +27,7 @@ describe('JobDrawer', () => {
     expect(wrapper.classes()).toContain('docked-job-panel')
     expect(wrapper.classes()).not.toContain('open')
     expect(wrapper.find('.job-panel-resizer').exists()).toBe(false)
+    expect(wrapper.get('.job-summary-chevron').attributes('data-icon')).toBe('chevron-up')
 
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'j', ctrlKey: true }))
     await nextTick()
@@ -35,6 +36,8 @@ describe('JobDrawer', () => {
     expect(wrapper.find('.job-panel-resizer').exists()).toBe(true)
     expect(wrapper.attributes('style')).toContain('--job-panel-height: 300px')
     expect(wrapper.text()).not.toContain('Import Config')
+    expect(wrapper.get('.job-drawer-head-actions .job-icon-btn:last-child svg').attributes('data-icon'))
+      .toBe('chevron-down')
 
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'j', ctrlKey: true }))
     await nextTick()
@@ -107,7 +110,9 @@ describe('JobDrawer', () => {
     )
     await nextTick()
 
-    expect(wrapper.get('.job-drawer-summary').text()).toContain('1 运行中')
+    expect(wrapper.get('.job-drawer-summary').text()).toBe('任务')
+    expect(wrapper.find('.job-summary-count').exists()).toBe(false)
+    expect(wrapper.find('.job-summary-latest').exists()).toBe(false)
     await wrapper.get('.job-drawer-summary').trigger('click')
     expect(wrapper.findAll('.job-row')).toHaveLength(2)
     expect(wrapper.get('.job-progress').attributes('aria-valuenow')).toBe('42')

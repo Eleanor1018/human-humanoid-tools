@@ -161,4 +161,19 @@ describe('DesktopMenuBar', () => {
     expect(downloadCount).toBe(1)
     result.remove()
   })
+
+  it('opens project information from the Help menu', async () => {
+    const wrapper = mount(DesktopMenuBar, {
+      props: { activePanel: 'motion', locale: 'en' },
+    })
+    wrappers.push(wrapper)
+
+    await wrapper.get('[data-menu-trigger="help"]').trigger('click')
+    const items = wrapper.findAll<HTMLButtonElement>('.desktop-menu-item')
+    const about = items.find((item) => item.text().includes('About hhtools'))
+
+    expect(about?.attributes('disabled')).toBeUndefined()
+    await about?.trigger('click')
+    expect(wrapper.emitted('openAbout')).toHaveLength(1)
+  })
 })

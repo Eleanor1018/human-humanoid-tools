@@ -20,6 +20,7 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{
   openSettings: []
+  openAbout: []
   toggleTheme: []
 }>()
 
@@ -31,6 +32,7 @@ const input = ref<HTMLInputElement | null>(null)
 const commands = computed(() => createApplicationCommands({
   activePanel: props.activePanel,
   openSettings: () => emit('openSettings'),
+  openAbout: () => emit('openAbout'),
   theme: props.theme,
   toggleTheme: () => emit('toggleTheme'),
   applicationMode: props.applicationMode,
