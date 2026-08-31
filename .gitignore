@@ -59,6 +59,7 @@ docs/web-electron-shared-ui-plan.md
 desktop/node_modules/
 desktop/out/
 desktop/release/
+desktop/.runtime/
 desktop/.vite/
 desktop/test-results/
 desktop/playwright-report/

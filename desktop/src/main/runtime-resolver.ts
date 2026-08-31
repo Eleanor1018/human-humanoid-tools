@@ -1,4 +1,4 @@
-/** Resolve the external Python checkout and writable desktop directories used by the Alpha. */
+/** Resolve either the bundled desktop runtime or a development checkout. */
 import { existsSync } from 'node:fs'
 import { delimiter, dirname, isAbsolute, join, resolve } from 'node:path'
 
@@ -9,12 +9,15 @@ export interface RuntimeConfig {
   saveDirectory: string
   cacheDirectory: string
   logDirectory: string
+  bundled: boolean
 }
 
 export interface ResolveRuntimeOptions {
   appPath: string
   cwd: string
   userData: string
+  isPackaged?: boolean
+  resourcesPath?: string
   env?: NodeJS.ProcessEnv
 }
 
@@ -30,6 +33,28 @@ function walkForRepository(start: string): string | undefined {
     if (parent === current) return undefined
     current = parent
   }
+}
+
+function bundledRuntime(options: ResolveRuntimeOptions): {
+  repoRoot: string
+  pythonExecutable: string
+} | undefined {
+  if (!options.isPackaged || options.resourcesPath === undefined) return undefined
+
+  const runtimeRoot = join(options.resourcesPath, 'runtime')
+  const repoRoot = join(runtimeRoot, 'app')
+  const pythonExecutable =
+    process.platform === 'win32'
+      ? join(runtimeRoot, 'python', 'python.exe')
+      : join(runtimeRoot, 'python', 'bin', 'python3')
+
+  if (!isRepositoryRoot(repoRoot)) {
+    throw new Error(`Bundled hhtools application files are missing: ${repoRoot}`)
+  }
+  if (!existsSync(pythonExecutable)) {
+    throw new Error(`Bundled Python runtime is missing: ${pythonExecutable}`)
+  }
+  return { repoRoot, pythonExecutable }
 }
 
 function resolveRepositoryRoot(options: ResolveRuntimeOptions, env: NodeJS.ProcessEnv): string {
@@ -69,15 +94,19 @@ function resolvePython(repoRoot: string, env: NodeJS.ProcessEnv): string {
 
 export function resolveRuntime(options: ResolveRuntimeOptions): RuntimeConfig {
   const env = options.env ?? process.env
-  const repoRoot = resolveRepositoryRoot(options, env)
+  const packaged = env.HHTOOLS_REPO_ROOT === undefined ? bundledRuntime(options) : undefined
+  const repoRoot = packaged?.repoRoot ?? resolveRepositoryRoot(options, env)
+  const pythonExecutable = env.HHTOOLS_PYTHON ?? packaged?.pythonExecutable ?? resolvePython(repoRoot, env)
 
   return {
     repoRoot,
-    pythonExecutable: resolvePython(repoRoot, env),
+    pythonExecutable,
     sourceRoot: resolve(env.HHTOOLS_SOURCE_ROOT ?? join(repoRoot, 'assets', 'motions')),
     saveDirectory: resolve(env.HHTOOLS_SAVE_DIR ?? join(options.userData, 'save_npz')),
-    cacheDirectory: resolve(env.HHTOOLS_CACHE_DIR ?? join(options.userData, 'cache')),
-    logDirectory: resolve(env.HHTOOLS_LOG_DIR ?? join(options.userData, 'logs'))
+    // Keep Python's generated assets separate from Electron/Chromium's Cache directory.
+    cacheDirectory: resolve(env.HHTOOLS_CACHE_DIR ?? join(options.userData, 'hhtools-cache')),
+    logDirectory: resolve(env.HHTOOLS_LOG_DIR ?? join(options.userData, 'logs')),
+    bundled: packaged !== undefined
   }
 }
 
@@ -89,6 +118,11 @@ const ENV_ALLOWLIST = new Set([
   'HHTOOLS_MAX_RUNNING_JOBS',
   'HHTOOLS_MOTION_LIBRARY_ROOT',
   'HHTOOLS_MOTION_LIBRARY_SETTINGS_PATH',
+  'HHTOOLS_GVHMR_BODY_MODELS',
+  'HHTOOLS_GVHMR_IMAGE',
+  'HHTOOLS_GVHMR_ROOT',
+  'HHTOOLS_GVHMR_TIMEOUT_SECONDS',
+  'HHTOOLS_ROBOT_PATH',
   'HHTOOLS_WEB_SETTINGS_PATH',
   'LOCALAPPDATA',
   'NUMBER_OF_PROCESSORS',
@@ -128,6 +162,8 @@ export function buildSidecarEnvironment(
 
   // Import the working checkout and make Python logs deterministic and immediately visible.
   result.PYTHONPATH = [repoRoot, source.PYTHONPATH].filter(Boolean).join(delimiter)
+  result.PYTHONDONTWRITEBYTECODE = '1'
+  result.PYTHONNOUSERSITE = '1'
   result.PYTHONUTF8 = '1'
   result.PYTHONUNBUFFERED = '1'
   return result

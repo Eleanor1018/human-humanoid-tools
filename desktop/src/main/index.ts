@@ -19,12 +19,17 @@ import { diagnosticsDataUrl } from './diagnostics-page'
 import { registerDesktopHandlers } from './ipc/register-desktop-handlers'
 import { createMainWindow } from './main-window'
 import { findAvailablePort } from './network'
+import { OptionalComponentStore, runGvhmrSetup } from './optional-components'
 import { buildSidecarEnvironment, resolveRuntime, type RuntimeConfig } from './runtime-resolver'
 import { configureDesktopSession } from './security/configure-session'
 import { SidecarSupervisor, type SidecarSnapshot } from './sidecar-supervisor'
 import { WindowStateStore } from './window-state-store'
 
 const lifecycle = new AppLifecycle()
+
+function desktopIconPath(): string {
+  return join(app.getAppPath(), 'resources', 'icon.png')
+}
 
 // These references are process-wide because requestSingleInstanceLock() guarantees one owner.
 let mainWindow: BrowserWindow | undefined
@@ -35,6 +40,7 @@ let backendOrigin: string | undefined
 let allowQuit = false
 let shutdownPromise: Promise<void> | undefined
 let crashDialogOpen = false
+let optionalComponents: OptionalComponentStore | undefined
 
 function runtimeState(snapshot: SidecarSnapshot | undefined = supervisor?.snapshot): RuntimeState {
   return {
@@ -82,10 +88,25 @@ async function startDesktop(): Promise<void> {
   app.setAppUserModelId('com.roboparty.hhtools.desktop.alpha')
   const userData = app.getPath('userData')
 
-  // The Alpha shell reuses a checked-out Python environment instead of bundling GPU runtimes.
-  runtime = resolveRuntime({ appPath: app.getAppPath(), cwd: process.cwd(), userData })
+  optionalComponents = new OptionalComponentStore({
+    userData,
+    localAppData: process.env.LOCALAPPDATA,
+    env: process.env,
+  })
+  runtime = resolveRuntime({
+    appPath: app.getAppPath(),
+    cwd: process.cwd(),
+    userData,
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+  })
   logger = new DesktopLogger(runtime.logDirectory)
-  logger.info('Desktop startup began', { repoRoot: runtime.repoRoot })
+  logger.info('Desktop startup began', { repoRoot: runtime.repoRoot, bundled: runtime.bundled })
+
+  const sidecarEnvironment = (): NodeJS.ProcessEnv => ({
+    ...optionalComponents?.sidecarEnvironment(),
+    ...buildSidecarEnvironment(runtime!.repoRoot),
+  })
 
   const port = await findAvailablePort()
   const secret = randomBytes(32).toString('hex')
@@ -97,6 +118,7 @@ async function startDesktop(): Promise<void> {
   const preloadPath = join(dirname(fileURLToPath(import.meta.url)), '../preload/index.cjs')
   const stateStore = new WindowStateStore(join(userData, 'window-state.json'))
   const windowResult = createMainWindow({
+    iconPath: desktopIconPath(),
     preloadPath,
     trustedOrigin: backendOrigin,
     stateStore,
@@ -123,7 +145,7 @@ async function startDesktop(): Promise<void> {
       ],
       cwd: runtime.repoRoot,
       env: {
-        ...buildSidecarEnvironment(runtime.repoRoot),
+        ...sidecarEnvironment(),
         // Use the environment rather than argv so the secret is absent from process listings.
         HHTOOLS_DESKTOP_SESSION_SECRET: secret
       },
@@ -148,13 +170,26 @@ async function startDesktop(): Promise<void> {
     mainWindow,
     trustedOrigin: backendOrigin,
     getRuntimeState: () => runtimeState(),
+    getOptionalComponents: () => optionalComponents!.getState(),
     restartBackend: async () => {
       if (lifecycle.phase === 'shutting-down' || supervisor === undefined) {
         throw new Error('The application is shutting down')
       }
       const snapshot = await supervisor.restart()
       return runtimeState(snapshot)
-    }
+    },
+    setupGvhmr: () => runGvhmrSetup({
+      mainWindow: mainWindow!,
+      store: optionalComponents!,
+      onConfigured: async () => {
+        if (supervisor === undefined) return
+        supervisor.updateEnvironment({
+          ...sidecarEnvironment(),
+          HHTOOLS_DESKTOP_SESSION_SECRET: secret,
+        })
+        await supervisor.restart()
+      },
+    }),
   })
   lifecycle.registerShutdownJoiner('desktop-ipc', removeDesktopHandlers)
 
@@ -186,6 +221,7 @@ async function showStartupFailure(reason: unknown): Promise<void> {
       height: 520,
       show: false,
       autoHideMenuBar: true,
+      icon: desktopIconPath(),
       webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true }
     })
   }

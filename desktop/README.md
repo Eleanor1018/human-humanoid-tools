@@ -1,7 +1,8 @@
 # hhtools Desktop Alpha
 
-This directory contains the Electron shell for the existing FastAPI and three.js WebUI. The
-desktop migration deliberately keeps the current page, HTTP routes, and Python business logic.
+This directory contains the standalone Electron GUI for the existing FastAPI and three.js WebUI.
+The desktop app keeps the current HTTP routes and Python business logic while supervising its own
+local Python sidecar.
 
 ## Development
 
@@ -62,6 +63,46 @@ npm run dist:win
 `test:e2e` builds and launches the real Electron application, checks the existing WebUI, captures
 a screenshot, closes the app, and verifies that the supervised Python process exits.
 
+## Windows package
+
+`npm run dist:win` performs three steps:
+
+1. Build the Electron main and preload processes.
+2. Stage an isolated CPython runtime, production Python packages, the hhtools source, tracked sample
+   motions, and bundled robot assets under `desktop/.runtime`.
+3. Build an assisted NSIS installer under `desktop/release`.
+
+The staging step reads the base interpreter from `.venv/pyvenv.cfg`; run `uv sync` before packaging.
+`HHTOOLS_RUNTIME_PYTHON_HOME`, `HHTOOLS_RUNTIME_SITE_PACKAGES`, and
+`HHTOOLS_BUNDLED_ROBOT_DIR` are packaging-time overrides. Generated or untracked motion files are
+not included.
+
+Installed files use this shape:
+
+```text
+hhtools Desktop Alpha/
+├── hhtools Desktop Alpha.exe
+└── resources/
+    ├── app.asar
+    └── runtime/
+        ├── app/       # hhtools source, WebUI, configs, and bundled assets
+        └── python/    # isolated CPython and production dependencies
+```
+
+User-created motions, caches, logs, window state, and optional-component settings remain under
+Electron's per-user data directory and are not removed by an application upgrade.
+
+### Optional GVHMR
+
+GVHMR is deliberately excluded from the core package. The installer can record that the user wants
+it configured; on first launch, **Settings → Optional components** opens the guided setup. The same
+entry remains available later for on-demand setup or repair.
+
+The guided setup accepts an official GVHMR checkout and restarts the sidecar with
+`HHTOOLS_GVHMR_ROOT`. Docker Desktop, the hhtools GVHMR image, official checkpoints, and licensed
+SMPL/SMPL-X files stay external. The app never silently accepts or redistributes those third-party
+licenses. A complete setup currently needs roughly 22 GB in addition to the core application.
+
 ## Runtime model
 
 1. Electron allocates a random `127.0.0.1` port and a per-launch session secret.
@@ -70,6 +111,6 @@ a screenshot, closes the app, and verifies that the supervised Python process ex
    the existing WebUI.
 4. Closing Electron stops the full Python process tree before the app exits.
 
-The Alpha installer contains the Electron shell, not a bundled GPU Python runtime. Set
-`HHTOOLS_REPO_ROOT` (and optionally `HHTOOLS_PYTHON`) when running an unpacked or installed Alpha
-outside the checkout. Bundling and signing the Python/GPU runtime remains a later release phase.
+Packaged builds always prefer `resources/runtime`. Development builds continue to discover the
+repository checkout and `.venv`; `HHTOOLS_REPO_ROOT` and `HHTOOLS_PYTHON` remain explicit developer
+overrides.

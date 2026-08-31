@@ -1,6 +1,7 @@
 import { dialog, ipcMain, shell, type BrowserWindow } from 'electron'
 
 import { DESKTOP_CHANNELS } from '../../shared/desktop-api'
+import type { GvhmrSetupResult, OptionalComponentsState } from '../../shared/desktop-api'
 import type { RuntimeState } from '../../shared/runtime-state'
 import { assertTrustedIpcSender } from './validate-ipc-sender'
 
@@ -8,7 +9,9 @@ export function registerDesktopHandlers(options: {
   mainWindow: BrowserWindow
   trustedOrigin: string
   getRuntimeState: () => RuntimeState
+  getOptionalComponents: () => OptionalComponentsState
   restartBackend: () => Promise<RuntimeState>
+  setupGvhmr: () => Promise<GvhmrSetupResult>
 }): () => void {
   // Every handler applies the same WebContents, main-frame, and origin checks before doing work.
   const trusted = (event: Electron.IpcMainInvokeEvent): void =>
@@ -18,9 +21,17 @@ export function registerDesktopHandlers(options: {
     trusted(event)
     return options.getRuntimeState()
   })
+  ipcMain.handle(DESKTOP_CHANNELS.getOptionalComponents, (event) => {
+    trusted(event)
+    return options.getOptionalComponents()
+  })
   ipcMain.handle(DESKTOP_CHANNELS.restartBackend, async (event) => {
     trusted(event)
     return options.restartBackend()
+  })
+  ipcMain.handle(DESKTOP_CHANNELS.setupGvhmr, async (event) => {
+    trusted(event)
+    return options.setupGvhmr()
   })
   ipcMain.handle(DESKTOP_CHANNELS.selectDirectory, async (event) => {
     trusted(event)
@@ -44,7 +55,9 @@ export function registerDesktopHandlers(options: {
 
   return () => {
     ipcMain.removeHandler(DESKTOP_CHANNELS.getRuntimeState)
+    ipcMain.removeHandler(DESKTOP_CHANNELS.getOptionalComponents)
     ipcMain.removeHandler(DESKTOP_CHANNELS.restartBackend)
+    ipcMain.removeHandler(DESKTOP_CHANNELS.setupGvhmr)
     ipcMain.removeHandler(DESKTOP_CHANNELS.selectDirectory)
     ipcMain.removeHandler(DESKTOP_CHANNELS.openExternal)
   }

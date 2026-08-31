@@ -6,7 +6,9 @@ import type { RuntimeState } from '../shared/runtime-state'
 // Expose named operations only. The renderer never receives raw ipcRenderer or Node primitives.
 const desktopApi: HHToolsDesktopApi = {
   getRuntimeState: () => ipcRenderer.invoke(DESKTOP_CHANNELS.getRuntimeState),
+  getOptionalComponents: () => ipcRenderer.invoke(DESKTOP_CHANNELS.getOptionalComponents),
   restartBackend: () => ipcRenderer.invoke(DESKTOP_CHANNELS.restartBackend),
+  setupGvhmr: () => ipcRenderer.invoke(DESKTOP_CHANNELS.setupGvhmr),
   selectDirectory: () => ipcRenderer.invoke(DESKTOP_CHANNELS.selectDirectory),
   openExternal: (url: string) => ipcRenderer.invoke(DESKTOP_CHANNELS.openExternal, url),
   onRuntimeStateChanged: (listener: (state: RuntimeState) => void) => {
