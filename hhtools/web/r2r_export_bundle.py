@@ -104,11 +104,17 @@ def clip_has_export_scene(clip_dir: Path, *, stem: str, profile: str = "") -> bo
             clip_dir.glob("*_terrain.obj")
         ):
             return True
-    if prof == "intermimic" or any(clip_dir.glob("*_cleaned_simplified.obj")):
-        if any(clip_dir.glob("object_*.csv")) or any(
-            clip_dir.glob("*_cleaned_simplified.obj")
-        ):
-            return True
+    # Web robot-export: ``object_*.csv`` + plain ``.obj`` (not only OMOMO
+    # ``*_cleaned_simplified.obj``).
+    if any(clip_dir.glob("object_*.csv")):
+        return True
+    if any(clip_dir.glob("*_cleaned_simplified.obj")):
+        return True
+    if prof == "intermimic":
+        return any(
+            p.is_file() and "_terrain" not in p.name.lower()
+            for p in clip_dir.glob("*.obj")
+        )
     return False
 
 
@@ -221,7 +227,29 @@ def _copy_r2r_scene_meshes(
         if _export_scaled_terrain_obj(terrain_src, dst, ratio):
             copied.append(dst.name)
 
+    mesh_srcs: list[Path] = []
+    seen_mesh: set[str] = set()
     for src in sorted(source_clip_dir.glob("*_cleaned_simplified.obj")):
+        key = str(src.resolve())
+        if key not in seen_mesh:
+            seen_mesh.add(key)
+            mesh_srcs.append(src)
+    try:
+        from hhtools.web.r2r_scene import resolve_object_mesh_path
+    except Exception:  # noqa: BLE001
+        resolve_object_mesh_path = None  # type: ignore[assignment]
+    if resolve_object_mesh_path is not None:
+        for csv_path in sorted(source_clip_dir.glob("object_*.csv")):
+            mesh = resolve_object_mesh_path(csv_path)
+            if mesh is None or not mesh.is_file():
+                continue
+            key = str(mesh.resolve())
+            if key in seen_mesh:
+                continue
+            seen_mesh.add(key)
+            mesh_srcs.append(mesh)
+
+    for src in mesh_srcs:
         dst = clip_dir / src.name
         if _export_scaled_object_mesh(src, dst, ratio):
             copied.append(dst.name)

@@ -29,23 +29,51 @@ describe('DesktopMenuBar', () => {
     }
     window.addEventListener('hhtools:panel-request', receive)
     await wrapper.get('[data-menu-trigger="workflows"]').trigger('click')
-    const h2r = wrapper.findAll('.desktop-menu-item').find((item) => item.text().includes('H2R'))
+    const h2r = wrapper.findAll('.desktop-menu-item').find((item) => item.text().includes('Human to Robot'))
     await h2r?.trigger('click')
     window.removeEventListener('hhtools:panel-request', receive)
 
     expect(panels).toEqual(['h2r'])
   })
 
-  it('shows unavailable analysis commands as disabled', async () => {
+  it('routes the consolidated data-analysis command', async () => {
     const wrapper = mount(DesktopMenuBar, { props: { activePanel: 'motion' } })
     wrappers.push(wrapper)
 
-    await wrapper.get('[data-menu-trigger="analysis"]').trigger('click')
-    const pae = wrapper.findAll<HTMLButtonElement>('.desktop-menu-item')
-      .find((item) => item.text().includes('PAE Analysis'))
+    const panels: string[] = []
+    const receive = (event: WindowEventMap['hhtools:panel-request']): void => {
+      panels.push(event.detail)
+    }
+    window.addEventListener('hhtools:panel-request', receive)
 
-    expect(pae?.attributes('disabled')).toBeDefined()
-    expect(pae?.text()).toContain('Coming soon')
+    await wrapper.get('[data-menu-trigger="analysis"]').trigger('click')
+    const analysis = wrapper.findAll<HTMLButtonElement>('.desktop-menu-item')
+      .find((item) => item.text().includes('Data Analysis'))
+    await analysis?.trigger('click')
+    window.removeEventListener('hhtools:panel-request', receive)
+
+    expect(analysis?.attributes('disabled')).toBeUndefined()
+    expect(panels).toEqual(['dataset-viz'])
+  })
+
+  it('routes the enabled video-to-motion workflow', async () => {
+    const wrapper = mount(DesktopMenuBar, { props: { activePanel: 'motion' } })
+    wrappers.push(wrapper)
+
+    const panels: string[] = []
+    const receive = (event: WindowEventMap['hhtools:panel-request']): void => {
+      panels.push(event.detail)
+    }
+    window.addEventListener('hhtools:panel-request', receive)
+
+    await wrapper.get('[data-menu-trigger="workflows"]').trigger('click')
+    const videoToMotion = wrapper.findAll<HTMLButtonElement>('.desktop-menu-item')
+      .find((item) => item.text().includes('Video to Motion'))
+    await videoToMotion?.trigger('click')
+    window.removeEventListener('hhtools:panel-request', receive)
+
+    expect(videoToMotion?.attributes('disabled')).toBeUndefined()
+    expect(panels).toEqual(['video-to-motion'])
   })
 
   it('routes File imports and keeps workspace and theme settings in their own menu', async () => {
@@ -61,8 +89,13 @@ describe('DesktopMenuBar', () => {
 
     await wrapper.get('[data-menu-trigger="file"]').trigger('click')
     const items = wrapper.findAll('.desktop-menu-item')
+    const fileMenu = wrapper.get('[data-menu-popup="file"]')
     expect(items.some((item) => item.text().includes('Settings'))).toBe(false)
+    expect(items.some((item) => item.text().includes('Import Video'))).toBe(true)
+    expect(fileMenu.element.firstElementChild?.classList.contains('desktop-menu-separator')).toBe(false)
+    expect(fileMenu.findAll('.desktop-menu-item-copy small')).toHaveLength(0)
     const motionFile = items.find((item) => item.text().includes('Import Motion File'))
+    expect(motionFile?.attributes('title')).toContain('BVH, GLB, NPZ')
     await motionFile?.trigger('click')
     window.removeEventListener('hhtools:import-command', receive)
 
@@ -74,7 +107,8 @@ describe('DesktopMenuBar', () => {
       expect.stringContaining('Settings'),
       expect.stringContaining('Dark Mode'),
     ])
-    expect(settingsItems[0]?.text()).toContain('background jobs')
+    expect(settingsItems[0]?.text()).toBe('Settings')
+    expect(settingsItems[0]?.attributes('title')).toContain('background jobs')
     await settingsItems[0]?.trigger('click')
     expect(wrapper.emitted('openSettings')).toHaveLength(1)
 

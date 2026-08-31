@@ -48,8 +48,15 @@ const groups: NavigationGroup[] = [
     enLabel: 'Workflows',
     zhLabel: '工作流',
     items: [
-      { id: 'h2r', label: '人体 → 机器人 H2R', enLabel: 'Human → Robot H2R', zhLabel: '人体 → 机器人 H2R', icon: '↗' },
-      { id: 'r2r', label: '机器人 → 机器人 R2R', enLabel: 'Robot → Robot R2R', zhLabel: '机器人 → 机器人 R2R', icon: '🔁' },
+      {
+        id: 'video-to-motion',
+        label: '视频 → 动作 Video to Motion',
+        enLabel: 'Video → Motion',
+        zhLabel: '视频 → 动作',
+        icon: '🎥',
+      },
+      { id: 'h2r', label: '人体 → 机器人', enLabel: 'Human → Robot', zhLabel: '人体 → 机器人', icon: '↗' },
+      { id: 'r2r', label: '机器人 → 机器人', enLabel: 'Robot → Robot', zhLabel: '机器人 → 机器人', icon: '🔁' },
       { id: 'batch', label: '批量 Batch', enLabel: 'Batch', zhLabel: '批量处理', icon: '🧺', badgeId: 'basket-badge' },
     ],
   },
@@ -60,19 +67,10 @@ const groups: NavigationGroup[] = [
     items: [
       {
         id: 'dataset-viz',
-        label: '数据集 Dataset',
-        enLabel: 'Manual Analysis',
-        zhLabel: '手动分析',
+        label: '数据分析 Data Analysis',
+        enLabel: 'Data Analysis',
+        zhLabel: '数据分析',
         icon: '📊',
-      },
-      {
-        label: 'PAE Analysis',
-        enLabel: 'PAE Analysis',
-        zhLabel: 'PAE 分析',
-        icon: '◫',
-        disabled: true,
-        disabledReason: 'Coming soon',
-        workspaceOnly: true,
       },
     ],
   },
@@ -96,8 +94,13 @@ function disabledReason(item: NavigationItem): string | undefined {
 
 <template>
   <div class="nav-groups">
-    <section v-for="group in groups" :key="group.label" class="nav-group">
-      <h2 class="nav-group-label">{{ groupLabel(group) }}</h2>
+    <section
+      v-for="group in groups"
+      :key="group.label"
+      class="nav-group"
+      role="group"
+      :aria-label="groupLabel(group)"
+    >
       <button
         v-for="item in group.items"
         :key="item.id"
@@ -118,8 +121,11 @@ function disabledReason(item: NavigationItem): string | undefined {
       </button>
     </section>
 
-    <section class="nav-group nav-help-group">
-      <h2 class="nav-group-label">{{ workspace ? (locale === 'zh-CN' ? '帮助' : 'Help') : '帮助 Help' }}</h2>
+    <section
+      class="nav-group nav-help-group"
+      role="group"
+      :aria-label="workspace ? (locale === 'zh-CN' ? '帮助' : 'Help') : '帮助 Help'"
+    >
       <button
         id="nav-tour"
         type="button"

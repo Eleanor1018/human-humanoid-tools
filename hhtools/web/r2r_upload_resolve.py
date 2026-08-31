@@ -6,8 +6,10 @@ Profiles mirror the human-motion basket layout:
 
 * **mimic** — standalone ``.csv`` / ``.pkl`` / ``.npz`` robot exports (nested
   folders OK, e.g. ``dataset/clip/clip.csv``).
-* **intermimic** — clip **folder** with a robot trajectory plus
-  ``*_cleaned_simplified.obj`` interaction meshes (OMOMO-style layout).
+* **intermimic** — clip **folder** with a robot trajectory plus interaction
+  sidecars: ``object_*.csv`` and/or object ``.obj`` meshes (Web export uses
+  plain names like ``Box_H_1.obj``; OMOMO-style ``*_cleaned_simplified.obj``
+  is also accepted).
 * **meshmimic** — clip **folder** with a robot trajectory plus ``*_terrain.obj``.
 """
 
@@ -31,10 +33,37 @@ def _has_terrain_obj(folder: Path, stem: str) -> bool:
     return any(folder.glob("*_terrain.obj"))
 
 
-def _has_intermimic_obj(folder: Path, stem: str) -> bool:
-    if (folder / f"{stem}_cleaned_simplified.obj").is_file():
+def _has_intermimic_obj(folder: Path, stem: str = "") -> bool:
+    """True when the folder carries interaction meshes or object tracks.
+
+    Accepts Web robot-export layout (``object_*.csv`` + any non-terrain
+    ``.obj``) as well as OMOMO ``*_cleaned_simplified.obj``.
+    """
+    folder = Path(folder)
+    if stem and (folder / f"{stem}_cleaned_simplified.obj").is_file():
         return True
-    return any(folder.glob("*_cleaned_simplified.obj"))
+    if any(folder.glob("*_cleaned_simplified.obj")):
+        return True
+    if any(folder.glob("object_*.csv")):
+        return True
+    for obj in folder.glob("*.obj"):
+        name = obj.name.lower()
+        if name.endswith("_terrain.obj") or name.endswith("_terrain"):
+            continue
+        if "_terrain" in name:
+            continue
+        return True
+    return False
+
+
+def _interaction_clip_dirs(drop_dir: Path) -> set[Path]:
+    """Parents of interaction sidecars (object tracks / object meshes)."""
+    dirs: set[Path] = set()
+    for p in drop_dir.rglob("*_cleaned_simplified.obj"):
+        dirs.add(p.parent)
+    for p in drop_dir.rglob("object_*.csv"):
+        dirs.add(p.parent)
+    return dirs
 
 
 def _sniff_robot_csv(path: Path) -> bool:
@@ -121,13 +150,26 @@ def _sniff_robot_npz(path: Path) -> bool:
     return _joint_q_width_from_npz(path) > 0
 
 
+def _is_human_sidecar_csv(path: Path) -> bool:
+    """True for object / actor timestamp CSVs that are not robot trajectories."""
+    name = path.name.lower()
+    if name == "motion_actor.csv":
+        return True
+    if name.startswith("prop_") and name.endswith(".csv"):
+        return True
+    # Official OmniContact object poses + hhtools robot-export object sidecars.
+    if name.startswith("object_") and name.endswith(".csv"):
+        return True
+    return False
+
+
 def _is_robot_export_trajectory(path: Path) -> bool:
     if not path.is_file():
         return False
     ext = path.suffix.lower()
     if ext not in _ROBOT_TRAJ_EXTS:
         return False
-    if path.name.lower().startswith("object_"):
+    if ext == ".csv" and _is_human_sidecar_csv(path):
         return False
     if ext == ".csv":
         return _sniff_robot_csv(path)
@@ -187,8 +229,10 @@ def _find_meshmimic_primaries(drop_dir: Path) -> list[tuple[str, Path]]:
 def _find_intermimic_primaries(drop_dir: Path) -> list[Path]:
     out: list[Path] = []
     seen: set[Path] = set()
-    for parent in sorted({p.parent for p in drop_dir.rglob("*_cleaned_simplified.obj")}):
+    for parent in sorted(_interaction_clip_dirs(drop_dir)):
         if parent in seen:
+            continue
+        if not _has_intermimic_obj(parent):
             continue
         cands: list[Path] = []
         for ext in _ROBOT_TRAJ_EXTS:
@@ -233,6 +277,48 @@ class R2rClipRef:
     profile: str
     clip_kind: str = ""
     has_scene: bool = False
+
+
+def r2r_clip_ref_for_path(path: Path, profile: str = "auto") -> R2rClipRef:
+    """Validate one exact robot trajectory and preserve its scene semantics.
+
+    Library selection differs from folder upload: the user has selected one
+    concrete row, so resolving the first clip below its parent would be wrong.
+    This helper validates that exact path and derives only the sidecars that
+    belong to it.
+    """
+
+    picked = Path(path).resolve()
+    if not _is_robot_export_trajectory(picked):
+        raise ValueError(
+            "所选资源不是机器人轨迹（需要包含 root pose 与机器人关节 DoF 的 "
+            "`.csv` / `.pkl` / `.npz`）"
+        )
+
+    requested = (profile or "auto").strip().lower()
+    if requested not in {"auto", "mimic", "intermimic", "meshmimic"}:
+        raise ValueError(f"unsupported R2R profile: {requested}")
+
+    if requested == "auto":
+        if _has_terrain_obj(picked.parent, picked.stem):
+            requested = "meshmimic"
+        elif _has_intermimic_obj(picked.parent, picked.stem):
+            requested = "intermimic"
+        else:
+            requested = "mimic"
+
+    has_scene = requested in {"intermimic", "meshmimic"}
+    if requested == "meshmimic" and not _has_terrain_obj(picked.parent, picked.stem):
+        raise ValueError("meshmimic 轨迹缺少 `*_terrain.obj` 场景文件")
+    if requested == "intermimic" and not _has_intermimic_obj(picked.parent, picked.stem):
+        raise ValueError("intermimic 轨迹缺少 `*_cleaned_simplified.obj` 交互物体")
+
+    return R2rClipRef(
+        path=picked,
+        profile=requested,
+        clip_kind=picked.suffix.lstrip("."),
+        has_scene=has_scene,
+    )
 
 
 def export_subdir_for_r2r_clip(drop_dir: Path, picked: Path) -> str:
@@ -295,7 +381,8 @@ def validate_r2r_upload(drop_dir: Path, profile: str) -> None:
     if profile == "intermimic":
         raise ValueError(
             "未找到 intermimic 风格 clip（需要文件夹内含机器人轨迹 "
-            "`.csv/.pkl/.npz` 与 `*_cleaned_simplified.obj`）"
+            "`.csv/.pkl/.npz`，以及 `object_*.csv` 和/或物体 `.obj`；"
+            "OMOMO 的 `*_cleaned_simplified.obj` 亦可）"
         )
     if profile == "meshmimic":
         raise ValueError(

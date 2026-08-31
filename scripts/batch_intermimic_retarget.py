@@ -3,6 +3,7 @@
 Supported ``--dataset`` values:
 
 * ``omomo`` — ``<clip>/<clip>.pkl`` + object mesh sidecars (SMPL-X / ``smplx``)
+* ``omnicontact`` — OmniContact ``raw_mocap/**/motion_actor.bvh`` + object CSV
 
 Output matches Web export contents (uncompressed folders)::
 
@@ -39,7 +40,7 @@ from _batch_retarget_common import (  # noqa: E402
     run_batch_main,
 )
 
-_INTERMIMIC_DATASETS = ("omomo",)
+_INTERMIMIC_DATASETS = ("omomo", "omnicontact")
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:

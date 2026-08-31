@@ -5,6 +5,7 @@ import type {
   CalibrationEditorStateDetail,
   ComparisonCommandDetail,
   ComparisonStateDetail,
+  DataAnalysisStateDetail,
   HhAppBridge,
   ImportCommandDetail,
   JobHistoryCommandDetail,
@@ -13,12 +14,14 @@ import type {
   PlaybackUiState,
   ResultDiagnosticsDetail,
   UploadFile,
+  VideoToMotionStateDetail,
   WorkflowStateDetail,
 } from './runtime/types'
 import type { GuidedTour } from './runtime/tutorial'
 
 export type HHToolsInputId =
   | 'lib-search'
+  | 'robot-library-search'
   | 'rt-retarget-fps'
   | 'rt-export-fps'
   | 'rt-export-t-start'
@@ -38,6 +41,8 @@ export type HHToolsInputId =
   | 'r2r-export-t-end'
   | 'r2r-csv-header'
   | 'r2r-batch-export-fps'
+  | 'r2r-batch-source-fps'
+  | 'r2r-batch-retarget-fps'
   | 'r2r-batch-t-start'
   | 'r2r-batch-t-end'
   | 'r2r-batch-out'
@@ -50,8 +55,8 @@ export type HHToolsInputId =
   | 'dv-subset-alpha'
 
 export type HHToolsSelectId =
-  | 'lib-folder'
-  | 'robot-select'
+  | 'lib-category'
+  | 'h2r-robot-select'
   | 'rt-ref-select'
   | 'rt-backend'
   | 'rt-export-format'
@@ -62,6 +67,9 @@ export type HHToolsSelectId =
   | 'r2r-backend'
   | 'r2r-export-format'
   | 'r2r-batch-backend'
+  | 'r2r-batch-format'
+  | 'r2r-batch-source-select'
+  | 'r2r-batch-target-select'
   | 'dv-embedding'
   | 'dv-robot-select'
   | 'dv-view-dim'
@@ -81,6 +89,7 @@ export type HHToolsKnownId =
   | `lib-${string}`
   | `load-${string}`
   | `motion-${string}`
+  | `gvhmr-${string}`
   | `r2r-${string}`
   | `robot-${string}`
   | `rt-${string}`
@@ -96,10 +105,8 @@ export type HHToolsKnownId =
   | 'ui-build'
 
 export type HHToolsButtonId =
-  | 'hide-sidebar'
-  | 'hide-inspector'
-  | 'show-sidebar'
-  | 'show-inspector'
+  | 'toggle-sidebar'
+  | 'toggle-inspector'
   | 'nav-tour'
   | 'view-reset-btn'
   | 'tg-skeleton'
@@ -118,8 +125,7 @@ export type HHToolsButtonId =
   | 'add-to-basket'
   | 'robot-pick-urdf'
   | 'robot-pick-mesh-folder'
-  | 'robot-load-btn'
-  | 'robot-delete-btn'
+  | 'h2r-robot-load'
   | 'recalib-btn'
   | 'calib-zero'
   | 'calib-restore'
@@ -138,8 +144,13 @@ export type HHToolsButtonId =
   | 'r2r-retarget-btn'
   | 'r2r-export-btn'
   | 'r2r-basket-clear'
+  | 'r2r-batch-pick-file'
+  | 'r2r-batch-pick-folder'
+  | 'r2r-batch-source-load'
+  | 'r2r-batch-target-load'
   | 'r2r-batch-run'
   | 'dv-pick-folder'
+  | 'dv-pick-robot-folder'
   | 'dv-clear-upload'
   | 'dv-analyze'
   | 'dv-clear-tags'
@@ -177,6 +188,7 @@ declare global {
     hhtoolsDesktop?: {
       getRuntimeState: () => Promise<unknown>
       restartBackend: () => Promise<unknown>
+      selectDirectory: () => Promise<string | null>
       openExternal: (url: string) => Promise<void>
       onRuntimeStateChanged: (listener: (state: unknown) => void) => () => void
     }
@@ -200,6 +212,7 @@ declare global {
     'hhtools:calibration-editor-state': CustomEvent<CalibrationEditorStateDetail>
     'hhtools:comparison-command': CustomEvent<ComparisonCommandDetail>
     'hhtools:comparison-state': CustomEvent<ComparisonStateDetail>
+    'hhtools:data-analysis-state': CustomEvent<DataAnalysisStateDetail>
     'hhtools:job-history-command': CustomEvent<JobHistoryCommandDetail>
     'hhtools:job-history-state': CustomEvent<JobHistoryStateDetail>
     'hhtools:import-command': CustomEvent<ImportCommandDetail>
@@ -208,6 +221,7 @@ declare global {
     'hhtools:playback-command': CustomEvent<PlaybackCommandDetail>
     'hhtools:playback-state': CustomEvent<Partial<PlaybackUiState>>
     'hhtools:result-diagnostics': CustomEvent<ResultDiagnosticsDetail>
+    'hhtools:video-to-motion-state': CustomEvent<VideoToMotionStateDetail>
     'hhtools:workflow-state': CustomEvent<WorkflowStateDetail>
   }
 }

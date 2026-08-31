@@ -17,6 +17,7 @@ import ipaddress
 import json
 import logging
 import math
+import os
 import shlex
 import shutil
 import tempfile
@@ -64,7 +65,7 @@ _log = logging.getLogger(__name__)
 
 # Bump when static/ front-end behaviour changes.  Injected into ``index.html``
 # at serve time so collaborators only need to pull + restart (no triple-sync).
-UI_BUILD_ID = "20260827-ux7"
+UI_BUILD_ID = "20260830-r2r-motion-boundary"
 
 _UPLOAD_CHUNK_BYTES = 1024 * 1024
 # These are application-level resource controls, not transport tuning knobs.
@@ -80,17 +81,35 @@ _DEFAULT_JOB_TTL_SECONDS = 60 * 60.0
 
 _ACTIVE_JOB_STATUSES = frozenset({"pending", "running"})
 
+# Product-curated models remain read-only even when a distribution provisions
+# them below the same per-user root as uploaded models. Keep this list aligned
+# with the front-end Robot Library catalog.
+_BUILTIN_ROBOT_PRESET_NAMES = frozenset(
+    {
+        "g1_29dof",
+        "roboto_origin",
+        "agibot_x2_ultra",
+        "asimov_1",
+        "fourier_gr2",
+        "berkeley_humanoid_lite",
+    }
+)
+
+
+def _is_builtin_robot_preset(name: str) -> bool:
+    return str(name).strip().lower() in _BUILTIN_ROBOT_PRESET_NAMES
+
 _UPLOAD_ENDPOINTS = frozenset(
     {
         "/api/dataset/upload",
         "/api/basket/upload",
         "/api/motion/upload",
+        "/api/video-to-motion/upload",
         "/api/robot/upload",
         "/api/r2r/source/upload",
         "/api/r2r/basket/upload",
     }
 )
-
 # Datasets whose adapters accept ``with_mesh=True`` (SMPL forward → baked vertices).
 # The web UI always requests mesh so AMASS / Motion-X etc. show a real body surface,
 # not just a stick skeleton (matches Viser's "Skinned mesh" path).
@@ -123,6 +142,7 @@ _DATASET_TO_REFERENCE: dict[str, str] = {
     "xsens_mocap": "xsens_mocap",
     "gvhmr": "gvhmr",
     "omomo": "smplx",
+    "omnicontact": "lafan_bvh",
     "meshmimic_holosoma": "smplx",
     "glb": "glb",
     "unified_npz": "smpl",
@@ -180,6 +200,74 @@ def _safe_upload_directory_name(name: str | None, *, default: str) -> str:
     if len(relative.parts) != 1:
         raise ValueError("upload directory name must contain one path segment")
     return relative.name
+
+
+def _adopt_motion_library_root(
+    target: Path,
+    *,
+    current_root: Path | None = None,
+    trusted_roots: tuple[Path, ...] = (),
+) -> Path:
+    """Create or explicitly adopt one dedicated, managed library container.
+
+    Library publication can replace a same-named child directory, so silently
+    treating an arbitrary populated dataset directory as its managed root would
+    make later unlink/import actions destructive. New selections must therefore
+    be empty (or already carry our marker). The current historical root may be
+    marked in place because hhtools already owns its child namespace.
+    """
+
+    from hhtools.web.motion_library_settings import (
+        motion_library_marker_path,
+        motion_library_marker_payload,
+        validate_motion_library_marker,
+    )
+
+    root = Path(target).expanduser().resolve(strict=False)
+    if root.parent == root or root == Path.home().resolve(strict=False):
+        raise ValueError("请选择专用的资源库目录，不能使用文件系统根目录或用户主目录")
+    if root.exists() and not root.is_dir():
+        raise ValueError("资源库路径必须是目录")
+
+    marker = motion_library_marker_path(root)
+    known_roots = trusted_roots + (
+        (current_root,) if current_root is not None else ()
+    )
+    already_owned = any(
+        root == Path(candidate).expanduser().resolve(strict=False)
+        for candidate in known_roots
+    )
+    marker_is_valid = validate_motion_library_marker(root)
+    if root.is_dir() and not marker_is_valid and not already_owned:
+        try:
+            has_existing_content = next(root.iterdir(), None) is not None
+        except OSError as err:
+            raise ValueError(f"无法读取资源库目录：{err}") from err
+        if has_existing_content:
+            raise ValueError(
+                "所选目录不是空目录。请选择一个空的专用目录；"
+                "已有数据集请使用“链接目录”接入。"
+            )
+
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+        temporary = marker.with_name(f".{marker.name}.{time.time_ns()}.tmp")
+        try:
+            temporary.write_text(
+                json.dumps(
+                    motion_library_marker_payload(),
+                    ensure_ascii=False,
+                    indent=2,
+                    sort_keys=True,
+                ) + "\n",
+                encoding="utf-8",
+            )
+            temporary.replace(marker)
+        finally:
+            temporary.unlink(missing_ok=True)
+    except OSError as err:
+        raise ValueError(f"无法写入资源库目录：{err}") from err
+    return root
 
 
 def _is_loopback_address(value: str | None, *, allow_localhost: bool = False) -> bool:
@@ -1144,9 +1232,44 @@ def create_app(
             "parent_job_id": stored.get("parent_job_id"),
         }
 
+    from hhtools.utils.paths import (
+        HHTOOLS_MOTION_LIBRARY_ROOT_ENV,
+        user_motion_library_root,
+        user_motion_library_settings_path,
+    )
     from hhtools.web.motion_library_links import ensure_motions_library, motions_library_root
+    from hhtools.web.motion_library_settings import (
+        MotionLibrarySettingsStore,
+        effective_motion_library_root,
+        updated_motion_library_settings,
+    )
 
+    motion_library_settings_store = MotionLibrarySettingsStore(
+        user_motion_library_settings_path(),
+    )
+    app.state.motion_library_settings_store = motion_library_settings_store
     ensure_motions_library()
+
+    # Agent-facing REST is a thin, versioned adapter over transport-neutral
+    # services.  Capability discovery receives only the scheduler's read-only
+    # snapshot function: it cannot reserve a queue slot or touch solver state.
+    from hhtools.services import AgentAssetService, AssetRegistry, CapabilitiesService
+    from hhtools.web.agent_api import router as agent_router
+
+    app.state.agent_asset_service = AgentAssetService(
+        AssetRegistry(
+            state.save_dir / ".hhtools-agent",
+            {
+                "motion-library": motions_library_root,
+                "source": state.source_root,
+            },
+        )
+    )
+    app.state.agent_capabilities_service = CapabilitiesService(
+        scheduler_snapshot=scheduler.snapshot,
+        asset_root_provider=lambda: app.state.agent_asset_service.allowed_root_ids,
+    )
+    app.include_router(agent_router)
 
     def _render_index_html() -> str:
         raw = (static_dir / "index.html").read_text(encoding="utf-8")
@@ -1312,6 +1435,92 @@ def create_app(
                 raise HTTPException(status_code=503, detail=str(err)) from err
             return _scheduler_payload(editable=True)
 
+    def _motion_library_settings_payload(
+        request: Request,
+    ) -> dict[str, str | bool | None]:
+        settings = motion_library_settings_store.load()
+        environment_override = bool(os.environ.get(HHTOOLS_MOTION_LIBRARY_ROOT_ENV))
+        local_request = _job_settings_editable(request)
+        editable = local_request and not environment_override
+        readonly_reason: str | None = None
+        if not editable:
+            readonly_reason = "environment_override" if environment_override else "remote"
+        return {
+            "root": str(effective_motion_library_root(settings)),
+            "default_root": str(user_motion_library_root().expanduser().resolve(strict=False)),
+            # An environment override is an administrator-owned launch setting;
+            # writing a lower-priority JSON value would misleadingly appear to
+            # succeed while leaving the effective root unchanged.
+            "editable": editable,
+            "readonly_reason": readonly_reason,
+        }
+
+    @app.get("/api/settings/motion-library")
+    def get_motion_library_settings(request: Request) -> dict[str, str | bool | None]:
+        """Return the effective server-side Motion Library root."""
+
+        return _motion_library_settings_payload(request)
+
+    @app.patch("/api/settings/motion-library")
+    def patch_motion_library_settings(
+        payload: dict[str, Any],
+        request: Request,
+    ) -> dict[str, str | bool | None]:
+        """Persist and hot-apply a dedicated managed library directory."""
+
+        if not _job_settings_editable(request):
+            raise HTTPException(
+                status_code=403,
+                detail="motion library settings can only be changed from a loopback client",
+            )
+        if os.environ.get(HHTOOLS_MOTION_LIBRARY_ROOT_ENV):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "HHTOOLS_MOTION_LIBRARY_ROOT overrides the saved directory; "
+                    "change or remove that environment setting first"
+                ),
+            )
+
+        # Switching the resolver while another thread publishes or scans a
+        # library would split one operation across two roots. The same lock used
+        # for materialization makes validation, persistence, and the next scan
+        # observe one complete root selection.
+        with motion_library_publish_lock:
+            current = motion_library_settings_store.load()
+            try:
+                updated = updated_motion_library_settings(current, payload)
+                selected_root = effective_motion_library_root(updated)
+                current_root = motions_library_root()
+                default_root = user_motion_library_root().expanduser().resolve(strict=False)
+                if selected_root != current_root:
+                    # Mark the root we are leaving before changing the resolver.
+                    # This preserves a safe return path even if platform-default
+                    # discovery changes while the custom root is active.
+                    _adopt_motion_library_root(
+                        current_root,
+                        current_root=current_root,
+                    )
+                _adopt_motion_library_root(
+                    selected_root,
+                    current_root=current_root,
+                    # The default/legacy location is owned by hhtools even when
+                    # it predates ownership markers. Trust it once so a populated
+                    # library can safely round-trip default -> custom -> default;
+                    # adoption writes the canonical marker before saving.
+                    trusted_roots=(default_root,),
+                )
+                motion_library_settings_store.save(updated)
+            except ValueError as err:
+                raise HTTPException(status_code=422, detail=str(err)) from err
+            except OSError as err:
+                _log.exception("failed to persist Motion Library settings")
+                raise HTTPException(
+                    status_code=500,
+                    detail="failed to persist Motion Library settings",
+                ) from err
+        return _motion_library_settings_payload(request)
+
     @app.get("/api/formats")
     def formats() -> dict:
         from hhtools.io.base import registered_loader_extensions
@@ -1329,6 +1538,7 @@ def create_app(
                 {"ext": ".npz", "label": "AMASS / SMPL-H,X poses", "needs": "smpl-weights"},
                 {"ext": ".npy", "label": "Motion-X / holosoma", "needs": "smpl / terrain.obj"},
                 {"ext": ".pkl", "label": "OMOMO (interaction)", "needs": "object .obj sidecar"},
+                {"ext": ".bvh", "label": "OmniContact (HOI mocap)", "needs": "object CSV + optional assets/"},
                 {"ext": ".pt", "label": "GVHMR", "needs": "smpl-weights"},
             ],
             "registered_loaders": exts,
@@ -1342,7 +1552,6 @@ def create_app(
         from hhtools.web.motion_library_links import scan_motions_library
 
         root = Path(source) if source else state.source_root
-        lib_root = motions_library_root()
         merged: list[dict] = []
         seen: set[str] = set()
         for e in scan_library(root):
@@ -1361,7 +1570,8 @@ def create_app(
         # namespace is still only process-local; multi-worker deployments need
         # a cross-process file lock before they can offer this guarantee.
         with motion_library_publish_lock:
-            motion_entries = scan_motions_library()
+            lib_root = motions_library_root()
+            motion_entries = scan_motions_library(lib_root)
         for raw in motion_entries:
             sp = str(raw.get("source_path") or "")
             if not sp or sp in seen:
@@ -1395,10 +1605,15 @@ def create_app(
         if not path:
             raise HTTPException(status_code=400, detail="需要 path")
         with motion_library_publish_lock:
-            dest = link_to_library(path, folder_label=folder_label)
+            lib_root = motions_library_root()
+            dest = link_to_library(
+                path,
+                folder_label=folder_label,
+                library_root=lib_root,
+            )
             entries = [
                 entry
-                for entry in scan_motions_library()
+                for entry in scan_motions_library(lib_root)
                 if entry.get("folder_label") == dest.name
             ]
         return {
@@ -1406,7 +1621,7 @@ def create_app(
             "kind": "directory",
             "clip_count": len(entries),
             "path": str(dest),
-            "motions_library_root": str(motions_library_root()),
+            "motions_library_root": str(lib_root),
         }
 
     @app.delete("/api/library/link/{folder_label}")
@@ -1517,6 +1732,19 @@ def create_app(
             _da.save_upload_source_hint(drop, hint_root)
         summary = _da.scan_upload_summary(drop)
         return summary
+
+    @app.post("/api/dataset/scan")
+    def dataset_scan(body: dict) -> dict:
+        """Scan a server-local directory without copying files into /tmp."""
+        from hhtools.web import dataset_analysis as _da
+
+        raw = str(body.get("source") or "").strip()
+        if not raw:
+            raise HTTPException(status_code=400, detail="请填写本机目录路径")
+        root = Path(raw).expanduser()
+        if not root.is_dir():
+            raise HTTPException(status_code=400, detail=f"目录不存在：{root}")
+        return _da.scan_upload_summary(root.resolve())
 
     @app.post("/api/dataset/upload/remove")
     async def dataset_upload_remove(body: dict) -> dict:
@@ -1677,6 +1905,12 @@ def create_app(
                 else None
             )
             dataset = infer_mimic_dataset(source_path, bone_names=bone_names)
+            if dataset == "omnicontact":
+                from hhtools.io.bvh_detect import infer_bvh_dataset_from_joints
+
+                detected = infer_bvh_dataset_from_joints(motion.hierarchy.bone_names)
+                if detected and detected in _DATASET_TO_REFERENCE:
+                    return _DATASET_TO_REFERENCE[detected]
         elif str(motion.source_format) == "bvh":
             from hhtools.io.bvh_detect import infer_bvh_dataset_from_joints
 
@@ -1798,15 +2032,15 @@ def create_app(
             job.mark_terminal("error")
 
     def _run_basket_upload_job(job: Job, drop: Path, profile: str) -> None:
-        from hhtools.web.upload_resolve import enumerate_upload_clips
+        from hhtools.web.upload_resolve import (
+            enumerate_upload_clips,
+            upload_validation_error,
+        )
 
         try:
             clips = enumerate_upload_clips(drop, profile)
             if not clips:
-                raise ValueError(
-                    "未找到可识别的动作 clip（支持 .npz / .pkl / .bvh / .glb …，"
-                    "可拖入整个文件夹保留子目录结构）"
-                )
+                raise ValueError(upload_validation_error(profile))
             entries = []
             for i, ref in enumerate(clips):
                 job.progress = i / max(1, len(clips))
@@ -1907,8 +2141,215 @@ def create_app(
             job.error = str(err)
             job.mark_terminal("error")
 
+    def _run_gvhmr_video_job(
+        job: Job,
+        drop: Path,
+        video_path: Path,
+        checkpoint_path: Path | None,
+        static_cam: bool,
+        f_mm: int | None,
+    ) -> None:
+        """Convert one uploaded video with the isolated official GVHMR runtime."""
+
+        from hhtools.integrations.gvhmr import GvhmrConfig, run_gvhmr
+        from hhtools.web.motion_library_links import materialize_drop
+        from hhtools.web.motion_progress import MotionLoadProgress
+        from hhtools.web.upload_resolve import load_clip_at_path
+
+        try:
+            config = GvhmrConfig.from_environment()
+            # GVHMR and hhtools can use the same licensed SMPL-X directory. An
+            # explicit hhtools override always wins; this only supplies the
+            # integration default for the generated .pt adapter.
+            os.environ.setdefault(
+                "HHTOOLS_BODY_MODELS", str(config.body_models_root),
+            )
+
+            def inference_progress(fraction: float, message: str) -> None:
+                job.progress = 0.03 + 0.67 * max(0.0, min(1.0, fraction))
+                job.message = message
+                _persist_job(job)
+
+            result_path = run_gvhmr(
+                video_path,
+                drop,
+                checkpoint_path=checkpoint_path,
+                static_cam=static_cam,
+                f_mm=f_mm,
+                config=config,
+                progress=inference_progress,
+            )
+
+            job.progress = 0.72
+            job.message = "正在转换 GVHMR 参数为 hhtools Motion…"
+            load_progress = MotionLoadProgress(job, base=0.72, span=0.13)
+            motion, dataset = load_clip_at_path(
+                result_path,
+                "mimic",
+                load_motion_file=_load_motion_file,
+                load_via_adapter=_load_via_adapter,
+                progress=load_progress,
+            )
+
+            relative_result = result_path.resolve().relative_to(drop.resolve())
+            folder_label_hint = _safe_upload_directory_name(
+                f"gvhmr-{video_path.stem}",
+                default=f"gvhmr-{job.id}",
+            )
+            job.progress = 0.87
+            job.message = "正在发布到 Motion Library…"
+            with motion_library_publish_lock:
+                lib_dir, folder_label, materialize_mode = materialize_drop(
+                    [relative_result.as_posix()],
+                    folder_label=folder_label_hint,
+                    upload_drop=drop,
+                )
+                library_picked = _matching_materialized_clip(
+                    lib_dir,
+                    snapshot_root=drop,
+                    snapshot_picked=result_path,
+                    profile="mimic",
+                )
+                library_entry = _library_entry_from_link(
+                    folder_label,
+                    lib_dir,
+                    library_picked,
+                    dataset or "gvhmr",
+                )
+
+            job.progress = 0.93
+            job.message = "正在构建动作预览…"
+            payload = _register_motion(
+                motion,
+                dataset or "gvhmr",
+                "gvhmr",
+                library_entry=library_entry,
+                extra={
+                    "video_name": video_path.name,
+                    "gvhmr_checkpoint": (
+                        checkpoint_path.name if checkpoint_path else "official"
+                    ),
+                    "gvhmr_static_cam": static_cam,
+                    "materialize_mode": materialize_mode,
+                    "linked_folder": folder_label,
+                },
+            )
+            job.result = payload
+            job.progress = 1.0
+            job.message = "视频动作生成完成"
+            job.mark_terminal("done")
+        except Exception as err:  # noqa: BLE001
+            _log.exception("GVHMR video-to-motion job failed")
+            job.error = str(err)
+            job.mark_terminal("error")
+
+    @app.get("/api/video-to-motion/status")
+    def video_to_motion_status() -> dict:
+        """Report whether the isolated official GVHMR runtime is ready."""
+
+        from hhtools.integrations.gvhmr import gvhmr_status
+
+        return gvhmr_status()
+
+    @app.post("/api/video-to-motion/upload")
+    async def upload_video_to_motion(
+        files: list[UploadFile] = File(...),
+        checkpoint: UploadFile | None = File(None),
+        static_cam: bool = True,
+        f_mm: int | None = None,
+    ) -> dict:
+        """Upload one video and schedule official GVHMR inference."""
+
+        from hhtools.integrations.gvhmr import gvhmr_status
+
+        if len(files) != 1:
+            raise HTTPException(status_code=400, detail="请选择一个视频文件")
+        if f_mm is not None and f_mm <= 0:
+            raise HTTPException(status_code=400, detail="f_mm 必须为正整数")
+        runtime = gvhmr_status()
+        if not runtime["ready"]:
+            missing = "; ".join(runtime["missing"])
+            raise HTTPException(status_code=503, detail=f"GVHMR 尚未就绪：{missing}")
+
+        admission = _reserve_job_slot()
+        drop = state.upload_root / f"gvhmr_{uuid.uuid4().hex[:8]}"
+        scheduled = False
+        try:
+            drop.mkdir(parents=True, exist_ok=True)
+            stored = await _store_uploads(files, drop)
+            if len(stored) != 1:
+                raise HTTPException(status_code=400, detail="视频上传为空")
+            relative, video_path = stored[0]
+            if video_path.suffix.lower() not in {
+                ".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v",
+            }:
+                raise HTTPException(
+                    status_code=400,
+                    detail="支持 MP4、MOV、MKV、AVI、WebM 和 M4V 视频",
+                )
+            checkpoint_path: Path | None = None
+            if checkpoint is not None:
+                stored_checkpoint = await _store_uploads(
+                    [checkpoint],
+                    drop / "checkpoint",
+                    default="custom.ckpt",
+                )
+                if len(stored_checkpoint) != 1:
+                    raise HTTPException(status_code=400, detail="自定义权重上传为空")
+                _checkpoint_relative, checkpoint_path = stored_checkpoint[0]
+                if checkpoint_path.suffix.lower() not in {".ckpt", ".pt", ".pth"}:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="自定义 GVHMR 权重仅支持 CKPT、PT 和 PTH 文件",
+                    )
+            job = _schedule_job(
+                "video_to_motion",
+                {
+                    "file": relative.as_posix(),
+                    "static_cam": static_cam,
+                    "f_mm": f_mm,
+                    "engine": "official_gvhmr",
+                    "weights": "custom" if checkpoint_path else "official",
+                    "checkpoint_name": checkpoint_path.name if checkpoint_path else None,
+                    "training": False,
+                },
+                _run_gvhmr_video_job,
+                args=(drop, video_path, checkpoint_path, static_cam, f_mm),
+                reservation=admission,
+            )
+            scheduled = True
+            return {"job_id": job.id}
+        finally:
+            if not scheduled:
+                admission.cancel()
+                shutil.rmtree(drop, ignore_errors=True)
+
     @app.post("/api/motion/load_library")
     async def load_library(body: dict) -> dict:
+        if body.get("usage") == "human_to_robot":
+            from hhtools.web.motion_library_links import library_entry_for_load
+            from hhtools.web.r2r_upload_resolve import _is_robot_export_trajectory
+
+            try:
+                entry = library_entry_for_load(
+                    dataset=str(body.get("dataset") or "unknown"),
+                    folder_label=str(body.get("folder_label") or ""),
+                    sequence_id=str(body.get("sequence_id") or ""),
+                    source_path=str(body.get("source_path") or ""),
+                )
+            except (FileNotFoundError, ValueError) as err:
+                raise HTTPException(status_code=422, detail=str(err)) from err
+            if (
+                str(body.get("dataset") or "").casefold() in {"robot", "r2r"}
+                or _is_robot_export_trajectory(entry.source_path)
+            ):
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "人体到机器人工作流只接受人体动作；机器人关节轨迹请使用"
+                        "机器人到机器人工作流。"
+                    ),
+                )
         job = _schedule_job(
             "motion_load", body, _run_motion_library_job, args=(body,),
         )
@@ -1946,20 +2387,60 @@ def create_app(
                 admission.cancel()
                 shutil.rmtree(drop, ignore_errors=True)
 
+    @app.post("/api/basket/scan")
+    def basket_scan(body: dict) -> dict:
+        """Enumerate Human2Robot clips on a server-local path (no copy)."""
+        from hhtools.web.upload_resolve import enumerate_upload_clips
+
+        raw = str(body.get("source") or "").strip()
+        profile = str(body.get("profile") or "auto").strip() or "auto"
+        if not raw:
+            raise HTTPException(status_code=400, detail="请填写本机目录路径")
+        root = Path(raw).expanduser()
+        if not root.is_dir():
+            raise HTTPException(status_code=400, detail=f"目录不存在：{root}")
+        root = root.resolve()
+        clips = enumerate_upload_clips(root, profile)
+        if not clips:
+            raise HTTPException(
+                status_code=400,
+                detail="未找到可识别的动作 clip（OmniContact 需要 motion_actor.bvh）",
+            )
+        entries = [
+            _library_entry_from_upload(
+                root,
+                ref.path,
+                ref.dataset,
+                ref.profile,
+                upload_profile=ref.profile,
+                clip_kind=ref.clip_kind,
+            )
+            for ref in clips
+        ]
+        return {
+            "entries": entries,
+            "clip_count": len(entries),
+            "source": str(root),
+            "profile": profile,
+        }
+
     @app.post("/api/motion/upload")
     async def upload_motion(
         files: list[UploadFile] = File(...),
         profile: str = "mimic",
         library_folder_label: str | None = None,
     ) -> dict:
-        """Upload motion clips; auto-symlink or copy into ``~/.config/hhtools/motions``."""
+        """Upload motion clips; auto-link or copy them into the managed library."""
 
         from hhtools.web.motion_library_links import motions_library_root
 
         if not files:
             raise HTTPException(status_code=400, detail="empty upload")
 
-        from hhtools.web.upload_resolve import enumerate_upload_clips
+        from hhtools.web.upload_resolve import (
+            enumerate_upload_clips,
+            upload_validation_error,
+        )
 
         folder_label = str(library_folder_label or "").strip() or None
 
@@ -1981,7 +2462,7 @@ def create_app(
             if not enumerate_upload_clips(drop, profile):
                 raise HTTPException(
                     status_code=400,
-                    detail="未找到可识别的动作文件（.npz / .bvh / .glb / .pkl …）",
+                    detail=upload_validation_error(profile),
                 )
 
             job = _schedule_job(
@@ -2034,13 +2515,15 @@ def create_app(
         refresh()
         out = []
         for p in list_presets():
+            builtin = _is_builtin_robot_preset(p.name)
             out.append(
                 {
                     "name": p.name,
                     "display_name": p.display_name,
                     "has_urdf": p.has_urdf,
                     "num_dof": len(p.dof_order),
-                    "deletable": is_user_installed(p, state.robot_root),
+                    "builtin": builtin,
+                    "deletable": is_user_installed(p, state.robot_root) and not builtin,
                 }
             )
         return {
@@ -2101,6 +2584,14 @@ def create_app(
             drop_name = _safe_upload_directory_name(name, default="uploaded_robot")
         except ValueError as err:
             raise HTTPException(status_code=400, detail=str(err)) from err
+        if _is_builtin_robot_preset(drop_name):
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"robot {drop_name!r} is a built-in preset and cannot be "
+                    "overwritten via upload"
+                ),
+            )
         drop = state.robot_root / drop_name
         # Re-uploading an existing robot rebuilds geometry but must NOT wipe the
         # user's tuned retarget config: keep bundled scalers, calibrations, and
@@ -2186,6 +2677,11 @@ def create_app(
             preset = get_preset(name)
         except KeyError as err:
             raise HTTPException(status_code=404, detail=f"unknown robot: {name}") from err
+        if _is_builtin_robot_preset(preset.name):
+            raise HTTPException(
+                status_code=403,
+                detail=f"robot {name!r} is a built-in preset and cannot be deleted",
+            )
         if not is_user_installed(preset, state.robot_root):
             raise HTTPException(
                 status_code=403,
@@ -3288,6 +3784,48 @@ def create_app(
                 admission.cancel()
                 shutil.rmtree(drop, ignore_errors=True)
 
+    @app.post("/api/r2r/source/library")
+    async def r2r_source_library(body: dict) -> dict:
+        """Load one existing robot trajectory without crossing into H2R data."""
+        from hhtools.web.motion_library_links import library_entry_for_load
+        from hhtools.web.r2r_upload_resolve import r2r_clip_ref_for_path
+
+        source_robot = str(body.get("source_robot") or "").strip()
+        if not source_robot:
+            raise HTTPException(status_code=400, detail="source_robot is required")
+        try:
+            entry = library_entry_for_load(
+                dataset=str(body.get("dataset") or "unknown"),
+                folder_label=str(body.get("folder_label") or ""),
+                sequence_id=str(body.get("sequence_id") or ""),
+                source_path=str(body.get("source_path") or ""),
+            )
+            profile = str(body.get("upload_profile") or body.get("profile") or "auto")
+            clip_ref = r2r_clip_ref_for_path(entry.source_path, profile)
+            source_fps = _parse_optional_fps(body.get("source_fps"))
+        except (FileNotFoundError, TypeError, ValueError) as err:
+            raise HTTPException(status_code=422, detail=str(err)) from err
+
+        job = _schedule_job(
+            "r2r_source_library",
+            {
+                "source_robot": source_robot,
+                "profile": clip_ref.profile,
+                "source_fps": source_fps,
+                "source_path": str(clip_ref.path),
+            },
+            _run_r2r_source_upload_job,
+            args=(
+                clip_ref.path.parent,
+                source_robot,
+                clip_ref.profile,
+                state,
+                source_fps,
+                clip_ref.path,
+            ),
+        )
+        return {"job_id": job.id}
+
     @app.get("/api/r2r/scene_glb")
     def r2r_scene_glb(token: str, mesh: str, scale: float | None = None) -> Response:
         """Serve an interaction-object mesh from an uploaded R2R clip folder."""
@@ -3545,6 +4083,34 @@ def create_app(
                 admission.cancel()
                 shutil.rmtree(drop, ignore_errors=True)
 
+    @app.post("/api/r2r/basket/scan")
+    def r2r_basket_scan(body: dict) -> dict:
+        """Enumerate R2R clips on a server-local path (no copy)."""
+        from hhtools.web.r2r_upload_resolve import enumerate_r2r_clips, validate_r2r_upload
+
+        raw = str(body.get("source") or "").strip()
+        profile = str(body.get("profile") or "auto").strip() or "auto"
+        if not raw:
+            raise HTTPException(status_code=400, detail="请填写本机目录路径")
+        root = Path(raw).expanduser()
+        if not root.is_dir():
+            raise HTTPException(status_code=400, detail=f"目录不存在：{root}")
+        root = root.resolve()
+        try:
+            validate_r2r_upload(root, profile)
+        except ValueError as err:
+            raise HTTPException(status_code=400, detail=str(err)) from err
+        clips = enumerate_r2r_clips(root, profile)
+        if not clips:
+            raise HTTPException(status_code=400, detail="未找到可识别的机器人轨迹 clip")
+        entries = [_r2r_entry_from_upload(root, ref) for ref in clips]
+        return {
+            "entries": entries,
+            "clip_count": len(entries),
+            "source": str(root),
+            "profile": profile,
+        }
+
     @app.post("/api/r2r/batch/retarget")
     async def r2r_batch_retarget(body: dict) -> dict:
         job = _schedule_job(
@@ -3561,10 +4127,23 @@ def create_app(
 
 
 def _enrich_basket_entry(entry: dict, fallback: str = "smpl") -> dict:
-    """Attach ``reference`` (calibration profile) inferred from dataset / path."""
+    """Attach stable calibration and Motion Library UX metadata."""
+    from hhtools.web.motion_library_categories import infer_motion_category
+
     out = dict(entry)
     if not (out.get("reference") or "").strip():
         out["reference"] = _entry_reference(out, fallback)
+    # Keep category semantics on the API boundary. The renderer must not infer
+    # object/terrain workflows from volatile adapter or folder display names.
+    out["motion_category"] = infer_motion_category(out)
+    explicit_kind = str(out.get("asset_kind") or "").strip().casefold()
+    if explicit_kind in {"human_motion", "robot_trajectory"}:
+        out["asset_kind"] = explicit_kind
+    else:
+        dataset = str(out.get("dataset") or "").strip().casefold()
+        out["asset_kind"] = (
+            "robot_trajectory" if dataset in {"robot", "r2r"} else "human_motion"
+        )
     return out
 
 
@@ -3623,7 +4202,7 @@ def _library_entry_from_link(
     picked: Path,
     dataset: str | None,
 ) -> dict:
-    """Build a library-shaped entry for a clip under ``~/.config/hhtools/motions``."""
+    """Build a library-shaped entry for a clip under the managed library root."""
     from hhtools.web.motion_library_links import scan_motions_library
 
     picked = Path(picked).resolve()
@@ -3677,9 +4256,11 @@ def _library_entry_from_upload(
         rel = picked.relative_to(drop_dir)
         sequence_id = rel.as_posix()
         stem = picked.parent.name if picked.parent.name == picked.stem else picked.stem
+        if picked.stem.lower() == "motion_actor":
+            stem = picked.parent.name or stem
     except ValueError:
         sequence_id = picked.name
-        stem = picked.stem
+        stem = picked.parent.name if picked.stem.lower() == "motion_actor" else picked.stem
     return _enrich_basket_entry({
         "dataset": dataset or "unknown",
         "folder_label": folder_label,
@@ -4070,14 +4651,16 @@ def _run_r2r_source_upload_job(
     profile: str,
     state: SessionState,
     source_fps: float | None = None,
+    selected_path: Path | None = None,
 ) -> None:
     from hhtools.retarget import robot_to_robot as r2r
+    from hhtools.web.r2r_export_bundle import clip_has_export_scene
     from hhtools.web.r2r_upload_resolve import (
         detect_r2r_profile,
         enumerate_r2r_clips,
+        r2r_clip_ref_for_path,
         validate_r2r_upload,
     )
-    from hhtools.web.r2r_export_bundle import clip_has_export_scene
     from hhtools.web.serialize import (
         serialize_motion_skeleton_preview,
         serialize_robot_trajectory,
@@ -4086,14 +4669,18 @@ def _run_r2r_source_upload_job(
     try:
         job.progress = 0.02
         job.message = "正在识别轨迹格式…"
-        validate_r2r_upload(drop, profile)
-        prof = (profile or "auto").strip().lower()
-        if prof == "auto":
-            prof = detect_r2r_profile(drop)
-        clips = enumerate_r2r_clips(drop, prof)
-        if not clips:
-            raise ValueError("no robot trajectory clip found under upload")
-        clip_ref = clips[0]
+        if selected_path is not None:
+            clip_ref = r2r_clip_ref_for_path(selected_path, profile)
+            prof = clip_ref.profile
+        else:
+            validate_r2r_upload(drop, profile)
+            prof = (profile or "auto").strip().lower()
+            if prof == "auto":
+                prof = detect_r2r_profile(drop)
+            clips = enumerate_r2r_clips(drop, prof)
+            if not clips:
+                raise ValueError("no robot trajectory clip found under upload")
+            clip_ref = clips[0]
         picked = clip_ref.path
         stem = picked.stem
         clip_dir = picked.parent
@@ -4235,6 +4822,7 @@ def _r2r_entry_from_upload(drop_dir: Path, ref) -> dict:
 
     return {
         "dataset": "r2r",
+        "asset_kind": "robot_trajectory",
         "folder_label": folder_by_profile.get(prof, "r2r"),
         "sequence_id": sequence_id,
         "source_path": str(picked),
@@ -5216,6 +5804,16 @@ def _load_via_adapter(path: Path):
     """Best-effort dataset-adapter load for non-io.base extensions."""
     suf = path.suffix.lower()
     try:
+        if suf == ".bvh":
+            from hhtools.io.mimic_detect import is_omnicontact_capture
+
+            if is_omnicontact_capture(path):
+                from hhtools.io.datasets.omnicontact import OmniContactAdapter
+
+                return (
+                    OmniContactAdapter(root=path.parent).load_motion(path.name),
+                    "omnicontact",
+                )
         if suf == ".pkl":
             from hhtools.io.datasets.omomo import OmomoAdapter
             from hhtools.io.datasets.parc_ms import ParcMsAdapter
@@ -5581,7 +6179,11 @@ def _compute_scaled_scene(
     scaler = HumanToRobotScaler(
         motion.hierarchy, scaler_cfg, human_height=float(human_height),
     )
-    ik_canons = frozenset(model.preset.ik_map.keys()) if model.preset.ik_map else frozenset()
+    from hhtools.robot.ik_map_policy import ik_map_canonicals_for_motion
+
+    ik_canons = ik_map_canonicals_for_motion(
+        model.preset.name, model.preset.ik_map, motion,
+    )
     ratio = float(
         uniform_overlay_scale_for_motion(
             scaler_cfg, float(human_height), motion, ik_map_keys=ik_canons,

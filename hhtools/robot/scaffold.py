@@ -189,15 +189,12 @@ class _LinkCandidate:
 def _side_of(lower: str) -> str:
     """Heuristic left/right detection from a link name.
 
-    We look for whole-word ``left``/``right`` tokens (``_`` or word boundary),
-    and the short forms ``l_``/``r_`` common in simulation rigs.  Anything
-    else is "no side".
+    Delegates to :func:`hhtools.robot.kinematics._side_of` so vendor suffixes
+    (``LINK_HIP_PITCH_L`` / ``J00_HIP_PITCH_R``) stay in sync with IK inference.
     """
-    if re.search(r"(^|_)left(_|$)", lower) or lower.startswith("l_") or "_l_" in lower:
-        return "left"
-    if re.search(r"(^|_)right(_|$)", lower) or lower.startswith("r_") or "_r_" in lower:
-        return "right"
-    return ""
+    from hhtools.robot.kinematics import _side_of as _kin_side_of
+
+    return _kin_side_of(lower)
 
 
 def _tokenise(lower: str) -> frozenset[str]:

@@ -175,7 +175,11 @@ XSENS_MOCAP_TO_CANONICAL: Mapping[str, str] = {
 # several CMU rigs expose ``LeftShoulder`` as a real clavicle bone, so we map
 # it to ``left_collar`` (same convention as SMPL) rather than leaving it
 # unmapped (which broke scaler / canonical packing on holosoma clips).
-# Spine chain: ``Spine`` → spine root, ``Spine1`` → spine (mid), ``Spine2`` → chest.
+# Spine chain (3-segment LAFAN / Mixamo): ``Spine`` → spine, ``Spine1`` →
+# spine (mid), ``Spine2`` → chest.  Two-segment optical-mocap Mixamo
+# (OmniContact, some CMU exports) has no ``Spine2``; shoulders parent
+# from ``Spine1``, which :func:`auto_source_to_canonical` then promotes
+# to ``chest`` — the table itself stays LAFAN-safe.
 
 MIXAMO_CMU_TO_CANONICAL: Mapping[str, str] = {
     "Hips": "hips",
@@ -512,6 +516,22 @@ def is_mixamo_cmu_like(joint_names: Iterable[str]) -> bool:
     return "hips" in normalised and "leftupleg" in normalised
 
 
+def is_two_segment_mixamo_like(joint_names: Iterable[str]) -> bool:
+    """Mixamo names with ``Spine`` / ``Spine1`` and no ``Spine2``.
+
+    OmniContact optical-mocap BVH (and some CMU exports) parent shoulders
+    from ``Spine1``.  Distinct from 3-segment LAFAN and 4-segment mocap.
+    Holosoma shares the spine count but is routed by its sole markers.
+    """
+    names = tuple(joint_names)
+    if is_meshmimic_holosoma_like(names) or is_mocap_spine3_bvh_like(names):
+        return False
+    if not is_mixamo_cmu_like(names):
+        return False
+    stripped = {_PREFIX_RE.sub("", n) for n in names}
+    return "Spine1" in stripped and "Spine2" not in stripped and "Spine3" not in stripped
+
+
 def is_mocap_spine3_bvh_like(joint_names: Iterable[str]) -> bool:
     """Heuristic: Mixamo-style leg chain plus a fourth spine segment ``Spine3``.
 
@@ -554,6 +574,29 @@ def _fuzzy_source_to_canonical(
     if len(canonical_hits) >= 6:
         return result
     return None
+
+
+def _promote_two_segment_spine_chest(
+    mapping: dict[str, str],
+    names: tuple[str, ...],
+) -> dict[str, str]:
+    """Treat ``Spine1`` as chest when a Mixamo-like rig has no ``Spine2``.
+
+    Standard LAFAN (``Spine`` / ``Spine1`` / ``Spine2``) is unchanged.  Used
+    by OmniContact optical-mocap BVH and holosoma, where shoulders parent
+    from ``Spine1``.  ``Spine3`` present means a four-segment mocap spine
+    and is left to that branch.
+    """
+    stripped = [_PREFIX_RE.sub("", n) for n in names]
+    if "Spine2" in stripped or "Spine3" in stripped:
+        return mapping
+    if "Spine1" not in stripped:
+        return mapping
+    out = dict(mapping)
+    for n, s in zip(names, stripped, strict=True):
+        if s == "Spine1":
+            out[n] = "chest"
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -614,12 +657,7 @@ def auto_source_to_canonical(
 
     if is_meshmimic_holosoma_like(names):
         result = {n: MIXAMO_CMU_TO_CANONICAL.get(n, n) for n in names}
-        # Holosoma has only 2 spine segments (Spine, Spine1) vs Mixamo's 3
-        # (Spine, Spine1, Spine2).  Spine1 parents the shoulders, so it is
-        # anatomically the chest — promote it when Spine2 is absent.
-        if "Spine2" not in names and "Spine1" in names:
-            result["Spine1"] = "chest"
-        return result
+        return _promote_two_segment_spine_chest(result, names)
 
     if is_mocap_spine3_bvh_like(names):
         result = {n: MIXAMO_CMU_TO_CANONICAL.get(n, n) for n in names}
@@ -629,7 +667,6 @@ def auto_source_to_canonical(
         return result
 
     if is_mixamo_cmu_like(names):
-        name_set = set(names)
         has_prefix = any(_PREFIX_RE.match(n) for n in names)
         if has_prefix:
             mapping: dict[str, str] = {}
@@ -637,8 +674,9 @@ def auto_source_to_canonical(
                 stripped = _PREFIX_RE.sub("", n)
                 can = MIXAMO_CMU_TO_CANONICAL.get(stripped)
                 mapping[n] = can if can is not None else n
-            return mapping
-        return {n: MIXAMO_CMU_TO_CANONICAL.get(n, n) for n in names}
+            return _promote_two_segment_spine_chest(mapping, names)
+        result = {n: MIXAMO_CMU_TO_CANONICAL.get(n, n) for n in names}
+        return _promote_two_segment_spine_chest(result, names)
 
     yaml_map = _try_yaml_override(names)
     if yaml_map is not None:
@@ -775,6 +813,7 @@ __all__ = [
     "invalidate_yaml_cache",
     "is_meshmimic_holosoma_like",
     "is_mixamo_cmu_like",
+    "is_two_segment_mixamo_like",
     "is_mocap_spine3_bvh_like",
     "is_smpl_like",
     "is_soma_bvh_like",

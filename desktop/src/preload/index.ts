@@ -7,6 +7,7 @@ import type { RuntimeState } from '../shared/runtime-state'
 const desktopApi: HHToolsDesktopApi = {
   getRuntimeState: () => ipcRenderer.invoke(DESKTOP_CHANNELS.getRuntimeState),
   restartBackend: () => ipcRenderer.invoke(DESKTOP_CHANNELS.restartBackend),
+  selectDirectory: () => ipcRenderer.invoke(DESKTOP_CHANNELS.selectDirectory),
   openExternal: (url: string) => ipcRenderer.invoke(DESKTOP_CHANNELS.openExternal, url),
   onRuntimeStateChanged: (listener: (state: RuntimeState) => void) => {
     const wrapped = (_event: Electron.IpcRendererEvent, state: RuntimeState): void => listener(state)

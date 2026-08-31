@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import pytest
@@ -146,6 +147,75 @@ def test_invalid_motion_upload_returns_400_without_publishing_library_data(
             "readme.definitely-not-motion"
         )
     )
+
+
+@pytest.mark.parametrize(
+    ("profile", "expected_fragments"),
+    [
+        (
+            "intermimic",
+            ("intermimic", "OMOMO", "<clip>/<clip>.pkl", "*_cleaned_simplified.obj"),
+        ),
+        (
+            "meshmimic",
+            ("meshmimic", "parc_ms", "<clip>/<clip>.pkl", "*_terrain.obj"),
+        ),
+        (
+            "mimic",
+            ("动作文件（mimic）", ".bvh", ".gltf", ".pt"),
+        ),
+    ],
+)
+def test_invalid_motion_upload_explains_selected_profile(
+    web_client: TestClient,
+    profile: str,
+    expected_fragments: tuple[str, ...],
+) -> None:
+    response = web_client.post(
+        "/api/motion/upload",
+        params={"profile": profile},
+        files={
+            "files": (
+                "readme.definitely-not-motion",
+                b"not a motion clip",
+                "application/octet-stream",
+            )
+        },
+    )
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    for fragment in expected_fragments:
+        assert fragment in detail
+
+
+def test_invalid_auto_basket_upload_reports_generic_requirements(
+    web_client: TestClient,
+) -> None:
+    response = web_client.post(
+        "/api/basket/upload",
+        files={
+            "files": (
+                "readme.definitely-not-motion",
+                b"not a motion clip",
+                "application/octet-stream",
+            )
+        },
+    )
+
+    assert response.status_code == 200
+    job_id = response.json()["job_id"]
+    deadline = time.monotonic() + 2.0
+    payload: dict = {}
+    while time.monotonic() < deadline:
+        payload = web_client.get(f"/api/job/{job_id}").json()
+        if payload.get("status") == "error":
+            break
+        time.sleep(0.005)
+
+    assert payload.get("status") == "error"
+    assert "intermimic / meshmimic" in payload["error"]
+    assert "（mimic）" not in payload["error"]
 
 
 def test_motion_library_label_is_one_directory_name() -> None:

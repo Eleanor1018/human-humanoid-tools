@@ -57,4 +57,10 @@ describe('workspace preferences', () => {
       },
     })
   })
+
+  it('migrates the retired video workspace to the unified workflow', () => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ activePanel: 'video' }))
+
+    expect(loadWorkspacePreferences().activePanel).toBe('video-to-motion')
+  })
 })

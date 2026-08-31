@@ -22,6 +22,15 @@ const defaultProps = {
   jobAdmissionError: null,
   jobAdmissionErrorOperation: null,
   jobAdmissionSaved: false,
+  motionLibrary: {
+    root: 'C:\\TestData\\Motions',
+    default_root: 'C:\\TestData\\hhtools\\motions',
+    editable: true,
+  },
+  motionLibraryLoading: false,
+  motionLibrarySaving: false,
+  motionLibraryError: null,
+  motionLibrarySaved: false,
 }
 
 async function setTeleportedInput(
@@ -72,6 +81,72 @@ describe('WorkspaceSettingsDialog', () => {
     language.dispatchEvent(new Event('change', { bubbles: true }))
 
     expect(wrapper.emitted('setLocale')).toEqual([['zh-CN']])
+  })
+
+  it('shows the server-owned library root and requests a directory selection', () => {
+    const wrapper = mount(WorkspaceSettingsDialog, {
+      props: defaultProps,
+      attachTo: document.body,
+    })
+    wrappers.push(wrapper)
+
+    expect(document.body.querySelector('.workspace-library-root')?.textContent)
+      .toBe('C:\\TestData\\Motions')
+    document.body.querySelector<HTMLButtonElement>('.workspace-library-select')?.click()
+    expect(wrapper.emitted('selectMotionLibraryRoot')).toHaveLength(1)
+  })
+
+  it('keeps remote Motion Library settings read-only', () => {
+    const wrapper = mount(WorkspaceSettingsDialog, {
+      props: {
+        ...defaultProps,
+        motionLibrary: {
+          ...defaultProps.motionLibrary,
+          editable: false,
+          readonly_reason: 'remote',
+        },
+      },
+      attachTo: document.body,
+    })
+    wrappers.push(wrapper)
+
+    expect(document.body.querySelector<HTMLButtonElement>('.workspace-library-select')?.disabled).toBe(true)
+    expect(document.body.textContent).toContain('remote connection is read-only')
+  })
+
+  it('explains when an environment override owns the Motion Library root', () => {
+    const wrapper = mount(WorkspaceSettingsDialog, {
+      props: {
+        ...defaultProps,
+        motionLibrary: {
+          ...defaultProps.motionLibrary,
+          editable: false,
+          source: 'environment',
+        },
+      },
+      attachTo: document.body,
+    })
+    wrappers.push(wrapper)
+
+    expect(document.body.querySelector<HTMLButtonElement>('.workspace-library-select')?.disabled).toBe(true)
+    expect(document.body.textContent).toContain('managed by HHTOOLS_MOTION_LIBRARY_ROOT')
+  })
+
+  it('uses a generic explanation for future read-only reasons', () => {
+    const wrapper = mount(WorkspaceSettingsDialog, {
+      props: {
+        ...defaultProps,
+        motionLibrary: {
+          ...defaultProps.motionLibrary,
+          editable: false,
+          readonly_reason: 'administrator_policy',
+        },
+      },
+      attachTo: document.body,
+    })
+    wrappers.push(wrapper)
+
+    expect(document.body.textContent).toContain('server has made this directory read-only')
   })
 
   it('keeps the queue editable in unlimited mode and emits validated integer limits', async () => {

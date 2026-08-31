@@ -1,0 +1,82 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from hhtools.contracts import (
+    AgentJobView,
+    ApiError,
+    ArtifactDescriptor,
+    AssetBundle,
+    AssetInspection,
+    AssetRegistrationRequest,
+    AssetSearchResponse,
+    CapabilityResponse,
+    JobSpecV2,
+    PreflightResponse,
+    RetargetPreflightRequest,
+)
+
+FIXTURES = Path(__file__).parent / "fixtures"
+SCHEMAS = Path(__file__).parents[2] / "docs" / "schemas" / "agent" / "v1"
+PUBLIC_SCHEMAS = {
+    "agent-job-view": AgentJobView,
+    "api-error": ApiError,
+    "artifact": ArtifactDescriptor,
+    "asset-bundle": AssetBundle,
+    "asset-inspection": AssetInspection,
+    "asset-registration-request": AssetRegistrationRequest,
+    "asset-search-response": AssetSearchResponse,
+    "capabilities": CapabilityResponse,
+    "job-spec-v2": JobSpecV2,
+    "preflight-response": PreflightResponse,
+    "retarget-preflight-request": RetargetPreflightRequest,
+}
+
+
+@pytest.mark.parametrize(
+    ("filename", "category", "sidecar_role"),
+    [
+        ("plain_motion.json", "plain_motion", None),
+        ("object_interaction.json", "object_interaction", "object_mesh"),
+        ("terrain_scene.json", "terrain_scene", "terrain_mesh"),
+    ],
+)
+def test_asset_golden_fixtures_are_portable_and_typed(
+    filename: str,
+    category: str,
+    sidecar_role: str | None,
+) -> None:
+    payload = json.loads((FIXTURES / "assets" / filename).read_text(encoding="utf-8"))
+
+    bundle = AssetBundle.model_validate(payload)
+
+    assert bundle.category.value == category
+    assert bundle.source is not None
+    assert bundle.source.root_id == "motion-library"
+    assert not bundle.source.logical_path.startswith(("/", "C:/"))
+    if sidecar_role is not None:
+        assert sidecar_role in {item.role.value for item in bundle.files}
+
+
+def test_calibrated_robot_preflight_golden_request_and_response_round_trip() -> None:
+    payload = json.loads(
+        (FIXTURES / "preflight" / "g1_smpl_ready.json").read_text(encoding="utf-8")
+    )
+
+    request = RetargetPreflightRequest.model_validate(payload["request"])
+    response = PreflightResponse.model_validate(payload["response"])
+
+    assert request.parameters["limit_frames"] == 30
+    assert response.plan is not None
+    assert response.plan.robot_id == "g1_29dof"
+    assert response.plan.calibration_id == request.calibration_id
+
+
+@pytest.mark.parametrize(("name", "model"), sorted(PUBLIC_SCHEMAS.items()))
+def test_public_json_schemas_match_reviewed_snapshots(name: str, model: type) -> None:
+    snapshot = json.loads((SCHEMAS / f"{name}.schema.json").read_text(encoding="utf-8"))
+
+    assert snapshot == model.model_json_schema()

@@ -72,6 +72,24 @@ def list_presets() -> list[RobotPreset]:
     return sorted(_CACHE.values(), key=lambda p: p.name)
 
 
+def list_presets_readonly() -> list[RobotPreset]:
+    """Discover existing YAML presets without scaffolding or mutating cache.
+
+    Capability discovery and preflight use this path because a read-only query
+    must not turn an orphan URDF into a newly written ``robot.yaml``.  Normal
+    UI/CLI discovery keeps the historical zero-config scaffolding behaviour in
+    :func:`list_presets` and :func:`refresh`.
+    """
+
+    if _CACHE is not None:
+        return sorted(_CACHE.values(), key=lambda preset: preset.name)
+    discovered: dict[str, RobotPreset] = {}
+    for root in _discovery_roots():
+        for preset in _scan_root(root, scaffold_missing=False):
+            discovered[preset.name] = preset
+    return sorted(discovered.values(), key=lambda preset: preset.name)
+
+
 def get(name: str) -> RobotPreset:
     """Look up a preset by name.  Raises :class:`KeyError` if unknown."""
     _ensure_loaded()
@@ -175,7 +193,7 @@ def _discovery_roots() -> list[Path]:
     return roots
 
 
-def _scan_root(root: Path) -> list[RobotPreset]:
+def _scan_root(root: Path, *, scaffold_missing: bool = True) -> list[RobotPreset]:
     """Scan one discovery root for ``<child>/robot*.yaml`` files.
 
     Per directory we first collect all ``robot.yaml`` + ``robot.<stem>.yaml``
@@ -195,7 +213,8 @@ def _scan_root(root: Path) -> list[RobotPreset]:
             # ``_template`` and any other private scaffolding stays invisible.
             continue
 
-        _autoscaffold_missing_yaml(child)
+        if scaffold_missing:
+            _autoscaffold_missing_yaml(child)
 
         yaml_paths = _collect_yaml_paths(child)
         if not yaml_paths:

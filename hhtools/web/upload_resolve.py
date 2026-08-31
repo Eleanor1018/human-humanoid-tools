@@ -4,7 +4,8 @@
 
 Three UI profiles mirror ``assets/motions`` layout:
 
-* **intermimic** — OMOMO-style ``<clip>/<clip>.pkl`` + ``*_cleaned_simplified.obj``
+* **intermimic** — OMOMO-style ``<clip>/<clip>.pkl`` + ``*_cleaned_simplified.obj``,
+  or OmniContact ``motion_actor.bvh`` + object-pose CSV
 * **meshmimic** — parc_ms ``<clip>/<clip>.pkl`` (+ ``*_terrain.obj``) or legacy ``.npz``
 * **mimic** — AMASS / BVH / GLB / … (supports nested folders)
 """
@@ -58,6 +59,16 @@ def _find_intermimic_pkls(drop_dir: Path) -> list[Path]:
         if p.is_file() and not _is_sidecar_pkl(p):
             out.append(p)
     return out
+
+
+def _find_omnicontact_bvhs(drop_dir: Path) -> list[Path]:
+    from hhtools.io.mimic_detect import is_omnicontact_capture
+
+    return [
+        p
+        for p in sorted(drop_dir.rglob("motion_actor.bvh"))
+        if p.is_file() and is_omnicontact_capture(p)
+    ]
 
 
 def _find_meshmimic_primaries(drop_dir: Path) -> list[tuple[str, Path]]:
@@ -122,16 +133,23 @@ def _pick_primary_clip(
     return primaries[0]
 
 
-def _load_intermimic(pkl: Path):
+def _load_intermimic(path: Path):
+    from hhtools.io.mimic_detect import is_omnicontact_capture
+
+    if is_omnicontact_capture(path):
+        from hhtools.io.datasets.omnicontact import OmniContactAdapter
+
+        return OmniContactAdapter(root=path.parent).load_motion(path.name), "omnicontact"
+
     from hhtools.io.datasets.omomo import OmomoAdapter
 
-    root = pkl.parent
-    if root.name == pkl.stem:
+    root = path.parent
+    if root.name == path.stem:
         adapter = OmomoAdapter(root=root.parent)
-        seq = f"{root.name}/{pkl.name}"
+        seq = f"{root.name}/{path.name}"
     else:
         adapter = OmomoAdapter(root=root)
-        seq = pkl.name
+        seq = path.name
     return adapter.load_motion(seq), "omomo"
 
 
@@ -250,6 +268,14 @@ def _load_mimic(path: Path, load_motion_file, load_via_adapter, *, progress=None
             except Exception:
                 continue
 
+    if suf == ".bvh" and dataset == "omnicontact":
+        from hhtools.io.datasets.omnicontact import OmniContactAdapter
+
+        cb = progress.as_callback() if progress is not None else None
+        kwargs = {"progress_callback": cb} if cb is not None else {}
+        motion = OmniContactAdapter(root=path.parent).load_motion(path.name, **kwargs)
+        return motion, "omnicontact"
+
     try:
         motion = load_motion_file(path, progress=progress)
         if suf == ".bvh":
@@ -308,6 +334,10 @@ def _infer_dataset_from_path(path: Path, profile: str, *, clip_kind: str = "") -
 
     profile = (profile or "mimic").strip().lower()
     if profile == "intermimic":
+        from hhtools.io.mimic_detect import is_omnicontact_capture
+
+        if is_omnicontact_capture(path):
+            return "omnicontact"
         return "omomo"
     if profile == "meshmimic":
         if clip_kind == "npz" or path.suffix.lower() == ".npz":
@@ -330,12 +360,41 @@ def detect_upload_profile(drop_dir: Path) -> str:
     """Guess intermimic / meshmimic / mimic from files under ``drop_dir``."""
     if _find_meshmimic_primaries(drop_dir):
         return "meshmimic"
+    if _find_omnicontact_bvhs(drop_dir):
+        return "intermimic"
     inter = _find_intermimic_pkls(drop_dir)
     if inter and any(_is_omomo_pkl(p) for p in inter):
         return "intermimic"
     if inter:
         return "intermimic"
     return "mimic"
+
+
+def upload_validation_error(profile: str) -> str:
+    """Explain the required upload structure for the selected UI profile."""
+    normalized = (profile or "mimic").strip().lower()
+    extensions = " / ".join(_MOTION_EXTS)
+    if normalized == "auto":
+        return (
+            "未找到可识别的动作内容。请选择支持的动作文件（"
+            f"{extensions}），或完整的 intermimic / meshmimic 数据集文件夹。"
+        )
+    if normalized == "intermimic":
+        return (
+            "未找到可识别的 intermimic 动作内容。请选择完整的 OMOMO clip "
+            "文件夹或数据集目录：需要 <clip>/<clip>.pkl，交互物体通常为 "
+            "*_cleaned_simplified.obj。"
+        )
+    if normalized == "meshmimic":
+        return (
+            "未找到可识别的 meshmimic 动作内容。请选择完整的 parc_ms clip "
+            "文件夹或数据集目录：需要 <clip>/<clip>.pkl 或 .npz，地形通常为 "
+            "*_terrain.obj。"
+        )
+    return (
+        "未找到可识别的动作文件（mimic）。请选择支持的动作文件或包含动作的"
+        f"数据集文件夹：{extensions}。"
+    )
 
 
 def enumerate_upload_clips(drop_dir: Path, profile: str = "auto") -> list[UploadClipRef]:
@@ -365,6 +424,8 @@ def enumerate_upload_clips(drop_dir: Path, profile: str = "auto") -> list[Upload
     if profile == "auto":
         for kind, path in _find_meshmimic_primaries(drop_dir):
             _add(path, "meshmimic", kind)
+        for bvh in _find_omnicontact_bvhs(drop_dir):
+            _add(bvh, "intermimic", "bvh")
         for pkl in _find_intermimic_pkls(drop_dir):
             _add(pkl, "intermimic", "pkl")
         for path in _find_mimic_primaries(drop_dir):
@@ -372,6 +433,8 @@ def enumerate_upload_clips(drop_dir: Path, profile: str = "auto") -> list[Upload
         return out
 
     if profile == "intermimic":
+        for bvh in _find_omnicontact_bvhs(drop_dir):
+            _add(bvh, profile, "bvh")
         for pkl in _find_intermimic_pkls(drop_dir):
             _add(pkl, profile, "pkl")
         return out
@@ -439,25 +502,22 @@ def resolve_upload_drop(
     info: dict = {"profile": profile}
 
     if profile == "intermimic":
-        pkls = _find_intermimic_pkls(drop_dir)
-        if not pkls:
+        clips = _find_omnicontact_bvhs(drop_dir) + _find_intermimic_pkls(drop_dir)
+        if not clips:
             raise ValueError(
-                "未找到 intermimic/OMOMO 风格 clip（需要 <clip>/<clip>.pkl，"
-                "可连同 *_cleaned_simplified.obj 一起拖入）"
+                "未找到 intermimic clip（OMOMO 需要 <clip>/<clip>.pkl；"
+                "OmniContact 需要 motion_actor.bvh + 物体 CSV）"
             )
-        picked = _pick_primary_clip(pkls, prefer_paths)
+        picked = _pick_primary_clip(clips, prefer_paths)
         info["picked"] = str(picked)
-        info["skipped_clips"] = max(0, len(pkls) - 1)
+        info["skipped_clips"] = max(0, len(clips) - 1)
         motion, dataset = _load_intermimic(picked)
         return motion, dataset, info
 
     if profile == "meshmimic":
         clips = _find_meshmimic_primaries(drop_dir)
         if not clips:
-            raise ValueError(
-                "未找到 meshmimic/parc_ms 风格 clip（需要 <clip>/<clip>.pkl 或 .npz，"
-                "可连同 *_terrain.obj 一起拖入）"
-            )
+            raise ValueError(upload_validation_error(profile))
         paths = [p for _, p in clips]
         picked_path = _pick_primary_clip(paths, prefer_paths)
         kind = next(k for k, p in clips if p == picked_path)
@@ -469,9 +529,7 @@ def resolve_upload_drop(
     # mimic — any supported motion file
     primaries = _find_mimic_primaries(drop_dir)
     if not primaries:
-        raise ValueError(
-            "未找到可识别的动作文件（.npz / .bvh / .glb / .pkl …）"
-        )
+        raise ValueError(upload_validation_error(profile))
     path = _pick_primary_clip(primaries, prefer_paths)
     info["picked"] = str(path)
     info["skipped_clips"] = max(0, len(primaries) - 1)

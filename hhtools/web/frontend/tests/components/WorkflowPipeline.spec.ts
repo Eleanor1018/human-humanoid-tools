@@ -24,6 +24,9 @@ describe('WorkflowPipeline', () => {
       nodes: [
         { id: 'motion', label: '动作', state: 'ready', detail: 'walk.npz', panel: 'motion' },
         { id: 'robot', label: '机器人', state: 'missing', detail: '未选择', panel: 'robot-assets' },
+        { id: 'calibration', label: '标定', state: 'missing', detail: '等待输入', panel: 'h2r' },
+        { id: 'solver', label: '求解', state: 'missing', detail: '尚未运行', panel: 'h2r' },
+        { id: 'result', label: '结果', state: 'missing', detail: '尚无结果', panel: 'h2r' },
       ],
     }
     window.dispatchEvent(
@@ -31,9 +34,13 @@ describe('WorkflowPipeline', () => {
     )
     await nextTick()
 
-    expect(wrapper.findAll('.workflow-pipeline-node')).toHaveLength(2)
-    expect(wrapper.get('.state-ready').text()).toContain('walk.npz')
-    expect(wrapper.get('.workflow-blocked-reason').text()).toBe(state.blockedReason)
+    expect(wrapper.findAll('.workflow-pipeline-node')).toHaveLength(4)
+    expect(wrapper.text()).not.toContain('求解')
+    expect(wrapper.get('.state-ready').text()).toBe('动作')
+    expect(wrapper.get('.state-ready').attributes('title')).toBe('walk.npz')
+    expect(wrapper.find('.workflow-pipeline-head').exists()).toBe(false)
+    expect(wrapper.find('.workflow-node-detail').exists()).toBe(false)
+    expect(wrapper.find('.workflow-blocked-reason').exists()).toBe(false)
 
     const requests: string[] = []
     const receiveRequest = (event: WindowEventMap['hhtools:panel-request']): void => {

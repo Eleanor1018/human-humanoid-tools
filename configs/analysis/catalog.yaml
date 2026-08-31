@@ -155,11 +155,21 @@ metrics:
     unit: rad/s
     formula: "quat 有限差分角速度均值"
     desc: "转体/旋转强度。"
+  root_xy_range:
+    title: XY 平面运动范围
+    unit: m
+    formula: "hypot(max(x)−min(x), max(y)−min(y))"
+    desc: "骨盆/基座在 XY 平面上的包围盒对角线。接近 0 为原地；越大覆盖越广。直方图框选可筛出不同活动范围的 clip。"
+  root_z_range:
+    title: Z 竖直运动范围
+    unit: m
+    formula: "max(z_root) − min(z_root)"
+    desc: "骨盆/基座高度极差。蹲起/跳跃/上下台阶会偏大；平坦行走接近 0。与 COM 高度变化相同，命名更直观。"
   com_height_range:
     title: COM 高度变化
     unit: m
     formula: "max(z_root) − min(z_root)"
-    desc: "root Z 极差，近似 COM 高度变化。"
+    desc: "root Z 极差，近似 COM 高度变化（与「Z 竖直运动范围」同值）。"
   airborne_ratio:
     title: 腾空比例
     unit: "0–1"

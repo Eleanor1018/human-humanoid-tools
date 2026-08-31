@@ -1,6 +1,8 @@
 // Dataset Visualization & Analysis panel.
 
 import type {
+  DataAnalysisKind,
+  DataAnalysisStage,
   DatasetCatalog,
   DatasetClip,
   DatasetSummary,
@@ -12,7 +14,8 @@ import type {
 } from './types'
 import type { HHToolsElementForId, HHToolsKnownId } from '../env'
 
-type DataKind = 'human' | 'robot' | 'mixed' | 'unknown'
+type DataKind = DataAnalysisKind
+type UploadDataKind = Extract<DataKind, 'human' | 'robot'>
 type TagMode = 'and' | 'or'
 type NumericRange = { lo: number; hi: number }
 type PlotPadding = { l: number; r: number; t: number; b: number }
@@ -70,6 +73,9 @@ type DatasetState = {
   subsetTimer: ReturnType<typeof setTimeout> | null
   hoverClipId: string | null
   hoverBin: number
+  analysisStage: DataAnalysisStage
+  analysisProgress: number
+  analysisMessage: string
 }
 
 const bridge = (): HhAppBridge => {
@@ -102,6 +108,9 @@ const state: DatasetState = {
   subsetTimer: null,
   hoverClipId: null,
   hoverBin: -1,
+  analysisStage: "idle",
+  analysisProgress: 0,
+  analysisMessage: "",
 };
 
 const $ = <Id extends HHToolsKnownId>(id: Id): HHToolsElementForId<Id> =>
@@ -131,6 +140,30 @@ const QUALITY_TAGS = ["quality_ok", "quality_warn", "quality_bad"];
 const DYN_TAGS = ["static", "low_dynamic", "mid_dynamic", "high_dynamic", "burst"];
 const CAT_DIMS = ["cluster_id", "folder_label", "quality_band", "dynamics_band", "source_kind"];
 const CATEGORICAL = ["#6366f1", "#14b8a6", "#f472b6", "#fb923c", "#38bdf8", "#a78bfa", "#34d399", "#fbbf24", "#f87171", "#64748b"];
+
+function emitAnalysisState(): void {
+  window.dispatchEvent(new CustomEvent('hhtools:data-analysis-state', {
+    detail: {
+      dataKind: state.dataKind,
+      clipCount: state.uploadSummary?.clip_count || 0,
+      stage: state.analysisStage,
+      progress: state.analysisProgress,
+      message: state.analysisMessage,
+      hasResults: state.analysisStage === 'completed' && okClips().length > 0,
+    },
+  }));
+}
+
+function setAnalysisState(
+  stage: DataAnalysisStage,
+  progress = state.analysisProgress,
+  message = state.analysisMessage,
+): void {
+  state.analysisStage = stage;
+  state.analysisProgress = Math.max(0, Math.min(1, progress));
+  state.analysisMessage = message;
+  emitAnalysisState();
+}
 
 /** Logseq-style graph palette — soft, distinct hues per cluster. */
 const GRAPH_PALETTE = [
@@ -200,12 +233,23 @@ function detectDataKind(): DataKind {
   return "unknown";
 }
 
+function dataKindLabel(kind: DataKind): string {
+  const zh = document.documentElement.lang === 'zh-CN';
+  const labels: Record<DataKind, [string, string]> = {
+    human: ['Motion', '动作'],
+    robot: ['Robot', '机器人'],
+    mixed: ['Mixed', '混合 ⚠'],
+    unknown: ['', ''],
+  };
+  return labels[kind][zh ? 1 : 0];
+}
+
 function updateKindBadge() {
   if (okClips().length) state.dataKind = detectDataKind();
   const badge = $("dv-kind-badge");
   if (!badge) return;
-  const map: Record<DataKind, string> = { human: "人体", robot: "机器人", mixed: "混合 ⚠", unknown: "—" };
-  badge.textContent = map[state.dataKind] || "—";
+  badge.hidden = state.dataKind === "unknown";
+  badge.textContent = dataKindLabel(state.dataKind);
   badge.className = "dv-card-badge" + (state.dataKind === "mixed" ? " warn" : "");
   const humanBtn = $("dv-human-basket");
   const robotBtn = $("dv-export-robot");
@@ -478,43 +522,82 @@ function resolveUploadKind(info: DatasetUploadSummary | null | undefined, fallba
   return fallback;
 }
 
+const uploadAreaIds: Record<UploadDataKind, {
+  dropzone: 'dv-dropzone' | 'dv-dropzone-robot'
+  icon: 'dv-drop-icon' | 'dv-drop-icon-robot'
+  label: 'dv-drop-label' | 'dv-drop-label-robot'
+}> = {
+  human: { dropzone: 'dv-dropzone', icon: 'dv-drop-icon', label: 'dv-drop-label' },
+  robot: { dropzone: 'dv-dropzone-robot', icon: 'dv-drop-icon-robot', label: 'dv-drop-label-robot' },
+};
+
+function uploadAreaText(kind: UploadDataKind): string {
+  const zh = document.documentElement.lang === 'zh-CN';
+  if (kind === 'robot') return zh ? '拖入机器人轨迹文件夹' : 'Drop a robot trajectory folder here';
+  return zh ? '拖入动作数据集文件夹' : 'Drop a motion dataset folder here';
+}
+
+function resetUploadArea(kind: UploadDataKind): void {
+  const ids = uploadAreaIds[kind];
+  $(ids.dropzone)?.classList.remove('ok', 'busy', 'err', 'hover');
+  if ($(ids.icon)) $(ids.icon).textContent = kind === 'robot' ? 'R' : 'M';
+  if ($(ids.label)) $(ids.label).textContent = uploadAreaText(kind);
+}
+
+function resetUploadAreas(): void {
+  resetUploadArea('human');
+  resetUploadArea('robot');
+}
+
+function markUploadArea(kind: UploadDataKind, status: 'busy' | 'ok' | 'err', clipCount = 0): void {
+  resetUploadAreas();
+  const ids = uploadAreaIds[kind];
+  $(ids.dropzone)?.classList.add(status);
+  if (status === 'ok') {
+    if ($(ids.icon)) $(ids.icon).textContent = '✓';
+    if ($(ids.label)) {
+      $(ids.label).textContent = document.documentElement.lang === 'zh-CN'
+        ? `已加载 ${clipCount} 个 clip，可继续追加`
+        : `${clipCount} clips loaded; drop more to append`;
+    }
+  }
+}
+
 function renderUploadBasket(info: DatasetUploadSummary): void {
   const n = info?.clip_count || 0;
   const kind = resolveUploadKind(info, state.dataKind);
   const basket = $("dv-upload-basket");
-  const dropzone = $("dv-dropzone");
-  const dropLabel = $("dv-drop-label");
 
   if (!n) {
     if (basket) basket.hidden = true;
-    if (dropzone) dropzone.classList.remove("ok", "busy");
-    if (dropLabel) dropLabel.innerHTML = "拖入<b>人体</b>或<b>机器人</b>数据集文件夹";
+    resetUploadAreas();
     $("dv-source-display").textContent = "未指定目录";
+    setAnalysisState('idle', 0, '');
     return;
   }
 
   state.uploadSummary = info;
   state.dataKind = kind;
+  const kindLabel = dataKindLabel(kind);
   if ($("dv-kind-badge")) {
-    $("dv-kind-badge").textContent = kind === "robot" ? "机器人" : kind === "human" ? "人体" : "混合 ⚠";
+    $("dv-kind-badge").hidden = false;
+    $("dv-kind-badge").textContent = kindLabel;
     $("dv-kind-badge").className = "dv-card-badge" + (kind === "mixed" ? " warn" : "");
   }
   $("dv-source-display").textContent =
-    `${kind === "robot" ? "机器人" : "人体"} · 共 ${n} clip（可继续拖入追加）`;
+    `${kindLabel} · ${n} clip`;
 
-  if (dropzone) {
-    dropzone.classList.remove("busy", "err");
-    dropzone.classList.add("ok");
-  }
-  if ($("dv-drop-icon")) $("dv-drop-icon").textContent = "✓";
-  if (dropLabel) {
-    dropLabel.innerHTML = `✓ 已加载 <b>${n}</b> 个 clip · 继续拖入可追加到同一批次`;
+  if (kind === 'human' || kind === 'robot') markUploadArea(kind, 'ok', n);
+  else {
+    resetUploadAreas();
+    $("dv-dropzone")?.classList.add('err');
+    $("dv-dropzone-robot")?.classList.add('err');
   }
 
   if (basket) {
     basket.hidden = false;
     $("dv-basket-summary").textContent =
-      `${kind === "robot" ? "机器人" : "人体"} · ${n} clip · ${Object.keys(info.folders || {}).length} 组`;
+      `${kindLabel} · ${n} clip · ${Object.keys(info.folders || {}).length} 组`;
     const list = $("dv-basket-list");
     if (list) {
       list.innerHTML = "";
@@ -552,6 +635,7 @@ function renderUploadBasket(info: DatasetUploadSummary): void {
     }
   }
   updateKindBadge();
+  setAnalysisState('idle', 0, '');
 }
 
 function clearUploadBasket() {
@@ -560,12 +644,11 @@ function clearUploadBasket() {
   state.dataKind = "unknown";
   $("dv-source").value = "";
   $("dv-upload-basket").hidden = true;
-  $("dv-dropzone")?.classList.remove("ok", "busy", "err");
-  if ($("dv-drop-icon")) $("dv-drop-icon").textContent = "📁";
-  $("dv-drop-label").innerHTML = "拖入<b>人体</b>或<b>机器人</b>数据集文件夹";
+  resetUploadAreas();
   $("dv-source-display").textContent = "未指定目录";
   $("dv-status").textContent = "";
   updateKindBadge();
+  setAnalysisState('idle', 0, '');
 }
 
 async function removeBasketFolder(folderLabel: string): Promise<void> {
@@ -611,23 +694,38 @@ async function removeBasketFolder(folderLabel: string): Promise<void> {
   }
 }
 
-async function ingestDroppedFiles(files: UploadFile[]): Promise<void> {
+async function ingestDroppedFiles(files: UploadFile[], expectedKind: UploadDataKind): Promise<void> {
   const { uploadFilesXHR, toast } = bridge();
   if (!files?.length) return;
   const kind = guessUploadKind(files);
   if (kind === "mixed") {
     toast("请勿同时拖入人体动作与机器人 CSV，请分开分析", true);
+    markUploadArea(expectedKind, 'err');
+    setAnalysisState('failed', 0, 'Motion and robot data must be analyzed separately');
+    return;
+  }
+  if (kind !== expectedKind) {
+    toast(
+      expectedKind === 'robot'
+        ? '这里仅接收机器人轨迹；人体动作请使用 Motion 上传区'
+        : '这里仅接收人体动作；机器人轨迹请使用 Robot 上传区',
+      true,
+    );
+    markUploadArea(expectedKind, 'err');
+    setAnalysisState('failed', 0, 'Selected data does not match this upload area');
     return;
   }
   if (state.analyzeSource && state.dataKind !== "unknown" && state.dataKind !== kind) {
     toast("与当前批次类型不同，请先点「清空批次」再拖入", true);
+    markUploadArea(expectedKind, 'err');
+    setAnalysisState('failed', 0, 'Clear the current batch before switching data types');
     return;
   }
 
-  const dropzone = $("dv-dropzone");
-  dropzone?.classList.remove("ok", "err");
-  dropzone?.classList.add("busy");
+  const dropzone = $(uploadAreaIds[expectedKind].dropzone);
+  markUploadArea(expectedKind, 'busy');
   $("dv-status").textContent = `上传 ${files.length} 个文件…`;
+  setAnalysisState('uploading', 0, `Uploading ${files.length} files`);
   const appendTo = state.analyzeSource || undefined;
   syncUserRootField();
   const userRoot = getUserSourceRoot();
@@ -646,6 +744,7 @@ async function ingestDroppedFiles(files: UploadFile[]): Promise<void> {
       toast("未识别到可分析 clip：人体请拖入含 BVH/NPZ/PKL 等的文件夹；机器人请拖入轨迹 CSV/PKL/NPZ 文件夹", true);
       $("dv-source-display").textContent = appendTo ? "追加后仍无 clip" : "未识别到 clip";
       $("dv-status").textContent = "";
+      setAnalysisState('failed', 0, 'No analyzable clips found');
       return;
     }
     renderUploadBasket(info);
@@ -658,17 +757,18 @@ async function ingestDroppedFiles(files: UploadFile[]): Promise<void> {
     dropzone?.classList.add("err");
     toast(errorMessage(error), true);
     $("dv-status").textContent = "上传失败";
+    setAnalysisState('failed', 0, errorMessage(error));
   }
 }
 
-async function pickFolder() {
+async function pickFolder(expectedKind: UploadDataKind) {
   const inp = document.createElement("input");
   inp.type = "file"; inp.multiple = true; inp.webkitdirectory = true; inp.style.display = "none";
   inp.onchange = () => {
     const files = Array.from(inp.files || []) as UploadFile[];
     for (const f of files) f._relpath = f.webkitRelativePath || f.name;
     document.body.removeChild(inp);
-    ingestDroppedFiles(files);
+    ingestDroppedFiles(files, expectedKind);
   };
   document.body.appendChild(inp);
   inp.click();
@@ -685,6 +785,7 @@ async function runAnalysis(): Promise<void> {
   progressBar.style.width = "4%";
   $("dv-analyze").disabled = true;
   $("dv-status").textContent = "分析中…";
+  setAnalysisState('running', 0.04, 'Analyzing');
   try {
     const body: { embedding: string; force: boolean; source?: string } = {
       embedding: $("dv-embedding").value,
@@ -695,8 +796,10 @@ async function runAnalysis(): Promise<void> {
     let result: JobResult | null = null;
     while (true) {
       const j = await API.get(`/api/job/${job_id}`);
-      progressBar.style.width = `${Math.round((j.progress || 0) * 100)}%`;
+      const progress = j.progress || 0;
+      progressBar.style.width = `${Math.round(progress * 100)}%`;
       $("dv-status").textContent = j.message || "分析中…";
+      setAnalysisState('running', progress, j.message || 'Analyzing');
       if (j.status === "done") { result = j.result ?? null; break; }
       if (j.status === "error") throw new Error(j.error || "失败");
       await new Promise((r) => setTimeout(r, 400));
@@ -712,6 +815,9 @@ async function runAnalysis(): Promise<void> {
     state.catBrush = null;
     resetScatterView(false);
     $("dv-results").hidden = false;
+    if ($("dv-results-empty")) $("dv-results-empty").hidden = true;
+    const resultsStep = $("dv-step-results");
+    if (resultsStep instanceof HTMLDetailsElement) resultsStep.open = true;
     $("dv-status").textContent = `完成 · ${result.summary?.num_ok || 0} clip`;
     updateKindBadge();
     await refreshRobotPreviewUI();
@@ -722,10 +828,12 @@ async function runAnalysis(): Promise<void> {
     buildViewDimOptions();
     recomputeSubset();
     renderAll();
+    setAnalysisState('completed', 1, 'Completed');
   } catch (error) {
     const message = errorMessage(error);
     toast(message, true);
     $("dv-status").textContent = "失败：" + message;
+    setAnalysisState('failed', state.analysisProgress, message);
   } finally {
     $("dv-analyze").disabled = false;
     setTimeout(() => { prog.style.display = "none"; }, 500);
@@ -1565,8 +1673,11 @@ async function exportRobotData() {
   }
 }
 
-function setupDropzone(): void {
-  const el = $("dv-dropzone");
+function setupDropzone(
+  id: 'dv-dropzone' | 'dv-dropzone-robot',
+  expectedKind: UploadDataKind,
+): void {
+  const el = $(id);
   if (!el) return;
   ["dragenter", "dragover"].forEach((ev) =>
     el.addEventListener(ev, (e) => { e.preventDefault(); el.classList.add("hover"); }));
@@ -1586,7 +1697,7 @@ function setupDropzone(): void {
       }
     }
     await Promise.all(walks);
-    if (files.length) ingestDroppedFiles(files);
+    if (files.length) ingestDroppedFiles(files, expectedKind);
   });
 }
 
@@ -1594,10 +1705,12 @@ function bind() {
   loadCatalog();
   syncUserRootField();
   updateKindBadge();
-  setupDropzone();
+  setupDropzone('dv-dropzone', 'human');
+  setupDropzone('dv-dropzone-robot', 'robot');
   setupHistInteraction();
   setupScatterNav();
-  $("dv-pick-folder")?.addEventListener("click", pickFolder);
+  $("dv-pick-folder")?.addEventListener("click", () => void pickFolder('human'));
+  $("dv-pick-robot-folder")?.addEventListener("click", () => void pickFolder('robot'));
   $("dv-clear-upload")?.addEventListener("click", clearUploadBasket);
   $("dv-analyze")?.addEventListener("click", runAnalysis);
   $("dv-clear-tags")?.addEventListener("click", () => {
@@ -1652,6 +1765,7 @@ function bind() {
     const root = bridge().getLibrarySourceRoot();
     if (root && $("dv-drop-hint")) $("dv-drop-hint").textContent = `留空 = ${root}`;
   });
+  emitAnalysisState();
 }
 
 if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", bind);

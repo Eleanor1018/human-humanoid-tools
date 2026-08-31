@@ -840,6 +840,12 @@ def build_scaler_config_from_calibration(
       ``q_offset`` and pitched the whole RP1 retarget forward.
     * **LAFAN / GLB / other BVH**: frame-0 rest
       (:func:`~hhtools.retarget.newton_basic.rest_pose.rest_pose_from_motion`).
+    * **OmniContact / 2-segment Mixamo BVH**: bind T-pose
+      (:func:`~hhtools.retarget.newton_basic.rest_pose.rest_pose_from_motion_bind`).
+      These clips open mid-action (carry / reach); using frame 0 as rest
+      bakes that pose into ``q_offset`` (hips look like a waist twist,
+      hands fold behind).  Heading is taken from the motion shoulder
+      axis — bind T-pose faces the opposite way to the walk.
 
     ``human_height`` and ``preserve_root_yaw`` are retained for API
     compatibility.  They are not written into the returned
@@ -894,18 +900,27 @@ def build_scaler_config_from_calibration(
                 source_tag="build_scaler_config_from_calibration_xsens_bind",
             )
     elif _ref == "lafan_bvh" and bundled_reference_bvh_path(_ref) is not None:
-        # Clip frame 0 as a *whole* skeleton.  The blue calibration overlay
-        # still uses bundled ``lafan_zero_frame0.bvh`` (T-pose), but feeding
-        # that T-pose into the scaler while the clip opens mid-motion makes
-        # heading / ``q_offset`` fight the trajectory (arms & legs look
-        # twisted).  Frame-0 rest keeps limb directions and facing coherent
-        # with the capture; wrist twist vs the T-pose overlay is a known
-        # LAFAN trade-off until we have a heading-safe T-pose rest path.
-        rest_pose = rest_pose_from_motion(
-            clip,
-            frame=0,
-            source_tag="build_scaler_config_from_calibration_lafan_frame0",
-        )
+        if _use_omnicontact_bind_rest(clip):
+            # OmniContact / 2-spine Mixamo opens mid-action.  Frame 0 is not
+            # a T-pose; using it as rest folds the arms behind the back and
+            # treats the posed hips like a waist.  Bind rest + motion heading.
+            rest_pose = rest_pose_from_motion_bind(
+                clip,
+                source_tag="build_scaler_config_from_calibration_omnicontact_bind",
+            )
+        else:
+            # Clip frame 0 as a *whole* skeleton.  The blue calibration overlay
+            # still uses bundled ``lafan_zero_frame0.bvh`` (T-pose), but feeding
+            # that T-pose into the scaler while the clip opens mid-motion makes
+            # heading / ``q_offset`` fight the trajectory (arms & legs look
+            # twisted).  Frame-0 rest keeps limb directions and facing coherent
+            # with the capture; wrist twist vs the T-pose overlay is a known
+            # LAFAN trade-off until we have a heading-safe T-pose rest path.
+            rest_pose = rest_pose_from_motion(
+                clip,
+                frame=0,
+                source_tag="build_scaler_config_from_calibration_lafan_frame0",
+            )
     elif _ref == "mocap_bvh" and bundled_reference_bvh_path(_ref) is not None:
         rest_pose = rest_pose_from_bundled_reference("mocap_bvh")
     elif _ref == "lafan_bvh":
@@ -989,6 +1004,20 @@ def build_scaler_config_from_calibration(
     )
 
 
+def _use_omnicontact_bind_rest(clip) -> bool:
+    """True when LAFAN frame-0 rest would bake a posed OmniContact opening."""
+    meta = getattr(clip, "meta", None) or {}
+    if str(meta.get("dataset") or "") == "omnicontact":
+        return True
+    hierarchy = getattr(clip, "hierarchy", None)
+    names = getattr(hierarchy, "bone_names", None)
+    if not names:
+        return False
+    from hhtools.retarget.newton_basic.human_aliases import is_two_segment_mixamo_like
+
+    return is_two_segment_mixamo_like(names)
+
+
 # ---------------------------------------------------------------------------
 # Soma-style ScalerConfig builder (closed-form rest alignment)
 # ---------------------------------------------------------------------------
@@ -1062,6 +1091,10 @@ def _compute_body_heading_alignment(
             from hhtools.retarget.newton_basic.rest_pose import motion_frame0_is_bind_pose
 
             _use_motion_fwd = motion_frame0_is_bind_pose(reference_motion)
+        if not _use_motion_fwd:
+            # Bind T-pose on OmniContact faces the opposite way to the walk
+            # (Mixamo +X T-pose → −Y after Y→Z).  Use the motion shoulders.
+            _use_motion_fwd = _use_omnicontact_bind_rest(reference_motion)
         if _use_motion_fwd:
             _bn = list(reference_motion.hierarchy.bone_names)
             if ls_src in _bn and rs_src in _bn:

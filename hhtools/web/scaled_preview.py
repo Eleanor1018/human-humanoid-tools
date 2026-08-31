@@ -283,6 +283,7 @@ def _uniform_scaled_joint_positions(
     *,
     ik_canons: frozenset[str],
     z_correction: float = 0.0,
+    robot_model=None,
 ) -> np.ndarray:
     """Uniform ``robot_height / human_height`` positions for yellow overlay joints.
 
@@ -294,6 +295,10 @@ def _uniform_scaled_joint_positions(
     ``z_correction`` (from :func:`resolve_scaled_overlay_z_correction`) snaps
     foot endpoints to ``z=0`` after uniform scale.  Hands inherit the same
     transform; COM/pelvis is not shifted independently.
+
+    When ``robot_model`` is set, OmniContact / 2-spine Mixamo clips also get
+    the same shoulder-pivoted arm reach boost as
+    :meth:`InteractionMeshPipeline._build_scaled_source_pose`.
     """
     from hhtools.retarget.calibration.calibration import uniform_overlay_scale_for_motion
 
@@ -312,6 +317,12 @@ def _uniform_scaled_joint_positions(
     src_pos = np.asarray(motion.positions, dtype=np.float32).copy()
     src_pos[:, :, 2] -= z_min
     src_pos *= ratio
+    if robot_model is not None:
+        from hhtools.retarget.interaction_mesh.arm_reach import (
+            maybe_boost_arm_reach_positions,
+        )
+
+        src_pos = maybe_boost_arm_reach_positions(src_pos, motion, robot_model)
     if abs(z_correction) > 1e-6:
         src_pos[:, :, 2] += np.float32(z_correction)
 
@@ -334,6 +345,7 @@ def _uniform_scaled_preview_fallback(
     *,
     max_frames: int = 0,
     z_correction: float = 0.0,
+    robot_model=None,
 ) -> dict[str, Any]:
     """Numpy-only scaled overlay when ``newton`` is not installed."""
     from hhtools.web.serialize import _downsample_indices
@@ -342,6 +354,7 @@ def _uniform_scaled_preview_fallback(
     pos = _uniform_scaled_joint_positions(
         motion, scaler_cfg, human_height, jn,
         ik_canons=ik_canons, z_correction=z_correction,
+        robot_model=robot_model,
     )
     idx = _downsample_indices(int(pos.shape[0]), max_frames, motion=motion)
     pos = pos[idx]
@@ -373,7 +386,11 @@ def compute_web_scaled_preview(
     scaler_cfg = resolve_web_scaler_config(
         model, motion, reference, float(human_height),
     )
-    ik_canons = frozenset(model.preset.ik_map.keys()) if model.preset.ik_map else frozenset()
+    from hhtools.robot.ik_map_policy import ik_map_canonicals_for_motion
+
+    ik_canons = ik_map_canonicals_for_motion(
+        model.preset.name, model.preset.ik_map, motion,
+    )
 
     if int(motion.num_bones) < 10:
         try:
@@ -393,7 +410,8 @@ def compute_web_scaled_preview(
             )
         except ModuleNotFoundError:
             return _uniform_scaled_preview_fallback(
-                motion, scaler_cfg, float(human_height), ik_canons, max_frames=max_frames,
+                motion, scaler_cfg, float(human_height), ik_canons,
+                max_frames=max_frames, robot_model=model,
             )
 
     from hhtools.retarget.calibration.calibration import uniform_overlay_scale_for_motion
@@ -431,6 +449,7 @@ def compute_web_scaled_preview(
                 z_correction=resolve_scaled_overlay_z_correction(
                     motion, scaler, overlay_ratio,
                 ),
+                robot_model=model,
             )
 
     # Dense source topology always uses uniform ``robot_height / human_height``
@@ -444,6 +463,7 @@ def compute_web_scaled_preview(
     pos_m = _uniform_scaled_joint_positions(
         motion, scaler_cfg, float(human_height), jn,
         ik_canons=ik_canons, z_correction=z_correction,
+        robot_model=model,
     )
     pos_m = _snap_scaled_overlay_positions_to_foot_floor(pos_m, jn)
     include_head_neck = False

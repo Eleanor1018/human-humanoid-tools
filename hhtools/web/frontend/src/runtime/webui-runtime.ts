@@ -43,6 +43,10 @@ function renderTextMessage(container: HTMLElement, message: unknown): void {
   if (messageElement) messageElement.style.padding = "12px";
 }
 
+function runtimeText(en: string, zh: string): string {
+  return document.documentElement.lang.toLowerCase().startsWith("zh") ? zh : en;
+}
+
 function renderSpinnerStatus(container: HTMLElement | null, message: unknown): void {
   if (!container) return;
   const spinner = document.createElement("span");
@@ -160,6 +164,12 @@ import {
   loadWorkspacePreferences,
   updateWorkspacePreferences,
 } from "./workspace-preferences";
+import {
+  curatedRobotLibraryItem,
+  DEFAULT_ROBOT_LIBRARY_ICON,
+  robotLibraryIcon,
+} from "./robot-library-catalog";
+import { sortRobotLibrarySummaries } from "./robot-library-order";
 import type {
   ApiClient,
   ApiGetResponse,
@@ -175,6 +185,8 @@ import type {
   CalibrationJointRegion,
   CalibrationReferencePayload,
   ComparisonPreset,
+  GvhmrRuntimeStatus,
+  GvhmrWeightSource,
   JobConfigResponse,
   JobHistoryStateDetail,
   JobListResponse,
@@ -183,12 +195,14 @@ import type {
   JobStartResponse,
   JointWorldPayload,
   LibraryEntry,
+  MotionCategory,
   Matrix4Data,
   MotionPayload,
   PlaybackUiState,
   PlaybackPayload,
   PlaybackView,
   RobotPayload,
+  RobotSummary,
   RobotExportPreviewResult,
   RetargetResult,
   ResultDiagnostics,
@@ -201,6 +215,8 @@ import type {
   TerrainPayload,
   UploadFile,
   Vec3,
+  VideoToMotionResultSummary,
+  VideoToMotionStateDetail,
   WorkflowNodeState,
   WorkflowNodeStatus,
   WorkflowStateDetail,
@@ -215,6 +231,9 @@ interface UploadFilesXhrOptions {
   appendTo?: string;
   libraryFolderLabel?: string;
   userSourceRoot?: string;
+  staticCam?: boolean;
+  fMm?: number;
+  checkpoint?: UploadFile;
 }
 
 type UploadFilesXhrResponse<Url extends string> =
@@ -282,13 +301,7 @@ interface AppState {
 // FastAPI's `detail` can be a string OR (for 422 validation errors) an array of
 // objects.  Flatten whatever we get into a human-readable string so the UI never
 // shows the useless "[object Object]".
-async function httpError(r: Response): Promise<Error> {
-  let detail: unknown;
-  try {
-    detail = (await r.json()).detail;
-  } catch {
-    detail = null;
-  }
+function apiDetailMessage(detail: unknown): string | undefined {
   let msg: string | undefined;
   if (typeof detail === "string") msg = detail;
   else if (Array.isArray(detail)) {
@@ -301,6 +314,17 @@ async function httpError(r: Response): Promise<Error> {
   } else if (detail && typeof detail === "object") {
     msg = "msg" in detail ? String(detail.msg) : JSON.stringify(detail);
   }
+  return msg;
+}
+
+async function httpError(r: Response): Promise<Error> {
+  let detail: unknown;
+  try {
+    detail = (await r.json()).detail;
+  } catch {
+    detail = null;
+  }
+  const msg = apiDetailMessage(detail);
   return new Error(msg || `${r.status} ${r.statusText}`);
 }
 
@@ -601,17 +625,23 @@ function uploadFilesXHR<Url extends string>(
     appendTo,
     libraryFolderLabel,
     userSourceRoot,
+    staticCam,
+    fMm,
+    checkpoint,
   }: UploadFilesXhrOptions = {},
   onUploadProgress?: ProgressCallback,
 ): Promise<UploadFilesXhrResponse<Url>> {
   return new Promise<UploadFilesXhrResponse<Url>>((resolve, reject) => {
     const fd = new FormData();
     for (const f of files) fd.append("files", f, f._relpath || f.name);
+    if (checkpoint) fd.append("checkpoint", checkpoint, checkpoint.name);
     const qs = new URLSearchParams();
     if (profile) qs.set("profile", profile);
     if (appendTo) qs.set("append_to", appendTo);
     if (libraryFolderLabel) qs.set("library_folder_label", libraryFolderLabel);
     if (userSourceRoot) qs.set("user_source_root", userSourceRoot);
+    if (staticCam !== undefined) qs.set("static_cam", String(staticCam));
+    if (fMm !== undefined) qs.set("f_mm", String(fMm));
     const q = qs.toString() ? `?${qs.toString()}` : "";
     const xhr = new XMLHttpRequest();
     xhr.upload.onprogress = (e) => {
@@ -625,7 +655,16 @@ function uploadFilesXHR<Url extends string>(
         catch (err) { reject(err); }
         return;
       }
-      reject(new Error(xhr.responseText || `upload failed (${xhr.status})`));
+      // XHR is required for byte-progress events, so unwrap FastAPI's detail
+      // payload here just as the fetch-based helpers do above.
+      let message = xhr.responseText || `upload failed (${xhr.status})`;
+      try {
+        const payload = JSON.parse(xhr.responseText) as { detail?: unknown };
+        message = apiDetailMessage(payload.detail) || message;
+      } catch {
+        // Non-JSON responses (proxy errors, disconnects) are already readable.
+      }
+      reject(new Error(message));
     };
     xhr.onerror = () => reject(new Error("upload failed"));
     xhr.open("POST", url + q);
@@ -2783,11 +2822,23 @@ function renderRobotValidation(robotPayload: RobotPayload): void {
   const unresolved = mappedLinks.filter((link) => !knownLinks.has(link));
   const dofCount = robotPayload.num_dof ?? robotPayload.joints?.length ?? 0;
   renderValidationSummary(document.getElementById("robot-validation-summary"), [
-    [dofCount > 0 ? "ok" : "error", `${dofCount} 个可控 DoF`],
-    [mappings.length > 0 ? "ok" : "warn", `ik_map：${mappings.length}/17 个语义槽位`],
+    [dofCount > 0 ? "ok" : "error", runtimeText(
+      `${dofCount} controllable DoF`,
+      `${dofCount} 个可控 DoF`,
+    )],
+    [mappings.length > 0 ? "ok" : "warn", runtimeText(
+      `ik_map: ${mappings.length}/17 semantic slots`,
+      `ik_map：${mappings.length}/17 个语义槽位`,
+    )],
     [unresolved.length === 0 ? "ok" : "error", unresolved.length === 0
-      ? "ik_map 中的目标 link 均可解析"
-      : `${unresolved.length} 个 ik_map link 无法在 Robot Model 中解析`],
+      ? runtimeText(
+        "All target links in ik_map resolve in the robot model",
+        "ik_map 中的目标 link 均可解析",
+      )
+      : runtimeText(
+        `${unresolved.length} ik_map links do not resolve in the robot model`,
+        `${unresolved.length} 个 ik_map link 无法在 Robot Model 中解析`,
+      )],
   ]);
 }
 
@@ -2796,23 +2847,64 @@ function renderMotionValidation(payload: MotionPayload): void {
   const frameRate = payload.framerate ?? payload.sample_rate ?? 0;
   const boneCount = payload.bone_names?.length ?? payload.parent_indices.length;
   const sceneParts: string[] = [];
-  if (payload.has_terrain || payload.terrain) sceneParts.push("地形");
-  if (payload.objects?.length) sceneParts.push(`${payload.objects.length} 个交互物体`);
+  if (payload.has_terrain || payload.terrain) sceneParts.push(runtimeText("terrain", "地形"));
+  if (payload.objects?.length) {
+    sceneParts.push(runtimeText(
+      `${payload.objects.length} interaction object${payload.objects.length === 1 ? "" : "s"}`,
+      `${payload.objects.length} 个交互物体`,
+    ));
+  }
 
   renderValidationSummary(document.getElementById("motion-validation-summary"), [
     [frameCount > 0 ? "ok" : "error", frameCount > 0
-      ? `轨迹可播放：${frameCount} 帧`
-      : "轨迹不包含可播放帧"],
+      ? runtimeText(`Playable trajectory: ${frameCount} frames`, `轨迹可播放：${frameCount} 帧`)
+      : runtimeText("The trajectory has no playable frames", "轨迹不包含可播放帧")],
     [frameRate > 0 ? "ok" : "warn", frameRate > 0
-      ? `时间轴有效：${frameRate.toFixed(1)} FPS`
-      : "未识别帧率，将使用默认时间轴"],
+      ? runtimeText(`Valid timeline: ${frameRate.toFixed(1)} FPS`, `时间轴有效：${frameRate.toFixed(1)} FPS`)
+      : runtimeText(
+        "Frame rate was not detected; the default timeline will be used",
+        "未识别帧率，将使用默认时间轴",
+      )],
     [boneCount > 0 ? "ok" : "error", boneCount > 0
-      ? `骨架层级：${boneCount} 个节点`
-      : "未识别骨架层级"],
+      ? runtimeText(`Skeleton hierarchy: ${boneCount} nodes`, `骨架层级：${boneCount} 个节点`)
+      : runtimeText("Skeleton hierarchy was not detected", "未识别骨架层级")],
     ["ok", sceneParts.length > 0
-      ? `场景附属数据：${sceneParts.join("、")}`
-      : "纯动作轨迹：无地形或交互物体"],
+      ? runtimeText(`Scene data: ${sceneParts.join(", ")}`, `场景附属数据：${sceneParts.join("、")}`)
+      : runtimeText(
+        "Motion only: no terrain or interaction objects",
+        "纯动作轨迹：无地形或交互物体",
+      )],
   ]);
+}
+
+function renderMotionDetails(payload: MotionPayload): void {
+  document.getElementById("motion-meta-card").style.display = "block";
+  document.getElementById("motion-name").textContent = payload.name;
+  const previewNote = isPlaybackPreview(payload)
+    ? runtimeText(
+      ` (preview: ${payload.playback_frames ?? payload.positions.length} frames / ${effectivePlaybackDuration(payload).toFixed(1)} s)`,
+      `（预览 ${payload.playback_frames ?? payload.positions.length} 帧 / ${effectivePlaybackDuration(payload).toFixed(1)} s）`,
+    )
+    : "";
+  const motionRows: Array<[string, unknown]> = [
+    [runtimeText("Format", "格式"), payload.source_format],
+    [runtimeText("Frames", "帧数"), payload.num_frames_total],
+    [runtimeText("Frame rate", "帧率"), `${(payload.framerate ?? payload.sample_rate ?? 30).toFixed(1)}`],
+    [runtimeText("Duration", "时长"), `${effectivePlaybackDuration(payload).toFixed(2)} s${previewNote}`],
+    [runtimeText("Skeleton", "骨骼"), payload.bone_names?.length ?? payload.parent_indices.length],
+  ];
+  if (payload.objects?.length) {
+    motionRows.push([runtimeText("Interaction objects", "交互物体"), payload.objects.length]);
+  }
+  if (payload.has_terrain) motionRows.push([runtimeText("Terrain", "地形"), runtimeText("Yes", "有")]);
+  motionRows.push([
+    runtimeText("Body mesh", "身体 mesh"),
+    payload.body_mesh?.available
+      ? runtimeText("SMPL / skin", "SMPL / 皮肤")
+      : payload.body_mesh?.reason || runtimeText("Tubular approximation", "管状近似"),
+  ]);
+  renderMetaRows(document.getElementById("motion-meta"), motionRows);
+  renderMotionValidation(payload);
 }
 
 function updateH2rCalibrationValidation(): void {
@@ -2958,7 +3050,8 @@ const REFERENCE_HELP: Record<string, { input: string; calib: string; file: strin
 };
 
 function datasetLabel(ds: string | null | undefined): string {
-  return (ds ? DATASET_LABELS[ds] : undefined) || ds || "未识别";
+  if (!ds || ds === "unknown") return runtimeText("Unknown", "未识别");
+  return DATASET_LABELS[ds] || ds;
 }
 
 let referenceCatalog: string[] = [];
@@ -3042,6 +3135,10 @@ function switchInspectorPanel(panelId: string): void {
   const normalizedPanelId = panelId === "robot" ? "h2r" : panelId;
   window.__hhUi?.setActivePanel(normalizedPanelId);
   inspectorPanelSwitchHook?.(normalizedPanelId);
+  if (normalizedPanelId === "batch") {
+    renderBasket({ refreshCompatibility: false });
+    void syncBatchRefHint();
+  }
 }
 
 window.addEventListener("hhtools:panel-request", (event) => {
@@ -3078,7 +3175,10 @@ async function loadMotionPayload(payload: MotionPayload): Promise<void> {
     player.setPlaying(false);
     await refreshRetargetPanel();
     _applyCalibSceneLayout();
-    toast(`已加载 ${payload.name}（标定模式）`);
+    toast(runtimeText(
+      `Loaded ${payload.name} (calibration mode)`,
+      `已加载 ${payload.name}（标定模式）`,
+    ));
     updatePills();
     return;
   }
@@ -3117,32 +3217,12 @@ async function loadMotionPayload(payload: MotionPayload): Promise<void> {
   setViewVisible(robot, "tg-robot", false);
   player.ready(effectivePlaybackDuration(payload));
   player.setPlaying(true);
-  // meta card
-  document.getElementById("motion-meta-card").style.display = "block";
-  document.getElementById("motion-name").textContent = payload.name;
-  const previewNote = isPlaybackPreview(payload)
-    ? `（预览 ${payload.playback_frames ?? payload.positions.length} 帧 / ${effectivePlaybackDuration(payload).toFixed(1)} s）`
-    : "";
-  const motionRows: Array<[string, unknown]> = [
-    ["格式", payload.source_format],
-    ["帧数", payload.num_frames_total],
-    ["帧率", `${(payload.framerate ?? payload.sample_rate ?? 30).toFixed(1)}`],
-    ["时长", `${effectivePlaybackDuration(payload).toFixed(2)} s${previewNote}`],
-    ["骨骼", payload.bone_names?.length ?? payload.parent_indices.length],
-  ];
-  if (payload.objects?.length) motionRows.push(["交互物体", payload.objects.length]);
-  if (payload.has_terrain) motionRows.push(["地形", "有"]);
-  motionRows.push([
-    "身体 mesh",
-    payload.body_mesh?.available ? "SMPL/皮肤" : payload.body_mesh?.reason || "管状近似",
-  ]);
-  renderMetaRows(document.getElementById("motion-meta"), motionRows);
-  renderMotionValidation(payload);
+  renderMotionDetails(payload);
   updatePills();
   updateRetargetFpsPlaceholder();
   if (state.robot) switchInspectorPanel("h2r");
   await refreshRetargetPanel();
-  toast(`已加载 ${payload.name}`);
+  toast(runtimeText(`Loaded ${payload.name}`, `已加载 ${payload.name}`));
 }
 
 function datasetSceneGlbUrl(token: string | null | undefined, o: SceneObjectPayload): string | null {
@@ -3257,21 +3337,35 @@ async function populateDvRobotSelect(preferred?: string): Promise<string> {
   return sel.value;
 }
 
-async function loadLibraryEntry(entry: LibraryEntry): Promise<void> {
+async function loadLibraryEntryRequest(
+  entry: LibraryEntry,
+  options: { usage?: "human_to_robot"; rethrow?: boolean } = {},
+): Promise<void> {
   const label = entry.stem || entry.sequence_id || "";
-  showLoading(`加载动作中… ${label}`.trim());
+  showLoading(runtimeText(`Loading motion… ${label}`, `加载动作中… ${label}`).trim());
   try {
-    const { job_id } = await API.post("/api/motion/load_library", entry);
+    const body = options.usage ? { ...entry, usage: options.usage } : entry;
+    const { job_id } = await API.post("/api/motion/load_library", body);
     const payload = await waitMotionJob<MotionPayload>(job_id, (frac, sub) => {
       setLoadingProgress(frac, sub);
     });
-    setLoadingProgress(1, "构建场景…");
+    setLoadingProgress(1, runtimeText("Building scene…", "构建场景…"));
     await loadMotionPayload(payload);
   } catch (e) {
     toast(errorMessage(e), true);
+    if (options.rethrow) throw e;
   } finally {
     hideLoading();
   }
+}
+
+async function loadLibraryEntry(entry: LibraryEntry): Promise<void> {
+  await loadLibraryEntryRequest(entry);
+}
+
+/** H2R loads only human reference motion; the backend verifies the real file. */
+async function loadHumanMotionEntry(entry: LibraryEntry): Promise<void> {
+  await loadLibraryEntryRequest(entry, { usage: "human_to_robot", rethrow: true });
 }
 
 // library navigator
@@ -3279,41 +3373,64 @@ let libMotionsRoot = "";
 
 async function linkLibraryPath(): Promise<void> {
   const hint = libMotionsRoot
-    ? `链接到资源库目录（${libMotionsRoot}）`
-    : "链接到资源库（~/.config/hhtools/motions）";
+    ? runtimeText(
+      `Link to the library directory (${libMotionsRoot})`,
+      `链接到资源库目录（${libMotionsRoot}）`,
+    )
+    : runtimeText("Link to the current library directory", "链接到当前资源库目录");
   const path = window.prompt(hint, "");
   if (!path?.trim()) return;
   try {
     const data = await API.post("/api/library/link", { path: path.trim() });
     if (data.motions_library_root) libMotionsRoot = data.motions_library_root;
-    updateMotionsLibraryHint();
     await refreshLibrary();
-    const sel = document.getElementById("lib-folder");
-    if (sel && data.folder_label) sel.value = data.folder_label;
-    renderLibrary();
-    toast(`已链接：${data.folder_label}（${data.clip_count} clip）`);
+    if (data.folder_label) setLibrarySearch(data.folder_label);
+    toast(runtimeText(
+      `Linked: ${data.folder_label} (${data.clip_count} clips)`,
+      `已链接：${data.folder_label}（${data.clip_count} 个动作）`,
+    ));
   } catch (e) {
     toast(errorMessage(e), true);
   }
 }
 
-function updateMotionsLibraryHint(): void {
-  const el = document.getElementById("lib-motions-hint");
-  if (!el) return;
-  if (!libMotionsRoot) {
-    el.textContent = "";
-    return;
-  }
-  el.replaceChildren(
-    document.createTextNode("拖入数据集会自动软链接到 "),
-    textElement("code", "", libMotionsRoot),
-    document.createTextNode("；建议将常用数据集中放到该目录。"),
-  );
-}
-
 // library navigator
 let libEntries: LibraryEntry[] = [];
 let libSourceRoot = "";
+let libCategoryFilter: "all" | MotionCategory = "all";
+const libCategoryCopy: Record<MotionCategory, { en: string; zh: string }> = {
+  motion: { en: "Motion", zh: "动作" },
+  object: { en: "Object", zh: "物体" },
+  terrain: { en: "Terrain", zh: "地形" },
+};
+
+function libraryCategoryLabel(category: MotionCategory): string {
+  const copy = libCategoryCopy[category];
+  return runtimeText(copy.en, copy.zh);
+}
+
+function normalizedMotionCategory(entry: LibraryEntry): MotionCategory {
+  const category = entry.motion_category;
+  return category === "object" || category === "terrain" ? category : "motion";
+}
+
+function selectLibraryCategory(category: "all" | MotionCategory): void {
+  libCategoryFilter = category;
+  renderLibrary();
+}
+
+function setLibrarySearch(value: string): void {
+  const input = document.getElementById("lib-search");
+  if (input.value === value) {
+    renderLibrary();
+    return;
+  }
+  // Dispatching a real input event keeps the Vue SearchField v-model, its
+  // clear affordance, and the imperative library renderer in one state.
+  input.value = value;
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
 async function refreshLibrary(): Promise<void> {
   const list = document.getElementById("lib-list");
   try {
@@ -3321,74 +3438,129 @@ async function refreshLibrary(): Promise<void> {
     libEntries = data.entries || [];
     libSourceRoot = data.source_root || "";
     if (data.motions_library_root) libMotionsRoot = data.motions_library_root;
-    updateMotionsLibraryHint();
-    // populate folder dropdown
-    const sel = document.getElementById("lib-folder");
-    const allFolders = document.createElement("option");
-    allFolders.value = "";
-    allFolders.textContent = `全部目录 (${(data.folders || []).length})`;
-    sel.replaceChildren(allFolders);
-    for (const f of data.folders || []) {
-      const o = document.createElement("option");
-      o.value = f; o.textContent = f;
-      sel.appendChild(o);
-    }
     renderLibrary();
   } catch (e) {
-    document.getElementById("lib-count").textContent = "加载失败";
-    renderTextMessage(list, `无法读取资源库：${errorMessage(e)}`);
+    renderTextMessage(list, runtimeText(
+      `Unable to read the library: ${errorMessage(e)}`,
+      `无法读取资源库：${errorMessage(e)}`,
+    ));
   }
 }
 function renderLibrary(): void {
   const query = document.getElementById("lib-search").value || "";
-  const folder = document.getElementById("lib-folder").value || "";
   const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
   const list = document.getElementById("lib-list");
   list.replaceChildren();
   const filtered = libEntries.filter((e) => {
-    if (folder && e.folder_label !== folder) return false;
-    const hay = (e.folder_label + " " + e.stem).toLowerCase();
+    if (libCategoryFilter !== "all" && normalizedMotionCategory(e) !== libCategoryFilter) {
+      return false;
+    }
+    const category = normalizedMotionCategory(e);
+    const categoryCopy = libCategoryCopy[category];
+    // Search both languages so switching the workspace locale never changes
+    // which rows match an existing query.
+    const hay = [
+      e.folder_label || "",
+      e.stem || "",
+      category,
+      categoryCopy.en,
+      categoryCopy.zh,
+    ].join(" ").toLowerCase();
     return tokens.every((t) => hay.includes(t));
   });
-  document.getElementById("lib-count").textContent =
-    libEntries.length ? `${filtered.length} / ${libEntries.length} clip` : "";
 
   if (!libEntries.length) {
     renderTextMessage(
       list,
-      `在 ${libSourceRoot || "assets/motions"} 未找到可识别的 clip。直接拖入文件夹，会自动软链接到 ${libMotionsRoot || "~/.config/hhtools/motions"}。`,
+      runtimeText(
+        "No recognizable motions are available. Choose a library directory or link an external dataset directory.",
+        "资源库中还没有可识别的动作。请选择资源库目录，或链接一个外部数据集目录。",
+      ),
     );
     return;
   }
   if (!filtered.length) {
-    renderTextMessage(list, `没有匹配「${query}${folder ? " @" + folder : ""}」的结果`);
+    renderTextMessage(list, runtimeText(
+      `No results match “${query}”`,
+      `没有匹配「${query}」的结果`,
+    ));
     return;
   }
   for (const e of filtered.slice(0, 300)) {
     const row = document.createElement("div");
     row.className = "lib-row";
-    const addButton = textElement("button", "lr-add", "＋");
-    addButton.type = "button";
-    addButton.title = "加入篮子";
-    row.append(
+    const category = normalizedMotionCategory(e);
+    const categoryBadge = textElement("span", "lr-category", libraryCategoryLabel(category));
+    categoryBadge.dataset.category = category;
+    const loadButton = document.createElement("button");
+    loadButton.type = "button";
+    loadButton.className = "lr-load";
+    loadButton.setAttribute(
+      "aria-label",
+      runtimeText(
+        `Load motion ${[e.folder_label, e.stem].filter(Boolean).join(" ")}`,
+        `加载动作 ${[e.folder_label, e.stem].filter(Boolean).join(" ")}`,
+      ),
+    );
+    loadButton.append(
+      categoryBadge,
       textElement("span", "lr-folder", e.folder_label),
       textElement("span", "lr-stem", e.stem),
-      addButton,
     );
-    row.onclick = () => loadLibraryEntry(e);
-    addButton.onclick = (ev) => { ev.stopPropagation(); addToBasket([e]); };
+    const addButton = textElement("button", "lr-add", "＋");
+    addButton.type = "button";
+    addButton.title = runtimeText("Add to basket", "加入篮子");
+    addButton.setAttribute("aria-label", runtimeText(
+      `Add ${e.stem || "motion"} to basket`,
+      `将 ${e.stem || "动作"} 加入篮子`,
+    ));
+    row.append(loadButton, addButton);
+    loadButton.onclick = () => loadLibraryEntry(e);
+    addButton.onclick = () => addToBasket([e]);
     list.appendChild(row);
   }
   if (filtered.length > 300) {
     const more = document.createElement("div");
     more.className = "hint";
     more.style.padding = "8px 10px";
-    more.textContent = `… 还有 ${filtered.length - 300} 条，继续输入以缩小范围`;
+    more.textContent = runtimeText(
+      `… ${filtered.length - 300} more. Keep typing to narrow the results.`,
+      `… 还有 ${filtered.length - 300} 条，继续输入以缩小范围`,
+    );
     list.appendChild(more);
   }
 }
 document.getElementById("lib-search").oninput = () => renderLibrary();
-document.getElementById("lib-folder").onchange = () => renderLibrary();
+document.getElementById("lib-category").onchange = (event) => {
+  const category = (event.currentTarget as HTMLSelectElement).value;
+  if (category === "all" || category === "motion" || category === "object" || category === "terrain") {
+    selectLibraryCategory(category);
+  }
+};
+window.addEventListener("hhtools:workspace-locale-change", () => {
+  renderLibrary();
+  renderRobotLibrary();
+  populateH2rRobotSelect();
+  populateBatchRobotSelect();
+  renderBasket();
+  const batchRobotStatus = document.getElementById("batch-robot");
+  if (batchRobotStatus) batchRobotStatus.textContent = state.robot?.display_name
+    || runtimeText("Not loaded", "未加载");
+  renderBatchResultCard();
+  renderBatchFailures(lastBatchResult);
+  void r2rPopulateSelects();
+  updateRobotImportStatus();
+  const motionMetaCard = document.getElementById("motion-meta-card");
+  // Calibration-only loads intentionally keep the details card hidden. A
+  // locale change should translate visible details, not alter that UI state.
+  if (state.motion && motionMetaCard?.style.display !== "none") {
+    renderMotionDetails(state.motion);
+  }
+  const robotMetaCard = document.getElementById("robot-meta-card");
+  if (state.robot && robotMetaCard?.style.display !== "none") {
+    renderRobotDetails(state.robot);
+  }
+});
 
 // drag-drop helpers (folder-aware)
 function readAllDirectoryEntries(
@@ -3480,9 +3652,10 @@ async function collectDroppedFiles(dataTransfer: DataTransfer | null): Promise<U
   return files;
 }
 
-function setupDropzone(
+function setupDropzone<DropContext = void>(
   el: HTMLElement,
-  onFiles: (files: UploadFile[]) => void | Promise<void>,
+  onFiles: (files: UploadFile[], context: DropContext) => void | Promise<void>,
+  captureDropContext?: () => DropContext,
 ): void {
   ["dragenter", "dragover"].forEach((ev) =>
     el.addEventListener(ev, (event) => { event.preventDefault(); el.classList.add("hover"); })
@@ -3494,20 +3667,28 @@ function setupDropzone(
     const dropEvent = event as DragEvent;
     dropEvent.stopPropagation();
     el.classList.remove("hover");
+    // Snapshot mutable UI state before recursively walking a potentially large
+    // folder; changing a selector mid-walk must not reinterpret this drop.
+    const dropContext = captureDropContext?.() as DropContext;
     void collectDroppedFiles(dropEvent.dataTransfer).then((files) => {
-      if (files.length) void onFiles(files);
+      if (files.length) void onFiles(files, dropContext);
     });
   });
 }
 // Hidden <input> based file / folder picker (for environments where native
 // drag-drop is awkward). Folder picker preserves relative paths via
-// webkitRelativePath so mesh subdirs + sidecars survive.
-function pickFiles({ folder = false }: { folder?: boolean } = {}): Promise<UploadFile[]> {
+// webkitRelativePath so mesh subdirs + sidecars survive. Native `accept`
+// filtering applies only to individual files: a folder must retain required
+// .obj sidecars, and its full structure is validated by the server instead.
+function pickFiles(
+  { folder = false, accept = "" }: { folder?: boolean; accept?: string } = {},
+): Promise<UploadFile[]> {
   return new Promise<UploadFile[]>((resolve) => {
     const inp = document.createElement("input");
     inp.type = "file";
     inp.multiple = true;
     if (folder) inp.webkitdirectory = true;
+    else if (accept) inp.accept = accept;
     inp.style.display = "none";
     inp.onchange = () => {
       const files = Array.from(inp.files || []) as UploadFile[];
@@ -3531,7 +3712,10 @@ function inferLibraryFolderLabel(files: UploadFile[]): string | undefined {
 async function ingestMotionFiles(files: UploadFile[], profile = "mimic"): Promise<void> {
   if (!files || !files.length) return;
   const libraryFolderLabel = inferLibraryFolderLabel(files);
-  showLoading(`链接并解析中… (${files.length} 个文件)`);
+  showLoading(runtimeText(
+    `Linking and parsing… (${files.length} files)`,
+    `链接并解析中…（${files.length} 个文件）`,
+  ));
   try {
     const uploadResp = await uploadFilesXHR(
       "/api/motion/upload",
@@ -3543,30 +3727,32 @@ async function ingestMotionFiles(files: UploadFile[], profile = "mimic"): Promis
     const payload = await waitMotionJob<MotionPayload>(job_id, (frac, sub) => {
       setLoadingProgress(frac, sub);
     }, { uploadFrac: 0 });
-    setLoadingProgress(1, "构建场景…");
+    setLoadingProgress(1, runtimeText("Building scene…", "构建场景…"));
     await loadMotionPayload(payload);
     if (linked || folder_label || payload.linked_folder) {
       await refreshLibrary();
       const label = folder_label || payload.linked_folder;
-      if (label) {
-        const sel = document.getElementById("lib-folder");
-        if (sel) sel.value = label;
-        renderLibrary();
-      }
+      if (label) setLibrarySearch(label);
     }
     const resolvedMaterializeMode = materialize_mode === "pending"
       ? payload.materialize_mode
       : materialize_mode;
     const modeHint = resolvedMaterializeMode === "symlink"
-      ? "软链接"
+      ? { en: "Symlinked", zh: "软链接" }
       : resolvedMaterializeMode === "hardlink"
-        ? "硬链接"
-        : "已复制";
+        ? { en: "Hard-linked", zh: "硬链接" }
+        : { en: "Copied", zh: "已复制" };
     if (payload.library_entry) {
       addToBasket([payload.library_entry]);
-      toast(`已${modeHint}并加载：${payload.name}（资源库 · ${folder_label || payload.linked_folder}）`);
+      toast(runtimeText(
+        `${modeHint.en} and loaded: ${payload.name} (Library · ${folder_label || payload.linked_folder})`,
+        `已${modeHint.zh}并加载：${payload.name}（资源库 · ${folder_label || payload.linked_folder}）`,
+      ));
     } else if (linked || payload.linked_folder) {
-      toast(`已${modeHint}到资源库：${payload.linked_folder || folder_label}，已加载首条 clip`);
+      toast(runtimeText(
+        `${modeHint.en} to the Library: ${payload.linked_folder || folder_label}; loaded the first clip`,
+        `已${modeHint.zh}到资源库：${payload.linked_folder || folder_label}，已加载首条 clip`,
+      ));
     }
   } catch (e) {
     toast(errorMessage(e), true);
@@ -3575,20 +3761,462 @@ async function ingestMotionFiles(files: UploadFile[], profile = "mimic"): Promis
   }
 }
 
-function initMotionImportZones(): void {
-  for (const el of document.querySelectorAll<HTMLElement>(".motion-import-grid [data-profile]")) {
-    const profile = el.dataset.profile || "mimic";
-    setupDropzone(el, (files) => ingestMotionFiles(files, profile));
+function initMotionImportZone(): void {
+  const dropzone = document.getElementById("motion-drop-shared");
+  if (dropzone) {
+    setupDropzone(
+      dropzone,
+      (files, profile) => ingestMotionFiles(files, profile),
+      () => dropzone.dataset.profile || "mimic",
+    );
   }
   document.querySelectorAll<HTMLButtonElement>("[data-pick]").forEach((btn) => {
     btn.onclick = async () => {
       const profile = btn.dataset.pick || "mimic";
       const folder = btn.dataset.folder === "1";
-      await ingestMotionFiles(await pickFiles({ folder }), profile);
+      const accept = btn.dataset.accept || "";
+      await ingestMotionFiles(await pickFiles({ folder, accept }), profile);
     };
   });
 }
-initMotionImportZones();
+initMotionImportZone();
+
+const GVHMR_VIDEO_ACCEPT =
+  "video/mp4,video/quicktime,video/x-matroska,video/x-msvideo,video/webm,.m4v";
+const GVHMR_VIDEO_EXTENSIONS = new Set([".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v"]);
+const GVHMR_CHECKPOINT_ACCEPT = ".ckpt,.pt,.pth";
+const GVHMR_CHECKPOINT_EXTENSIONS = new Set([".ckpt", ".pt", ".pth"]);
+
+interface GvhmrWorkspaceState {
+  file: UploadFile | null;
+  previewUrl: string | null;
+  previewDuration: number | null;
+  weightSource: GvhmrWeightSource;
+  checkpoint: UploadFile | null;
+  runtimeState: VideoToMotionStateDetail["runtimeState"];
+  runtimeMissing: string[];
+  runtimeError: string | null;
+  environmentConfirmed: boolean;
+  stage: VideoToMotionStateDetail["stage"];
+  progress: number;
+  message: string;
+  result: VideoToMotionResultSummary | null;
+}
+
+const gvhmrWorkspace: GvhmrWorkspaceState = {
+  file: null,
+  previewUrl: null,
+  previewDuration: null,
+  weightSource: "official",
+  checkpoint: null,
+  runtimeState: "checking",
+  runtimeMissing: [],
+  runtimeError: null,
+  environmentConfirmed: false,
+  stage: "idle",
+  progress: 0,
+  message: "",
+  result: null,
+};
+
+function gvhmrText(en: string, zh: string): string {
+  return document.documentElement.lang === "zh-CN" ? zh : en;
+}
+
+function gvhmrRuntimeMessage(): string {
+  if (gvhmrWorkspace.runtimeState === "checking") {
+    return gvhmrText("Checking…", "检查中……");
+  }
+  if (gvhmrWorkspace.runtimeState === "ready") {
+    if (gvhmrWorkspace.weightSource === "custom") {
+      return gvhmrWorkspace.checkpoint?.name
+        ? gvhmrText("Ready · custom weights", "已就绪 · 自定义权重")
+        : gvhmrText("Ready · select custom weights", "已就绪 · 请选择自定义权重");
+    }
+    return gvhmrText("Ready · official weights", "已就绪 · 官方权重");
+  }
+  return gvhmrWorkspace.runtimeMissing[0]
+    || gvhmrWorkspace.runtimeError
+    || gvhmrText("GVHMR runtime is unavailable", "GVHMR 推理环境不可用");
+}
+
+function gvhmrPublicState(): VideoToMotionStateDetail {
+  return {
+    videoName: gvhmrWorkspace.file?.name ?? null,
+    weightSource: gvhmrWorkspace.weightSource,
+    checkpointName: gvhmrWorkspace.checkpoint?.name ?? null,
+    runtimeState: gvhmrWorkspace.runtimeState,
+    runtimeMessage: gvhmrRuntimeMessage(),
+    environmentConfirmed: gvhmrWorkspace.environmentConfirmed,
+    stage: gvhmrWorkspace.stage,
+    progress: gvhmrWorkspace.progress,
+    message: gvhmrWorkspace.message,
+    result: gvhmrWorkspace.result,
+  };
+}
+
+function renderGvhmrWorkspace(): void {
+  const isBusy = gvhmrWorkspace.stage === "uploading" || gvhmrWorkspace.stage === "running";
+  const canRun = Boolean(gvhmrWorkspace.file)
+    && gvhmrWorkspace.runtimeState === "ready"
+    && gvhmrWorkspace.environmentConfirmed
+    && !isBusy;
+  const runtimeMessage = gvhmrRuntimeMessage();
+
+  const runtimeStatus = document.getElementById("gvhmr-runtime-status");
+  if (runtimeStatus) {
+    runtimeStatus.textContent = gvhmrWorkspace.runtimeState === "ready"
+      ? gvhmrText(
+        "GVHMR runtime ready · official weights are the default",
+        "GVHMR 推理环境已就绪 · 默认使用官方权重",
+      )
+      : runtimeMessage;
+    runtimeStatus.classList.toggle("error", gvhmrWorkspace.runtimeState === "unavailable");
+    runtimeStatus.title = gvhmrWorkspace.runtimeMissing.join("\n") || gvhmrWorkspace.runtimeError || "";
+  }
+
+  const selection = document.getElementById("gvhmr-video-selection");
+  if (selection) selection.style.display = gvhmrWorkspace.file ? "flex" : "none";
+  const videoName = document.getElementById("gvhmr-video-name");
+  if (videoName) videoName.textContent = gvhmrWorkspace.file?.name ?? "—";
+  const videoMeta = document.getElementById("gvhmr-video-meta");
+  if (videoMeta) {
+    const parts = gvhmrWorkspace.file
+      ? [fmtBytes(gvhmrWorkspace.file.size), gvhmrWorkspace.file.type || gvhmrText("Video", "视频")]
+      : [];
+    if (gvhmrWorkspace.previewDuration != null) {
+      parts.push(`${gvhmrWorkspace.previewDuration.toFixed(1)} s`);
+    }
+    videoMeta.textContent = parts.join(" · ");
+  }
+
+  const workflowVideo = document.getElementById("gvhmr-workflow-video");
+  if (workflowVideo) {
+    workflowVideo.textContent = gvhmrWorkspace.file?.name
+      ?? gvhmrText("Not selected", "未选择");
+  }
+  const workflowRuntime = document.getElementById("gvhmr-workflow-runtime");
+  if (workflowRuntime) {
+    workflowRuntime.textContent = runtimeMessage;
+    workflowRuntime.classList.toggle("error", gvhmrWorkspace.runtimeState === "unavailable");
+  }
+  const weightSource = document.getElementById("gvhmr-weight-source") as HTMLSelectElement | null;
+  if (weightSource) weightSource.value = gvhmrWorkspace.weightSource;
+  const confirmEnvironment = document.getElementById("gvhmr-confirm-environment") as HTMLButtonElement | null;
+  if (confirmEnvironment) {
+    confirmEnvironment.disabled = gvhmrWorkspace.runtimeState !== "ready"
+      || !gvhmrWorkspace.file
+      || gvhmrWorkspace.environmentConfirmed
+      || isBusy;
+    confirmEnvironment.textContent = gvhmrWorkspace.environmentConfirmed
+      ? gvhmrText("Confirmed", "已确认")
+      : gvhmrText("Confirm", "确认环境");
+  }
+  const customCheckpoint = document.getElementById("gvhmr-custom-checkpoint");
+  if (customCheckpoint) {
+    customCheckpoint.style.display = gvhmrWorkspace.weightSource === "custom" ? "flex" : "none";
+  }
+  const checkpointName = document.getElementById("gvhmr-checkpoint-name");
+  if (checkpointName) {
+    checkpointName.textContent = gvhmrWorkspace.checkpoint?.name
+      ?? gvhmrText("No checkpoint selected", "尚未选择权重");
+  }
+  const workflowCheckpoint = document.getElementById("gvhmr-workflow-checkpoint");
+  if (workflowCheckpoint) {
+    workflowCheckpoint.textContent = gvhmrWorkspace.weightSource === "official"
+      ? gvhmrText("Official GVHMR (default)", "GVHMR 官方权重（默认）")
+      : gvhmrWorkspace.checkpoint?.name
+        ?? gvhmrText("Custom checkpoint not selected", "尚未选择自定义权重");
+  }
+
+  const runButton = document.getElementById("gvhmr-run") as HTMLButtonElement | null;
+  if (runButton) {
+    runButton.disabled = !canRun;
+    runButton.textContent = isBusy
+      ? gvhmrText("Generating…", "生成中……")
+      : gvhmrText("Start GVHMR", "开始 GVHMR 推理");
+  }
+  const disabledReason = document.getElementById("gvhmr-disabled-reason");
+  if (disabledReason) {
+    let reason = "";
+    if (gvhmrWorkspace.runtimeState === "checking") {
+      reason = gvhmrText("Checking the GVHMR runtime.", "正在检查 GVHMR 推理环境。");
+    } else if (gvhmrWorkspace.runtimeState === "unavailable") {
+      reason = runtimeMessage;
+    } else if (!gvhmrWorkspace.file) {
+      reason = gvhmrText("Select a video first.", "请先选择视频。");
+    } else if (!gvhmrWorkspace.environmentConfirmed) {
+      reason = gvhmrText("Confirm the runtime environment.", "请确认运行环境。");
+    } else if (gvhmrWorkspace.weightSource === "custom" && !gvhmrWorkspace.checkpoint) {
+      reason = gvhmrText(
+        "Import a compatible custom checkpoint or switch back to official weights.",
+        "请导入兼容的自定义权重，或切回官方权重。",
+      );
+    }
+    disabledReason.textContent = reason;
+    disabledReason.style.display = reason && !isBusy ? "block" : "none";
+  }
+
+  const progress = document.getElementById("gvhmr-progress");
+  if (progress) {
+    progress.style.display = gvhmrWorkspace.stage === "idle" ? "none" : "block";
+    const bar = progress.querySelector<HTMLElement>(".bar");
+    if (bar) bar.style.width = `${Math.round(Math.max(0, Math.min(1, gvhmrWorkspace.progress)) * 100)}%`;
+  }
+  const status = document.getElementById("gvhmr-status");
+  if (status) {
+    status.textContent = gvhmrWorkspace.message;
+    status.classList.toggle("error", gvhmrWorkspace.stage === "failed");
+  }
+
+  const resultCard = document.getElementById("gvhmr-result-card");
+  if (resultCard) resultCard.style.display = gvhmrWorkspace.result ? "block" : "none";
+  const resultEmpty = document.getElementById("gvhmr-result-empty");
+  if (resultEmpty) resultEmpty.style.display = gvhmrWorkspace.result ? "none" : "block";
+  const resultName = document.getElementById("gvhmr-result-name");
+  if (resultName) resultName.textContent = gvhmrWorkspace.result?.name ?? "—";
+  const resultFrames = document.getElementById("gvhmr-result-frames");
+  if (resultFrames) {
+    resultFrames.textContent = gvhmrWorkspace.result?.frames == null
+      ? "—"
+      : String(gvhmrWorkspace.result.frames);
+  }
+  const resultDuration = document.getElementById("gvhmr-result-duration");
+  if (resultDuration) {
+    const result = gvhmrWorkspace.result;
+    const parts = result?.duration == null ? [] : [`${result.duration.toFixed(2)} s`];
+    if (result?.framerate != null) parts.push(`${result.framerate.toFixed(2)} fps`);
+    resultDuration.textContent = parts.join(" · ") || "—";
+  }
+
+  window.dispatchEvent(new CustomEvent("hhtools:video-to-motion-state", {
+    detail: gvhmrPublicState(),
+  }));
+}
+
+function selectGvhmrCheckpoint(files: UploadFile[]): void {
+  if (!files.length) return;
+  if (files.length !== 1) {
+    toast(gvhmrText("Select one checkpoint at a time.", "每次只能选择一个权重文件。"), true);
+    return;
+  }
+  const file = files[0];
+  const suffix = file.name.slice(file.name.lastIndexOf(".")).toLowerCase();
+  if (!GVHMR_CHECKPOINT_EXTENSIONS.has(suffix)) {
+    toast(gvhmrText(
+      "Custom GVHMR weights must be a CKPT, PT, or PTH file.",
+      "自定义 GVHMR 权重必须是 CKPT、PT 或 PTH 文件。",
+    ), true);
+    return;
+  }
+  gvhmrWorkspace.checkpoint = file;
+  gvhmrWorkspace.weightSource = "custom";
+  gvhmrWorkspace.stage = "idle";
+  gvhmrWorkspace.progress = 0;
+  gvhmrWorkspace.message = "";
+  gvhmrWorkspace.result = null;
+  renderGvhmrWorkspace();
+}
+
+function selectGvhmrVideo(files: UploadFile[]): void {
+  if (!files.length) return;
+  if (files.length !== 1) {
+    toast(gvhmrText("Select one video at a time.", "GVHMR 每次只处理一个视频。"), true);
+    return;
+  }
+  const file = files[0];
+  const suffix = file.name.slice(file.name.lastIndexOf(".")).toLowerCase();
+  if (!GVHMR_VIDEO_EXTENSIONS.has(suffix)) {
+    toast(gvhmrText(
+      "Supported formats: MP4, MOV, MKV, AVI, WebM, and M4V.",
+      "支持 MP4、MOV、MKV、AVI、WebM 和 M4V 视频。",
+    ), true);
+    return;
+  }
+
+  if (gvhmrWorkspace.previewUrl) URL.revokeObjectURL(gvhmrWorkspace.previewUrl);
+  gvhmrWorkspace.file = file;
+  gvhmrWorkspace.previewUrl = URL.createObjectURL(file);
+  gvhmrWorkspace.previewDuration = null;
+  gvhmrWorkspace.stage = "idle";
+  gvhmrWorkspace.progress = 0;
+  gvhmrWorkspace.message = "";
+  gvhmrWorkspace.result = null;
+
+  const preview = document.getElementById("gvhmr-video-preview") as HTMLVideoElement | null;
+  if (preview) {
+    preview.src = gvhmrWorkspace.previewUrl;
+    preview.onloadedmetadata = () => {
+      gvhmrWorkspace.previewDuration = Number.isFinite(preview.duration) ? preview.duration : null;
+      renderGvhmrWorkspace();
+    };
+    preview.load();
+  }
+  renderGvhmrWorkspace();
+}
+
+async function refreshGvhmrRuntime(): Promise<void> {
+  gvhmrWorkspace.runtimeState = "checking";
+  gvhmrWorkspace.runtimeError = null;
+  renderGvhmrWorkspace();
+  try {
+    const runtime: GvhmrRuntimeStatus = await API.get("/api/video-to-motion/status");
+    gvhmrWorkspace.runtimeState = runtime.ready ? "ready" : "unavailable";
+    gvhmrWorkspace.runtimeMissing = runtime.missing ?? [];
+  } catch (error) {
+    gvhmrWorkspace.runtimeState = "unavailable";
+    gvhmrWorkspace.runtimeMissing = [];
+    gvhmrWorkspace.runtimeError = errorMessage(error);
+  }
+  renderGvhmrWorkspace();
+}
+
+function gvhmrFocalLength(): number | undefined {
+  const input = document.getElementById("gvhmr-f-mm") as HTMLInputElement | null;
+  const raw = input?.value.trim() ?? "";
+  if (!raw) return undefined;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(gvhmrText(
+      "Focal length must be a positive integer.",
+      "焦距必须是正整数。",
+    ));
+  }
+  return value;
+}
+
+async function runGvhmrVideoToMotion(): Promise<void> {
+  const file = gvhmrWorkspace.file;
+  if (!file || gvhmrWorkspace.runtimeState !== "ready" || !gvhmrWorkspace.environmentConfirmed) {
+    renderGvhmrWorkspace();
+    return;
+  }
+  if (gvhmrWorkspace.weightSource === "custom" && !gvhmrWorkspace.checkpoint) {
+    toast(gvhmrText(
+      "Import a compatible custom checkpoint or switch back to official weights.",
+      "请导入兼容的自定义权重，或切回官方权重。",
+    ), true);
+    renderGvhmrWorkspace();
+    return;
+  }
+
+  let fMm: number | undefined;
+  try {
+    fMm = gvhmrFocalLength();
+  } catch (error) {
+    toast(errorMessage(error), true);
+    return;
+  }
+  const staticCam = (document.getElementById("gvhmr-static-cam") as HTMLInputElement | null)?.checked ?? true;
+
+  gvhmrWorkspace.stage = "uploading";
+  gvhmrWorkspace.progress = 0;
+  gvhmrWorkspace.message = gvhmrText(`Uploading ${file.name}…`, `正在上传 ${file.name}……`);
+  gvhmrWorkspace.result = null;
+  renderGvhmrWorkspace();
+  showLoading(gvhmrWorkspace.message);
+
+  try {
+    const { job_id } = await uploadFilesXHR(
+      "/api/video-to-motion/upload",
+      [file],
+      {
+        staticCam,
+        fMm,
+        checkpoint: gvhmrWorkspace.weightSource === "custom"
+          ? gvhmrWorkspace.checkpoint ?? undefined
+          : undefined,
+      },
+      (fraction, loaded, total) => {
+        gvhmrWorkspace.progress = (fraction ?? 0) * 0.08;
+        gvhmrWorkspace.message = total > 0
+          ? gvhmrText(
+            `Uploading ${fmtBytes(loaded)} / ${fmtBytes(total)}`,
+            `上传 ${fmtBytes(loaded)} / ${fmtBytes(total)}`,
+          )
+          : gvhmrText("Uploading video…", "正在上传视频……");
+        setLoadingProgress(gvhmrWorkspace.progress, gvhmrWorkspace.message);
+        renderGvhmrWorkspace();
+      },
+    );
+    gvhmrWorkspace.stage = "running";
+    renderGvhmrWorkspace();
+    const payload = await waitMotionJob<MotionPayload>(job_id, (fraction, message) => {
+      gvhmrWorkspace.stage = "running";
+      gvhmrWorkspace.progress = 0.08 + fraction * 0.92;
+      gvhmrWorkspace.message = message;
+      setLoadingProgress(gvhmrWorkspace.progress, message);
+      renderGvhmrWorkspace();
+    }, { uploadFrac: 0 });
+    setLoadingProgress(1, gvhmrText("Building the motion preview…", "正在构建动作预览……"));
+    await loadMotionPayload(payload);
+    await refreshLibrary();
+    if (payload.library_entry) addToBasket([payload.library_entry], { silent: true });
+
+    gvhmrWorkspace.stage = "completed";
+    gvhmrWorkspace.progress = 1;
+    gvhmrWorkspace.message = gvhmrText("Motion generated successfully.", "视频动作生成完成。");
+    gvhmrWorkspace.result = {
+      name: payload.name,
+      frames: payload.playback_frames ?? payload.num_frames_total ?? payload.positions.length ?? null,
+      duration: payload.playback_duration ?? payload.duration ?? null,
+      framerate: payload.framerate ?? payload.sample_rate ?? null,
+    };
+    renderGvhmrWorkspace();
+    toast(gvhmrText(
+      `GVHMR motion generated and loaded: ${payload.name}`,
+      `GVHMR 动作已生成并加载：${payload.name}`,
+    ));
+  } catch (error) {
+    gvhmrWorkspace.stage = "failed";
+    gvhmrWorkspace.message = errorMessage(error);
+    renderGvhmrWorkspace();
+    toast(gvhmrWorkspace.message, true);
+  } finally {
+    hideLoading();
+  }
+}
+
+function initGvhmrWorkspace(): void {
+  const pickButton = document.getElementById("video-pick-file") as HTMLButtonElement | null;
+  const runButton = document.getElementById("gvhmr-run") as HTMLButtonElement | null;
+  const weightSource = document.getElementById("gvhmr-weight-source") as HTMLSelectElement | null;
+  const confirmEnvironment = document.getElementById("gvhmr-confirm-environment") as HTMLButtonElement | null;
+  const pickCheckpoint = document.getElementById("gvhmr-pick-checkpoint") as HTMLButtonElement | null;
+  const dropzone = document.getElementById("video-drop-shared");
+  if (!pickButton || !runButton || !weightSource || !confirmEnvironment || !dropzone) return;
+
+  pickButton.onclick = async () => {
+    selectGvhmrVideo(await pickFiles({ accept: GVHMR_VIDEO_ACCEPT }));
+  };
+  runButton.onclick = () => void runGvhmrVideoToMotion();
+  weightSource.onchange = () => {
+    gvhmrWorkspace.weightSource = "official";
+    gvhmrWorkspace.environmentConfirmed = false;
+    gvhmrWorkspace.stage = "idle";
+    gvhmrWorkspace.progress = 0;
+    gvhmrWorkspace.message = "";
+    gvhmrWorkspace.result = null;
+    renderGvhmrWorkspace();
+  };
+  confirmEnvironment.onclick = () => {
+    if (!gvhmrWorkspace.file || gvhmrWorkspace.runtimeState !== "ready") return;
+    gvhmrWorkspace.weightSource = "official";
+    gvhmrWorkspace.environmentConfirmed = true;
+    renderGvhmrWorkspace();
+  };
+  if (pickCheckpoint) {
+    pickCheckpoint.onclick = async () => {
+      selectGvhmrCheckpoint(await pickFiles({ accept: GVHMR_CHECKPOINT_ACCEPT }));
+    };
+  }
+  setupDropzone(dropzone, (files) => selectGvhmrVideo(files));
+  window.addEventListener("hhtools:workspace-locale-change", renderGvhmrWorkspace);
+  renderGvhmrWorkspace();
+  void refreshGvhmrRuntime();
+}
+
+initGvhmrWorkspace();
 setupDropzone(document.getElementById("stage"), (files) => ingestMotionFiles(files, "mimic"));
 
 document.getElementById("add-to-basket").onclick = () => {
@@ -3596,11 +4224,81 @@ document.getElementById("add-to-basket").onclick = () => {
     addToBasket([state.libraryEntry]);
     return;
   }
-  toast("请从资源库加载动作后再加入篮子，或使用资源库列表行的 ＋", true);
+  toast(runtimeText(
+    "Load a motion from the Library before adding it to the basket, or use ＋ on a library row.",
+    "请从资源库加载动作后再加入篮子，或使用资源库列表行的 ＋",
+  ), true);
 };
 
 // =================================================================  ROBOT
 let _robotPanelLockDepth = 0;
+let robotSummaries: RobotSummary[] = [];
+let robotLibraryDir = "";
+let robotLoadingName = "";
+
+function isBuiltinRobot(summary: RobotSummary): boolean {
+  return summary.builtin === true || curatedRobotLibraryItem(summary.name) != null;
+}
+
+function robotSummaryLabel(summary: RobotSummary): string {
+  const copy = curatedRobotLibraryItem(summary.name);
+  return copy ? runtimeText(copy.en, copy.zh) : summary.display_name || summary.name;
+}
+
+function sortedRobotSummaries(): RobotSummary[] {
+  return sortRobotLibrarySummaries(robotSummaries, robotSummaryLabel);
+}
+
+/** Keep a compact workflow robot picker in sync with the shared Robot Library. */
+function populateWorkflowRobotSelect(
+  selectId: string,
+  loadButtonId: string,
+  preferredName?: string,
+): void {
+  const select = document.getElementById(selectId) as HTMLSelectElement | null;
+  const loadButton = document.getElementById(loadButtonId) as HTMLButtonElement | null;
+  if (!select || !loadButton) return;
+
+  const preferred = preferredName || select.value || state.robot?.name;
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = runtimeText("Select a robot…", "选择机器人……");
+  select.replaceChildren(placeholder);
+
+  for (const summary of sortedRobotSummaries()) {
+    const option = document.createElement("option");
+    option.value = summary.name;
+    option.textContent = `${robotSummaryLabel(summary)} (${summary.num_dof} DoF)`;
+    option.disabled = !summary.has_urdf;
+    select.appendChild(option);
+  }
+
+  if (preferred && [...select.options].some((option) => option.value === preferred && !option.disabled)) {
+    select.value = preferred;
+  } else {
+    select.value = "";
+  }
+  const selectedRobotIsLoaded = Boolean(select.value && select.value === state.robot?.name);
+  select.disabled = state.robotPanelLocked || Boolean(robotLoadingName);
+  loadButton.disabled = select.disabled || !select.value || selectedRobotIsLoaded;
+  loadButton.textContent = selectedRobotIsLoaded
+    ? runtimeText(
+      selectId === "batch-robot-select" ? "Target robot loaded" : "Robot loaded",
+      selectId === "batch-robot-select" ? "目标机器人已加载" : "机器人已加载",
+    )
+    : runtimeText(
+      selectId === "batch-robot-select" ? "Load target robot" : "Load robot",
+      selectId === "batch-robot-select" ? "加载目标机器人" : "加载机器人",
+    );
+}
+
+function populateH2rRobotSelect(preferredName?: string): void {
+  populateWorkflowRobotSelect("h2r-robot-select", "h2r-robot-load", preferredName);
+}
+
+function populateBatchRobotSelect(preferredName?: string): void {
+  populateWorkflowRobotSelect("batch-robot-select", "batch-robot-load", preferredName);
+}
 
 function setRobotPanelLocked(locked: boolean): void {
   if (locked) _robotPanelLockDepth++;
@@ -3608,24 +4306,44 @@ function setRobotPanelLocked(locked: boolean): void {
   const busy = _robotPanelLockDepth > 0;
   state.robotPanelLocked = busy;
 
-  const sel = document.getElementById("robot-select");
-  if (sel) sel.disabled = busy;
-  for (const id of ["robot-load-btn", "robot-pick-urdf", "robot-pick-mesh-folder"]) {
+  for (const id of ["robot-pick-urdf", "robot-pick-mesh-folder"]) {
     const el = document.getElementById(id) as HTMLButtonElement | null;
     if (el) el.disabled = busy;
   }
-  const delBtn = document.getElementById("robot-delete-btn");
-  if (delBtn && busy) delBtn.disabled = true;
-  if (!busy) updateRobotDeleteBtn();
   for (const id of ["robot-drop-urdf", "robot-drop-mesh"]) {
     document.getElementById(id)?.classList.toggle("disabled", busy);
   }
+  populateH2rRobotSelect();
+  populateBatchRobotSelect();
+  renderRobotLibrary();
   publishH2rWorkflowState();
+  updateBatchRunAvailability();
 }
 
-async function applyRobot(robotData: RobotPayload): Promise<void> {
+function renderRobotDetails(robotData: RobotPayload): void {
+  document.getElementById("robot-name").textContent = robotData.display_name;
+  renderMetaRows(document.getElementById("robot-meta"), [
+    [runtimeText("Links", "链接"), robotData.links.length],
+    [runtimeText("Degrees of freedom", "自由度"), robotData.num_dof ?? robotData.joints?.length ?? 0],
+    [runtimeText("ik_map slots", "ik_map 槽位"), Object.keys(robotData.ik_map ?? {}).length],
+  ]);
+  renderRobotValidation(robotData);
+}
+
+interface ApplyRobotOptions {
+  /** Batch selects a target in place instead of navigating away from its task builder. */
+  stayOnCurrentPanel?: boolean;
+}
+
+async function applyRobot(
+  robotData: RobotPayload,
+  { stayOnCurrentPanel = false }: ApplyRobotOptions = {},
+): Promise<void> {
   if (state.robotPanelLocked) {
-    toast("Retarget 进行中，请等待完成后再切换机器人", true);
+    toast(runtimeText(
+      "Retargeting is running. Wait for it to finish before switching robots.",
+      "Retarget 进行中，请等待完成后再切换机器人",
+    ), true);
     return;
   }
   state.robot = robotData;
@@ -3635,17 +4353,13 @@ async function applyRobot(robotData: RobotPayload): Promise<void> {
   state.calibration = false;
   h2rRunState = "idle";
   document.getElementById("rt-export-card").style.display = "none";
+  populateH2rRobotSelect(robotData.name);
+  populateBatchRobotSelect(robotData.name);
   await robot.load(robotData);
   document.getElementById("robot-meta-card").style.display = "block";
-  document.getElementById("robot-name").textContent = robotData.display_name;
-  renderMetaRows(document.getElementById("robot-meta"), [
-    ["链接 links", robotData.links.length],
-    ["自由度 DOF", robotData.num_dof ?? robotData.joints?.length ?? 0],
-    ["ik_map 槽位", Object.keys(robotData.ik_map ?? {}).length],
-  ]);
-  renderRobotValidation(robotData);
+  renderRobotDetails(robotData);
+  renderRobotLibrary();
   document.getElementById("batch-robot").textContent = robotData.display_name;
-  void syncBatchRefHint();
   renderBasket();
   updatePills();
   const tgRobot = document.getElementById("tg-robot");
@@ -3657,83 +4371,208 @@ async function applyRobot(robotData: RobotPayload): Promise<void> {
   if (state.calibrationMode) {
     switchInspectorPanel("h2r");
     await enterCalibrationMode(state.calibQ);
-    toast(`机器人已加载（标定姿态）：${robotData.display_name}`);
+    toast(runtimeText(
+      `Robot loaded in calibration pose: ${robotData.display_name}`,
+      `机器人已加载（标定姿态）：${robotData.display_name}`,
+    ));
     return;
   }
-  await routeAfterRobotLoad();
+  if (stayOnCurrentPanel) await refreshRetargetPanel();
+  else await routeAfterRobotLoad();
   toast(
     state.motion
-      ? `机器人已加载：${robotData.display_name}`
-      : `机器人已加载：${robotData.display_name} — 请先加载动作`,
+      ? runtimeText(
+        `Robot loaded: ${robotData.display_name}`,
+        `机器人已加载：${robotData.display_name}`,
+      )
+      : runtimeText(
+        `Robot loaded: ${robotData.display_name} — load a motion next`,
+        `机器人已加载：${robotData.display_name} — 请先加载动作`,
+      ),
   );
-}
-
-function updateRobotDeleteBtn() {
-  const sel = document.getElementById("robot-select");
-  const btn = document.getElementById("robot-delete-btn");
-  if (!sel || !btn) return;
-  const opt = sel.selectedOptions[0];
-  const deletable = opt?.dataset.deletable === "1";
-  btn.style.display = deletable ? "" : "none";
-  btn.dataset.deletable = deletable ? "1" : "0";
-  btn.disabled = state.robotPanelLocked || !deletable;
 }
 
 async function refreshRobotList(): Promise<void> {
   try {
     const data = await API.get("/api/robots");
-    const sel = document.getElementById("robot-select");
-    const hint = document.getElementById("robot-library-hint");
-    const prev = sel.value;
-    sel.innerHTML = "";
-    for (const r of data.robots) {
-      const opt = document.createElement("option");
-      opt.value = r.name;
-      opt.dataset.deletable = r.deletable ? "1" : "0";
-      const tag = r.deletable ? " · 用户库" : "";
-      opt.textContent = `${r.display_name} (${r.num_dof} DOF)${tag}${r.has_urdf ? "" : " — 无URDF"}`;
-      opt.disabled = !r.has_urdf;
-      sel.appendChild(opt);
-    }
-    if (prev && [...sel.options].some((o) => o.value === prev)) sel.value = prev;
-    if (hint && data.library_dir) {
-      hint.replaceChildren(
-        document.createTextNode("通过 UI 注册的机器人保存在 "),
-        textElement("code", "", data.library_dir),
-        document.createTextNode("，重启 "),
-        textElement("code", "", "hhtools web"),
-        document.createTextNode(" 后仍可用。"),
-      );
-    }
-    updateRobotDeleteBtn();
-  } catch (e) { /* ignore */ }
+    robotSummaries = data.robots || [];
+    robotLibraryDir = data.library_dir || "";
+    populateH2rRobotSelect();
+    populateBatchRobotSelect();
+    renderRobotLibrary();
+  } catch (e) {
+    renderTextMessage(
+      document.getElementById("robot-library-list"),
+      runtimeText(
+        `Unable to read the Robot Library: ${errorMessage(e)}`,
+        `无法读取机器人库：${errorMessage(e)}`,
+      ),
+    );
+  }
 }
-document.getElementById("robot-select")?.addEventListener("change", updateRobotDeleteBtn);
-document.getElementById("robot-load-btn").onclick = async () => {
-  if (state.robotPanelLocked) {
-    toast("Retarget 进行中，请等待完成后再切换机器人", true);
+
+function renderRobotLibrary(): void {
+  const list = document.getElementById("robot-library-list");
+  if (!list) return;
+  const input = document.getElementById("robot-library-search") as HTMLInputElement | null;
+  const query = input?.value.trim().toLowerCase() || "";
+  const tokens = query.split(/\s+/).filter(Boolean);
+  const filtered = sortedRobotSummaries().filter((summary) => {
+    const builtin = isBuiltinRobot(summary);
+    const haystack = [
+      summary.name,
+      summary.display_name,
+      robotSummaryLabel(summary),
+      summary.num_dof,
+      builtin ? "builtin built-in included 内置 预置" : "imported custom uploaded 导入 自定义 上传",
+    ].join(" ").toLowerCase();
+    return tokens.every((token) => haystack.includes(token));
+  });
+
+  list.replaceChildren();
+  if (!robotSummaries.length) {
+    renderTextMessage(list, runtimeText(
+      "No robot models are available. Import a complete robot folder above.",
+      "机器人库中暂无模型，请从上方导入完整的机器人文件夹。",
+    ));
     return;
   }
-  const name = document.getElementById("robot-select").value;
-  if (!name) return;
-  toast("加载机器人…");
-  try { await applyRobot(await API.post("/api/robot/select", { name })); }
-  catch (e) { toast(errorMessage(e), true); }
-};
-document.getElementById("robot-delete-btn").onclick = async () => {
-  if (state.robotPanelLocked) {
-    toast("Retarget 进行中，请等待完成后再操作", true);
+  if (!filtered.length) {
+    renderTextMessage(list, runtimeText(
+      `No robots match “${input?.value || ""}”`,
+      `没有匹配「${input?.value || ""}」的机器人`,
+    ));
     return;
   }
-  const sel = document.getElementById("robot-select");
-  const name = sel?.value;
-  if (!name) return;
-  const label = sel.selectedOptions[0]?.textContent || name;
-  if (!confirm(`确定从资源库删除「${label}」？\n将永久删除对应目录，不可恢复。`)) return;
-  toast("删除机器人…");
+
+  for (const summary of filtered) {
+    const builtin = isBuiltinRobot(summary);
+    const active = state.robot?.name === summary.name;
+    const unavailable = !summary.has_urdf;
+    const row = document.createElement("div");
+    row.className = "lib-row robot-lib-row";
+    row.classList.toggle("is-active", active);
+    row.classList.toggle("is-unavailable", unavailable);
+
+    const loadButton = document.createElement("button");
+    loadButton.type = "button";
+    loadButton.className = "lr-load robot-library-load";
+    loadButton.disabled = unavailable || state.robotPanelLocked || Boolean(robotLoadingName);
+    loadButton.setAttribute("aria-label", runtimeText(
+      `Load robot ${robotSummaryLabel(summary)}`,
+      `加载机器人 ${robotSummaryLabel(summary)}`,
+    ));
+    if (active) loadButton.setAttribute("aria-current", "true");
+
+    const icon = document.createElement("img");
+    icon.className = "robot-library-icon";
+    icon.src = robotLibraryIcon(summary.name);
+    // Broken or unavailable curated artwork must degrade to the same generic
+    // mark used by user imports, never to a browser broken-image glyph.
+    icon.onerror = () => {
+      icon.onerror = null;
+      icon.src = DEFAULT_ROBOT_LIBRARY_ICON;
+    };
+    icon.alt = "";
+    icon.setAttribute("aria-hidden", "true");
+
+    const copy = document.createElement("span");
+    copy.className = "robot-library-copy";
+    copy.append(
+      textElement("strong", "robot-library-name", robotSummaryLabel(summary)),
+      textElement("small", "robot-library-meta", runtimeText(
+        `${summary.num_dof} DoF · ${builtin ? "Built-in" : "Imported"}${unavailable ? " · URDF missing" : ""}`,
+        `${summary.num_dof} DoF · ${builtin ? "内置" : "已导入"}${unavailable ? " · 缺少 URDF" : ""}`,
+      )),
+    );
+    loadButton.append(icon, copy);
+    if (robotLoadingName === summary.name) {
+      loadButton.append(textElement("span", "robot-library-state", runtimeText("Loading…", "加载中……")));
+    } else if (active) {
+      loadButton.append(textElement("span", "robot-library-state", runtimeText("Loaded", "已加载")));
+    }
+    loadButton.onclick = () => loadRobotSummary(summary);
+    row.appendChild(loadButton);
+
+    if (summary.deletable && !builtin) {
+      const deleteButton = textElement("button", "robot-library-delete", "×");
+      deleteButton.type = "button";
+      deleteButton.disabled = state.robotPanelLocked || Boolean(robotLoadingName);
+      deleteButton.title = runtimeText("Remove from Robot Library", "从机器人库删除");
+      deleteButton.setAttribute("aria-label", runtimeText(
+        `Delete robot ${robotSummaryLabel(summary)}`,
+        `删除机器人 ${robotSummaryLabel(summary)}`,
+      ));
+      deleteButton.onclick = (event) => {
+        event.stopPropagation();
+        void deleteRobotSummary(summary);
+      };
+      row.appendChild(deleteButton);
+    }
+    list.appendChild(row);
+  }
+
+  const hint = document.getElementById("robot-library-hint");
+  if (hint) {
+    hint.textContent = runtimeText(
+      "Imported robot models stay in the local library.",
+      "导入的机器人模型会保存在本机资源库。",
+    );
+    hint.title = robotLibraryDir;
+  }
+}
+
+async function loadRobotSummary(
+  summary: RobotSummary,
+  options: ApplyRobotOptions = {},
+): Promise<void> {
+  if (state.robotPanelLocked) {
+    toast(runtimeText(
+      "Retargeting is running. Wait for it to finish before switching robots.",
+      "Retarget 进行中，请等待完成后再切换机器人",
+    ), true);
+    return;
+  }
+  if (options.stayOnCurrentPanel && state.calibrationMode) {
+    toast(runtimeText(
+      "Finish or cancel the current calibration before changing the Batch target robot.",
+      "请先保存或取消当前标定，再更换 Batch 目标机器人。",
+    ), true);
+    return;
+  }
+  if (!summary.has_urdf || robotLoadingName) return;
+  robotLoadingName = summary.name;
+  renderRobotLibrary();
+  toast(runtimeText("Loading robot…", "加载机器人……"));
   try {
-    await API.delete(`/api/robot/${encodeURIComponent(name)}`);
-    if (state.robot?.name === name) {
+    await applyRobot(await API.post("/api/robot/select", { name: summary.name }), options);
+  } catch (e) {
+    toast(errorMessage(e), true);
+  } finally {
+    robotLoadingName = "";
+    populateH2rRobotSelect();
+    populateBatchRobotSelect();
+    renderRobotLibrary();
+  }
+}
+
+async function deleteRobotSummary(summary: RobotSummary): Promise<void> {
+  if (state.robotPanelLocked) {
+    toast(runtimeText(
+      "Retargeting is running. Wait for it to finish before editing the library.",
+      "Retarget 进行中，请等待完成后再操作",
+    ), true);
+    return;
+  }
+  const label = robotSummaryLabel(summary);
+  if (!confirm(runtimeText(
+    `Remove “${label}” from the Robot Library?\nThis permanently deletes its local folder and cannot be undone.`,
+    `确定从机器人库删除「${label}」？\n将永久删除对应目录，不可恢复。`,
+  ))) return;
+  toast(runtimeText("Removing robot…", "删除机器人……"));
+  try {
+    await API.delete(`/api/robot/${encodeURIComponent(summary.name)}`);
+    if (state.robot?.name === summary.name) {
       state.robot = null;
       state.exportToken = null;
       state.robotTrajectory = null;
@@ -3741,15 +4580,49 @@ document.getElementById("robot-delete-btn").onclick = async () => {
       h2rRunState = "idle";
       robot.group.visible = false;
       document.getElementById("robot-meta-card").style.display = "none";
-      document.getElementById("robot-pill").textContent = "未加载机器人";
-      document.getElementById("batch-robot").textContent = "未加载";
+      document.getElementById("robot-pill").textContent = runtimeText("No robot loaded", "未加载机器人");
+      document.getElementById("batch-robot").textContent = runtimeText("Not loaded", "未加载");
       renderBasket();
       refreshRetargetPanel();
     }
     await refreshRobotList();
-    toast(`已从资源库删除：${name}`);
+    toast(runtimeText(
+      `Removed from Robot Library: ${label}`,
+      `已从机器人库删除：${label}`,
+    ));
   } catch (e) { toast(errorMessage(e), true); }
-};
+}
+
+const robotSearchInput = document.getElementById("robot-library-search") as HTMLInputElement | null;
+if (robotSearchInput) robotSearchInput.oninput = renderRobotLibrary;
+
+const h2rRobotSelect = document.getElementById("h2r-robot-select");
+if (h2rRobotSelect) {
+  h2rRobotSelect.onchange = () => populateH2rRobotSelect();
+}
+const h2rRobotLoadButton = document.getElementById("h2r-robot-load");
+if (h2rRobotLoadButton) {
+  h2rRobotLoadButton.onclick = async () => {
+    const name = h2rRobotSelect?.value;
+    const summary = robotSummaries.find((candidate) => candidate.name === name);
+    if (summary) await loadRobotSummary(summary);
+  };
+}
+
+const batchRobotSelect = document.getElementById("batch-robot-select") as HTMLSelectElement | null;
+if (batchRobotSelect) {
+  batchRobotSelect.onchange = () => {
+    populateBatchRobotSelect();
+    updateBatchRunAvailability();
+  };
+}
+const batchRobotLoadButton = document.getElementById("batch-robot-load") as HTMLButtonElement | null;
+if (batchRobotLoadButton) {
+  batchRobotLoadButton.onclick = async () => {
+    const summary = robotSummaries.find((candidate) => candidate.name === batchRobotSelect?.value);
+    if (summary) await loadRobotSummary(summary, { stayOnCurrentPanel: true });
+  };
+}
 
 interface RobotImportState {
   urdf: UploadFile | null;
@@ -3768,22 +4641,33 @@ function isMeshFile(f: UploadFile): boolean {
 function updateRobotImportStatus(): void {
   const el = document.getElementById("robot-import-status");
   if (!el) return;
-  const parts = [];
-  if (robotImport.urdf) parts.push(`URDF：${robotImport.urdf.name || "robot.urdf"}`);
-  if (robotImport.meshes.length) parts.push(`Mesh：${robotImport.meshes.length} 个文件`);
+  const parts: string[] = [];
+  if (robotImport.urdf) parts.push(`URDF: ${robotImport.urdf.name || "robot.urdf"}`);
+  if (robotImport.meshes.length) parts.push(runtimeText(
+    `Assets: ${robotImport.meshes.length} files`,
+    `资源：${robotImport.meshes.length} 个文件`,
+  ));
   if (robotImport.urdf && !robotImport.meshes.length) {
-    parts.push("请接着拖入 meshes/ 文件夹完成注册");
+    parts.push(runtimeText(
+      "Choose the matching mesh folder to continue",
+      "请继续选择对应的 mesh 文件夹",
+    ));
   }
-  el.textContent = parts.length ? parts.join(" · ") : "尚未选择 URDF。";
+  el.textContent = parts.length
+    ? parts.join(" · ")
+    : runtimeText("No URDF selected.", "尚未选择 URDF。");
 }
 
 async function tryUploadRobot(): Promise<void> {
   if (state.robotPanelLocked) {
-    toast("Retarget 进行中，请等待完成后再切换机器人", true);
+    toast(runtimeText(
+      "Retargeting is running. Wait for it to finish before switching robots.",
+      "Retarget 进行中，请等待完成后再切换机器人",
+    ), true);
     return;
   }
   if (!robotImport.urdf) {
-    toast("请先放入 .urdf 文件", true);
+    toast(runtimeText("Choose a .urdf file first.", "请先选择 .urdf 文件。"), true);
     return;
   }
   // The backend wipes the upload dir on every call, so URDF + meshes MUST be
@@ -3795,30 +4679,40 @@ async function tryUploadRobot(): Promise<void> {
     .replace(/\.urdf$/i, "")
     .replace(/[^a-z0-9_]/gi, "_")
     .toLowerCase();
-  toast(`上传机器人… (${files.length} 个文件)`);
+  toast(runtimeText(
+    `Importing robot… (${files.length} files)`,
+    `导入机器人……（${files.length} 个文件）`,
+  ));
   try {
     const robotData = await API.upload("/api/robot/upload", files, { name });
     await applyRobot(robotData);
-    // The clip is now a registered preset (name derived from the URDF) — show
-    // it in the "已注册机器人" list and select it.
+    // The backend persists the imported preset; refreshing exposes it through
+    // the same Robot Library used for the bundled G1 and X2 models.
     await refreshRobotList();
-    const sel = document.getElementById("robot-select");
-    if (sel && robotData.name) sel.value = robotData.name;
     robotImport.urdf = null;
     robotImport.meshes = [];
     updateRobotImportStatus();
-    toast(`机器人已注册：${robotData.display_name || robotData.name}`);
+    toast(runtimeText(
+      `Robot added to the library: ${robotData.display_name || robotData.name}`,
+      `机器人已加入资源库：${robotData.display_name || robotData.name}`,
+    ));
   } catch (e) { toast(errorMessage(e), true); }
 }
 
 function ingestRobotUrdf(files: UploadFile[]): void {
   if (state.robotPanelLocked) {
-    toast("Retarget 进行中，请等待完成后再切换机器人", true);
+    toast(runtimeText(
+      "Retargeting is running. Wait for it to finish before switching robots.",
+      "Retarget 进行中，请等待完成后再切换机器人",
+    ), true);
     return;
   }
   if (!files?.length) return;
   const urdf = files.find(isUrdfFile);
-  if (!urdf) { toast("此区域需要 .urdf 文件", true); return; }
+  if (!urdf) {
+    toast(runtimeText("No .urdf file was found.", "未找到 .urdf 文件。"), true);
+    return;
+  }
   robotImport.urdf = urdf;
   const extra = files.filter((f) => f !== urdf && (isMeshFile(f) || !isUrdfFile(f)));
   if (extra.length) robotImport.meshes = [...robotImport.meshes, ...extra];
@@ -3828,27 +4722,39 @@ function ingestRobotUrdf(files: UploadFile[]): void {
   // — uploading immediately used to register a mesh-less robot and reset the
   // stored URDF, so the subsequent meshes drop hit "请先放入 .urdf 文件".
   if (robotImport.meshes.length) {
-    tryUploadRobot();
+    void tryUploadRobot();
   } else {
-    toast("已读取 URDF，请接着拖入 meshes/ 文件夹完成注册");
+    toast(runtimeText(
+      "URDF selected. Choose the matching mesh folder to finish importing.",
+      "已读取 URDF，请继续选择对应的 mesh 文件夹完成导入。",
+    ));
   }
 }
 
 function ingestRobotMesh(files: UploadFile[]): void {
   if (state.robotPanelLocked) {
-    toast("Retarget 进行中，请等待完成后再切换机器人", true);
+    toast(runtimeText(
+      "Retargeting is running. Wait for it to finish before switching robots.",
+      "Retarget 进行中，请等待完成后再切换机器人",
+    ), true);
     return;
   }
   if (!files?.length) return;
   const meshes = files.filter((f) => !isUrdfFile(f));
-  if (!meshes.length) { toast("未找到 mesh 文件", true); return; }
+  if (!meshes.length) {
+    toast(runtimeText("No mesh assets were found.", "未找到 mesh 资源。"), true);
+    return;
+  }
   if (!robotImport.urdf) {
-    toast("请先在「1 · URDF 文件」区域放入 .urdf，再拖入 meshes/", true);
+    toast(runtimeText(
+      "Choose the robot URDF before selecting its mesh folder.",
+      "请先选择机器人 URDF，再选择对应的 mesh 文件夹。",
+    ), true);
     return;
   }
   robotImport.meshes = meshes;
   updateRobotImportStatus();
-  tryUploadRobot();
+  void tryUploadRobot();
 }
 
 setupDropzone(document.getElementById("robot-drop-urdf"), ingestRobotUrdf);
@@ -5164,6 +6070,7 @@ document.getElementById("calib-save").onclick = async () => {
     renderCalibrationSaveSummary("calibration-save-summary", scope, response.path ?? null, savedQ);
     updateH2rCalibrationValidation();
     publishH2rWorkflowState();
+    void syncBatchRefHint();
     const changed = Object.values(savedQ).filter((value) => Math.abs(value) > 1e-4).length;
     toast(`标定已保存：${changed} 个非零关节 — 请点击 Retarget 后再播放预览`);
   } catch (e) { toast(errorMessage(e), true); }
@@ -5373,13 +6280,46 @@ document.getElementById("rt-export-btn").onclick = async () => {
 
 // =================================================================  BATCH
 let basket: LibraryEntry[] = [];
-function basketEntryLabel(e: LibraryEntry): string {
-  const ds = datasetLabel(e.dataset);
-  const ref = referenceLabel(entryReference(e, state.reference || "smpl"));
-  const clip = e.origin === "upload"
-    ? `${e.export_subdir ? `${e.export_subdir}/` : ""}${e.stem}`
-    : `${e.folder_label}/${e.stem}`;
-  return `输入 ${ds} → 标定 ${ref} · ${clip}`;
+let batchBasketQuery = "";
+let batchBasketCategory: "all" | MotionCategory = "all";
+let batchSelectedPaths = new Set<string>();
+let batchMissingReferences = new Set<string>();
+let batchCompatibilityPending = false;
+let batchCompatibilityRevision = 0;
+let batchRunning = false;
+let lastBatchJobId: string | null = null;
+let lastBatchDownloadName: string | null = null;
+let lastBatchFailureCount = 0;
+let lastBatchResult: BatchRetargetResult | null = null;
+
+function basketEntryKey(entry: LibraryEntry): string {
+  return entry.source_path || entry.token || [entry.folder_label, entry.stem].filter(Boolean).join("/");
+}
+
+function basketEntryTitle(entry: LibraryEntry): string {
+  return entry.stem || entry.sequence_id || entry.display_name || entry.label || entry.name
+    || runtimeText("Untitled motion", "未命名动作");
+}
+
+function basketEntryContext(entry: LibraryEntry): string {
+  const parts = [entry.folder_label, entry.dataset ? datasetLabel(entry.dataset) : ""].filter(Boolean);
+  return [...new Set(parts)].join(" · ") || runtimeText("Imported motion", "导入动作");
+}
+
+function visibleBasketEntries(): LibraryEntry[] {
+  const tokens = batchBasketQuery.toLowerCase().split(/\s+/).filter(Boolean);
+  return basket.filter((entry) => {
+    const category = normalizedMotionCategory(entry);
+    if (batchBasketCategory !== "all" && category !== batchBasketCategory) return false;
+    const haystack = [
+      basketEntryTitle(entry),
+      basketEntryContext(entry),
+      category,
+      libraryCategoryLabel(category),
+      entryReference(entry, "smpl"),
+    ].join(" ").toLowerCase();
+    return tokens.every((token) => haystack.includes(token));
+  });
 }
 
 interface BatchReferenceGroup {
@@ -5388,16 +6328,24 @@ interface BatchReferenceGroup {
 }
 
 async function syncBatchRefHint(): Promise<void> {
+  const revision = ++batchCompatibilityRevision;
   const el = document.getElementById("batch-ref-hint");
   if (!el) return;
   if (!basket.length) {
-    el.replaceChildren();
-    el.style.display = "none";
+    batchCompatibilityPending = false;
+    batchMissingReferences.clear();
+    el.replaceChildren(textElement("p", "batch-compatibility-empty", runtimeText(
+      "Add inputs to check calibration compatibility.",
+      "添加输入动作后会在这里检查标定兼容性。",
+    )));
+    updateBatchRunAvailability();
     return;
   }
   const groups = new Map<string, BatchReferenceGroup>();
   for (const e of basket) {
-    const ref = entryReference(e, state.reference || "smpl");
+    // The reference must be intrinsic to each entry. Previewing another motion
+    // changes state.reference, so using that mutable global would corrupt the batch.
+    const ref = entryReference(e, "smpl");
     if (!groups.has(ref)) groups.set(ref, { count: 0, datasets: new Set<string>() });
     const g = groups.get(ref);
     if (!g) continue;
@@ -5405,92 +6353,353 @@ async function syncBatchRefHint(): Promise<void> {
     g.datasets.add(e.dataset || "unknown");
   }
 
-  const blocks: HTMLElement[] = [];
-  for (const [ref, g] of groups) {
-    const help = REFERENCE_HELP[ref] || {
-      input: `数据集 ${[...g.datasets].map(datasetLabel).join("、")}`,
-      calib: `标定参考「${referenceLabel(ref)}」`,
-      file: `retarget_calibration_${ref}.yaml`,
-    };
-    let status: { text: string; className: string } | null = null;
-    if (state.robot?.name) {
-      try {
-        const st = await API.get(
-          `/api/calibration/status?robot=${encodeURIComponent(state.robot.name)}`
-          + `&reference=${encodeURIComponent(ref)}`,
-        );
-        status = st.calibrated
-          ? { text: "✓ 当前机器人已标定", className: "status-ok" }
-          : { text: "✗ 未标定 — 请去左侧「机器人→标定」保存", className: "status-warn" };
-      } catch {
-        status = null;
-      }
+  batchCompatibilityPending = Boolean(state.robot?.name);
+  batchMissingReferences.clear();
+  updateBatchRunAvailability();
+
+  const checks = await Promise.all([...groups].map(async ([ref, group]) => {
+    if (!state.robot?.name) return { ref, group, calibrated: null as boolean | null, unavailable: false };
+    try {
+      const status = await API.get(
+        `/api/calibration/status?robot=${encodeURIComponent(state.robot.name)}`
+        + `&reference=${encodeURIComponent(ref)}`,
+      );
+      return { ref, group, calibrated: Boolean(status.calibrated), unavailable: false };
+    } catch {
+      return { ref, group, calibrated: false, unavailable: true };
     }
+  }));
+  if (revision !== batchCompatibilityRevision) return;
+
+  const missing = new Set<string>();
+  const blocks = checks.map(({ ref, group, calibrated, unavailable }) => {
+    if (calibrated === false) missing.add(ref);
     const block = document.createElement("div");
-    block.className = "batch-ref-block";
-    block.append(textElement("b", "", referenceLabel(ref)), document.createTextNode(`（${g.count} 条） `));
-    if (status) block.append(textElement("span", status.className, status.text));
-    block.append(document.createElement("br"));
-    block.append(textElement("span", "sub", `① 输入格式：${help.input}`), document.createElement("br"));
-    block.append(textElement("span", "sub", `② 标定参考：${help.calib}`), document.createElement("br"));
-    const calibrationFile = document.createElement("span");
-    calibrationFile.className = "sub";
-    calibrationFile.append(
-      document.createTextNode("③ 标定文件："),
-      textElement("code", "", help.file),
-      document.createTextNode("（保存在机器人 URDF 同目录）"),
+    block.className = `batch-compatibility-row${calibrated ? " is-ready" : calibrated === false ? " is-missing" : ""}`;
+
+    const copy = document.createElement("div");
+    copy.className = "batch-compatibility-copy";
+    copy.append(
+      textElement("strong", "", referenceLabel(ref)),
+      textElement("small", "", runtimeText(
+        `${group.count} clips · ${[...group.datasets].map(datasetLabel).join(", ")}`,
+        `${group.count} 条 · ${[...group.datasets].map(datasetLabel).join("、")}`,
+      )),
     );
-    block.append(calibrationFile);
-    blocks.push(block);
-  }
+    block.appendChild(copy);
+    const controls = document.createElement("div");
+    controls.className = "batch-compatibility-controls";
+
+    if (calibrated === true) {
+      controls.append(textElement("span", "batch-compatibility-status ok", runtimeText("Ready", "已就绪")));
+    } else if (calibrated === false) {
+      controls.append(textElement(
+        "span",
+        "batch-compatibility-status warn",
+        unavailable ? runtimeText("Check failed", "检查失败") : runtimeText("Calibration needed", "需要标定"),
+      ));
+      const action = textElement("button", "batch-compatibility-action", runtimeText("Calibrate", "去标定"));
+      action.type = "button";
+      action.onclick = async () => {
+        switchInspectorPanel("h2r");
+        await onReferenceChange(ref);
+        (document.getElementById("recalib-btn") as HTMLButtonElement | null)?.click();
+      };
+      controls.appendChild(action);
+    } else {
+      controls.append(textElement("span", "batch-compatibility-status", runtimeText(
+        "Select a robot",
+        "请选择机器人",
+      )));
+    }
+    block.appendChild(controls);
+    return block;
+  });
+  batchMissingReferences = missing;
+  batchCompatibilityPending = false;
   el.replaceChildren(...blocks);
-  el.style.display = "block";
+  updateBatchRunAvailability();
 }
 
-function renderBasket(): void {
+function updateBatchSelectionState(visible = visibleBasketEntries()): void {
+  const visibleKeys = visible.map(basketEntryKey);
+  const selectedVisible = visibleKeys.filter((key) => batchSelectedPaths.has(key)).length;
+  const selectAll = document.getElementById("batch-select-all") as HTMLInputElement | null;
+  if (selectAll) {
+    selectAll.checked = Boolean(visibleKeys.length) && selectedVisible === visibleKeys.length;
+    selectAll.indeterminate = selectedVisible > 0 && selectedVisible < visibleKeys.length;
+    selectAll.disabled = batchRunning || !visibleKeys.length;
+  }
+  const selectedCount = document.getElementById("batch-selected-count");
+  if (selectedCount) selectedCount.textContent = runtimeText(
+    `${batchSelectedPaths.size} selected`,
+    `已选择 ${batchSelectedPaths.size} 条`,
+  );
+  const removeSelected = document.getElementById("batch-remove-selected") as HTMLButtonElement | null;
+  if (removeSelected) removeSelected.disabled = batchRunning || !batchSelectedPaths.size;
+}
+
+function updateBatchSettingsNote(): void {
+  const backend = (document.getElementById("batch-backend") as HTMLSelectElement | null)?.value || "newton";
+  const format = (document.getElementById("batch-format") as HTMLSelectElement | null)?.value || "pkl";
+  const note = document.getElementById("batch-settings-note");
+  const batchSizeField = document.getElementById("batch-size-field");
+  const csvHeaderRow = document.getElementById("batch-csv-header-row");
+  const hasSceneInputs = basket.some((entry) => normalizedMotionCategory(entry) !== "motion");
+
+  if (batchSizeField) batchSizeField.hidden = backend !== "newton";
+  if (csvHeaderRow) csvHeaderRow.hidden = format !== "csv";
+  if (!note) return;
+  const base = backend === "interaction_mesh"
+    ? runtimeText("Interaction-Mesh processes clips sequentially.", "Interaction-Mesh 会逐条处理动作。")
+    : runtimeText("Newton uses GPU chunks; leave batch size empty for automatic tuning.", "Newton 使用 GPU 分块；批大小留空可自动调节。")
+  const recommendation = hasSceneInputs && backend === "newton"
+    ? runtimeText(" Scene inputs are present; verify whether Interaction-Mesh is required.", " 清单中包含场景动作，请确认是否应使用 Interaction-Mesh。")
+    : "";
+  note.textContent = base + recommendation;
+  note.classList.toggle("warn", Boolean(recommendation));
+}
+
+function updateBatchRunAvailability(): void {
+  const runButton = document.getElementById("batch-run") as HTMLButtonElement | null;
+  const reason = document.getElementById("batch-disabled-reason");
+  const summary = document.getElementById("batch-run-summary");
+  if (!runButton || !reason || !summary) return;
+
+  const startInput = document.getElementById("batch-export-t-start") as HTMLInputElement | null;
+  const endInput = document.getElementById("batch-export-t-end") as HTMLInputElement | null;
+  const start = parseOptionalTime(startInput);
+  const end = parseOptionalTime(endInput);
+  const invalidStart = Boolean(startInput?.value) && start == null;
+  const invalidEnd = Boolean(endInput?.value) && end == null;
+  let disabledReason = "";
+  if (batchRunning) disabledReason = runtimeText("A batch task is running.", "批量任务正在运行。")
+  else if (state.robotPanelLocked) disabledReason = runtimeText(
+    "Another retarget task is using the workspace.",
+    "另一个重定向任务正在占用工作区。",
+  )
+  else if (state.calibrationMode) disabledReason = runtimeText(
+    "Finish or cancel the current calibration first.",
+    "请先保存或取消当前标定。",
+  )
+  else if (!basket.length) disabledReason = runtimeText("Add at least one motion.", "请至少添加一条动作。")
+  else if (!state.robot) disabledReason = runtimeText("Select and load a target robot.", "请选择并加载目标机器人。")
+  else if ((document.getElementById("batch-robot-select") as HTMLSelectElement | null)?.value !== state.robot.name) {
+    disabledReason = runtimeText("Load the selected target robot.", "请加载当前选择的目标机器人。");
+  }
+  else if (batchCompatibilityPending) disabledReason = runtimeText("Checking calibration compatibility…", "正在检查标定兼容性……")
+  else if (batchMissingReferences.size) disabledReason = runtimeText(
+    `Complete calibration for ${[...batchMissingReferences].map(referenceLabel).join(", ")}.`,
+    `请先完成 ${[...batchMissingReferences].map(referenceLabel).join("、")} 标定。`,
+  )
+  else if (invalidStart || invalidEnd) disabledReason = runtimeText(
+    "Enter a valid non-negative time range.",
+    "请输入有效的非负时间范围。",
+  )
+  else if (start != null && end != null && start > end) disabledReason = runtimeText(
+    "Start time cannot be later than end time.",
+    "起始时间不能晚于截止时间。",
+  );
+
+  runButton.disabled = Boolean(disabledReason);
+  reason.textContent = disabledReason;
+  reason.hidden = !disabledReason;
+  const target = state.robot?.display_name || runtimeText("no target", "未选择目标");
+  const output = ((document.getElementById("batch-out") as HTMLInputElement | null)?.value || "batch_export")
+    .replace(/\.zip$/i, "");
+  summary.textContent = basket.length
+    ? runtimeText(
+      `${basket.length} clips → ${target} → ${output}.zip`,
+      `${basket.length} 条动作 → ${target} → ${output}.zip`,
+    )
+    : runtimeText("No inputs selected.", "尚未选择输入动作。");
+}
+
+function setBatchDraftLocked(locked: boolean): void {
+  batchRunning = locked;
+  for (const id of [
+    "batch-library-open", "batch-pick-file", "batch-pick-folder", "batch-select-all", "batch-remove-selected",
+    "basket-clear", "batch-robot-select", "batch-robot-load", "batch-backend", "batch-format",
+    "batch-size", "batch-retarget-fps", "batch-export-fps", "batch-export-t-start",
+    "batch-export-t-end", "batch-csv-header", "batch-out",
+  ]) {
+    const control = document.getElementById(id) as HTMLButtonElement | HTMLInputElement | HTMLSelectElement | null;
+    if (control) control.disabled = locked;
+  }
+  document.getElementById("basket-drop")?.classList.toggle("is-locked", locked);
+  renderBasket({ refreshCompatibility: false });
+}
+
+function renderBasket({ refreshCompatibility = true }: { refreshCompatibility?: boolean } = {}): void {
   const list = document.getElementById("basket-list");
+  if (!list) return;
   list.replaceChildren();
-  for (const e of basket) {
+  const currentKeys = new Set(basket.map(basketEntryKey));
+  batchSelectedPaths = new Set([...batchSelectedPaths].filter((key) => currentKeys.has(key)));
+  const visible = visibleBasketEntries();
+
+  if (!basket.length) {
+    const empty = document.createElement("div");
+    empty.className = "batch-basket-empty";
+    empty.append(
+      textElement("strong", "", runtimeText("No motions yet", "还没有动作")),
+      textElement("span", "", runtimeText(
+        "Add from the Library, import files, or drop a folder here.",
+        "可以从资源库添加、导入文件，或把文件夹拖到这里。",
+      )),
+    );
+    list.appendChild(empty);
+  } else if (!visible.length) {
+    const empty = textElement("div", "batch-basket-empty", runtimeText(
+      "No inputs match the current search and filter.",
+      "没有符合当前搜索与筛选条件的动作。",
+    ));
+    list.appendChild(empty);
+  }
+
+  for (const entry of visible) {
+    const key = basketEntryKey(entry);
     const row = document.createElement("div");
-    row.className = "basket-row";
-    const removeButton = textElement("button", "rm", "×");
+    row.className = `batch-basket-row${batchSelectedPaths.has(key) ? " is-selected" : ""}`;
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = batchSelectedPaths.has(key);
+    checkbox.disabled = batchRunning;
+    checkbox.setAttribute("aria-label", runtimeText(
+      `Select ${basketEntryTitle(entry)}`,
+      `选择 ${basketEntryTitle(entry)}`,
+    ));
+    checkbox.onchange = () => {
+      if (checkbox.checked) batchSelectedPaths.add(key);
+      else batchSelectedPaths.delete(key);
+      row.classList.toggle("is-selected", checkbox.checked);
+      updateBatchSelectionState(visible);
+    };
+
+    const identity = document.createElement("div");
+    identity.className = "batch-basket-copy";
+    identity.append(
+      textElement("strong", "batch-basket-title", basketEntryTitle(entry)),
+      textElement("span", "batch-basket-context", basketEntryContext(entry)),
+    );
+    const category = normalizedMotionCategory(entry);
+    const categoryBadge = textElement("span", "batch-category-tag", libraryCategoryLabel(category));
+    categoryBadge.dataset.category = category;
+    const reference = textElement("span", "batch-basket-reference", referenceLabel(entryReference(entry, "smpl")));
+    const removeButton = textElement("button", "batch-basket-remove", "×");
     removeButton.type = "button";
-    removeButton.onclick = () => { basket = basket.filter((x) => x !== e); syncBasket(); };
-    row.append(textElement("span", "", basketEntryLabel(e)), removeButton);
+    removeButton.disabled = batchRunning;
+    removeButton.title = runtimeText("Remove from batch", "从批量清单移除");
+    removeButton.setAttribute("aria-label", runtimeText(
+      `Remove ${basketEntryTitle(entry)} from batch`,
+      `从批量清单移除 ${basketEntryTitle(entry)}`,
+    ));
+    removeButton.onclick = () => {
+      basket = basket.filter((candidate) => basketEntryKey(candidate) !== key);
+      batchSelectedPaths.delete(key);
+      void syncBasket();
+    };
+    row.append(checkbox, identity, categoryBadge, reference, removeButton);
     list.appendChild(row);
   }
-  document.getElementById("basket-count").textContent = String(basket.length);
+
+  const count = document.getElementById("basket-count");
+  if (count) count.textContent = String(basket.length);
+  const inspectorCount = document.getElementById("batch-inspector-count");
+  if (inspectorCount) inspectorCount.textContent = String(basket.length);
   const badge = document.getElementById("basket-badge");
-  badge.textContent = String(basket.length);
-  badge.style.display = basket.length ? "inline-block" : "none";
-  document.getElementById("batch-run").disabled = !(basket.length && state.robot);
-  void syncBatchRefHint();
+  if (badge) {
+    badge.textContent = String(basket.length);
+    badge.style.display = basket.length ? "inline-block" : "none";
+  }
+  const clearButton = document.getElementById("basket-clear") as HTMLButtonElement | null;
+  if (clearButton) clearButton.disabled = batchRunning || !basket.length;
+  updateBatchSelectionState(visible);
+  updateBatchSettingsNote();
+  updateBatchRunAvailability();
+  if (refreshCompatibility) void syncBatchRefHint();
 }
 async function syncBasket(): Promise<void> {
   renderBasket();
+  window.dispatchEvent(new CustomEvent("hhtools:batch-basket-changed"));
 }
 function addToBasket(
   entries: LibraryEntry[],
   { silent = false }: { silent?: boolean } = {},
 ): void {
+  if (batchRunning) {
+    if (!silent) toast(runtimeText(
+      "Wait for the current Batch task before changing its inputs.",
+      "当前 Batch 任务结束后才能修改输入清单。",
+    ), true);
+    return;
+  }
+  let added = 0;
   for (const e of entries) {
-    if (!basket.find((x) => x.source_path === e.source_path)) basket.push(e);
+    if (!basket.find((x) => basketEntryKey(x) === basketEntryKey(e))) {
+      basket.push(e);
+      added++;
+    }
   }
   renderBasket();
-  if (!silent) toast(`已加入篮子（${basket.length}）`);
+  window.dispatchEvent(new CustomEvent("hhtools:batch-basket-changed"));
+  if (!silent) toast(runtimeText(
+    `${added} added${entries.length - added ? ` · ${entries.length - added} duplicates skipped` : ""}`,
+    `已添加 ${added} 条${entries.length - added ? ` · 跳过 ${entries.length - added} 条重复项` : ""}`,
+  ));
 }
-document.getElementById("basket-clear").onclick = () => { basket = []; renderBasket(); };
+
+window.addEventListener("hhtools:batch-filter", (event) => {
+  const detail = (event as CustomEvent<{ query?: unknown; category?: unknown }>).detail ?? {};
+  batchBasketQuery = typeof detail.query === "string" ? detail.query : "";
+  batchBasketCategory = detail.category === "motion" || detail.category === "object" || detail.category === "terrain"
+    ? detail.category
+    : "all";
+  renderBasket({ refreshCompatibility: false });
+});
+
+document.getElementById("batch-select-all")?.addEventListener("change", (event) => {
+  const checked = (event.currentTarget as HTMLInputElement).checked;
+  for (const entry of visibleBasketEntries()) {
+    const key = basketEntryKey(entry);
+    if (checked) batchSelectedPaths.add(key);
+    else batchSelectedPaths.delete(key);
+  }
+  renderBasket({ refreshCompatibility: false });
+});
+document.getElementById("batch-remove-selected")?.addEventListener("click", () => {
+  basket = basket.filter((entry) => !batchSelectedPaths.has(basketEntryKey(entry)));
+  batchSelectedPaths.clear();
+  void syncBasket();
+});
+document.getElementById("basket-clear")?.addEventListener("click", () => {
+  basket = [];
+  batchSelectedPaths.clear();
+  void syncBasket();
+});
+document.getElementById("batch-pick-file")?.addEventListener("click", async () => {
+  await ingestBasketFiles(await pickFiles(), "auto");
+});
+document.getElementById("batch-pick-folder")?.addEventListener("click", async () => {
+  await ingestBasketFiles(await pickFiles({ folder: true }), "auto");
+});
 
 async function ingestBasketFiles(files: UploadFile[], profile = "auto"): Promise<void> {
   if (!files || !files.length) return;
-  showLoading(`上传到会话缓存… (${files.length} 个文件)`);
+  showLoading(runtimeText(
+    `Uploading to the session cache… (${files.length} files)`,
+    `上传到会话缓存…（${files.length} 个文件）`,
+  ));
   try {
     const { job_id } = await uploadFilesXHR(
       "/api/basket/upload",
       files,
       { profile },
       (frac, recv, total) => {
-        setLoadingProgress((frac ?? 0) * 0.35, `上传 ${fmtBytes(recv)} / ${fmtBytes(total)}`);
+        setLoadingProgress((frac ?? 0) * 0.35, runtimeText(
+          `Uploading ${fmtBytes(recv)} / ${fmtBytes(total)}`,
+          `上传 ${fmtBytes(recv)} / ${fmtBytes(total)}`,
+        ));
       },
     );
     const payload = await waitMotionJob<{ entries: LibraryEntry[] }>(job_id, (frac, sub) => {
@@ -5498,11 +6707,17 @@ async function ingestBasketFiles(files: UploadFile[], profile = "auto"): Promise
     }, { uploadFrac: 0.35 });
     const entries = payload.entries || [];
     if (!entries.length) {
-      toast("未识别到可 retarget 的 clip", true);
+      toast(runtimeText(
+        "No retargetable clips were recognized.",
+        "未识别到可重定向的 clip。",
+      ), true);
       return;
     }
     addToBasket(entries, { silent: true });
-    toast(`已缓存 ${entries.length} 个 clip（关闭 Web 后自动清除）`);
+    toast(runtimeText(
+      `${entries.length} clips cached for this session.`,
+      `已缓存 ${entries.length} 个 clip（关闭 Web 后自动清除）`,
+    ));
   } catch (e) {
     toast(errorMessage(e), true);
   } finally {
@@ -5510,12 +6725,35 @@ async function ingestBasketFiles(files: UploadFile[], profile = "auto"): Promise
   }
 }
 
-setupDropzone(document.getElementById("basket-drop"), (files) => ingestBasketFiles(files, "auto"));
+setupDropzone(document.getElementById("basket-drop"), (files) => {
+  if (batchRunning) {
+    toast(runtimeText(
+      "Wait for the current Batch task before changing its inputs.",
+      "当前 Batch 任务结束后才能修改输入清单。",
+    ), true);
+    return;
+  }
+  return ingestBasketFiles(files, "auto");
+});
 
-const BATCH_STAGE_LABELS: Record<string, string> = {
-  load: "加载",
-  retarget: "重定向",
-  export: "导出",
+for (const id of [
+  "batch-backend", "batch-format", "batch-size", "batch-retarget-fps", "batch-export-fps",
+  "batch-export-t-start", "batch-export-t-end", "batch-csv-header", "batch-out",
+]) {
+  document.getElementById(id)?.addEventListener("input", () => {
+    updateBatchSettingsNote();
+    updateBatchRunAvailability();
+  });
+  document.getElementById(id)?.addEventListener("change", () => {
+    updateBatchSettingsNote();
+    updateBatchRunAvailability();
+  });
+}
+
+const BATCH_STAGE_LABELS: Record<string, { en: string; zh: string }> = {
+  load: { en: "Load", zh: "加载" },
+  retarget: { en: "Retarget", zh: "重定向" },
+  export: { en: "Export", zh: "导出" },
 };
 
 function renderBatchFailures(result: BatchRetargetResult | null): void {
@@ -5528,27 +6766,37 @@ function renderBatchFailures(result: BatchRetargetResult | null): void {
     return;
   }
   box.classList.remove("hidden");
-  const heading = textElement("h4", "", `失败明细（${failures.length}）`);
+  const heading = textElement("h4", "", runtimeText(
+    `Failures (${failures.length})`,
+    `失败明细（${failures.length}）`,
+  ));
   const list = document.createElement("ul");
   list.className = "batch-fail-list";
   for (const failure of failures) {
-    const stage = (failure.stage ? BATCH_STAGE_LABELS[failure.stage] : undefined)
+    const stageCopy = failure.stage ? BATCH_STAGE_LABELS[failure.stage] : undefined;
+    const stage = (stageCopy ? runtimeText(stageCopy.en, stageCopy.zh) : undefined)
       || failure.stage
-      || "未知阶段";
+      || runtimeText("Unknown stage", "未知阶段");
     const item = document.createElement("li");
     item.append(
-      textElement("b", "", failure.stem || "未命名 clip"),
+      textElement("b", "", failure.stem || runtimeText("Untitled clip", "未命名 clip")),
       document.createTextNode(" "),
       textElement("span", "tag", stage),
-      textElement("div", "reason", failure.reason || "未知错误"),
+      textElement("div", "reason", failure.reason || runtimeText("Unknown error", "未知错误")),
     );
     if (failure.log_rel) {
       const logLine = document.createElement("div");
       logLine.className = "sub";
-      logLine.append(document.createTextNode("已复制 → "), textElement("code", "", failure.log_rel));
+      logLine.append(
+        document.createTextNode(runtimeText("Copied → ", "已复制 → ")),
+        textElement("code", "", failure.log_rel),
+      );
       item.append(logLine);
     } else if (failure.stash_error) {
-      item.append(textElement("div", "sub warn", `未能复制源文件：${failure.stash_error}`));
+      item.append(textElement("div", "sub warn", runtimeText(
+        `Unable to copy the source file: ${failure.stash_error}`,
+        `未能复制源文件：${failure.stash_error}`,
+      )));
     }
     list.append(item);
   }
@@ -5558,18 +6806,42 @@ function renderBatchFailures(result: BatchRetargetResult | null): void {
     const hint = document.createElement("p");
     hint.className = "hint";
     hint.append(
-      document.createTextNode("失败数据目录："),
+      document.createTextNode(runtimeText("Failure data: ", "失败数据目录：")),
       textElement("code", "", failureLog),
       document.createElement("br"),
-      document.createTextNode("修复后可将该文件夹（或其中子目录）拖入上方篮子重试；也可打开 "),
+      document.createTextNode(runtimeText(
+        "After fixing the inputs, drop this folder (or a child folder) into the list to retry. See ",
+        "修复后可将该文件夹（或其中子目录）拖入上方清单重试；也可打开 ",
+      )),
       textElement("code", "", "失败说明.txt"),
       document.createTextNode(" / "),
       textElement("code", "", "failures.json"),
-      document.createTextNode(" 查看详情。"),
+      document.createTextNode(runtimeText(" for details.", " 查看详情。")),
     );
     children.push(hint);
   }
   box.replaceChildren(...children);
+}
+
+function renderBatchResultCard(result: BatchRetargetResult | null = lastBatchResult): void {
+  const card = document.getElementById("batch-result-card");
+  if (!card || !result || !lastBatchJobId) return;
+  const successCount = result.written?.length ?? 0;
+  const failureCount = result.failures?.length ?? 0;
+  const title = document.getElementById("batch-result-title");
+  const summary = document.getElementById("batch-result-summary");
+  const downloadButton = document.getElementById("batch-result-download") as HTMLButtonElement | null;
+  const retryButton = document.getElementById("batch-result-retry") as HTMLButtonElement | null;
+  if (title) title.textContent = failureCount
+    ? runtimeText("Batch completed with failures", "批量任务完成，但有失败项")
+    : runtimeText("Batch complete", "批量任务完成");
+  if (summary) summary.textContent = runtimeText(
+    `${successCount} succeeded${failureCount ? ` · ${failureCount} failed` : ""}`,
+    `${successCount} 条成功${failureCount ? ` · ${failureCount} 条失败` : ""}`,
+  );
+  if (downloadButton) downloadButton.hidden = !result.download_name;
+  if (retryButton) retryButton.hidden = !failureCount;
+  card.classList.remove("hidden");
 }
 
 function setBatchProgress(
@@ -5583,35 +6855,54 @@ function setBatchProgress(
   if (!totalBar || !clipBar) return;
   const totalP = job.progress || 0;
   const clipP = job.clip_progress ?? 0;
+  const totalPercent = Math.max(0, Math.min(100, totalP * 100));
+  const clipPercent = Math.max(0, Math.min(100, clipP * 100));
   const totalIndet = job.status === "running" && totalP < 0.01;
   const clipIndet = job.status === "running" && clipP < 0.02 && totalP < 0.99;
   totalProg.classList.toggle("indet", totalIndet);
   clipProg.classList.toggle("indet", clipIndet);
+  totalProg.setAttribute("aria-valuenow", totalPercent.toFixed(0));
+  clipProg.setAttribute("aria-valuenow", clipPercent.toFixed(0));
+  totalProg.setAttribute("aria-valuetext", totalIndet
+    ? runtimeText("Starting", "正在启动")
+    : `${totalPercent.toFixed(0)}%`);
+  clipProg.setAttribute("aria-valuetext", clipIndet
+    ? runtimeText("Preparing current chunk", "正在准备当前批次")
+    : `${clipPercent.toFixed(0)}%`);
   if (!totalIndet) {
-    totalBar.style.width = `${Math.max(0, totalP * 100).toFixed(0)}%`;
+    totalBar.style.width = `${totalPercent.toFixed(0)}%`;
   } else {
     totalBar.style.width = "0%";
   }
   if (!clipIndet) {
-    clipBar.style.width = `${Math.max(0, clipP * 100).toFixed(0)}%`;
+    clipBar.style.width = `${clipPercent.toFixed(0)}%`;
   } else {
     clipBar.style.width = "0%";
   }
 }
 
 document.getElementById("batch-run").onclick = async () => {
-  if (!basket.length || !state.robot) return;
+  updateBatchRunAvailability();
+  const runButton = document.getElementById("batch-run") as HTMLButtonElement;
+  if (!basket.length || !state.robot || runButton.disabled) return;
   const batchRobotName = state.robot.name;
   const progStack = document.getElementById("batch-progress-stack");
   const status = document.getElementById("batch-status");
   const failBox = document.getElementById("batch-failures");
+  const resultCard = document.getElementById("batch-result-card");
   if (failBox) {
     failBox.classList.add("hidden");
     failBox.replaceChildren();
   }
+  resultCard?.classList.add("hidden");
+  lastBatchJobId = null;
+  lastBatchDownloadName = null;
+  lastBatchFailureCount = 0;
+  lastBatchResult = null;
   progStack?.classList.remove("hidden");
   setBatchProgress({ status: "running", progress: 0, clip_progress: 0 });
-  renderSpinnerStatus(status, "批量处理中…");
+  renderSpinnerStatus(status, runtimeText("Starting batch task…", "正在启动批量任务……"));
+  setBatchDraftLocked(true);
   setRobotPanelLocked(true);
   try {
     const batchBody: {
@@ -5630,7 +6921,9 @@ document.getElementById("batch-run").onclick = async () => {
       t_end?: number;
     } = {
       robot: batchRobotName,
-      reference: state.reference || "smpl",
+      // Each entry carries its own reference. This is only the stable fallback
+      // for older entries that have neither reference nor dataset metadata.
+      reference: "smpl",
       backend: document.getElementById("batch-backend").value,
       out_dir: document.getElementById("batch-out").value || "batch_export",
       format: document.getElementById("batch-format").value,
@@ -5651,6 +6944,10 @@ document.getElementById("batch-run").onclick = async () => {
     if (t0 != null) batchBody.t_start = t0;
     if (t1 != null) batchBody.t_end = t1;
     const { job_id } = await API.post("/api/batch/retarget", batchBody);
+    lastBatchJobId = job_id;
+    window.dispatchEvent(new CustomEvent("hhtools:job-history-command", {
+      detail: { command: "refresh" },
+    }));
     const j = await pollJob<BatchRetargetResult>(job_id, (jp) => {
       setBatchProgress(jp);
       status.textContent = jp.message || "";
@@ -5659,31 +6956,82 @@ document.getElementById("batch-run").onclick = async () => {
     const r = j.result;
     const modeNote = r.solver_mode ? ` · ${r.solver_mode}` : "";
     const partialNote = (r.failures?.length && r.written?.length)
-      ? "（ZIP 仅含成功项，失败见下方）" : "";
-    status.textContent = `完成：${r.written?.length ?? 0} 个 clip` +
-      (r.failures?.length ? `，${r.failures.length} 个失败` : "") +
+      ? runtimeText(" (ZIP contains successful items only)", "（ZIP 仅含成功项，失败见下方）") : "";
+    const successCount = r.written?.length ?? 0;
+    const failureCount = r.failures?.length ?? 0;
+    lastBatchDownloadName = r.download_name || null;
+    lastBatchFailureCount = failureCount;
+    lastBatchResult = r;
+    status.textContent = runtimeText(`Complete: ${successCount} clips`, `完成：${successCount} 个 clip`) +
+      (failureCount ? runtimeText(`, ${failureCount} failed`, `，${failureCount} 个失败`) : "") +
       partialNote +
       modeNote +
-      (r.download_name ? ` — 正在下载 ${r.download_name}` : "");
+      (r.download_name ? runtimeText(` — downloading ${r.download_name}`, ` — 正在下载 ${r.download_name}`) : "");
     renderBatchFailures(r);
+    renderBatchResultCard(r);
     if (r.download_name) {
       try {
         await triggerBrowserDownload(`/api/job/${job_id}/download`, r.download_name);
       } catch (e) { toast(errorMessage(e), true); }
     }
     toast(
-      `批量完成：${r.written?.length ?? 0} 个`
-      + (r.failures?.length ? `，${r.failures.length} 失败（见下方明细）` : ""),
-      !!r.failures?.length,
+      runtimeText(
+        `Batch complete: ${successCount} succeeded${failureCount ? `, ${failureCount} failed` : ""}`,
+        `批量完成：${successCount} 个${failureCount ? `，${failureCount} 失败（见下方明细）` : ""}`,
+      ),
+      Boolean(failureCount),
     );
+    window.dispatchEvent(new CustomEvent("hhtools:job-history-command", {
+      detail: { command: "refresh" },
+    }));
   } catch (e) {
-    status.textContent = "";
+    status.textContent = runtimeText(
+      `Batch failed: ${errorMessage(e)}`,
+      `批量任务失败：${errorMessage(e)}`,
+    );
     renderBatchFailures(null);
     toast(errorMessage(e), true);
   } finally {
+    setBatchDraftLocked(false);
     setRobotPanelLocked(false);
+    void syncBatchRefHint();
   }
 };
+
+document.getElementById("batch-result-download")?.addEventListener("click", async () => {
+  if (!lastBatchJobId || !lastBatchDownloadName) return;
+  try {
+    await triggerBrowserDownload(`/api/job/${lastBatchJobId}/download`, lastBatchDownloadName);
+  } catch (error) {
+    toast(errorMessage(error), true);
+  }
+});
+
+document.getElementById("batch-result-retry")?.addEventListener("click", async () => {
+  if (!lastBatchJobId || !lastBatchFailureCount) return;
+  try {
+    const started = await API.post("/api/jobs/replay", {
+      job_id: lastBatchJobId,
+      failed_only: true,
+    });
+    toast(runtimeText(
+      `Created failed-item retry task ${started.job_id}`,
+      `已创建失败项重试任务 ${started.job_id}`,
+    ));
+    window.dispatchEvent(new CustomEvent("hhtools:job-history-command", {
+      detail: { command: "refresh" },
+    }));
+  } catch (error) {
+    toast(errorMessage(error), true);
+  }
+});
+
+document.getElementById("batch-result-tasks")?.addEventListener("click", () => {
+  (document.querySelector(".job-drawer-summary") as HTMLButtonElement | null)?.click();
+  window.dispatchEvent(new CustomEvent("hhtools:job-history-command", {
+    detail: { command: "refresh" },
+  }));
+});
 
 // Wrap every <select> so a CSS chevron can sit outside the native control.
 function wrapSelectDropdowns(): void {
@@ -6458,7 +7806,16 @@ async function r2rUpdateRetargetBtn(): Promise<void> {
   r2r.calibrated = calibrated;
   if (!r2r.targetName || !r2r.sourceName) r2rSetCalChip("—", "");
   else r2rSetCalChip(calibrated ? "已标定" : "未标定 — 请先标定", calibrated ? "ok" : "warn");
+  const batchCalibrationStatus = document.getElementById("r2r-batch-calibration-status");
+  if (batchCalibrationStatus) {
+    batchCalibrationStatus.textContent = !r2r.targetName || !r2r.sourceName
+      ? ""
+      : (calibrated
+        ? runtimeText("Calibration ready", "标定已就绪")
+        : runtimeText("Calibration required in Robot → Robot", "需要先在“机器人 → 机器人”中完成标定"));
+  }
   if (rtBtn) rtBtn.disabled = !(r2r.sourceToken && r2r.targetName && calibrated);
+  r2rRenderBasket();
   publishR2rWorkflowState();
 }
 
@@ -6485,6 +7842,109 @@ async function r2rPopulateSelects(): Promise<void> {
   };
   fill(document.getElementById("r2r-source-select"), true);
   fill(document.getElementById("r2r-target-select"), false);
+  fill(document.getElementById("r2r-batch-source-select"), true);
+  fill(document.getElementById("r2r-batch-target-select"), false);
+  for (const id of ["r2r-source-select", "r2r-batch-source-select"]) {
+    const select = document.getElementById(id) as HTMLSelectElement | null;
+    if (select && r2r.sourceName) select.value = r2r.sourceName;
+  }
+  for (const id of ["r2r-target-select", "r2r-batch-target-select"]) {
+    const select = document.getElementById(id) as HTMLSelectElement | null;
+    if (select && r2r.targetName) select.value = r2r.targetName;
+  }
+}
+
+function setR2rRobotStatus(kind: "source" | "target", text: string): void {
+  const ids = kind === "source"
+    ? ["r2r-source-status", "r2r-batch-source-status"]
+    : ["r2r-target-status", "r2r-batch-target-status"];
+  for (const id of ids) {
+    const element = document.getElementById(id);
+    if (element) element.textContent = text;
+  }
+}
+
+function syncR2rRobotSelects(kind: "source" | "target", name: string): void {
+  const ids = kind === "source"
+    ? ["r2r-source-select", "r2r-batch-source-select"]
+    : ["r2r-target-select", "r2r-batch-target-select"];
+  for (const id of ids) {
+    const select = document.getElementById(id) as HTMLSelectElement | null;
+    if (select && [...select.options].some((option) => option.value === name)) {
+      select.value = name;
+    }
+  }
+}
+
+async function r2rLoadSourceRobot(
+  name: string,
+  { activateWorkspace = true }: { activateWorkspace?: boolean } = {},
+): Promise<void> {
+  if (!name) return;
+  toast(runtimeText("Loading source robot…", "加载源机器人…"));
+  try {
+    const sourcePayload = await API.post("/api/robot/select", { name });
+    if (r2r.sourceName !== name) {
+      r2r.sourceToken = null;
+      r2r.sourceStem = null;
+      r2rTrajectoryState = "idle";
+      const trajectoryValue = document.getElementById("r2r-trajectory-value");
+      if (trajectoryValue) trajectoryValue.textContent = runtimeText("Not loaded", "未加载");
+    }
+    r2r.calibrated = false;
+    r2r.sourcePayload = sourcePayload;
+    r2r.sourceName = name;
+    r2r.exportToken = null;
+    r2rRunState = "idle";
+    clearResultDiagnostics("r2r");
+    await r2rSrc.load(sourcePayload);
+    syncR2rRobotSelects("source", name);
+    if (activateWorkspace) {
+      switchInspectorPanel("r2r");
+      if (!r2r.active) r2rEnterPanel();
+      r2rApplyStage();
+      r2rFocus(r2rSrc);
+    }
+    setR2rRobotStatus("source", runtimeText(
+      `Source robot: ${sourcePayload.display_name}`,
+      `源机器人：${sourcePayload.display_name}`,
+    ));
+    toast(runtimeText(
+      `Source robot loaded: ${sourcePayload.display_name}`,
+      `源机器人已加载：${sourcePayload.display_name}`,
+    ));
+    await r2rMaybeAutoCalib();
+    r2rRenderBasket();
+  } catch (error) {
+    toast(errorMessage(error), true);
+  }
+}
+
+async function r2rLoadTargetRobot(name: string): Promise<void> {
+  if (!name) return;
+  toast(runtimeText("Loading target robot…", "加载目标机器人…"));
+  try {
+    const targetPayload = await API.post("/api/robot/select", { name });
+    r2r.calibrated = false;
+    r2r.targetPayload = targetPayload;
+    r2r.targetName = name;
+    r2r.exportToken = null;
+    r2rRunState = "idle";
+    clearResultDiagnostics("r2r");
+    syncR2rRobotSelects("target", name);
+    setR2rRobotStatus("target", runtimeText(
+      `Target robot: ${targetPayload.display_name}`,
+      `目标机器人：${targetPayload.display_name}`,
+    ));
+    toast(runtimeText(
+      `Target robot loaded: ${targetPayload.display_name}`,
+      `目标机器人已加载：${targetPayload.display_name}`,
+    ));
+    await r2rMaybeAutoCalib();
+    r2rRenderBasket();
+  } catch (error) {
+    toast(errorMessage(error), true);
+  }
 }
 
 // --------------------------------------------------------------- calibration
@@ -6855,37 +8315,12 @@ async function r2rUploadTraj(
       if (bar) bar.style.width = `${Math.max(2, 18 + frac * 82).toFixed(0)}%`;
       st.textContent = sub;
     }, { uploadFrac: 0.18 });
-    r2r.sourceToken = data.token;
-    r2rTrajectoryState = "idle";
-    r2r.sourceStem = data.name || (files[0].name || "source").replace(/\.[^.]+$/, "");
-    r2r.hasScene = !!data.has_scene;
-    if (data.suggested_backend) r2rApplySuggestedBackend(data.suggested_backend);
-    await r2rSrc.load(sourcePayload);
-    r2rSrc.setTrajectory(data.trajectory);
-    if (data.skeleton_preview) {
-      r2rSrcSkel.load(data.skeleton_preview);
-      const skBtn = document.getElementById("r2r-tg-src-skel");
-      if (skBtn) skBtn.disabled = false;
-    }
-    const clipDur = Math.max(0.1, (data.num_frames - 1) / (data.framerate || 30));
-    r2rLoadSrcScene(data.scaled_scene, data.token, clipDur);
-    r2rVis.srcRobot = true;
-    r2rVis.srcSkel = false;
-    r2rVis.srcEnv = !!data.scaled_scene;
-    r2rVis.tgtRobot = false;
-    r2rVis.tgtSkel = false;
-    r2rVis.tgtEnv = false;
-    player.ready(r2rSrc.clipDuration || 1);
-    player.seek(0);
-    r2rApplyStage();
-    r2rFocus(r2rSrc);
-    player.setPlaying(true);
-    const prof = data.upload_profile ? ` · ${data.upload_profile}` : "";
-    st.textContent = `已加载：${data.num_frames} 帧 @ ${data.framerate.toFixed(1)} fps${prof}`;
-    if (bar) bar.style.width = "100%";
-    toast(`上传成功：${data.num_frames} 帧，正在播放源机器人轨迹`);
-    publishR2rWorkflowState();
-    await r2rUpdateRetargetBtn();
+    const fallbackStem = (files[0].name || "source").replace(/\.[^.]+$/, "");
+    await r2rApplySourceTrajectoryResult(data, sourcePayload, fallbackStem);
+    toast(runtimeText(
+      `Uploaded ${data.num_frames} frames; playing the source trajectory`,
+      `上传成功：${data.num_frames} 帧，正在播放源机器人轨迹`,
+    ));
   } catch (e) {
     r2rTrajectoryState = "failed";
     st.textContent = "";
@@ -6893,6 +8328,122 @@ async function r2rUploadTraj(
     publishR2rWorkflowState();
     toast(errorMessage(e), true);
   }
+}
+
+async function r2rApplySourceTrajectoryResult(
+  data: R2rSourceTrajectoryResult,
+  sourcePayload: RobotPayload,
+  fallbackStem: string,
+): Promise<void> {
+  const status = document.getElementById("r2r-traj-status");
+  const progress = document.getElementById("r2r-traj-progress");
+  const bar = progress?.querySelector<HTMLElement>(".bar");
+  const sourceStem = data.name || fallbackStem || "source";
+
+  r2r.sourceToken = data.token;
+  r2rTrajectoryState = "idle";
+  r2r.sourceStem = sourceStem;
+  r2r.hasScene = !!data.has_scene;
+  if (data.suggested_backend) r2rApplySuggestedBackend(data.suggested_backend);
+  await r2rSrc.load(sourcePayload);
+  r2rSrc.setTrajectory(data.trajectory);
+  if (data.skeleton_preview) {
+    r2rSrcSkel.load(data.skeleton_preview);
+    const skBtn = document.getElementById("r2r-tg-src-skel");
+    if (skBtn) skBtn.disabled = false;
+  }
+  const clipDur = Math.max(0.1, (data.num_frames - 1) / (data.framerate || 30));
+  r2rLoadSrcScene(data.scaled_scene, data.token, clipDur);
+  r2rVis.srcRobot = true;
+  r2rVis.srcSkel = false;
+  r2rVis.srcEnv = !!data.scaled_scene;
+  r2rVis.tgtRobot = false;
+  r2rVis.tgtSkel = false;
+  r2rVis.tgtEnv = false;
+  player.ready(r2rSrc.clipDuration || 1);
+  player.seek(0);
+  r2rApplyStage();
+  r2rFocus(r2rSrc);
+  player.setPlaying(true);
+  const profile = data.upload_profile ? ` · ${data.upload_profile}` : "";
+  if (status) {
+    status.textContent = runtimeText(
+      `Loaded: ${data.num_frames} frames @ ${data.framerate.toFixed(1)} fps${profile}`,
+      `已加载：${data.num_frames} 帧 @ ${data.framerate.toFixed(1)} fps${profile}`,
+    );
+  }
+  const selection = document.getElementById("r2r-trajectory-value");
+  if (selection) selection.textContent = sourceStem;
+  if (progress) progress.style.display = "block";
+  if (bar) bar.style.width = "100%";
+  publishR2rWorkflowState();
+  await r2rUpdateRetargetBtn();
+}
+
+/** Load an existing robot trajectory through the R2R-only backend boundary. */
+async function loadR2rLibraryEntry(entry: LibraryEntry): Promise<void> {
+  if (!(await r2rEnsureSourceLoaded())) {
+    throw new Error(runtimeText(
+      "Load the source robot before selecting its trajectory.",
+      "请先加载源机器人，再选择对应轨迹。",
+    ));
+  }
+  const sourceName = r2r.sourceName;
+  const sourcePayload = r2r.sourcePayload;
+  if (!sourceName || !sourcePayload) return;
+
+  const status = document.getElementById("r2r-traj-status");
+  const progress = document.getElementById("r2r-traj-progress");
+  const bar = progress?.querySelector<HTMLElement>(".bar");
+  if (progress) {
+    progress.style.display = "block";
+    progress.classList.remove("indet");
+  }
+  if (bar) bar.style.width = "2%";
+  if (status) status.textContent = runtimeText("Validating trajectory…", "正在校验机器人轨迹……");
+  r2rTrajectoryState = "validating";
+  r2r.exportToken = null;
+  r2rRunState = "idle";
+  clearResultDiagnostics("r2r");
+  publishR2rWorkflowState();
+
+  try {
+    switchInspectorPanel("r2r");
+    if (!r2r.active) r2rEnterPanel();
+    const sourceFps = parseOptionalFps(document.getElementById("r2r-source-fps"));
+    const { job_id } = await API.post("/api/r2r/source/library", {
+      ...entry,
+      source_robot: sourceName,
+      source_fps: sourceFps,
+    });
+    const data = await waitMotionJob<R2rSourceTrajectoryResult>(job_id, (frac, sub) => {
+      if (bar) bar.style.width = `${Math.max(2, frac * 100).toFixed(0)}%`;
+      if (status) status.textContent = sub;
+    });
+    const fallbackStem = entry.stem || entry.sequence_id || "source";
+    await r2rApplySourceTrajectoryResult(data, sourcePayload, fallbackStem);
+    toast(runtimeText(
+      `Loaded robot trajectory: ${data.name || fallbackStem}`,
+      `机器人轨迹已加载：${data.name || fallbackStem}`,
+    ));
+  } catch (error) {
+    r2rTrajectoryState = "failed";
+    if (status) status.textContent = "";
+    if (progress) progress.style.display = "none";
+    publishR2rWorkflowState();
+    toast(errorMessage(error), true);
+    throw error;
+  }
+}
+
+async function pickR2rTrajectory(
+  { folder = false }: { folder?: boolean } = {},
+): Promise<void> {
+  const files = await pickFiles({
+    folder,
+    accept: folder ? "" : ".csv,.pkl,.npz",
+  });
+  await r2rUploadTraj(files, "auto");
 }
 
 function r2rSuggestedBackendForProfile(profile: string): string {
@@ -7020,25 +8571,91 @@ function r2rRenderBasket() {
   const list = document.getElementById("r2r-basket-list");
   if (!list) return;
   list.replaceChildren();
+  if (!r2r.basket.length) {
+    const empty = document.createElement("div");
+    empty.className = "batch-basket-empty";
+    empty.append(
+      textElement("strong", "", runtimeText("No robot trajectories yet", "还没有机器人轨迹")),
+      document.createTextNode(runtimeText(
+        "Import trajectory files or folders to build this R2R batch.",
+        "导入轨迹文件或文件夹来建立 R2R 批量任务。",
+      )),
+    );
+    list.appendChild(empty);
+  }
   for (const e of r2r.basket) {
     const row = document.createElement("div");
-    row.className = "basket-row";
+    row.className = "batch-basket-row r2r-batch-basket-row";
     const label = e.export_subdir ? `${e.export_subdir}/${e.stem}` : e.stem;
-    const removeButton = textElement("button", "rm", "×");
+    const main = textElement("span", "batch-basket-main", label);
+    const profile = textElement(
+      "span",
+      "batch-basket-type",
+      e.upload_profile || "mimic",
+    );
+    const actions = document.createElement("span");
+    actions.className = "batch-basket-actions";
+    const removeButton = textElement("button", "batch-basket-remove rm", "×");
     removeButton.type = "button";
+    removeButton.setAttribute("aria-label", runtimeText(`Remove ${label}`, `移除 ${label}`));
     removeButton.onclick = () => {
       r2r.basket = r2r.basket.filter((x) => x !== e);
       r2rRenderBasket();
     };
-    row.append(
-      textElement("span", "", `${label} · ${e.upload_profile || "mimic"}`),
-      removeButton,
-    );
+    actions.appendChild(removeButton);
+    row.append(main, profile, actions);
     list.appendChild(row);
   }
-  document.getElementById("r2r-basket-count").textContent = String(r2r.basket.length);
+  const count = String(r2r.basket.length);
+  for (const id of ["r2r-basket-count", "r2r-batch-inspector-count"]) {
+    const element = document.getElementById(id);
+    if (element) element.textContent = count;
+  }
+  const clearButton = document.getElementById("r2r-basket-clear") as HTMLButtonElement | null;
+  if (clearButton) clearButton.disabled = !r2r.basket.length;
+  const summary = document.getElementById("r2r-batch-stage-summary");
+  if (summary) {
+    summary.textContent = r2r.basket.length
+      ? runtimeText(
+        `${r2r.basket.length} robot trajectories ready`,
+        `已准备 ${r2r.basket.length} 条机器人轨迹`,
+      )
+      : runtimeText("No robot trajectories selected", "尚未选择机器人轨迹");
+  }
+  const runSummary = document.getElementById("r2r-batch-run-summary");
+  if (runSummary) {
+    runSummary.textContent = r2r.basket.length
+      ? runtimeText(
+        `${r2r.basket.length} trajectories · ${r2r.sourceName || "no source robot"} → ${r2r.targetName || "no target robot"}`,
+        `${r2r.basket.length} 条轨迹 · ${r2r.sourceName || "未加载源机器人"} → ${r2r.targetName || "未加载目标机器人"}`,
+      )
+      : runtimeText("No source trajectories selected.", "尚未选择源轨迹。");
+  }
   const runBtn = document.getElementById("r2r-batch-run");
-  if (runBtn) runBtn.disabled = !(r2r.basket.length && r2r.targetName && r2r.sourceName);
+  const ready = Boolean(
+    r2r.basket.length && r2r.targetName && r2r.sourceName && r2r.calibrated,
+  );
+  if (runBtn) runBtn.disabled = !ready;
+  const disabledReason = document.getElementById("r2r-batch-disabled-reason");
+  if (disabledReason) {
+    if (!r2r.basket.length) {
+      disabledReason.textContent = runtimeText(
+        "Add at least one source trajectory.",
+        "请至少添加一条源轨迹。",
+      );
+    } else if (!r2r.sourceName) {
+      disabledReason.textContent = runtimeText("Load the source robot.", "请加载源机器人。");
+    } else if (!r2r.targetName) {
+      disabledReason.textContent = runtimeText("Load the target robot.", "请加载目标机器人。");
+    } else if (!r2r.calibrated) {
+      disabledReason.textContent = runtimeText(
+        "Calibrate this robot pair in Robot → Robot first.",
+        "请先在“机器人 → 机器人”中完成这组机器人的标定。",
+      );
+    } else {
+      disabledReason.textContent = "";
+    }
+  }
 }
 
 async function r2rIngestBasket(
@@ -7106,54 +8723,22 @@ function r2rInit(): void {
       r2rApplyStage();
     });
   }
-  document.getElementById("r2r-source-load").onclick = async () => {
-    const name = document.getElementById("r2r-source-select").value;
-    if (!name) return;
-    toast("加载源机器人…");
-    try {
-      const sourcePayload = await API.post("/api/robot/select", { name });
-      if (r2r.sourceName !== name) {
-        r2r.sourceToken = null;
-        r2r.sourceStem = null;
-        r2rTrajectoryState = "idle";
-      }
-      r2r.calibrated = false;
-      r2r.sourcePayload = sourcePayload;
-      r2r.sourceName = name;
-      r2r.exportToken = null;
-      r2rRunState = "idle";
-      clearResultDiagnostics("r2r");
-      await r2rSrc.load(sourcePayload);
-      switchInspectorPanel("r2r");
-      if (!r2r.active) r2rEnterPanel();
-      r2rApplyStage();
-      r2rFocus(r2rSrc);
-      document.getElementById("r2r-source-status").textContent =
-        `源机器人：${sourcePayload.display_name}（上传轨迹后可播放）`;
-      toast(`源机器人已加载：${sourcePayload.display_name}`);
-      await r2rMaybeAutoCalib();
-      r2rRenderBasket();
-    } catch (e) { toast(errorMessage(e), true); }
-  };
-  document.getElementById("r2r-target-load").onclick = async () => {
-    const name = document.getElementById("r2r-target-select").value;
-    if (!name) return;
-    toast("加载目标机器人…");
-    try {
-      const targetPayload = await API.post("/api/robot/select", { name });
-      r2r.calibrated = false;
-      r2r.targetPayload = targetPayload;
-      r2r.targetName = name;
-      r2r.exportToken = null;
-      r2rRunState = "idle";
-      clearResultDiagnostics("r2r");
-      document.getElementById("r2r-target-status").textContent =
-        `目标机器人：${targetPayload.display_name}`;
-      toast(`目标机器人已加载：${targetPayload.display_name}`);
-      await r2rMaybeAutoCalib();
-      r2rRenderBasket();
-    } catch (e) { toast(errorMessage(e), true); }
-  };
+  document.getElementById("r2r-source-load")?.addEventListener("click", () => {
+    const name = (document.getElementById("r2r-source-select") as HTMLSelectElement | null)?.value || "";
+    void r2rLoadSourceRobot(name);
+  });
+  document.getElementById("r2r-batch-source-load")?.addEventListener("click", () => {
+    const name = (document.getElementById("r2r-batch-source-select") as HTMLSelectElement | null)?.value || "";
+    void r2rLoadSourceRobot(name, { activateWorkspace: false });
+  });
+  document.getElementById("r2r-target-load")?.addEventListener("click", () => {
+    const name = (document.getElementById("r2r-target-select") as HTMLSelectElement | null)?.value || "";
+    void r2rLoadTargetRobot(name);
+  });
+  document.getElementById("r2r-batch-target-load")?.addEventListener("click", () => {
+    const name = (document.getElementById("r2r-batch-target-select") as HTMLSelectElement | null)?.value || "";
+    void r2rLoadTargetRobot(name);
+  });
   document.getElementById("r2r-calib-btn").onclick = () => void r2rStartCalib();
   document.getElementById("r2r-calib-zero").onclick = () => {
     void applyCalibrationComparison("r2r", "zero");
@@ -7187,6 +8772,12 @@ function r2rInit(): void {
     r2r.basket = [];
     r2rRenderBasket();
   });
+  document.getElementById("r2r-batch-pick-file")?.addEventListener("click", async () => {
+    await r2rIngestBasket(await pickFiles({ accept: ".csv,.pkl,.npz" }), "auto");
+  });
+  document.getElementById("r2r-batch-pick-folder")?.addEventListener("click", async () => {
+    await r2rIngestBasket(await pickFiles({ folder: true }), "auto");
+  });
   document.getElementById("r2r-batch-run")?.addEventListener("click", async () => {
     if (!r2r.basket.length || !r2r.targetName || !r2r.sourceName) return;
     const prog = document.getElementById("r2r-batch-progress");
@@ -7202,12 +8793,12 @@ function r2rInit(): void {
         entries: r2r.basket,
         backend: document.getElementById("r2r-batch-backend")?.value || "newton",
         out_dir: document.getElementById("r2r-batch-out")?.value || "r2r_batch_export",
-        format: document.getElementById("r2r-export-format")?.value || "csv",
+        format: document.getElementById("r2r-batch-format")?.value || "csv",
         csv_header: document.getElementById("r2r-batch-csv-header")?.checked !== false,
       };
       const exFps = parseOptionalFps(document.getElementById("r2r-batch-export-fps"));
-      const rtFps = parseOptionalFps(document.getElementById("r2r-retarget-fps"));
-      const srcFps = parseOptionalFps(document.getElementById("r2r-source-fps"));
+      const rtFps = parseOptionalFps(document.getElementById("r2r-batch-retarget-fps"));
+      const srcFps = parseOptionalFps(document.getElementById("r2r-batch-source-fps"));
       if (exFps) body.export_fps = exFps;
       if (rtFps) body.retarget_fps = rtFps;
       if (srcFps) body.source_fps = srcFps;
@@ -7249,11 +8840,18 @@ window.__hhApp = {
   API,
   toast,
   loadLibraryEntry,
+  loadHumanMotionEntry,
+  loadR2rLibraryEntry,
+  pickR2rTrajectory,
   previewRobotClip,
   populateDvRobotSelect,
   addToBasket,
   switchInspectorPanel,
   getLibrarySourceRoot: () => libSourceRoot,
+  refreshLibrary,
+  pickFiles,
+  collectDroppedFiles,
+  waitMotionJob,
   uploadFilesXHR,
 };
 
@@ -7263,7 +8861,6 @@ async function verifyUiBuild() {
     const el = document.getElementById("ui-build");
     if (el) el.textContent = `UI·${h.ui_build || "?"}`;
     if (h.motions_library_root) libMotionsRoot = h.motions_library_root;
-    updateMotionsLibraryHint();
     const assetsHint = document.getElementById("motion-assets-hint");
     if (assetsHint && h.source_root) assetsHint.textContent = h.source_root;
     const missingFeatures =
@@ -7288,6 +8885,7 @@ async function verifyUiBuild() {
   document.getElementById("lib-link-path")?.addEventListener("click", () => linkLibraryPath());
   await verifyUiBuild();
   await Promise.all([loadReferenceCatalog(), refreshLibrary(), refreshRobotList()]);
+  renderBasket();
   r2rInit();
   switchInspectorPanel(initialWorkspacePreferences.activePanel);
   publishPlaybackState();

@@ -1,0 +1,124 @@
+{
+  "$defs": {
+    "SchemaVersion": {
+      "description": "Version of the transport-neutral HHTools agent schema.",
+      "enum": [
+        "1.0"
+      ],
+      "title": "SchemaVersion",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Metadata and URI for a job output; binary data is never embedded.",
+  "properties": {
+    "artifact_id": {
+      "description": "Artifact id with a stable kind namespace.",
+      "pattern": "^artifact:[a-z][a-z0-9_-]*:[A-Za-z0-9._~-]+$",
+      "title": "Artifact Id",
+      "type": "string"
+    },
+    "created_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Created At"
+    },
+    "format": {
+      "anyOf": [
+        {
+          "maxLength": 32,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Format"
+    },
+    "job_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Job Id",
+      "type": "string"
+    },
+    "kind": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Kind",
+      "type": "string"
+    },
+    "media_type": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Media Type"
+    },
+    "metadata": {
+      "additionalProperties": true,
+      "title": "Metadata",
+      "type": "object"
+    },
+    "resource_uri": {
+      "description": "Resolvable artifact URI, for example hhtools:// or https://.",
+      "minLength": 1,
+      "pattern": "^(?:hhtools|https?)://[^\\s]+$",
+      "title": "Resource Uri",
+      "type": "string"
+    },
+    "schema_version": {
+      "$ref": "#/$defs/SchemaVersion",
+      "default": "1.0"
+    },
+    "sha256": {
+      "anyOf": [
+        {
+          "description": "Lower-case SHA-256 content digest.",
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Sha256"
+    },
+    "size_bytes": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Size Bytes"
+    }
+  },
+  "required": [
+    "artifact_id",
+    "job_id",
+    "kind",
+    "resource_uri"
+  ],
+  "title": "ArtifactDescriptor",
+  "type": "object"
+}

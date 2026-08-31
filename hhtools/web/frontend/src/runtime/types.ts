@@ -92,6 +92,7 @@ export type PlaybackAction = 'toggle' | 'seek' | 'speed' | 'loop'
 export type WorkspacePanelId =
   | 'motion'
   | 'robot-assets'
+  | 'video-to-motion'
   | 'h2r'
   | 'batch'
   | 'r2r'
@@ -108,6 +109,7 @@ export type ComparisonPreset = 'source' | 'target' | 'result' | 'overlay'
 export type ImportCommandTarget =
   | 'motion-file'
   | 'motion-folder'
+  | 'video-file'
   | 'robot-urdf'
   | 'robot-mesh-folder'
   | 'robot-trajectory'
@@ -190,6 +192,50 @@ export interface WorkflowStateDetail {
   blockedReason: string | null
 }
 
+export type VideoToMotionStage =
+  | 'idle'
+  | 'uploading'
+  | 'running'
+  | 'completed'
+  | 'failed'
+
+export type GvhmrWeightSource = 'official' | 'custom'
+
+export interface VideoToMotionResultSummary {
+  name: string
+  frames: number | null
+  duration: number | null
+  framerate: number | null
+}
+
+/** Renderer-safe state for the GVHMR workflow; the selected File stays private. */
+export interface VideoToMotionStateDetail {
+  videoName: string | null
+  weightSource: GvhmrWeightSource
+  checkpointName: string | null
+  runtimeState: 'checking' | 'ready' | 'unavailable'
+  runtimeMessage: string
+  environmentConfirmed: boolean
+  stage: VideoToMotionStage
+  progress: number
+  message: string
+  result: VideoToMotionResultSummary | null
+}
+
+export type DataAnalysisKind = 'human' | 'robot' | 'mixed' | 'unknown'
+
+export type DataAnalysisStage = 'idle' | 'uploading' | 'running' | 'completed' | 'failed'
+
+/** Minimal renderer state for the dataset-analysis workflow navigation. */
+export interface DataAnalysisStateDetail {
+  dataKind: DataAnalysisKind
+  clipCount: number
+  stage: DataAnalysisStage
+  progress: number
+  message: string
+  hasResults: boolean
+}
+
 export interface PlaybackCommandDetail {
   action: PlaybackAction
   value?: number
@@ -241,6 +287,7 @@ export interface RobotSummary {
   display_name: string
   has_urdf: boolean
   num_dof: number
+  builtin?: boolean
   deletable: boolean
 }
 
@@ -302,6 +349,18 @@ export interface CalibrationStatus {
   joint_q?: Record<string, number> | null
 }
 
+export type MotionCategory = 'motion' | 'object' | 'terrain'
+
+/**
+ * Pipeline-level meaning of a library item.
+ *
+ * A human motion is a skeleton/body-space reference consumed by H2R. A robot
+ * trajectory contains root pose plus source-robot DoF samples and is consumed
+ * by R2R. Keeping this separate from `motion_category` prevents a visually
+ * similar clip from crossing workflow boundaries.
+ */
+export type LibraryAssetKind = 'human_motion' | 'robot_trajectory'
+
 export interface LibraryEntry {
   dataset?: string
   folder_label?: string
@@ -317,6 +376,10 @@ export interface LibraryEntry {
   export_subdir?: string
   token?: string
   suggested_backend?: string
+  /** Stable backend-provided UX category; never infer it from dataset labels. */
+  motion_category?: MotionCategory
+  /** Stable backend-provided pipeline boundary. */
+  asset_kind?: LibraryAssetKind
 }
 
 export interface LibraryResponse {
@@ -607,6 +670,16 @@ export interface JobAdmissionSnapshot extends JobAdmissionSettings {
   editable?: boolean
 }
 
+export interface MotionLibrarySettingsSnapshot {
+  root: string
+  default_root: string
+  editable: boolean
+  /** Optional server hint explaining why an otherwise valid root is read-only. */
+  readonly_reason?: string | null
+  /** Optional origin of the effective value, for example default/settings/environment. */
+  source?: string | null
+}
+
 export interface HealthResponse {
   ok: boolean
   ui_build?: string
@@ -743,9 +816,23 @@ export interface BasicResponse {
   [key: string]: unknown
 }
 
+export interface GvhmrRuntimeStatus {
+  ready: boolean
+  missing: string[]
+  checks: Record<string, boolean>
+  root: string
+  body_models_root: string
+  image: string
+  uses_official_weights: boolean
+  supports_custom_weights: boolean
+  training_enabled: boolean
+}
+
 export type ApiGetResponse<Url extends string> =
   Url extends '/api/health' ? HealthResponse
+    : Url extends '/api/video-to-motion/status' ? GvhmrRuntimeStatus
     : Url extends '/api/settings/job-admission' ? JobAdmissionSnapshot
+    : Url extends '/api/settings/motion-library' ? MotionLibrarySettingsSnapshot
     : Url extends '/api/library' ? LibraryResponse
       : Url extends '/api/robots' ? RobotsResponse
         : Url extends '/api/calibration/references' ? { references: string[] }
@@ -766,6 +853,7 @@ export type ApiPostResponse<Url extends string> =
         : Url extends '/api/r2r/calibration/session' ? CalibrationSession
           : Url extends '/api/scaled_preview' ? ScaledPreviewResponse
             : Url extends '/api/motion/load_library' ? JobStartResponse
+              : Url extends '/api/r2r/source/library' ? JobStartResponse
               : Url extends '/api/dataset/preview_robot' ? JobStartResponse
                 : Url extends '/api/dataset/analyze' ? JobStartResponse
                   : Url extends '/api/retarget' ? JobStartResponse
@@ -807,6 +895,9 @@ export interface HhAppBridge {
   API: ApiClient
   toast: (message: string, isError?: boolean) => void
   loadLibraryEntry: (entry: LibraryEntry) => Promise<void>
+  loadHumanMotionEntry: (entry: LibraryEntry) => Promise<void>
+  loadR2rLibraryEntry: (entry: LibraryEntry) => Promise<void>
+  pickR2rTrajectory: (options?: { folder?: boolean }) => Promise<void>
   previewRobotClip: (
     entry: LibraryEntry,
     robotName?: string,
@@ -815,6 +906,14 @@ export interface HhAppBridge {
   addToBasket: (entries: LibraryEntry[], options?: { silent?: boolean }) => void
   switchInspectorPanel: (panelId: string) => void
   getLibrarySourceRoot: () => string
+  refreshLibrary: () => Promise<void>
+  pickFiles: (options?: { folder?: boolean; accept?: string }) => Promise<UploadFile[]>
+  collectDroppedFiles: (dataTransfer: DataTransfer | null) => Promise<UploadFile[]>
+  waitMotionJob: <Result = JobResult>(
+    jobId: string,
+    onProgress?: (fraction: number, message: string) => void,
+    options?: { uploadFrac?: number },
+  ) => Promise<Result>
   uploadFilesXHR: <Url extends string>(
     url: Url,
     files: Iterable<UploadFile>,
@@ -823,6 +922,9 @@ export interface HhAppBridge {
       appendTo?: string
       libraryFolderLabel?: string
       userSourceRoot?: string
+      staticCam?: boolean
+      fMm?: number
+      checkpoint?: UploadFile
     },
     onProgress?: (progress: number | null, loaded: number, total: number) => void,
   ) => Promise<
