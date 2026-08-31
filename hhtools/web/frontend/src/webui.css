@@ -1,5 +1,5 @@
-/* hhtools web — Apple-inspired design system.
-   Soft glass panels, SF system font, restrained palette, generous radii. */
+/* hhtools web — compact desktop application design system.
+   Soft glass panels, SF system font, restrained palette, tight radii. */
 
 :root {
   --bg: #f5f5f7;
@@ -21,9 +21,10 @@
   --code-bg: rgba(0, 0, 0, 0.06);
   --thumb-bg: #ffffff;
   --overlay-scrim: rgba(0, 0, 0, 0.28);
-  --radius-lg: 20px;
-  --radius: 14px;
-  --radius-sm: 9px;
+  --radius-lg: 8px;
+  --radius: 8px;
+  --radius-sm: 6px;
+  --radius-xs: 4px;
   --button-radius: 0px;
   --menu-radius: 8px;
   --shadow: 0 8px 30px rgba(0, 0, 0, 0.10);
@@ -320,14 +321,14 @@ button { font-family: inherit; cursor: pointer; }
   color: var(--accent);
   margin-left: 6px;
   padding: 2px 8px;
-  border-radius: 100px;
+  border-radius: var(--radius-xs);
   background: var(--accent-soft);
 }
 .pill {
   font-size: 12px;
   color: var(--ink-secondary);
   padding: 5px 11px;
-  border-radius: 100px;
+  border-radius: var(--radius-sm);
   background: var(--panel);
   border: 1px solid var(--hairline);
 }
@@ -378,7 +379,7 @@ button { font-family: inherit; cursor: pointer; }
   max-height: min(620px, 72vh);
   overflow: hidden;
   border: 1px solid var(--hairline);
-  border-radius: 12px;
+  border-radius: var(--menu-radius);
   background: var(--panel-solid);
   box-shadow: var(--shadow);
 }
@@ -588,7 +589,7 @@ button { font-family: inherit; cursor: pointer; }
 .nav-item .icon { font-size: 17px; width: 20px; text-align: center; }
 .nav-item .badge {
   margin-left: auto; font-size: 11px; font-weight: 600;
-  background: var(--red); color: #fff; border-radius: 100px;
+  background: var(--red); color: #fff; border-radius: var(--radius-xs);
   padding: 1px 7px; min-width: 18px; text-align: center;
 }
 .nav-item.active .badge { background: rgba(255,255,255,0.3); }
@@ -637,7 +638,7 @@ button { font-family: inherit; cursor: pointer; }
   background: var(--panel);
   backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
   border: 1px solid var(--hairline);
-  border-radius: 100px;
+  border-radius: var(--radius-sm);
   padding: 8px 16px;
   box-shadow: var(--shadow);
 }
@@ -1112,7 +1113,7 @@ button { font-family: inherit; cursor: pointer; }
 }
 .seg-btn {
   border: none; background: transparent; color: var(--ink-secondary);
-  font-size: 12px; font-weight: 600; padding: 6px 12px; border-radius: 100px;
+  font-size: 12px; font-weight: 600; padding: 6px 12px; border-radius: var(--radius-xs);
   display: inline-flex; align-items: center; gap: 5px;
   transition: background 0.15s, color 0.15s, opacity 0.15s;
 }
@@ -1645,7 +1646,7 @@ button { font-family: inherit; cursor: pointer; }
 .calibration-region-tabs button {
   padding: 5px 8px;
   border: 1px solid transparent;
-  border-radius: 999px;
+  border-radius: var(--radius-xs);
 }
 .calibration-region-tabs button:hover { background: var(--accent-soft); }
 .calibration-region-tabs button.active {
@@ -2590,14 +2591,14 @@ button { font-family: inherit; cursor: pointer; }
 
 .fmt-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; justify-content: center; }
 .fmt-tag {
-  font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 100px;
+  font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: var(--radius-xs);
   background: var(--accent-soft); color: var(--accent);
 }
 .fmt-tag.warn { background: rgba(255,159,10,0.16); color: var(--orange); }
 
 /* buttons */
 .btn {
-  border: none; border-radius: 100px; padding: 10px 18px;
+  border: none; border-radius: var(--button-radius); padding: 10px 18px;
   font-size: 14px; font-weight: 600; background: var(--accent); color: #fff;
   transition: background 0.15s, transform 0.1s, opacity 0.15s;
   width: 100%;
@@ -2826,7 +2827,7 @@ button { font-family: inherit; cursor: pointer; }
 #batch-ref-hint .status-ok { color: #1a7f37; font-size: 12px; }
 #batch-ref-hint .status-warn { color: #b45309; font-size: 12px; }
 
-.batch-failures { margin-top: 10px; padding: 10px 12px; border-radius: 10px;
+.batch-failures { margin-top: 10px; padding: 10px 12px; border-radius: var(--radius-sm);
   background: rgba(255, 59, 48, 0.06); border: 1px solid rgba(255, 59, 48, 0.18); }
 .batch-failures h4 { margin: 0 0 8px; font-size: 12px; font-weight: 700; color: var(--ink); }
 .batch-fail-list { list-style: none; margin: 0; padding: 0; max-height: 200px; overflow-y: auto; }
@@ -2874,7 +2875,7 @@ button { font-family: inherit; cursor: pointer; }
   padding: 10px 12px 11px;
   background: var(--panel);
   border: 1.5px solid color-mix(in srgb, var(--accent) 38%, transparent);
-  border-radius: 12px;
+  border-radius: var(--radius);
   box-shadow: var(--shadow);
   backdrop-filter: blur(10px);
   transition: opacity 0.15s, transform 0.15s;
@@ -2986,7 +2987,7 @@ button { font-family: inherit; cursor: pointer; }
   position: absolute; left: 50%; bottom: 72px; transform: translateX(-50%) translateY(8px);
   z-index: 11; pointer-events: none;
   font: 500 12px/1 -apple-system, sans-serif; color: var(--ink-secondary);
-  background: var(--panel); padding: 6px 14px; border-radius: 999px;
+  background: var(--panel); padding: 6px 14px; border-radius: var(--radius-sm);
   border: 1px solid var(--hairline); box-shadow: var(--shadow-sm);
   opacity: 0; transition: opacity 0.15s, transform 0.15s;
 }
@@ -3026,7 +3027,7 @@ button { font-family: inherit; cursor: pointer; }
   z-index: 160; display: flex; align-items: center; gap: 9px;
   max-width: min(920px, calc(100vw - 28px));
   background: var(--accent, #2563eb); color: #fff;
-  padding: 9px 18px; border-radius: 999px; box-shadow: var(--shadow);
+  padding: 9px 18px; border-radius: var(--radius-sm); box-shadow: var(--shadow);
   font: 600 13px/1.35 -apple-system, sans-serif; letter-spacing: 0.2px;
   pointer-events: none;
 }
@@ -3049,7 +3050,7 @@ body:has(#app.workspace-shell) #calib-banner { top: 52px; }
 #load-overlay.hidden { display: none; }
 #load-overlay .load-card {
   min-width: 280px; max-width: 70vw; background: var(--panel-solid); color: var(--ink);
-  padding: 20px 22px; border-radius: 16px; box-shadow: var(--shadow); text-align: center;
+  padding: 20px 22px; border-radius: var(--radius); box-shadow: var(--shadow); text-align: center;
   border: 1px solid var(--hairline);
 }
 #load-overlay .load-label { font-size: 14px; font-weight: 600; margin-bottom: 12px; }
@@ -3728,7 +3729,7 @@ body:has(#app.workspace-shell) #calib-banner { top: 52px; }
 #toast {
   position: fixed; bottom: 24px; left: 50%;
   transform: translateX(-50%) translateY(calc(100% + 32px));
-  background: var(--ink); color: var(--bg); padding: 11px 20px; border-radius: 100px;
+  background: var(--ink); color: var(--bg); padding: 11px 20px; border-radius: var(--radius-sm);
   font-size: 13px; font-weight: 500; box-shadow: var(--shadow); z-index: 100;
   opacity: 0; visibility: hidden; pointer-events: none;
   transition:
@@ -3866,7 +3867,7 @@ select.search {
   z-index: 262;
   width: min(320px, calc(100vw - 24px));
   padding: 14px 16px 16px;
-  border-radius: 14px;
+  border-radius: var(--radius);
   background: var(--panel-solid);
   color: var(--ink);
   border: 1px solid var(--hairline);
@@ -3943,7 +3944,7 @@ body.tour-active { overflow: hidden; }
 }
 .dv-card-title { font-size: 13px; font-weight: 600; color: var(--ink); }
 .dv-card-badge {
-  font-size: 11px; padding: 2px 8px; border-radius: 999px;
+  font-size: 11px; padding: 2px 8px; border-radius: var(--radius-xs);
   background: var(--accent-soft); color: var(--accent); font-weight: 500;
 }
 .dv-card-badge.warn { background: rgba(255,159,10,0.15); color: #c93400; }
@@ -4076,13 +4077,13 @@ body.tour-active { overflow: hidden; }
 .dv-chip {
   display: inline-flex; align-items: center; gap: 4px;
   padding: 3px 8px; border: 1px solid var(--hairline);
-  border-radius: 999px; background: var(--bg);
+  border-radius: var(--radius-xs); background: var(--bg);
   color: var(--ink); font: 11px var(--font); cursor: pointer;
 }
 .dv-chip:hover { border-color: var(--accent); }
 .dv-chip.on { background: var(--accent); color: #fff; border-color: var(--accent); }
 .dv-chip-n {
-  font-size: 10px; padding: 0 4px; border-radius: 999px;
+  font-size: 10px; padding: 0 4px; border-radius: var(--radius-xs);
   background: rgba(0,0,0,0.06); color: var(--ink-secondary);
 }
 .dv-chip.on .dv-chip-n { background: rgba(255,255,255,0.25); color: #fff; }
@@ -4228,6 +4229,12 @@ body.tour-active { overflow: hidden; }
 #app button,
 .tour-root button {
   border-radius: var(--button-radius);
+}
+
+/* The primary transport control is intentionally circular even though the
+   rest of the application uses compact rectangular controls. */
+#app button#play-btn {
+  border-radius: 50%;
 }
 
 #app button.nav-item,

@@ -1371,6 +1371,6 @@ onBeforeUnmount(() => {
 
   <div id="toast"></div>
   <div id="boot-error" style="display:none;position:fixed;inset:auto 16px 16px 16px;z-index:200;
-    background:#ff3b30;color:#fff;padding:12px 16px;border-radius:12px;font:14px/1.5 -apple-system,sans-serif">
+    background:#ff3b30;color:#fff;padding:12px 16px;border-radius:8px;font:14px/1.5 -apple-system,sans-serif">
   </div>
 </template>
