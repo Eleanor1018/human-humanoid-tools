@@ -78,9 +78,7 @@ def _install_inference_only_pytorch3d_stubs(torch: object) -> None:
         )
         neighbors = None
         if return_nn:
-            expanded = p2[:, None, :, :].expand(
-                -1, p1.shape[1], -1, -1
-            )
+            expanded = p2[:, None, :, :].expand(-1, p1.shape[1], -1, -1)
             neighbors = torch.gather(
                 expanded,
                 2,
@@ -118,9 +116,7 @@ def main() -> int:
         if not checkpoint.is_file():
             raise FileNotFoundError(f"custom checkpoint does not exist: {checkpoint}")
         if checkpoint.suffix.lower() not in {".ckpt", ".pt", ".pth"}:
-            raise ValueError(
-                f"unsupported checkpoint extension: {checkpoint.suffix or '<none>'}"
-            )
+            raise ValueError(f"unsupported checkpoint extension: {checkpoint.suffix or '<none>'}")
     output_root.mkdir(parents=True, exist_ok=True)
 
     # Executing this worker by absolute path makes Python use the worker's
@@ -181,18 +177,14 @@ def main() -> int:
         with torch.no_grad():
             pred = model.predict(data, static_cam=cfg.static_cam)
         pred = detach_to_cpu(pred)
-        Log.info(
-            f"[HHTOOLS] GVHMR prediction elapsed: "
-            f"{Log.sync_time() - tic:.2f}s"
-        )
+        Log.info(f"[HHTOOLS] GVHMR prediction elapsed: {Log.sync_time() - tic:.2f}s")
         torch.save(pred, result_path)
 
     if not result_path.is_file():
         raise RuntimeError(f"GVHMR did not create {result_path}")
     _progress(1.0, "GVHMR motion ready")
     print(
-        "HHTOOLS_RESULT "
-        + json.dumps({"result_path": str(result_path)}, ensure_ascii=False),
+        "HHTOOLS_RESULT " + json.dumps({"result_path": str(result_path)}, ensure_ascii=False),
         flush=True,
     )
     return 0

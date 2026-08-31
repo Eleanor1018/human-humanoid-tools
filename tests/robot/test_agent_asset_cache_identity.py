@@ -67,13 +67,9 @@ def test_foot_geometry_caches_are_isolated_by_agent_asset_id(tmp_path) -> None:
     )
 
     parts_a = foot_geometry._foot_mesh_node_parts(model_a, "left_foot_link")
-    cached_vertices_a = foot_geometry._cached_geom_vertices(
-        model_a, "shared_foot_geometry"
-    )
+    cached_vertices_a = foot_geometry._cached_geom_vertices(model_a, "shared_foot_geometry")
     parts_b = foot_geometry._foot_mesh_node_parts(model_b, "left_foot_link")
-    cached_vertices_b = foot_geometry._cached_geom_vertices(
-        model_b, "shared_foot_geometry"
-    )
+    cached_vertices_b = foot_geometry._cached_geom_vertices(model_b, "shared_foot_geometry")
 
     assert parts_a == (("left_foot_link_asset_a", "shared_foot_geometry"),)
     assert parts_b == (("left_foot_link_asset_b", "shared_foot_geometry"),)
@@ -114,16 +110,11 @@ def test_agent_scaler_lookup_cannot_fall_back_to_same_named_workspace_robot(
     snapshot_root.mkdir(parents=True)
     workspace_root.mkdir(parents=True)
     (workspace_root / "robot.yaml").write_text(
-        "retarget:\n"
-        "  references:\n"
-        "    smpl:\n"
-        "      scaler_config: workspace-only.yaml\n",
+        "retarget:\n  references:\n    smpl:\n      scaler_config: workspace-only.yaml\n",
         encoding="utf-8",
     )
     preset = _preset(snapshot_root, asset_id="robot_asset_a")
-    preset.meta["retarget"] = {
-        "references": {"smpl": {"scaler_config": "snapshot.yaml"}}
-    }
+    preset.meta["retarget"] = {"references": {"smpl": {"scaler_config": "snapshot.yaml"}}}
     monkeypatch.setattr(
         retarget_profile,
         "_workspace_robot_dir",
@@ -131,6 +122,4 @@ def test_agent_scaler_lookup_cannot_fall_back_to_same_named_workspace_robot(
     )
 
     assert retarget_profile._scaler_search_roots(preset) == [snapshot_root.resolve()]
-    assert retarget_profile._scaler_rel_candidates(preset, "smpl") == [
-        "snapshot.yaml"
-    ]
+    assert retarget_profile._scaler_rel_candidates(preset, "smpl") == ["snapshot.yaml"]

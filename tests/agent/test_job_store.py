@@ -715,9 +715,7 @@ def test_retry_parent_identity_and_idempotency_lineage_cannot_be_changed(
         )
     _assert_code(missing_parent, "JOB_NOT_FOUND")
 
-    changed_plan = _spec().model_copy(
-        update={"plan_id": f"plan:sha256:{'9' * 64}"}
-    )
+    changed_plan = _spec().model_copy(update={"plan_id": f"plan:sha256:{'9' * 64}"})
     with pytest.raises(JobStoreError) as plan_conflict:
         store.create(
             changed_plan,
@@ -960,9 +958,7 @@ def test_job_spec_and_failed_error_reject_host_absolute_paths(
     _assert_code(unsafe_request, "INVALID_PARAMETER")
 
     queued = store.create(_spec(), idempotency_key="portable-request")
-    unsafe_error = _failure().model_copy(
-        update={"details": {"solver_log": host_path}}
-    )
+    unsafe_error = _failure().model_copy(update={"details": {"solver_log": host_path}})
     with pytest.raises(JobStoreError) as unsafe_failure:
         store.transition(
             queued.job_id,

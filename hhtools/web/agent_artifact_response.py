@@ -46,9 +46,7 @@ def _validated_descriptor(stored: StoredArtifact) -> ArtifactDescriptor:
     """Revalidate even a test double constructed without Pydantic validation."""
 
     try:
-        descriptor = ArtifactDescriptor.model_validate(
-            stored.descriptor.model_dump(mode="python")
-        )
+        descriptor = ArtifactDescriptor.model_validate(stored.descriptor.model_dump(mode="python"))
         if _SAFE_JOB_ID.fullmatch(descriptor.job_id) is None:
             raise ValueError("unsafe job id")
         return descriptor
@@ -71,16 +69,12 @@ def verified_artifact_response(stored: StoredArtifact) -> StreamingResponse:
 
     descriptor = _validated_descriptor(stored)
     if descriptor.sha256 is None or descriptor.size_bytes is None:
-        raise _internal_failure(
-            "The managed artifact is missing required integrity metadata."
-        )
+        raise _internal_failure("The managed artifact is missing required integrity metadata.")
 
     try:
         handle = stored.path.open("rb")
     except OSError as exc:
-        raise _artifact_failure(
-            "The managed artifact is unavailable for download."
-        ) from exc
+        raise _artifact_failure("The managed artifact is unavailable for download.") from exc
 
     try:
         before = os.fstat(handle.fileno())

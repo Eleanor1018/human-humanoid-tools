@@ -54,6 +54,10 @@ docs/webui-p1-remediation.md
 docs/webui-ux-reform-plan.md
 docs/electron-gui-workspace-plan.md
 docs/web-electron-shared-ui-plan.md
+docs/remote-workspace-development-plan.md
+docs/agent-integration-plan.md
+docs/electron-remote-gpu-plan.md
+docs/fork-upstream-change-review.md
 
 # Electron desktop shell
 desktop/node_modules/

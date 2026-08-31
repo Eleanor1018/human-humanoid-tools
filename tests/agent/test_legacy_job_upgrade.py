@@ -53,12 +53,8 @@ def _digest(value: Any) -> str:
 
 def _write_motion(path: Path, *, frame_count: int = 48) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    positions: NDArray[np.float32] = np.zeros(
-        (frame_count, 2, 3), dtype=np.float32
-    )
-    quaternions: NDArray[np.float32] = np.zeros(
-        (frame_count, 2, 4), dtype=np.float32
-    )
+    positions: NDArray[np.float32] = np.zeros((frame_count, 2, 3), dtype=np.float32)
+    quaternions: NDArray[np.float32] = np.zeros((frame_count, 2, 4), dtype=np.float32)
     quaternions[..., 3] = 1.0
     np.savez(
         path,

@@ -394,16 +394,8 @@ def _analyse_urdf(root: ElementTree.Element) -> _UrdfFacts:
 
         parent_elements = _children(joint, "parent")
         child_elements = _children(joint, "child")
-        parent = (
-            (parent_elements[0].get("link") or "").strip()
-            if len(parent_elements) == 1
-            else ""
-        )
-        child = (
-            (child_elements[0].get("link") or "").strip()
-            if len(child_elements) == 1
-            else ""
-        )
+        parent = (parent_elements[0].get("link") or "").strip() if len(parent_elements) == 1 else ""
+        child = (child_elements[0].get("link") or "").strip() if len(child_elements) == 1 else ""
         if not parent or not child:
             errors.append(
                 _api_error(
@@ -952,13 +944,9 @@ def discover_robot_bundle(candidate: str | Path) -> RobotAssetDiscovery:
         )
         mesh_roles[resolved].add(declaration.role)
 
-    files: list[RobotAssetFile] = [
-        RobotAssetFile(primary, AssetFileRole.ROBOT_DESCRIPTION)
-    ]
+    files: list[RobotAssetFile] = [RobotAssetFile(primary, AssetFileRole.ROBOT_DESCRIPTION)]
     metadata_files = _robot_metadata_files(bundle_root, primary)
-    files.extend(
-        RobotAssetFile(path, AssetFileRole.METADATA) for path in metadata_files
-    )
+    files.extend(RobotAssetFile(path, AssetFileRole.METADATA) for path in metadata_files)
 
     shared_meshes = 0
     for path, roles in sorted(

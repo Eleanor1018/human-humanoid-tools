@@ -195,9 +195,7 @@ def build_gvhmr_command(
         if not checkpoint.is_file():
             raise FileNotFoundError(f"custom checkpoint does not exist: {checkpoint}")
         if checkpoint.suffix.lower() not in _CHECKPOINT_SUFFIXES:
-            raise ValueError(
-                f"unsupported checkpoint extension: {checkpoint.suffix or '<none>'}"
-            )
+            raise ValueError(f"unsupported checkpoint extension: {checkpoint.suffix or '<none>'}")
 
     output = work / "output"
     output.mkdir(parents=True, exist_ok=True)
@@ -236,9 +234,7 @@ def build_gvhmr_command(
         ]
     )
     if checkpoint is not None:
-        command.extend(
-            ["--checkpoint", _container_path(checkpoint, work, "/work")]
-        )
+        command.extend(["--checkpoint", _container_path(checkpoint, work, "/work")])
     if static_cam:
         command.append("--static-cam")
     if f_mm is not None:
@@ -318,9 +314,7 @@ def run_gvhmr(
                 payload = json.loads(line[len(_RESULT_PREFIX) :])
                 result_container_path = str(payload["result_path"])
         if timed_out:
-            raise TimeoutError(
-                f"GVHMR exceeded the {cfg.timeout_seconds}-second inference timeout"
-            )
+            raise TimeoutError(f"GVHMR exceeded the {cfg.timeout_seconds}-second inference timeout")
         return_code = process.wait(timeout=max(1.0, deadline - time.monotonic()))
     except Exception:
         process.kill()
@@ -333,9 +327,7 @@ def run_gvhmr(
         raise
     if return_code != 0:
         diagnostic = "\n".join(recent[-12:])
-        raise RuntimeError(
-            f"GVHMR container exited with code {return_code}.\n{diagnostic}"
-        )
+        raise RuntimeError(f"GVHMR container exited with code {return_code}.\n{diagnostic}")
     if not result_container_path or not result_container_path.startswith("/work/"):
         raise RuntimeError("GVHMR completed without publishing a result path")
     result = job_root.resolve() / Path(result_container_path).relative_to("/work")

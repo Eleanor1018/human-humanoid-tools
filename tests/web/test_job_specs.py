@@ -69,9 +69,7 @@ def test_replay_capability_checks_sources_and_ephemeral_root(tmp_path: Path) -> 
 
 
 def test_replay_capability_explains_session_only_job() -> None:
-    capability = replay_capability(
-        build_job_spec("r2r_retarget", {"source_token": "gone"})
-    )
+    capability = replay_capability(build_job_spec("r2r_retarget", {"source_token": "gone"}))
 
     assert capability["available"] is False
     assert "会话内对象" in capability["reason"]

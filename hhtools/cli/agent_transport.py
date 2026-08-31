@@ -11,32 +11,28 @@ import hashlib
 import json
 import math
 import os
-import re
 import tempfile
 from collections.abc import Mapping
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from pathlib import Path
 from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import urlencode, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
 from hhtools.contracts import ApiError, ArtifactDescriptor, ErrorStage, NextAction
+from hhtools.contracts.portability import (
+    PortableJsonError as ContractPortableJsonError,
+)
+from hhtools.contracts.portability import (
+    looks_like_host_path as contract_looks_like_host_path,
+)
+from hhtools.contracts.portability import (
+    validate_portable_json as validate_contract_portable_json,
+)
 
 _DEFAULT_MAX_JSON_BYTES = 16 * 1024 * 1024
 _COPY_CHUNK_BYTES = 1024 * 1024
 _MAX_JSON_NUMBER_TOKEN = 128
-_CONTROLLED_RESOURCE_URI_FRAGMENT = re.compile(
-    r"(?:hhtools|https?)://"
-    r"(?:\[[0-9A-Fa-f:.%]+\](?::[0-9]{1,5})?|[A-Za-z0-9._~-]+(?::[0-9]{1,5})?)"
-    r"(?:[/?#][A-Za-z0-9._~:/?#@!$&*+,;=%-]*)?",
-    re.IGNORECASE,
-)
-_EMBEDDED_URI_SCHEME = re.compile(r"(?<![A-Za-z0-9])([A-Za-z][A-Za-z0-9+.-]*)://")
-_EMBEDDED_FILE_URI = re.compile(r"(?<![A-Za-z0-9])file:", re.IGNORECASE)
-_EMBEDDED_WINDOWS_PATH = re.compile(r"(?<![A-Za-z0-9])(?:[A-Za-z]:[\\/]|\\\\)[^\s\"']*")
-_EMBEDDED_POSIX_PATH = re.compile(r"(?<![A-Za-z0-9/])/(?![/\s])[^\s\"']*")
-_EMBEDDED_PROTOCOL_RELATIVE = re.compile(r"(?<![A-Za-z0-9/])//[^\s\"']+")
-_UI_QUERY_KEY = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 
 
 class AgentTransportError(RuntimeError):
@@ -104,47 +100,14 @@ def loads_strict_json(payload: str | bytes) -> Any:
         raise StrictJsonError("JSON nesting exceeds the supported depth") from error
 
 
-def _safe_same_origin_ui_url(value: str) -> bool:
-    if value == "/":
-        return True
-    if not value.startswith("/?") or value.startswith("//"):
-        return False
-    parsed = urlsplit(value)
-    if parsed.scheme or parsed.netloc or parsed.path != "/" or parsed.fragment:
-        return False
-    try:
-        fields = parse_qsl(parsed.query, keep_blank_values=True, max_num_fields=16)
-    except ValueError:
-        return False
-    return all(
-        _UI_QUERY_KEY.fullmatch(key) is not None
-        and len(item) <= 256
-        and not _looks_like_host_path(item)
-        for key, item in fields
-    )
-
-
 def _looks_like_host_path(
     value: str,
     *,
     allow_same_origin_ui_url: bool = False,
 ) -> bool:
-    if _EMBEDDED_FILE_URI.search(value):
-        return True
-    for match in _EMBEDDED_URI_SCHEME.finditer(value):
-        if match.group(1).casefold() not in {"hhtools", "http", "https"}:
-            return True
-    if allow_same_origin_ui_url and _safe_same_origin_ui_url(value):
-        return False
-    masked = _CONTROLLED_RESOURCE_URI_FRAGMENT.sub("", value)
-    posix = PurePosixPath(masked)
-    windows = PureWindowsPath(masked)
-    if posix.is_absolute() or windows.is_absolute() or bool(windows.drive) or bool(windows.root):
-        return True
-    return bool(
-        _EMBEDDED_WINDOWS_PATH.search(masked)
-        or _EMBEDDED_POSIX_PATH.search(masked)
-        or _EMBEDDED_PROTOCOL_RELATIVE.search(masked)
+    return contract_looks_like_host_path(
+        value,
+        allow_same_origin_ui_url=allow_same_origin_ui_url,
     )
 
 
@@ -155,36 +118,17 @@ def ensure_portable_json(
 ) -> None:
     """Fail closed when public JSON could reveal a host path or local URI."""
 
-    if value is None or isinstance(value, bool | int):
-        return
-    if isinstance(value, float):
-        if not math.isfinite(value):
-            raise PortableJsonError("non-finite number")
-        return
-    if isinstance(value, str):
-        if _looks_like_host_path(
-            value,
-            allow_same_origin_ui_url=allow_same_origin_ui_url,
-        ):
-            raise PortableJsonError("host path")
-        return
-    if isinstance(value, list | tuple):
-        for item in value:
-            ensure_portable_json(item)
-        return
-    if isinstance(value, dict):
-        next_action_shape = value.get("actor") in {"agent", "human", "system"} and isinstance(
-            value.get("action"), str
-        )
-        for key, item in value.items():
-            if not isinstance(key, str) or _looks_like_host_path(key):
-                raise PortableJsonError("invalid object key")
-            ensure_portable_json(
-                item,
-                allow_same_origin_ui_url=next_action_shape and key == "url",
-            )
-        return
-    raise PortableJsonError("non-JSON value")
+    try:
+        if allow_same_origin_ui_url and isinstance(value, str):
+            if contract_looks_like_host_path(
+                value,
+                allow_same_origin_ui_url=True,
+            ):
+                raise ContractPortableJsonError("host path")
+            return
+        validate_contract_portable_json(value)
+    except ContractPortableJsonError as error:
+        raise PortableJsonError(str(error)) from error
 
 
 class AgentTransport(Protocol):

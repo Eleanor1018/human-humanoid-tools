@@ -290,9 +290,7 @@ class AgentAssetService:
             bundle_root = bundle_root.parent
 
         inspector = (
-            self._robot_inspector
-            if bundle.kind is AssetKind.ROBOT_BUNDLE
-            else self._inspector
+            self._robot_inspector if bundle.kind is AssetKind.ROBOT_BUNDLE else self._inspector
         )
         return inspector.inspect(
             bundle,

@@ -43,16 +43,10 @@ from hhtools.contracts import (
 _IDEMPOTENCY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._~:-]{0,255}$")
 _JOB_ID_PATTERN = re.compile(r"^job:[A-Za-z0-9][A-Za-z0-9._~-]{0,251}$")
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
-_TERMINAL_STATES = frozenset(
-    {JobState.COMPLETED, JobState.FAILED, JobState.CANCELLED}
-)
+_TERMINAL_STATES = frozenset({JobState.COMPLETED, JobState.FAILED, JobState.CANCELLED})
 _ALLOWED_TRANSITIONS: dict[JobState, frozenset[JobState]] = {
-    JobState.QUEUED: frozenset(
-        {JobState.RUNNING, JobState.FAILED, JobState.CANCELLED}
-    ),
-    JobState.RUNNING: frozenset(
-        {JobState.COMPLETED, JobState.FAILED, JobState.CANCELLED}
-    ),
+    JobState.QUEUED: frozenset({JobState.RUNNING, JobState.FAILED, JobState.CANCELLED}),
+    JobState.RUNNING: frozenset({JobState.COMPLETED, JobState.FAILED, JobState.CANCELLED}),
     JobState.COMPLETED: frozenset(),
     JobState.FAILED: frozenset(),
     JobState.CANCELLED: frozenset(),
@@ -188,12 +182,7 @@ def _strict_json_loads(payload: str) -> Any:
 def _looks_like_absolute_path(value: str) -> bool:
     posix = PurePosixPath(value)
     windows = PureWindowsPath(value)
-    return (
-        posix.is_absolute()
-        or windows.is_absolute()
-        or bool(windows.drive)
-        or bool(windows.root)
-    )
+    return posix.is_absolute() or windows.is_absolute() or bool(windows.drive) or bool(windows.root)
 
 
 def _validate_portable_json(value: Any, *, location: str = "$") -> None:
@@ -321,12 +310,7 @@ def _normalize_revision(value: int) -> int:
 def _normalize_poll_after_ms(value: int | None) -> int | None:
     if value is None:
         return None
-    if (
-        isinstance(value, bool)
-        or not isinstance(value, int)
-        or value < 0
-        or value > 300_000
-    ):
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0 or value > 300_000:
         raise _error(
             "INVALID_PARAMETER",
             "The polling interval must be an integer from 0 to 300000 milliseconds.",
@@ -379,9 +363,7 @@ def _validate_artifact(artifact: ArtifactDescriptor, *, job_id: str) -> str:
     if artifact.job_id != job_id:
         raise _InvalidStoredJobError("artifact job id does not match its owner")
     if artifact.sha256 is None or artifact.size_bytes is None or artifact.created_at is None:
-        raise _InvalidStoredJobError(
-            "artifact requires sha256, size_bytes, and created_at"
-        )
+        raise _InvalidStoredJobError("artifact requires sha256, size_bytes, and created_at")
     encoded = _canonical_json(artifact.model_dump(mode="json"))
     restored = ArtifactDescriptor.model_validate_json(encoded)
     if _canonical_json(restored.model_dump(mode="json")) != encoded:
@@ -451,9 +433,7 @@ def _decode_artifacts(payload: Any, *, job_id: str) -> tuple[ArtifactDescriptor,
 
 
 def _encode_artifacts(artifacts: Sequence[ArtifactDescriptor]) -> str:
-    return _canonical_json(
-        [artifact.model_dump(mode="json") for artifact in artifacts]
-    )
+    return _canonical_json([artifact.model_dump(mode="json") for artifact in artifacts])
 
 
 def _merge_artifacts(
@@ -499,9 +479,7 @@ class JobStore:
         self._data_dir = Path(data_dir)
         self._database_path = self._data_dir / "jobs.sqlite3"
         self._clock = clock or (lambda: datetime.now(UTC))
-        self._job_id_provider = job_id_provider or (
-            lambda: f"job:{uuid.uuid4().hex}"
-        )
+        self._job_id_provider = job_id_provider or (lambda: f"job:{uuid.uuid4().hex}")
         try:
             self._data_dir.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
@@ -565,15 +543,12 @@ class JobStore:
                     """
                 )
                 columns = {
-                    row[1]
-                    for row in connection.execute("PRAGMA table_info(jobs)").fetchall()
+                    row[1] for row in connection.execute("PRAGMA table_info(jobs)").fetchall()
                 }
                 migrations = {
                     "parent_job_id": "ALTER TABLE jobs ADD COLUMN parent_job_id TEXT",
                     "root_job_id": "ALTER TABLE jobs ADD COLUMN root_job_id TEXT",
-                    "attempt": (
-                        "ALTER TABLE jobs ADD COLUMN attempt INTEGER NOT NULL DEFAULT 1"
-                    ),
+                    "attempt": ("ALTER TABLE jobs ADD COLUMN attempt INTEGER NOT NULL DEFAULT 1"),
                     "artifacts_json": (
                         "ALTER TABLE jobs ADD COLUMN artifacts_json TEXT NOT NULL DEFAULT '[]'"
                     ),
@@ -582,12 +557,9 @@ class JobStore:
                     if column not in columns:
                         connection.execute(statement)
                 connection.execute(
-                    "CREATE INDEX IF NOT EXISTS jobs_state_revision "
-                    "ON jobs (state, revision)"
+                    "CREATE INDEX IF NOT EXISTS jobs_state_revision ON jobs (state, revision)"
                 )
-                connection.execute(
-                    "CREATE INDEX IF NOT EXISTS jobs_parent ON jobs (parent_job_id)"
-                )
+                connection.execute("CREATE INDEX IF NOT EXISTS jobs_parent ON jobs (parent_job_id)")
         except sqlite3.Error as exc:
             raise _error(
                 "INTERNAL_ERROR",
@@ -605,11 +577,7 @@ class JobStore:
                 "The job store clock failed.",
                 stage=ErrorStage.INTERNAL,
             ) from exc
-        if (
-            not isinstance(value, datetime)
-            or value.tzinfo is None
-            or value.utcoffset() is None
-        ):
+        if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
             raise _error(
                 "INTERNAL_ERROR",
                 "The job store clock must return a timezone-aware datetime.",
@@ -733,9 +701,7 @@ class JobStore:
             submitted_at = _parse_datetime(row["submitted_at"], required=True)
             started_at = _parse_datetime(row["started_at"], required=False)
             completed_at = _parse_datetime(row["completed_at"], required=False)
-            cancel_requested_at = _parse_datetime(
-                row["cancel_requested_at"], required=False
-            )
+            cancel_requested_at = _parse_datetime(row["cancel_requested_at"], required=False)
             if submitted_at is None:  # required=True; narrows the type for Pydantic
                 raise _InvalidStoredJobError("persisted submission timestamp is missing")
             if progress.updated_at is None or progress.updated_at < submitted_at:
@@ -752,24 +718,15 @@ class JobStore:
 
             if state in _TERMINAL_STATES:
                 if completed_at is None:
-                    raise _InvalidStoredJobError(
-                        "terminal jobs require a completion timestamp"
-                    )
+                    raise _InvalidStoredJobError("terminal jobs require a completion timestamp")
                 if progress.updated_at > completed_at:
-                    raise _InvalidStoredJobError(
-                        "persisted progress timestamp follows completion"
-                    )
-                if (
-                    cancel_requested_at is not None
-                    and cancel_requested_at > completed_at
-                ):
+                    raise _InvalidStoredJobError("persisted progress timestamp follows completion")
+                if cancel_requested_at is not None and cancel_requested_at > completed_at:
                     raise _InvalidStoredJobError(
                         "persisted cancellation timestamp follows completion"
                     )
             elif completed_at is not None:
-                raise _InvalidStoredJobError(
-                    "non-terminal job has a completion timestamp"
-                )
+                raise _InvalidStoredJobError("non-terminal job has a completion timestamp")
             if state is JobState.RUNNING and started_at is None:
                 raise _InvalidStoredJobError("running jobs require a start timestamp")
             if state is JobState.QUEUED and started_at is not None:
@@ -875,8 +832,7 @@ class JobStore:
                     stored = self._decode_row(existing)
                     if (
                         stored.request_fingerprint != computed_fingerprint
-                        or _canonical_json(stored.spec.model_dump(mode="json"))
-                        != spec_json
+                        or _canonical_json(stored.spec.model_dump(mode="json")) != spec_json
                         or stored.view.parent_job_id != normalized_parent_id
                     ):
                         raise _error(
@@ -1081,8 +1037,7 @@ class JobStore:
         try:
             with self._connect() as connection:
                 rows = connection.execute(
-                    f"{_SELECT_JOB} "
-                    "WHERE state IN (?, ?) ORDER BY submitted_at ASC, job_id ASC",
+                    f"{_SELECT_JOB} WHERE state IN (?, ?) ORDER BY submitted_at ASC, job_id ASC",
                     (JobState.QUEUED.value, JobState.RUNNING.value),
                 ).fetchall()
         except sqlite3.Error as exc:
@@ -1302,9 +1257,7 @@ class JobStore:
     ) -> None:
         requested = current.cancel_requested if cancel_requested is None else cancel_requested
         requested_at = (
-            current.cancel_requested_at
-            if cancel_requested is None
-            else cancel_requested_at
+            current.cancel_requested_at if cancel_requested is None else cancel_requested_at
         )
         stored_artifacts = current.artifacts if artifacts is None else artifacts
         cursor = connection.execute(
@@ -1375,16 +1328,10 @@ class JobStore:
         normalized_poll_after_ms = _normalize_poll_after_ms(poll_after_ms)
         normalized_artifacts: tuple[ArtifactDescriptor, ...] = ()
         if artifacts is not None:
-            if isinstance(artifacts, str | bytes) or not isinstance(
-                artifacts, Sequence
-            ):
-                normalized_artifacts = _normalize_artifacts(
-                    normalized_id, artifacts
-                )
+            if isinstance(artifacts, str | bytes) or not isinstance(artifacts, Sequence):
+                normalized_artifacts = _normalize_artifacts(normalized_id, artifacts)
             elif artifacts:
-                normalized_artifacts = _normalize_artifacts(
-                    normalized_id, artifacts
-                )
+                normalized_artifacts = _normalize_artifacts(normalized_id, artifacts)
         self._validate_terminal_fields(target_state, normalized_outcome, error)
 
         try:
@@ -1425,9 +1372,7 @@ class JobStore:
 
                 merged_artifacts = current.artifacts
                 if normalized_artifacts:
-                    merged_artifacts, _ = _merge_artifacts(
-                        current, normalized_artifacts
-                    )
+                    merged_artifacts, _ = _merge_artifacts(current, normalized_artifacts)
 
                 now = self._now()
                 self._assert_clock_order(current, now)
@@ -1439,9 +1384,7 @@ class JobStore:
                     revision=next_revision,
                     updated_at=now,
                 )
-                started_at, completed_at = self._updated_timestamps(
-                    current, target_state, now
-                )
+                started_at, completed_at = self._updated_timestamps(current, target_state, now)
                 self._replace_row(
                     connection,
                     current,
@@ -1592,9 +1535,7 @@ class JobStore:
                         details={"job_id": current.job_id},
                     )
 
-                merged_artifacts, changed = _merge_artifacts(
-                    current, normalized_artifacts
-                )
+                merged_artifacts, changed = _merge_artifacts(current, normalized_artifacts)
                 if not changed:
                     return current
                 self._assert_revision(current, expected_revision)

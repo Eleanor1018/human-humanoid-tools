@@ -317,13 +317,15 @@ def test_library_api_exposes_robot_trajectory_asset_boundary(
     monkeypatch.setattr(
         motion_library_links,
         "scan_motions_library",
-        lambda _root=None: [{
-            "dataset": "robot",
-            "folder_label": "G1 exports",
-            "sequence_id": "walk.csv",
-            "stem": "walk",
-            "source_path": str(clip),
-        }],
+        lambda _root=None: [
+            {
+                "dataset": "robot",
+                "folder_label": "G1 exports",
+                "sequence_id": "walk.csv",
+                "stem": "walk",
+                "source_path": str(clip),
+            }
+        ],
     )
 
     with _local_client(app) as client:

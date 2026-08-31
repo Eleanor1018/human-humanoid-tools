@@ -71,9 +71,7 @@ def _text_code_block(document: str, heading: str) -> set[str]:
 
 def test_skill_has_minimal_repo_scoped_structure_and_trigger_metadata() -> None:
     files = {
-        path.relative_to(SKILL_ROOT).as_posix()
-        for path in SKILL_ROOT.rglob("*")
-        if path.is_file()
+        path.relative_to(SKILL_ROOT).as_posix() for path in SKILL_ROOT.rglob("*") if path.is_file()
     }
     assert files == {
         "SKILL.md",
@@ -204,9 +202,7 @@ def test_workflow_invariants_preserve_transport_and_execution_boundaries() -> No
         term in normalized["NEW_FULL_PLAN"]
         for term in ("explicit approval", "new full preflight", "new plan", "new idempotency key")
     )
-    assert all(
-        term in normalized["JOB_SCOPED_ARTIFACTS"] for term in ("job_id", "artifact_id")
-    )
+    assert all(term in normalized["JOB_SCOPED_ARTIFACTS"] for term in ("job_id", "artifact_id"))
     assert all(term in normalized["NO_BINARY_CONTEXT"] for term in ("binary", "base64"))
     assert all(
         term in normalized["SINGLE_RUNTIME_OWNER"]

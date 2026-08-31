@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 from collections.abc import AsyncIterator
@@ -13,7 +14,7 @@ from typing import Any, cast
 
 import anyio
 import pytest
-from mcp import Client, StdioServerParameters
+from mcp import Client, MCPError, StdioServerParameters
 
 from hhtools.contracts import (
     AgentJobView,
@@ -112,6 +113,41 @@ def _artifact() -> ArtifactDescriptor:
         size_bytes=3,
         sha256=_DIGEST,
     )
+
+
+class _MutatingReportPath:
+    """Emulate a same-size report rewrite when a reader seeks for a second pass."""
+
+    def __init__(self, path: Path, replacement: bytes) -> None:
+        self.path = path
+        self.replacement = replacement
+        self.seek_calls = 0
+
+    def open(self, _mode: str):
+        owner = self
+        stream = self.path.open("r+b")
+
+        class _Stream:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args: Any) -> None:
+                stream.close()
+
+            def read(self, size: int = -1) -> bytes:
+                return stream.read(size)
+
+            def fileno(self) -> int:
+                return stream.fileno()
+
+            def seek(self, offset: int, whence: int = 0) -> int:
+                owner.seek_calls += 1
+                stream.seek(0)
+                stream.write(owner.replacement)
+                stream.flush()
+                return stream.seek(offset, whence)
+
+        return _Stream()
 
 
 class _CapabilitiesService:
@@ -257,6 +293,16 @@ class _Fixture:
             yield self.runtime
 
         return create_mcp_server(runtime_factory=runtime_factory)
+
+    def replace_jobs(self, jobs: Any) -> None:
+        self.jobs = jobs
+        self.runtime = AgentRuntime(
+            capabilities=cast(Any, self.capabilities),
+            assets=cast(Any, self.assets),
+            preflight=cast(Any, self.preflight),
+            plans=cast(Any, self.plans),
+            jobs=cast(Any, jobs),
+        )
 
 
 def _tool_by_name(tools: list[Any], name: str) -> Any:
@@ -430,6 +476,139 @@ async def test_artifacts_remain_job_scoped_and_errors_are_structured() -> None:
     assert denied.structured_content["code"] == "JOB_NOT_FOUND"
     assert denied.structured_content["stage"] == "artifact"
     assert json.loads(denied.content[0].text) == denied.structured_content
+
+
+@pytest.mark.anyio
+async def test_report_hash_covers_the_exact_payload_returned(tmp_path: Path) -> None:
+    fixture = _Fixture()
+    original = json.dumps(
+        {
+            "schema_version": "1.0",
+            "job_id": _JOB_ID,
+            "outcome": "success",
+            "summary": "A",
+            "created_at": _NOW.isoformat(),
+        },
+        separators=(",", ":"),
+    ).encode()
+    replacement = original.replace(b'"summary":"A"', b'"summary":"B"')
+    assert len(original) == len(replacement)
+    report_file = tmp_path / "evaluation.json"
+    report_file.write_bytes(original)
+    mutating_path = _MutatingReportPath(report_file, replacement)
+    descriptor = ArtifactDescriptor(
+        artifact_id="artifact:evaluation_report:mcp-test",
+        job_id=_JOB_ID,
+        kind="evaluation_report",
+        format="json",
+        resource_uri=f"hhtools://jobs/{_JOB_ID}/artifacts/evaluation-report",
+        media_type="application/json",
+        size_bytes=len(replacement),
+        sha256=hashlib.sha256(replacement).hexdigest(),
+    )
+
+    class _ReportJobs:
+        def get_job(self, _job_id: str) -> Any:
+            return SimpleNamespace(artifact_count=1)
+
+        def list_artifacts(self, _job_id: str, *, offset: int, limit: int) -> list[Any]:
+            return [descriptor][offset : offset + limit]
+
+        def get_artifact(
+            self,
+            _job_id: str,
+            _artifact_id: str,
+            *,
+            verify: bool,
+        ) -> Any:
+            assert verify is False
+            return SimpleNamespace(descriptor=descriptor, path=mutating_path)
+
+    fixture.replace_jobs(_ReportJobs())
+    async with Client(fixture.server(), raise_exceptions=True) as client:
+        with pytest.raises(MCPError) as raised:
+            await client.read_resource(f"hhtools://jobs/{_JOB_ID}/evaluation")
+
+    error = json.loads(raised.value.message)
+    assert error["code"] == "ARTIFACT_HASH_MISMATCH"
+    # The fixed reader hashes the payload it already read and never starts a
+    # second pass that a concurrent writer could swap underneath it.
+    assert mutating_path.seek_calls == 0
+    assert report_file.read_bytes() == original
+
+
+@pytest.mark.anyio
+async def test_non_portable_service_errors_are_sanitized_for_tools_and_resources() -> None:
+    fixture = _Fixture()
+    secret_path = r"C:\Users\Nora\private\robot.npz"
+
+    class _UnsafeJobs(_Jobs):
+        def get_job(
+            self,
+            _job_id: str,
+            *,
+            after_revision: int | None = None,
+        ) -> AgentJobView:
+            del after_revision
+            raise JobManagerError(
+                ApiError(
+                    code="SERVICE_FAILURE",
+                    message=f"Could not read {secret_path}",
+                    stage=ErrorStage.INTERNAL,
+                    details={"source_path": secret_path},
+                )
+            )
+
+    fixture.replace_jobs(_UnsafeJobs())
+    async with Client(fixture.server(), raise_exceptions=True) as client:
+        tool_result = await client.call_tool("get_job", {"job_id": _JOB_ID})
+        with pytest.raises(MCPError) as raised:
+            await client.read_resource(f"hhtools://jobs/{_JOB_ID}/status")
+
+    expected = {
+        "schema_version": "1.0",
+        "code": "INTERNAL_ERROR",
+        "message": "The HHTools MCP service could not complete the request.",
+        "retryable": True,
+        "stage": "internal",
+        "details": {},
+    }
+    assert tool_result.is_error is True
+    assert tool_result.structured_content == expected
+    assert json.loads(tool_result.content[0].text) == expected
+    resource_error = json.loads(raised.value.message)
+    assert resource_error == expected
+    assert secret_path not in json.dumps(tool_result.model_dump(mode="json"))
+    assert secret_path not in raised.value.message
+
+
+@pytest.mark.anyio
+async def test_non_portable_success_payloads_are_sanitized_for_tools_and_resources() -> None:
+    fixture = _Fixture()
+    secret_path = r"C:\Users\Nora\private\robot.npz"
+
+    class _UnsafeSuccessJobs(_Jobs):
+        def get_job(
+            self,
+            _job_id: str,
+            *,
+            after_revision: int | None = None,
+        ) -> AgentJobView:
+            del after_revision
+            return _job().model_copy(update={"summary": {"source_path": secret_path}})
+
+    fixture.replace_jobs(_UnsafeSuccessJobs())
+    async with Client(fixture.server(), raise_exceptions=True) as client:
+        tool_result = await client.call_tool("get_job", {"job_id": _JOB_ID})
+        with pytest.raises(MCPError) as raised:
+            await client.read_resource(f"hhtools://jobs/{_JOB_ID}/status")
+
+    expected_code = "INTERNAL_ERROR"
+    assert tool_result.is_error is True
+    assert tool_result.structured_content["code"] == expected_code
+    assert json.loads(raised.value.message)["code"] == expected_code
+    assert secret_path not in json.dumps(tool_result.model_dump(mode="json"))
+    assert secret_path not in raised.value.message
 
 
 @pytest.mark.anyio

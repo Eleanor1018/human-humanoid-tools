@@ -10,7 +10,9 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
+
+from .portability import is_portable_next_action_url, is_portable_resource_uri
 
 
 class ContractModel(BaseModel):
@@ -62,13 +64,41 @@ ArtifactId = Annotated[
         description="Artifact id with a stable kind namespace.",
     ),
 ]
+
+_URI_PORT = (
+    r"(?:0|[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|"
+    r"65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])"
+)
+_URI_HOST = r"(?:\[[0-9A-Fa-f:.%]+\]|[A-Za-z0-9._~-]+)"
+_HTTP_URI = rf"https?://{_URI_HOST}(?::{_URI_PORT})?(?:[/?#][^\s]*)?"
+_HTTPS_URI = rf"https://{_URI_HOST}(?::{_URI_PORT})?(?:[/?#][^\s]*)?"
+_HHTOOLS_ARTIFACT_URI = (
+    r"hhtools://jobs/[A-Za-z0-9._~:-]+/artifacts/[A-Za-z0-9._~:-]+"
+)
+_UI_QUERY_PAIR = r"(?:calibrate|panel|robot|view)=[^&#\s]{0,256}"
+_UI_QUERY = rf"\?(?:{_UI_QUERY_PAIR}(?:&{_UI_QUERY_PAIR})*)?"
+_LOCAL_UI_URL = (
+    rf"(?:/(?:{_UI_QUERY})?|http://(?:127\.0\.0\.1|localhost|\[::1\]):"
+    rf"{_URI_PORT}/(?:{_UI_QUERY})?)"
+)
+_RESOURCE_URI_PATTERN = rf"^(?:{_HTTP_URI}|{_HHTOOLS_ARTIFACT_URI})$"
+_NEXT_ACTION_URL_PATTERN = rf"^(?:{_LOCAL_UI_URL}|{_HTTPS_URI})$"
+
+
+def _validate_resource_uri(value: str) -> str:
+    if not is_portable_resource_uri(value):
+        raise ValueError("resource URI must be canonical and host independent")
+    return value
+
+
 ResourceUri = Annotated[
     str,
     Field(
         min_length=1,
-        pattern=r"^(?:hhtools|https?)://[^\s]+$",
-        description="Controlled HHTools resource or HTTP(S) URI.",
+        pattern=_RESOURCE_URI_PATTERN,
+        description=("Canonical job-scoped HHTools artifact URI or portable HTTP(S) URI."),
     ),
+    AfterValidator(_validate_resource_uri),
 ]
 
 
@@ -91,12 +121,24 @@ class NextAction(ContractModel):
     )
     url: str | None = Field(
         default=None,
-        description="Optional Web UI or documentation URL for this action.",
+        pattern=_NEXT_ACTION_URL_PATTERN,
+        description=(
+            "Optional allowlisted local calibration UI route or portable HTTPS documentation URL."
+        ),
     )
     parameters: dict[str, Any] = Field(
         default_factory=dict,
         description="Structured parameters needed to perform the action.",
     )
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, value: str | None) -> str | None:
+        if value is not None and not is_portable_next_action_url(value):
+            raise ValueError(
+                "url must be an allowlisted local UI route or portable HTTPS documentation"
+            )
+        return value
 
 
 class ErrorStage(StrEnum):

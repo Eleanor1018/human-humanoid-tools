@@ -72,8 +72,7 @@ def _plan(
     return RetargetPlan(
         plan_id=compute_plan_id(canonical_payload),
         created_at=created_at or datetime(2026, 8, 31, 12, 30, tzinfo=UTC),
-        expires_at=(created_at or datetime(2026, 8, 31, 12, 30, tzinfo=UTC))
-        + timedelta(hours=1),
+        expires_at=(created_at or datetime(2026, 8, 31, 12, 30, tzinfo=UTC)) + timedelta(hours=1),
         motion_asset_id=f"asset:sha256:{'1' * 64}",
         robot_id="g1",
         robot_asset_id=f"asset:sha256:{'2' * 64}",
@@ -152,9 +151,7 @@ def test_manual_calibration_id_must_match_its_content_digest(tmp_path: Path) -> 
     profile = payload["retarget_profile"]
     assert isinstance(profile, dict)
     profile["calibration_id"] = f"cal:sha256:{'6' * 64}"
-    plan = _retarget_plan(payload).model_copy(
-        update={"calibration_id": f"cal:sha256:{'6' * 64}"}
-    )
+    plan = _retarget_plan(payload).model_copy(update={"calibration_id": f"cal:sha256:{'6' * 64}"})
 
     with pytest.raises(PlanStoreError) as captured:
         PlanStore(tmp_path / "state").put_if_absent(plan, payload)

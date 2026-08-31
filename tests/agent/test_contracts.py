@@ -110,7 +110,7 @@ def test_common_contracts_use_stable_machine_values_and_forbid_extra_fields() ->
         actor="human",
         action="open_calibration_ui",
         message="Calibrate the selected robot.",
-        url="http://127.0.0.1:8009/calibration",
+        url="http://127.0.0.1:8009/?view=calibration",
     )
 
     assert error.model_dump(mode="json")["code"] == "CALIBRATION_MISSING"
@@ -119,6 +119,31 @@ def test_common_contracts_use_stable_machine_values_and_forbid_extra_fields() ->
         ApiError(code="BAD_INPUT", message="Bad input", stage="request", typo=True)
     with pytest.raises(ValidationError):
         ApiError(code="calibration_missing", message="Bad machine code", stage="request")
+
+
+def test_public_url_contracts_match_the_portable_transport_boundary() -> None:
+    documentation = NextAction(
+        actor="human",
+        action="read_documentation",
+        url="https://docs.example.invalid/guide?next=/agent/v1",
+    )
+    assert documentation.url is not None
+
+    with pytest.raises(ValidationError):
+        NextAction(
+            actor="human",
+            action="open_calibration_ui",
+            url="http://127.0.0.1:8009/private/session",
+        )
+
+    with pytest.raises(ValidationError):
+        ArtifactDescriptor(
+            artifact_id=ARTIFACT_ID,
+            job_id="job_test",
+            kind="retargeted_motion",
+            resource_uri="hhtools://custom/private",
+            sha256=SHA_A,
+        )
 
 
 @pytest.mark.parametrize(
@@ -623,9 +648,7 @@ def test_job_operation_requests_and_artifact_pages_are_strict_and_versioned() ->
 
 
 def test_legacy_upgrade_transport_request_is_wrapped_and_strict() -> None:
-    request = LegacyJobUpgradeRequest(
-        payload={"schema_version": 1, "kind": "h2r", "request": {}}
-    )
+    request = LegacyJobUpgradeRequest(payload={"schema_version": 1, "kind": "h2r", "request": {}})
 
     assert request.schema_version is SchemaVersion.V1
     with pytest.raises(ValidationError, match="Extra inputs"):

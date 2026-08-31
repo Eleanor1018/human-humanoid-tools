@@ -10,11 +10,8 @@ from __future__ import annotations
 import json
 import logging
 import math
-import re
 from collections.abc import Awaitable, Callable
-from pathlib import PurePosixPath, PureWindowsPath
 from typing import Annotated, Any, Protocol, cast
-from urllib.parse import parse_qsl, urlsplit
 
 from fastapi import APIRouter, Body, Query, Request
 from fastapi.exceptions import RequestValidationError
@@ -43,6 +40,15 @@ from hhtools.contracts import (
     LegacyJobUpgradeResponse,
     PreflightResponse,
     RetargetPreflightRequest,
+)
+from hhtools.contracts.portability import (
+    PortableJsonError as ContractPortableJsonError,
+)
+from hhtools.contracts.portability import (
+    looks_like_host_path as contract_looks_like_host_path,
+)
+from hhtools.contracts.portability import (
+    validate_portable_json as validate_contract_portable_json,
 )
 from hhtools.services.artifacts import StoredArtifact
 from hhtools.services.assets import AssetServiceError
@@ -85,50 +91,9 @@ _ERROR_STATUS_BY_CODE = {
     "SCHEDULER_UNAVAILABLE": 503,
 }
 
-_CONTROLLED_RESOURCE_URI_FRAGMENT = re.compile(
-    r"(?:hhtools|https?)://"
-    r"(?:\[[0-9A-Fa-f:.%]+\](?::[0-9]{1,5})?|[A-Za-z0-9._~-]+(?::[0-9]{1,5})?)"
-    r"(?:[/?#][A-Za-z0-9._~:/?#@!$&*+,;=%-]*)?",
-    re.IGNORECASE,
-)
-_EMBEDDED_URI_SCHEME = re.compile(
-    r"(?<![A-Za-z0-9])([A-Za-z][A-Za-z0-9+.-]*)://"
-)
-_EMBEDDED_FILE_URI = re.compile(r"(?<![A-Za-z0-9])file:", re.IGNORECASE)
-_EMBEDDED_WINDOWS_PATH = re.compile(
-    r"(?<![A-Za-z0-9])(?:[A-Za-z]:[\\/]|\\\\)[^\s\"']*"
-)
-_EMBEDDED_POSIX_PATH = re.compile(r"(?<![A-Za-z0-9/])/(?![/\s])[^\s\"']*")
-_EMBEDDED_PROTOCOL_RELATIVE = re.compile(r"(?<![A-Za-z0-9/])//[^\s\"']+")
-_UI_QUERY_KEY = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
-
 
 class _InvalidAgentJsonError(ValueError):
     """The JSON representation is ambiguous or unsafe for the public wire."""
-
-
-def _safe_same_origin_ui_url(value: str) -> bool:
-    if value == "/":
-        return True
-    if not value.startswith("/?") or value.startswith("//"):
-        return False
-    parsed = urlsplit(value)
-    if parsed.scheme or parsed.netloc or parsed.path != "/" or parsed.fragment:
-        return False
-    try:
-        fields = parse_qsl(
-            parsed.query,
-            keep_blank_values=True,
-            max_num_fields=16,
-        )
-    except ValueError:
-        return False
-    return all(
-        _UI_QUERY_KEY.fullmatch(key) is not None
-        and len(item) <= 256
-        and not _looks_like_host_path(item)
-        for key, item in fields
-    )
 
 
 def _strict_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -182,38 +147,9 @@ def _looks_like_host_path(
     *,
     allow_same_origin_ui_url: bool = False,
 ) -> bool:
-    if _EMBEDDED_FILE_URI.search(value):
-        return True
-    for match in _EMBEDDED_URI_SCHEME.finditer(value):
-        if match.group(1).casefold() not in {"hhtools", "http", "https"}:
-            # Free-form metadata/details must not smuggle an adapter-specific
-            # URI scheme past the ResourceUri allowlist.
-            return True
-    # Remove explicitly portable resource URI fragments before looking for
-    # filesystem syntax.  The remaining scans use a generic non-alphanumeric
-    # boundary, so punctuation such as ``:``, ``[``, ``{`` and ``|`` cannot
-    # create one-off path-leak bypasses while ``https://`` is not mistaken for
-    # an absolute POSIX path.
-    masked = _CONTROLLED_RESOURCE_URI_FRAGMENT.sub("", value)
-    # The current Web recovery action opens the root UI with a query string.
-    # Permit only that explicit shape inside a verified NextAction object;
-    # arbitrary nested fields named ``url`` and protocol-relative ``//`` URLs
-    # must not turn into path-leak escape hatches.
-    if allow_same_origin_ui_url and _safe_same_origin_ui_url(value):
-        return False
-    posix = PurePosixPath(masked)
-    windows = PureWindowsPath(masked)
-    if (
-        posix.is_absolute()
-        or windows.is_absolute()
-        or bool(windows.drive)
-        or bool(windows.root)
-    ):
-        return True
-    return bool(
-        _EMBEDDED_WINDOWS_PATH.search(masked)
-        or _EMBEDDED_POSIX_PATH.search(masked)
-        or _EMBEDDED_PROTOCOL_RELATIVE.search(masked)
+    return contract_looks_like_host_path(
+        value,
+        allow_same_origin_ui_url=allow_same_origin_ui_url,
     )
 
 
@@ -222,37 +158,17 @@ def _validate_portable_json(
     *,
     allow_same_origin_ui_url: bool = False,
 ) -> None:
-    if value is None or isinstance(value, bool | int):
-        return
-    if isinstance(value, float):
-        if not math.isfinite(value):
-            raise _InvalidAgentJsonError("non-finite number")
-        return
-    if isinstance(value, str):
-        if _looks_like_host_path(
-            value,
-            allow_same_origin_ui_url=allow_same_origin_ui_url,
-        ):
-            raise _InvalidAgentJsonError("host path")
-        return
-    if isinstance(value, list):
-        for item in value:
-            _validate_portable_json(item)
-        return
-    if isinstance(value, dict):
-        next_action_shape = (
-            value.get("actor") in {"agent", "human", "system"}
-            and isinstance(value.get("action"), str)
-        )
-        for key, item in value.items():
-            if not isinstance(key, str) or _looks_like_host_path(key):
-                raise _InvalidAgentJsonError("invalid object key")
-            _validate_portable_json(
-                item,
-                allow_same_origin_ui_url=next_action_shape and key == "url",
-            )
-        return
-    raise _InvalidAgentJsonError("non-JSON value")
+    try:
+        if allow_same_origin_ui_url and isinstance(value, str):
+            if contract_looks_like_host_path(
+                value,
+                allow_same_origin_ui_url=True,
+            ):
+                raise ContractPortableJsonError("host path")
+            return
+        validate_contract_portable_json(value)
+    except ContractPortableJsonError as error:
+        raise _InvalidAgentJsonError(str(error)) from error
 
 
 def _error_status(error: ApiError) -> int:
@@ -735,11 +651,15 @@ def get_job_artifact_descriptor(
 ) -> ArtifactDescriptor:
     """Return metadata only after canonical job-membership authorization."""
 
-    return _job_manager(request).get_artifact(
-        job_id,
-        artifact_id,
-        verify=verify,
-    ).descriptor
+    return (
+        _job_manager(request)
+        .get_artifact(
+            job_id,
+            artifact_id,
+            verify=verify,
+        )
+        .descriptor
+    )
 
 
 @router.get(

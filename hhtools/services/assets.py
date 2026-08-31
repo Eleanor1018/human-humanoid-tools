@@ -421,9 +421,7 @@ class AssetRegistry:
                     )
                     """
                 )
-                connection.execute(
-                    "CREATE INDEX IF NOT EXISTS assets_kind_idx ON assets(kind)"
-                )
+                connection.execute("CREATE INDEX IF NOT EXISTS assets_kind_idx ON assets(kind)")
                 connection.execute(
                     "CREATE INDEX IF NOT EXISTS assets_category_idx ON assets(category)"
                 )
@@ -781,8 +779,7 @@ class AssetRegistry:
         if query:
             escaped = query.casefold().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
             clauses.append(
-                "(LOWER(display_name) LIKE ? ESCAPE '\\' "
-                "OR LOWER(logical_path) LIKE ? ESCAPE '\\')"
+                "(LOWER(display_name) LIKE ? ESCAPE '\\' OR LOWER(logical_path) LIKE ? ESCAPE '\\')"
             )
             parameters.extend((f"%{escaped}%", f"%{escaped}%"))
         for column, value in (

@@ -167,9 +167,7 @@ def test_boundary_applies_exact_legacy_cap_and_validates_transport_headers() -> 
     assert accepted.status_code == 200
     assert accepted.json()["size"] == LEGACY_UPGRADE_MAX_BODY_BYTES
     assert rejected.status_code == 413
-    assert rejected.json()["details"] == {
-        "max_bytes": LEGACY_UPGRADE_MAX_BODY_BYTES
-    }
+    assert rejected.json()["details"] == {"max_bytes": LEGACY_UPGRADE_MAX_BODY_BYTES}
     assert invalid_length.status_code == 400
     assert invalid_length.json()["code"] == "INVALID_CONTENT_LENGTH"
     assert mismatched_length.status_code == 400
