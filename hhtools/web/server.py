@@ -32,7 +32,6 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 from hhtools.services.runtime_lease import AgentRuntimeLease
-
 from hhtools.web.job_scheduler import (
     JobQueueFullError,
     JobReservation,
@@ -7008,6 +7007,11 @@ def effective_job_admission_settings(
         persisted.max_queued_jobs if max_queued_jobs is None else max_queued_jobs,
     )
     return settings, path
+
+
+# Preserve the private name used by existing callers and regression tests;
+# Phase 5 exposes the public alias to the local MCP composition bridge.
+_effective_job_admission_settings = effective_job_admission_settings
 
 
 def run_web(
