@@ -36,6 +36,7 @@
         {
           "maxLength": 32,
           "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]{0,31}$",
           "type": "string"
         },
         {
@@ -54,12 +55,14 @@
     "kind": {
       "maxLength": 128,
       "minLength": 1,
+      "pattern": "^[a-z][a-z0-9_-]{0,127}$",
       "title": "Kind",
       "type": "string"
     },
     "media_type": {
       "anyOf": [
         {
+          "maxLength": 255,
           "type": "string"
         },
         {

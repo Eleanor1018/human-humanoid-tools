@@ -84,6 +84,7 @@
             {
               "maxLength": 32,
               "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]{0,31}$",
               "type": "string"
             },
             {
@@ -102,12 +103,14 @@
         "kind": {
           "maxLength": 128,
           "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_-]{0,127}$",
           "title": "Kind",
           "type": "string"
         },
         "media_type": {
           "anyOf": [
             {
+              "maxLength": 255,
               "type": "string"
             },
             {
@@ -237,6 +240,7 @@
         "message": {
           "anyOf": [
             {
+              "maxLength": 2048,
               "type": "string"
             },
             {
@@ -423,12 +427,42 @@
   "additionalProperties": false,
   "description": "Compact default job view; large arrays live behind artifact URIs.",
   "properties": {
+    "artifact_count": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Artifact Count"
+    },
     "artifacts": {
       "items": {
         "$ref": "#/$defs/ArtifactDescriptor"
       },
+      "maxItems": 32,
       "title": "Artifacts",
       "type": "array"
+    },
+    "attempt": {
+      "default": 1,
+      "minimum": 1,
+      "title": "Attempt",
+      "type": "integer"
+    },
+    "cancellable": {
+      "default": false,
+      "title": "Cancellable",
+      "type": "boolean"
+    },
+    "cancellation_requested": {
+      "default": false,
+      "title": "Cancellation Requested",
+      "type": "boolean"
     },
     "completed_at": {
       "anyOf": [
@@ -482,6 +516,20 @@
       ],
       "default": null
     },
+    "parent_job_id": {
+      "anyOf": [
+        {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Parent Job Id"
+    },
     "poll_after_ms": {
       "anyOf": [
         {
@@ -509,6 +557,20 @@
         }
       ],
       "default": null
+    },
+    "root_job_id": {
+      "anyOf": [
+        {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Root Job Id"
     },
     "schema_version": {
       "$ref": "#/$defs/SchemaVersion",

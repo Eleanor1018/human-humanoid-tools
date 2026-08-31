@@ -640,6 +640,11 @@ def _scaler_search_roots(preset: "RobotPreset") -> list[Path]:
     """Preset dir first, then same-named workspace bundle (user upload shadowing)."""
 
     roots: list[Path] = [preset.root_dir.resolve()]
+    # Agent jobs materialize an exact RobotBundle into an isolated workspace.
+    # Falling back to a same-named source-tree preset would silently consume
+    # configuration that is absent from the content-addressed asset.
+    if preset.meta.get("_agent_asset_id"):
+        return roots
     ws = _workspace_robot_dir(preset.name)
     if ws is not None:
         resolved = ws.resolve()
@@ -658,6 +663,9 @@ def _scaler_rel_candidates(
     user_rel = _reference_block(preset, reference).get("scaler_config")
     if user_rel:
         rels.append(str(user_rel))
+
+    if preset.meta.get("_agent_asset_id"):
+        return rels
 
     ws = _workspace_robot_dir(preset.name)
     if ws is not None and ws.resolve() != preset.root_dir.resolve():

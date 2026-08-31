@@ -26,6 +26,15 @@ _FOOT_MESH_NODE_CACHE: dict[tuple[str, str], tuple[tuple[str, str], ...]] = {}
 _GEOM_VERTEX_CACHE: dict[tuple[str, str], np.ndarray] = {}
 
 
+def _model_content_identity(model: URDFRobotModel) -> str:
+    """Separate Agent caches by immutable RobotBundle when identity is known."""
+
+    asset_id = model.preset.meta.get("_agent_asset_id")
+    if isinstance(asset_id, str) and asset_id:
+        return asset_id
+    return f"preset:{model.preset.name}"
+
+
 def _lateral_axis_idx(preset) -> int:
     up = str(getattr(preset, "up_axis", "Z") or "Z").upper()
     fwd = str(getattr(preset, "forward_axis", "X") or "X").upper()
@@ -88,7 +97,7 @@ def _root_lateral_direction(preset, root_xyzw: np.ndarray | None) -> np.ndarray:
 
 def _foot_mesh_node_parts(model: "URDFRobotModel", link: str) -> tuple[tuple[str, str], ...]:
     """Cached ``(scene_node, geom_name)`` pairs belonging to ``link``."""
-    key = (str(model.preset.name), link)
+    key = (_model_content_identity(model), link)
     cached = _FOOT_MESH_NODE_CACHE.get(key)
     if cached is not None:
         return cached
@@ -110,7 +119,7 @@ def _foot_mesh_node_parts(model: "URDFRobotModel", link: str) -> tuple[tuple[str
 def _cached_geom_vertices(model: "URDFRobotModel", geom_name: str) -> np.ndarray | None:
     import trimesh
 
-    key = (str(model.preset.name), geom_name)
+    key = (_model_content_identity(model), geom_name)
     if key in _GEOM_VERTEX_CACHE:
         return _GEOM_VERTEX_CACHE[key]
     geom = model.urdf.scene.geometry.get(geom_name)

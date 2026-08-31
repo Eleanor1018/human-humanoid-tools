@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import pickle
 from pathlib import Path
 
@@ -97,6 +98,21 @@ def _write_unified_npz(
     )
 
 
+def _write_holosoma_manifest(path: Path, joint_count: int = 53) -> None:
+    path.write_text(
+        json.dumps(
+            {
+                "framerate": {"raw_hz": 120.0, "recommended_downsample": 4},
+                "skeleton": {
+                    "joint_names": [f"joint_{index}" for index in range(joint_count)],
+                    "parent_indices": [-1, *range(joint_count - 1)],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 def test_plain_motion_inspection_reads_lightweight_npz_metadata(tmp_path: Path) -> None:
     primary = "unified_npz/walk.npz"
     _write_unified_npz(tmp_path / primary)
@@ -121,6 +137,167 @@ def test_plain_motion_inspection_reads_lightweight_npz_metadata(tmp_path: Path) 
     assert inspection.has_terrain is False
     assert inspection.metadata["recommended_backend"] == "newton"
     assert str(tmp_path) not in str(inspection.model_dump(mode="json"))
+
+
+def test_unified_npz_requires_the_scalar_fields_consumed_by_the_real_loader(
+    tmp_path: Path,
+) -> None:
+    primary = tmp_path / "unified_npz" / "missing_loader_fields.npz"
+    primary.parent.mkdir(parents=True)
+    positions = np.zeros((2, 2, 3), dtype=np.float32)
+    quaternions = np.zeros((2, 2, 4), dtype=np.float32)
+    quaternions[..., 3] = 1.0
+    # These four arrays used to be enough for inspection, but load_npz also
+    # unconditionally consumes schema_version, name, framerate, and up_axis.
+    np.savez(
+        primary,
+        bone_names=np.array(["root", "child"]),
+        parent_indices=np.array([-1, 0], dtype=np.int32),
+        positions=positions,
+        quaternions=quaternions,
+    )
+    relative = primary.relative_to(tmp_path).as_posix()
+    bundle = _bundle(
+        tmp_path,
+        primary=relative,
+        category=AssetCategory.PLAIN_MOTION,
+        dataset="unified_npz",
+        files=[(relative, AssetFileRole.MOTION)],
+    )
+
+    inspection = MotionAssetInspector().inspect(bundle, tmp_path)
+
+    assert inspection.status is InspectionStatus.INVALID
+    error = next(error for error in inspection.errors if error.code == "MOTION_PARSE_FAILED")
+    assert "required fields" in error.details["reason"]
+
+
+def test_raw_amass_requires_a_complete_loader_parameter_schema(tmp_path: Path) -> None:
+    primary = tmp_path / "AMASS" / "subject" / "incomplete_stageii.npz"
+    primary.parent.mkdir(parents=True)
+    # trans + pose_body previously produced a frame count and a false success,
+    # although AmassAdapter then fails because betas and root_orient are required.
+    np.savez(
+        primary,
+        trans=np.zeros((3, 3), dtype=np.float32),
+        pose_body=np.zeros((3, 63), dtype=np.float32),
+        mocap_frame_rate=np.array(30.0),
+    )
+    relative = primary.relative_to(tmp_path).as_posix()
+    bundle = _bundle(
+        tmp_path,
+        primary=relative,
+        category=AssetCategory.PLAIN_MOTION,
+        dataset="amass",
+        files=[(relative, AssetFileRole.MOTION)],
+    )
+
+    inspection = MotionAssetInspector().inspect(bundle, tmp_path)
+
+    assert inspection.status is InspectionStatus.INVALID
+    error = next(error for error in inspection.errors if error.code == "MOTION_PARSE_FAILED")
+    assert "betas" in error.details["reason"]
+
+
+def test_holosoma_npy_must_match_the_manifest_joint_position_shape(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clip_dir = tmp_path / "meshmimic" / "holosoma" / "parkour_1"
+    clip_dir.mkdir(parents=True)
+    primary = clip_dir / "parkour_1.npy"
+    # A (T, J) matrix previously passed because the inspector only required
+    # two axes; MeshmimicHolosomaAdapter requires exactly (T, J, 3).
+    np.save(primary, np.zeros((4, 53), dtype=np.float32))
+    manifest = clip_dir / "source.yaml"
+    _write_holosoma_manifest(manifest)
+    terrain = clip_dir / "terrain.obj"
+    terrain.write_text("v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n", encoding="utf-8")
+    primary_relative = primary.relative_to(tmp_path).as_posix()
+    manifest_relative = manifest.relative_to(tmp_path).as_posix()
+    terrain_relative = terrain.relative_to(tmp_path).as_posix()
+    bundle = _bundle(
+        tmp_path,
+        primary=primary_relative,
+        category=AssetCategory.TERRAIN_SCENE,
+        dataset="meshmimic_holosoma",
+        files=[
+            (primary_relative, AssetFileRole.MOTION),
+            (manifest_relative, AssetFileRole.METADATA),
+            (terrain_relative, AssetFileRole.TERRAIN_MESH),
+        ],
+    )
+    numpy_load = np.load
+
+    def safe_numpy_load(*args, **kwargs):
+        assert kwargs.get("allow_pickle") is False
+        return numpy_load(*args, **kwargs)
+
+    monkeypatch.setattr(asset_inspection_module.np, "load", safe_numpy_load)
+
+    inspection = MotionAssetInspector().inspect(bundle, tmp_path)
+
+    assert inspection.status is InspectionStatus.INVALID
+    error = next(error for error in inspection.errors if error.code == "MOTION_PARSE_FAILED")
+    assert "(frames, joints, 3)" in error.details["reason"]
+
+
+def test_complete_raw_amass_stageii_structure_remains_accepted(tmp_path: Path) -> None:
+    primary = tmp_path / "AMASS" / "subject" / "valid_stageii.npz"
+    primary.parent.mkdir(parents=True)
+    np.savez(
+        primary,
+        trans=np.zeros((3, 3), dtype=np.float32),
+        betas=np.zeros(16, dtype=np.float32),
+        root_orient=np.zeros((3, 3), dtype=np.float32),
+        pose_body=np.zeros((3, 63), dtype=np.float32),
+        mocap_frame_rate=np.array(60.0),
+    )
+    relative = primary.relative_to(tmp_path).as_posix()
+    bundle = _bundle(
+        tmp_path,
+        primary=relative,
+        category=AssetCategory.PLAIN_MOTION,
+        dataset="amass",
+        files=[(relative, AssetFileRole.MOTION)],
+    )
+
+    inspection = MotionAssetInspector().inspect(bundle, tmp_path)
+
+    assert inspection.status is InspectionStatus.VALID
+    assert inspection.frame_count == 3
+    assert inspection.frame_rate_hz == 60.0
+    assert inspection.metadata["parameter_schema"] == "stageii"
+
+
+def test_valid_holosoma_positions_and_manifest_remain_accepted(tmp_path: Path) -> None:
+    clip_dir = tmp_path / "meshmimic" / "holosoma" / "parkour_2"
+    clip_dir.mkdir(parents=True)
+    primary = clip_dir / "parkour_2.npy"
+    np.save(primary, np.zeros((8, 53, 3), dtype=np.float32))
+    manifest = clip_dir / "source.yaml"
+    _write_holosoma_manifest(manifest)
+    terrain = clip_dir / "terrain.obj"
+    terrain.write_text("v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n", encoding="utf-8")
+    primary_relative = primary.relative_to(tmp_path).as_posix()
+    bundle = _bundle(
+        tmp_path,
+        primary=primary_relative,
+        category=AssetCategory.TERRAIN_SCENE,
+        dataset="meshmimic_holosoma",
+        files=[
+            (primary_relative, AssetFileRole.MOTION),
+            (manifest.relative_to(tmp_path).as_posix(), AssetFileRole.METADATA),
+            (terrain.relative_to(tmp_path).as_posix(), AssetFileRole.TERRAIN_MESH),
+        ],
+    )
+
+    inspection = MotionAssetInspector().inspect(bundle, tmp_path)
+
+    assert inspection.status is InspectionStatus.VALID
+    assert inspection.frame_count == 2
+    assert inspection.frame_rate_hz == 30.0
+    assert inspection.joint_count == 53
 
 
 def test_object_interaction_requires_and_discovers_object_mesh(tmp_path: Path) -> None:

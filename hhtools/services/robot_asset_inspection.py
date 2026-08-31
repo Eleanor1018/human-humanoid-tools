@@ -19,10 +19,11 @@ from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Any
+from typing import Any, NoReturn
 from urllib.parse import unquote, urlsplit
-from urllib.request import url2pathname
 from xml.etree import ElementTree
+
+import yaml  # type: ignore[import-untyped]
 
 from hhtools.contracts import (
     ApiError,
@@ -36,6 +37,7 @@ from hhtools.contracts import (
 )
 
 _MAX_URDF_BYTES = 16 * 1024 * 1024
+_MAX_ROBOT_METADATA_BYTES = 2 * 1024 * 1024
 _SUPPORTED_JOINT_TYPES = frozenset(
     {"fixed", "revolute", "continuous", "prismatic", "floating", "planar"}
 )
@@ -126,7 +128,7 @@ def _raise_discovery(
     *,
     details: Mapping[str, Any] | None = None,
     candidates: tuple[str, ...] = (),
-) -> None:
+) -> NoReturn:
     raise RobotAssetDiscoveryError(
         _api_error(code, message, details=details),
         candidates=candidates,
@@ -540,28 +542,85 @@ def _reference_candidate(reference: str, *, urdf_path: Path, bundle_root: Path) 
             )
         return bundle_root.joinpath(*parts)
 
-    if scheme == "file":
-        if parsed.query or parsed.fragment or parsed.netloc not in {"", "localhost"}:
-            _raise_discovery(
-                "ASSET_OUTSIDE_ALLOWED_ROOT",
-                "A file URI is outside the registered robot bundle.",
-            )
-        return Path(url2pathname(unquote(parsed.path)))
+    # Absolute references are not portable manifest identities.  Even when an
+    # absolute path currently lands inside the registered bundle, copying the
+    # URDF into an Agent job snapshot would leave the string pointing back at
+    # the mutable source directory.  Loader mesh repair could then read from or
+    # write beside that source file instead of the isolated snapshot.
+    decoded = unquote(raw)
+    windows_path = PureWindowsPath(decoded)
+    posix_path = PurePosixPath(decoded.replace("\\", "/"))
+    if (
+        scheme == "file"
+        or windows_path.is_absolute()
+        or bool(windows_path.drive)
+        or posix_path.is_absolute()
+    ):
+        _raise_discovery(
+            "ASSET_OUTSIDE_ALLOWED_ROOT",
+            "Robot mesh references must be bundle-relative or use package URIs.",
+        )
 
     # A Windows drive such as C:\\robot\\mesh.stl is parsed as a one-letter
-    # URI scheme.  Treat it as a filesystem path, not an unknown URI.
-    windows_path = PureWindowsPath(raw)
+    # URI scheme.  It was rejected above rather than treated as an unknown URI.
     if scheme and not windows_path.drive:
         _raise_discovery(
             "BUNDLE_INCOMPLETE",
             "The robot description uses an unsupported mesh URI scheme.",
         )
-    if windows_path.is_absolute() or windows_path.drive:
-        return Path(raw)
-    if PurePosixPath(raw).is_absolute():
-        return Path(raw)
-    normalized = unquote(raw).replace("\\", "/")
+    normalized = decoded.replace("\\", "/")
     return urdf_path.parent.joinpath(*PurePosixPath(normalized).parts)
+
+
+def _compiler_path_errors(
+    root: ElementTree.Element,
+    *,
+    urdf_path: Path,
+    bundle_root: Path,
+) -> list[ApiError]:
+    """Reject MuJoCo compiler directories that can escape an Agent snapshot."""
+
+    errors: list[ApiError] = []
+    for mujoco in _children(root, "mujoco"):
+        for compiler in _children(mujoco, "compiler"):
+            for attribute in ("meshdir", "texturedir", "assetdir"):
+                raw = compiler.get(attribute)
+                if raw is None or not raw.strip():
+                    continue
+                value = raw.strip()
+                parsed = urlsplit(value)
+                decoded = unquote(value)
+                windows_path = PureWindowsPath(decoded)
+                posix_path = PurePosixPath(decoded.replace("\\", "/"))
+                if (
+                    parsed.scheme
+                    or parsed.netloc
+                    or parsed.query
+                    or parsed.fragment
+                    or windows_path.is_absolute()
+                    or bool(windows_path.drive)
+                    or posix_path.is_absolute()
+                ):
+                    errors.append(
+                        _api_error(
+                            "ASSET_OUTSIDE_ALLOWED_ROOT",
+                            "MuJoCo compiler directories must be bundle-relative.",
+                            details={"attribute": attribute},
+                        )
+                    )
+                    continue
+                candidate = urdf_path.parent.joinpath(*posix_path.parts)
+                try:
+                    candidate.resolve(strict=False).relative_to(bundle_root)
+                except (OSError, RuntimeError, ValueError):
+                    errors.append(
+                        _api_error(
+                            "ASSET_OUTSIDE_ALLOWED_ROOT",
+                            "A MuJoCo compiler directory resolves outside the robot bundle.",
+                            details={"attribute": attribute},
+                        )
+                    )
+    return errors
 
 
 def _resolve_mesh(
@@ -696,6 +755,175 @@ def _metadata(facts: _UrdfFacts, *, unique_meshes: int, shared_meshes: int) -> d
     }
 
 
+def _robot_metadata_files(bundle_root: Path, primary: Path) -> tuple[Path, ...]:
+    """Return robot YAML, calibrations, and declared scaler configs."""
+
+    candidates = {
+        bundle_root / "robot.yaml",
+        bundle_root / f"robot.{primary.stem}.yaml",
+        primary.parent / "robot.yaml",
+        primary.parent / f"robot.{primary.stem}.yaml",
+    }
+    # Human-reviewed calibrations are executable robot configuration, not
+    # incidental workspace state.  Binding them into the robot manifest means
+    # editing or adding one requires a new robot asset id before preflight can
+    # produce another runnable plan.
+    for directory in {bundle_root, primary.parent}:
+        candidates.update(directory.glob("retarget_calibration*.yaml"))
+    files: set[Path] = set()
+    for candidate in sorted(candidates, key=lambda item: item.as_posix().casefold()):
+        if not candidate.exists() and not candidate.is_symlink():
+            continue
+        metadata_path = _contains(bundle_root, candidate, strict=True)
+        if not metadata_path.is_file():
+            _raise_discovery(
+                "BUNDLE_INCOMPLETE",
+                "Robot metadata exists but is not a regular file.",
+            )
+        try:
+            if metadata_path.stat().st_size > _MAX_ROBOT_METADATA_BYTES:
+                _raise_discovery(
+                    "ROBOT_METADATA_INVALID",
+                    "Robot metadata exceeds the supported inspection size.",
+                    details={"max_bytes": _MAX_ROBOT_METADATA_BYTES},
+                )
+            payload = yaml.safe_load(metadata_path.read_text(encoding="utf-8")) or {}
+        except RobotAssetDiscoveryError:
+            raise
+        except (OSError, UnicodeError, yaml.YAMLError) as exc:
+            raise RobotAssetDiscoveryError(
+                _api_error(
+                    "ROBOT_METADATA_INVALID",
+                    "Robot metadata could not be parsed safely.",
+                    details={"exception_type": type(exc).__name__},
+                )
+            ) from exc
+        if not isinstance(payload, dict):
+            _raise_discovery(
+                "ROBOT_METADATA_INVALID",
+                "Robot metadata must contain a YAML mapping.",
+            )
+        files.add(metadata_path)
+        raw_urdf = payload.get("urdf")
+        if raw_urdf is not None:
+            if not isinstance(raw_urdf, str) or not raw_urdf.strip() or "\x00" in raw_urdf:
+                _raise_discovery(
+                    "ROBOT_METADATA_INVALID",
+                    "The robot metadata urdf field must be a non-empty path string.",
+                )
+            urdf_value = raw_urdf.strip().replace("\\", "/")
+            windows_urdf = PureWindowsPath(urdf_value)
+            posix_urdf = PurePosixPath(urdf_value)
+            if windows_urdf.is_absolute() or windows_urdf.drive or posix_urdf.is_absolute():
+                _raise_discovery(
+                    "ROBOT_METADATA_INVALID",
+                    "The robot metadata urdf path must be bundle-relative.",
+                )
+            configured_urdf = metadata_path.parent.joinpath(*posix_urdf.parts)
+            try:
+                resolved_urdf = configured_urdf.resolve(strict=True)
+                resolved_urdf.relative_to(bundle_root)
+            except (OSError, RuntimeError, ValueError) as exc:
+                raise RobotAssetDiscoveryError(
+                    _api_error(
+                        "BUNDLE_INCOMPLETE",
+                        "The URDF declared by robot metadata is missing or outside the bundle.",
+                    )
+                ) from exc
+            if resolved_urdf != primary:
+                _raise_discovery(
+                    "BUNDLE_METADATA_MISMATCH",
+                    "Robot metadata refers to a different URDF than the bundle primary.",
+                )
+        raw_search_paths = payload.get("mesh_search_paths")
+        if raw_search_paths is not None:
+            if not isinstance(raw_search_paths, list):
+                _raise_discovery(
+                    "ROBOT_METADATA_INVALID",
+                    "Robot mesh_search_paths must be a list of bundle-relative directories.",
+                )
+            for raw_search_path in raw_search_paths:
+                if (
+                    not isinstance(raw_search_path, str)
+                    or not raw_search_path.strip()
+                    or "\x00" in raw_search_path
+                ):
+                    _raise_discovery(
+                        "ROBOT_METADATA_INVALID",
+                        "Each robot mesh search path must be a non-empty path string.",
+                    )
+                search_value = raw_search_path.strip().replace("\\", "/")
+                windows_search = PureWindowsPath(search_value)
+                posix_search = PurePosixPath(search_value)
+                if (
+                    windows_search.is_absolute()
+                    or windows_search.drive
+                    or posix_search.is_absolute()
+                ):
+                    _raise_discovery(
+                        "ROBOT_METADATA_INVALID",
+                        "Robot mesh search paths must be bundle-relative.",
+                    )
+                search_candidate = metadata_path.parent.joinpath(*posix_search.parts)
+                try:
+                    search_path = search_candidate.resolve(strict=True)
+                    search_path.relative_to(bundle_root)
+                except (OSError, RuntimeError, ValueError) as exc:
+                    raise RobotAssetDiscoveryError(
+                        _api_error(
+                            "ASSET_OUTSIDE_ALLOWED_ROOT",
+                            "A robot mesh search path is missing or outside the bundle.",
+                        )
+                    ) from exc
+                if not search_path.is_dir():
+                    _raise_discovery(
+                        "BUNDLE_INCOMPLETE",
+                        "A robot mesh search path is not a directory.",
+                    )
+        retarget = payload.get("retarget")
+        references = retarget.get("references") if isinstance(retarget, dict) else None
+        if not isinstance(references, dict):
+            continue
+        for reference_config in references.values():
+            if not isinstance(reference_config, dict):
+                continue
+            raw_scaler = reference_config.get("scaler_config")
+            if raw_scaler is None:
+                continue
+            if not isinstance(raw_scaler, str) or not raw_scaler.strip() or "\x00" in raw_scaler:
+                _raise_discovery(
+                    "ROBOT_METADATA_INVALID",
+                    "A declared scaler_config must be a non-empty path string.",
+                )
+            scaler_value = raw_scaler.strip()
+            windows_path = PureWindowsPath(scaler_value)
+            posix_path = PurePosixPath(scaler_value.replace("\\", "/"))
+            if windows_path.is_absolute() or windows_path.drive or posix_path.is_absolute():
+                _raise_discovery(
+                    "ROBOT_METADATA_INVALID",
+                    "A declared scaler_config path must be bundle-relative.",
+                )
+            scaler_candidate = metadata_path.parent.joinpath(*posix_path.parts)
+            try:
+                scaler_path = scaler_candidate.resolve(strict=False)
+                scaler_path.relative_to(bundle_root)
+            except (OSError, RuntimeError, ValueError) as exc:
+                raise RobotAssetDiscoveryError(
+                    _api_error(
+                        "ASSET_OUTSIDE_ALLOWED_ROOT",
+                        "A scaler config resolves outside the registered robot bundle.",
+                    )
+                ) from exc
+            if not scaler_path.is_file():
+                _raise_discovery(
+                    "BUNDLE_INCOMPLETE",
+                    "A declared robot scaler config is missing.",
+                    details={"relative_path": _safe_relative(scaler_path, bundle_root)},
+                )
+            files.add(_contains(bundle_root, scaler_candidate, strict=True))
+    return tuple(sorted(files, key=lambda path: _safe_relative(path, bundle_root).casefold()))
+
+
 def discover_robot_bundle(candidate: str | Path) -> RobotAssetDiscovery:
     """Discover one URDF plus every in-bundle file required by that URDF."""
 
@@ -705,6 +933,13 @@ def discover_robot_bundle(candidate: str | Path) -> RobotAssetDiscovery:
     if facts.errors:
         first = facts.errors[0]
         raise RobotAssetDiscoveryError(first)
+    compiler_errors = _compiler_path_errors(
+        xml_root,
+        urdf_path=primary,
+        bundle_root=bundle_root,
+    )
+    if compiler_errors:
+        raise RobotAssetDiscoveryError(compiler_errors[0])
 
     mesh_roles: dict[Path, set[AssetFileRole]] = defaultdict(set)
     for declaration in facts.mesh_declarations:
@@ -720,17 +955,10 @@ def discover_robot_bundle(candidate: str | Path) -> RobotAssetDiscovery:
     files: list[RobotAssetFile] = [
         RobotAssetFile(primary, AssetFileRole.ROBOT_DESCRIPTION)
     ]
-    metadata_candidates = {bundle_root / "robot.yaml", primary.parent / "robot.yaml"}
-    for path in sorted(metadata_candidates, key=lambda item: item.as_posix().casefold()):
-        if not path.exists() and not path.is_symlink():
-            continue
-        resolved = _contains(bundle_root, path, strict=True)
-        if not resolved.is_file():
-            _raise_discovery(
-                "BUNDLE_INCOMPLETE",
-                "Robot metadata exists but is not a regular file.",
-            )
-        files.append(RobotAssetFile(resolved, AssetFileRole.METADATA))
+    metadata_files = _robot_metadata_files(bundle_root, primary)
+    files.extend(
+        RobotAssetFile(path, AssetFileRole.METADATA) for path in metadata_files
+    )
 
     shared_meshes = 0
     for path, roles in sorted(
@@ -775,11 +1003,14 @@ def discover_robot_bundle(candidate: str | Path) -> RobotAssetDiscovery:
     return RobotAssetDiscovery(
         primary_urdf=primary,
         files=ordered,
-        metadata=_metadata(
-            facts,
-            unique_meshes=len(mesh_roles),
-            shared_meshes=shared_meshes,
-        ),
+        metadata={
+            **_metadata(
+                facts,
+                unique_meshes=len(mesh_roles),
+                shared_meshes=shared_meshes,
+            ),
+            "metadata_file_count": len(metadata_files),
+        },
     )
 
 
@@ -956,6 +1187,13 @@ class RobotAssetInspector:
                 facts = _analyse_urdf(xml_root)
                 errors.extend(facts.errors)
                 warnings.extend(facts.warnings)
+                errors.extend(
+                    _compiler_path_errors(
+                        xml_root,
+                        urdf_path=primary_path,
+                        bundle_root=root,
+                    )
+                )
                 content_parsed = True
 
                 roles_by_path: dict[str, set[AssetFileRole]] = defaultdict(set)
@@ -1032,6 +1270,30 @@ class RobotAssetInspector:
                     warnings.append(
                         f"{len(unused)} declared mesh file(s) are not referenced by the URDF."
                     )
+
+                expected_metadata = _robot_metadata_files(root, primary_path)
+                for metadata_path in expected_metadata:
+                    relative = _safe_relative(metadata_path, root)
+                    manifest_file = manifest_by_path.get(relative)
+                    if manifest_file is None:
+                        errors.append(
+                            _api_error(
+                                "BUNDLE_INCOMPLETE",
+                                "Robot metadata or scaler config is absent from the manifest.",
+                                details={"relative_path": relative},
+                            )
+                        )
+                    elif manifest_file.role is not AssetFileRole.METADATA:
+                        errors.append(
+                            _api_error(
+                                "BUNDLE_METADATA_MISMATCH",
+                                "Robot metadata must use the metadata manifest role.",
+                                details={
+                                    "relative_path": relative,
+                                    "role": manifest_file.role.value,
+                                },
+                            )
+                        )
             except RobotAssetDiscoveryError as exc:
                 errors.append(exc.api_error)
 

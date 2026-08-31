@@ -14,14 +14,16 @@ from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from hhtools.services.admission import AdmissionClosedError, AdmissionQueueFullError
+
 _log = logging.getLogger(__name__)
 
 
-class JobQueueFullError(RuntimeError):
+class JobQueueFullError(AdmissionQueueFullError):
     """Raised when a bounded waiting queue has no admission slot left."""
 
 
-class JobSchedulerClosedError(RuntimeError):
+class JobSchedulerClosedError(AdmissionClosedError):
     """Raised when work is submitted after scheduler shutdown begins."""
 
 
@@ -40,8 +42,33 @@ class SchedulerSnapshot:
 
 @dataclass(frozen=True)
 class _ScheduledCall:
+    token: int
     run: Callable[[], object]
     on_cancel: Callable[[str], None] | None = None
+
+
+class ScheduledJobHandle:
+    """Opaque identity for one submitted call.
+
+    The handle can remove a call while it is still waiting in the FIFO queue.
+    Once execution has started, Python cannot safely stop the worker thread and
+    ``cancel`` returns ``False``; a higher-level JobManager must then use a
+    cooperative cancellation token.
+    """
+
+    def __init__(self, scheduler: JobScheduler, token: int) -> None:
+        self._scheduler = scheduler
+        self._token = token
+
+    def cancel(self) -> bool:
+        """Cancel exactly this queued call, returning whether it was removed."""
+
+        return self._scheduler._cancel_scheduled(self._token)  # noqa: SLF001
+
+    def queue_position(self) -> int | None:
+        """Return the current one-based FIFO position, if still queued."""
+
+        return self._scheduler._queue_position(self._token)  # noqa: SLF001
 
 
 class JobReservation:
@@ -56,11 +83,13 @@ class JobReservation:
         run: Callable[[], object],
         *,
         on_cancel: Callable[[str], None] | None = None,
-    ) -> None:
+    ) -> ScheduledJobHandle:
         """Consume this reservation and submit its work exactly once."""
 
-        self._scheduler._submit_reserved(  # noqa: SLF001 - paired internal type
-            self._token, _ScheduledCall(run=run, on_cancel=on_cancel),
+        return self._scheduler._submit_reserved(  # noqa: SLF001 - paired internal type
+            self._token,
+            run,
+            on_cancel=on_cancel,
         )
 
     def cancel(self) -> None:
@@ -86,6 +115,7 @@ class JobScheduler:
         self._condition = threading.Condition(threading.Lock())
         self._pending: deque[_ScheduledCall] = deque()
         self._reservations: set[int] = set()
+        self._running_tokens: set[int] = set()
         self._threads: set[threading.Thread] = set()
         self._next_token = 1
         self._running = 0
@@ -117,12 +147,12 @@ class JobScheduler:
         run: Callable[[], object],
         *,
         on_cancel: Callable[[str], None] | None = None,
-    ) -> None:
+    ) -> ScheduledJobHandle:
         """Reserve and submit a call in one operation."""
 
         reservation = self.reserve()
         try:
-            reservation.submit(run, on_cancel=on_cancel)
+            return reservation.submit(run, on_cancel=on_cancel)
         except BaseException:
             reservation.cancel()
             raise
@@ -172,8 +202,10 @@ class JobScheduler:
                 else max(0, running_limit - self._running)
             )
             for _ in range(min(available, len(self._pending))):
-                promoted.append(self._pending.popleft())
+                call = self._pending.popleft()
+                promoted.append(call)
                 self._running += 1
+                self._running_tokens.add(call.token)
             self._condition.notify_all()
 
         # Starting threads outside the scheduler lock keeps submit/snapshot
@@ -233,7 +265,14 @@ class JobScheduler:
                 self._condition.wait(timeout=remaining)
             return self._running == 0 and self._cancelling == 0
 
-    def _submit_reserved(self, token: int, call: _ScheduledCall) -> None:
+    def _submit_reserved(
+        self,
+        token: int,
+        run: Callable[[], object],
+        *,
+        on_cancel: Callable[[str], None] | None,
+    ) -> ScheduledJobHandle:
+        call = _ScheduledCall(token=token, run=run, on_cancel=on_cancel)
         with self._condition:
             if token not in self._reservations:
                 if self._closed:
@@ -249,16 +288,46 @@ class JobScheduler:
             )
             if starts_now:
                 self._running += 1
+                self._running_tokens.add(token)
             else:
                 self._pending.append(call)
 
         if starts_now:
             self._start(call, propagate_failure=True)
+        return ScheduledJobHandle(self, token)
 
     def _cancel_reservation(self, token: int) -> None:
         with self._condition:
             self._reservations.discard(token)
             self._condition.notify_all()
+
+    def _queue_position(self, token: int) -> int | None:
+        with self._condition:
+            for position, call in enumerate(self._pending, start=1):
+                if call.token == token:
+                    return position
+        return None
+
+    def _cancel_scheduled(self, token: int) -> bool:
+        cancelled: _ScheduledCall | None = None
+        with self._condition:
+            for index, call in enumerate(self._pending):
+                if call.token == token:
+                    cancelled = call
+                    del self._pending[index]
+                    self._cancelling += 1
+                    self._condition.notify_all()
+                    break
+            if cancelled is None:
+                return False
+
+        try:
+            self._notify_cancel(cancelled, "任务在等待队列中被取消。")
+        finally:
+            with self._condition:
+                self._cancelling -= 1
+                self._condition.notify_all()
+        return True
 
     def _start(self, call: _ScheduledCall, *, propagate_failure: bool) -> None:
         """Start one reserved call, iteratively draining calls if starts fail."""
@@ -280,6 +349,7 @@ class JobScheduler:
                     # just before shutdown closes admission.  Return its slot and
                     # cancel it instead of starting new work after that boundary.
                     self._running -= 1
+                    self._running_tokens.discard(current.token)
                     self._cancelling += 1
                     cancelled_by_shutdown = True
                     self._condition.notify_all()
@@ -295,6 +365,7 @@ class JobScheduler:
                         start_error = err
                         self._threads.discard(thread)
                         self._running -= 1
+                        self._running_tokens.discard(current.token)
                         # Terminal persistence performed by on_cancel is part of
                         # shutdown.  Track it before exposing running == 0 so a
                         # concurrent cleanup cannot delete files beneath it.
@@ -350,6 +421,7 @@ class JobScheduler:
             with self._condition:
                 self._threads.discard(threading.current_thread())
                 self._running -= 1
+                self._running_tokens.discard(call.token)
                 next_call = self._take_next_locked()
                 self._condition.notify_all()
             if next_call is not None:
@@ -362,6 +434,7 @@ class JobScheduler:
             return None
         call = self._pending.popleft()
         self._running += 1
+        self._running_tokens.add(call.token)
         return call
 
     def _cancel_pending(self, pending: list[_ScheduledCall]) -> None:
@@ -388,5 +461,6 @@ __all__ = [
     "JobReservation",
     "JobScheduler",
     "JobSchedulerClosedError",
+    "ScheduledJobHandle",
     "SchedulerSnapshot",
 ]

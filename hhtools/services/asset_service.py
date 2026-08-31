@@ -8,7 +8,7 @@ do not need to exchange host paths or reimplement bundle assembly.
 
 from __future__ import annotations
 
-from pathlib import PurePosixPath, PureWindowsPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from hhtools.contracts import (
     ApiError,
@@ -34,6 +34,15 @@ from .assets import (
     AssetServiceError,
     DiscoveredAsset,
     DiscoveredAssetFile,
+)
+from .robot_asset_inspection import (
+    RobotAssetDiscoveryError,
+    RobotAssetInspector,
+    discover_robot_bundle,
+)
+
+_MOTION_EXTENSIONS = frozenset(
+    {".bvh", ".csv", ".glb", ".gltf", ".npy", ".npz", ".pickle", ".pkl", ".pt", ".pth"}
 )
 
 
@@ -75,6 +84,52 @@ def _discovery_error(error: MotionAssetDiscoveryError) -> AssetServiceError:
     )
 
 
+def _robot_discovery_error(error: RobotAssetDiscoveryError) -> AssetServiceError:
+    """Move safe robot-discovery diagnostics to the registration stage."""
+
+    return AssetServiceError(
+        error.api_error.model_copy(update={"stage": ErrorStage.ASSET_REGISTRATION})
+    )
+
+
+def _registration_kind(
+    request: AssetRegistrationRequest,
+    candidate: Path,
+) -> AssetKind:
+    """Resolve an explicit or unambiguous motion/robot registration kind."""
+
+    if request.kind is not None:
+        if request.kind not in {AssetKind.MOTION_BUNDLE, AssetKind.ROBOT_BUNDLE}:
+            raise AssetServiceError(
+                ApiError(
+                    code="UNSUPPORTED_ASSET_KIND",
+                    message="Asset registration currently supports motion and robot bundles.",
+                    stage=ErrorStage.ASSET_REGISTRATION,
+                    details={"kind": request.kind.value},
+                )
+            )
+        return request.kind
+    if request.category is AssetCategory.ROBOT_MODEL or candidate.suffix.casefold() == ".urdf":
+        return AssetKind.ROBOT_BUNDLE
+    if candidate.is_file():
+        return AssetKind.MOTION_BUNDLE
+
+    has_urdf = any(path.is_file() for path in candidate.rglob("*.urdf"))
+    has_motion = any(
+        path.is_file() and path.suffix.casefold() in _MOTION_EXTENSIONS
+        for path in candidate.rglob("*")
+    )
+    if has_urdf and has_motion:
+        raise AssetServiceError(
+            ApiError(
+                code="BUNDLE_AMBIGUOUS",
+                message="The directory contains both robot and motion assets; specify kind.",
+                stage=ErrorStage.ASSET_REGISTRATION,
+            )
+        )
+    return AssetKind.ROBOT_BUNDLE if has_urdf else AssetKind.MOTION_BUNDLE
+
+
 class AgentAssetService:
     """Transport-neutral facade for the Agent asset lifecycle."""
 
@@ -82,9 +137,11 @@ class AgentAssetService:
         self,
         registry: AssetRegistry,
         inspector: MotionAssetInspector | None = None,
+        robot_inspector: RobotAssetInspector | None = None,
     ) -> None:
         self._registry = registry
         self._inspector = inspector or MotionAssetInspector()
+        self._robot_inspector = robot_inspector or RobotAssetInspector()
 
     @property
     def allowed_root_ids(self) -> tuple[str, ...]:
@@ -96,45 +153,101 @@ class AgentAssetService:
         """Discover and persist one motion bundle below an allowlisted root."""
 
         candidate = self._registry.resolve_registration_path(request)
-        try:
-            discovered = discover_primary(candidate)
-        except MotionAssetDiscoveryError as error:
-            raise _discovery_error(error) from error
-
-        files = [
-            DiscoveredAssetFile(
-                path=discovered.primary_path,
-                role=AssetFileRole.MOTION,
-                required=True,
+        kind = _registration_kind(request, candidate)
+        if kind is AssetKind.ROBOT_BUNDLE:
+            try:
+                robot = discover_robot_bundle(candidate)
+            except RobotAssetDiscoveryError as error:
+                raise _robot_discovery_error(error) from error
+            discovery = DiscoveredAsset(
+                primary_file=robot.primary_urdf,
+                files=tuple(
+                    DiscoveredAssetFile(
+                        path=item.path,
+                        role=item.role,
+                        required=item.required,
+                    )
+                    for item in robot.files
+                ),
+                kind=AssetKind.ROBOT_BUNDLE,
+                category=AssetCategory.ROBOT_MODEL,
+                metadata=robot.metadata,
             )
-        ]
-        for role, paths in sorted(
-            discovered.sidecars.items(),
-            key=lambda item: item[0].value,
-        ):
-            files.extend(
-                DiscoveredAssetFile(path=path, role=role, required=True)
-                for path in paths
-                if path != discovered.primary_path
-            )
+        else:
+            try:
+                discovered = discover_primary(candidate)
+            except MotionAssetDiscoveryError as error:
+                raise _discovery_error(error) from error
 
-        discovery = DiscoveredAsset(
-            primary_file=discovered.primary_path,
-            files=tuple(files),
-            kind=AssetKind.MOTION_BUNDLE,
-            category=discovered.category,
-            detected=AssetDetected(
-                dataset=discovered.dataset,
-                reference=discovered.reference,
-                recommended_backend=discovered.recommended_backend,
-            ),
-        )
+            files = [
+                DiscoveredAssetFile(
+                    path=discovered.primary_path,
+                    role=AssetFileRole.MOTION,
+                    required=True,
+                )
+            ]
+            for role, paths in sorted(
+                discovered.sidecars.items(),
+                key=lambda item: item[0].value,
+            ):
+                files.extend(
+                    DiscoveredAssetFile(path=path, role=role, required=True)
+                    for path in paths
+                    if path != discovered.primary_path
+                )
+
+            discovery = DiscoveredAsset(
+                primary_file=discovered.primary_path,
+                files=tuple(files),
+                kind=AssetKind.MOTION_BUNDLE,
+                category=discovered.category,
+                detected=AssetDetected(
+                    dataset=discovered.dataset,
+                    reference=discovered.reference,
+                    recommended_backend=discovered.recommended_backend,
+                ),
+            )
         return self._registry.register(request, discovery=discovery)
 
     def get(self, asset_id: str) -> AssetBundle:
         """Return one registered, portable asset manifest."""
 
         return self._registry.get(asset_id)
+
+    def resolve_primary(self, asset_id: str, *, verify_hash: bool = True) -> Path:
+        """Resolve the trusted primary file for an in-process executor.
+
+        This is deliberately a Python-only application-service boundary.  REST,
+        CLI, and MCP adapters must return the portable :class:`AssetBundle`
+        instead of serializing this host path.
+        """
+
+        bundle = self._registry.get(asset_id)
+        return self.resolve_file(
+            bundle.asset_id,
+            bundle.primary_file,
+            verify_hash=verify_hash,
+        )
+
+    def resolve_file(
+        self,
+        asset_id: str,
+        relative_path: str,
+        *,
+        verify_hash: bool = True,
+    ) -> Path:
+        """Resolve one manifest-declared file for trusted in-process consumers.
+
+        The registry enforces membership, containment, and optional content-hash
+        verification.  Protocol adapters must keep returning portable manifest
+        paths instead of exposing this application-internal absolute path.
+        """
+
+        return self._registry.resolve_file(
+            asset_id,
+            relative_path,
+            verify_hash=verify_hash,
+        )
 
     def search(
         self,
@@ -176,7 +289,12 @@ class AgentAssetService:
         for _ in PurePosixPath(bundle.primary_file).parts:
             bundle_root = bundle_root.parent
 
-        return self._inspector.inspect(
+        inspector = (
+            self._robot_inspector
+            if bundle.kind is AssetKind.ROBOT_BUNDLE
+            else self._inspector
+        )
+        return inspector.inspect(
             bundle,
             bundle_root,
             verify_hashes=request.verify_hashes,

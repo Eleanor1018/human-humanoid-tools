@@ -303,6 +303,14 @@ def _backend_capabilities(devices: list[DeviceCapability]) -> list[BackendCapabi
             {
                 "requires_cuda": False,
                 "recommended_linux_cuda": True,
+                # These are admission-safety ceilings, not performance
+                # recommendations.  Expert callers may still choose any
+                # value below them, while accidental pathological values are
+                # rejected before a solver or resampler is constructed.
+                "max_ik_iterations": 200,
+                "max_retarget_fps": 1_000.0,
+                "max_retarget_frames": 100_000,
+                "max_human_height": 10.0,
             },
         ),
         (
@@ -316,7 +324,12 @@ def _backend_capabilities(devices: list[DeviceCapability]) -> list[BackendCapabi
                 "mpc": True,
                 "cpu_fallback": True,
             },
-            {"requires_cuda": False},
+            {
+                "requires_cuda": False,
+                "max_retarget_fps": 1_000.0,
+                "max_retarget_frames": 100_000,
+                "max_human_height": 10.0,
+            },
         ),
     )
     capabilities: list[BackendCapability] = []
@@ -351,6 +364,13 @@ class CapabilitiesService:
         robot_provider: Callable[[], Iterable[RobotPreset]] | None = None,
         device_probe: Callable[[], list[DeviceCapability]] = _detect_devices,
         asset_root_provider: Callable[[], Iterable[str]] | None = None,
+        preflight_available: bool = False,
+        artifact_store_available: bool = False,
+        job_manager_available: bool = False,
+        job_execution_available: bool = False,
+        mcp_available: bool = False,
+        agent_rest_available: bool = True,
+        json_cli_available: bool = True,
     ) -> None:
         if robot_provider is None:
             from hhtools.robot.registry import list_presets_readonly
@@ -360,6 +380,16 @@ class CapabilitiesService:
         self._robot_provider = robot_provider
         self._device_probe = device_probe
         self._asset_root_provider = asset_root_provider
+        self._preflight_available = bool(preflight_available)
+        self._artifact_store_available = bool(artifact_store_available)
+        self._job_manager_available = bool(job_manager_available)
+        # Execution, cancellation, and retry all require a trusted executor.
+        # A durable JobStore on its own can still serve compact historical
+        # queries, but it must not make a client believe new solver work can run.
+        self._job_execution_available = bool(job_manager_available and job_execution_available)
+        self._mcp_available = bool(mcp_available)
+        self._agent_rest_available = bool(agent_rest_available)
+        self._json_cli_available = bool(json_cli_available)
 
     def get_capabilities(self) -> CapabilityResponse:
         """Return a compact snapshot; no solver, queue slot, or asset is created."""
@@ -381,13 +411,23 @@ class CapabilitiesService:
             supported_input_formats=list(_INPUT_FORMATS),
             supported_output_formats=list(_OUTPUT_FORMATS),
             features={
-                "agent_rest": True,
+                "agent_rest": self._agent_rest_available,
                 "asset_inspection": self._asset_root_provider is not None,
                 "asset_registry": self._asset_root_provider is not None,
+                "artifact_store": self._artifact_store_available,
+                "idempotent_jobs": self._job_manager_available,
+                "job_cancellation": self._job_execution_available,
+                "job_execution": self._job_execution_available,
+                "job_retry": self._job_execution_available,
                 "job_spec_v2": True,
-                "json_cli": False,
-                "mcp": False,
-                "preflight": False,
+                # Phase 4 ships the strict JSON client in the same package. It
+                # delegates to this long-lived REST composition root so job
+                # ownership never moves into a short-lived CLI process.
+                "json_cli": self._json_cli_available,
+                "mcp": self._mcp_available,
+                "persistent_jobs": self._job_manager_available,
+                "preflight": self._preflight_available,
+                "revision_polling": self._job_manager_available,
             },
         )
 

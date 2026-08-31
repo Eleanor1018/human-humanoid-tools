@@ -135,6 +135,90 @@ def test_package_uri_resolves_within_bundle(tmp_path: Path) -> None:
     }
 
 
+def test_declared_scaler_config_is_bound_into_robot_manifest(tmp_path: Path) -> None:
+    bundle_root = tmp_path / "robot"
+    _write_valid_robot(bundle_root)
+    scaler = bundle_root / "config" / "smpl_scaler.yaml"
+    scaler.parent.mkdir()
+    scaler.write_text("joint_scales: {}\n", encoding="utf-8")
+    (bundle_root / "robot.yaml").write_text(
+        "name: test_robot\n"
+        "retarget:\n"
+        "  references:\n"
+        "    smpl:\n"
+        "      scaler_config: config/smpl_scaler.yaml\n",
+        encoding="utf-8",
+    )
+
+    discovery = discover_robot_bundle(bundle_root)
+
+    assert any(item.path == scaler.resolve() for item in discovery.files)
+    assert all(
+        item.role is AssetFileRole.METADATA
+        for item in discovery.files
+        if item.path.name in {"robot.yaml", "smpl_scaler.yaml"}
+    )
+    assert discovery.metadata["metadata_file_count"] == 2
+
+
+def test_declared_scaler_config_cannot_escape_robot_bundle(tmp_path: Path) -> None:
+    bundle_root = tmp_path / "robot"
+    _write_valid_robot(bundle_root)
+    outside = tmp_path / "outside_scaler.yaml"
+    outside.write_text("joint_scales: {}\n", encoding="utf-8")
+    (bundle_root / "robot.yaml").write_text(
+        "name: test_robot\n"
+        "retarget:\n"
+        "  references:\n"
+        "    smpl:\n"
+        "      scaler_config: ../outside_scaler.yaml\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RobotAssetDiscoveryError) as caught:
+        discover_robot_bundle(bundle_root)
+
+    assert caught.value.code == "ASSET_OUTSIDE_ALLOWED_ROOT"
+    _assert_no_host_path(caught.value.api_error.model_dump(mode="json"), tmp_path)
+
+
+@pytest.mark.parametrize("path_field", ["urdf", "mesh_search_paths", "scaler_config"])
+def test_robot_metadata_execution_paths_must_be_bundle_relative(
+    tmp_path: Path,
+    path_field: str,
+) -> None:
+    bundle_root = tmp_path / "robot"
+    urdf = _write_valid_robot(bundle_root)
+    mesh_directory = bundle_root / "meshes"
+    scaler = bundle_root / "config" / "smpl_scaler.yaml"
+    scaler.parent.mkdir()
+    scaler.write_text("joint_scales: {}\n", encoding="utf-8")
+
+    if path_field == "urdf":
+        metadata = f"name: test_robot\nurdf: {urdf.as_posix()}\n"
+    elif path_field == "mesh_search_paths":
+        metadata = (
+            "name: test_robot\n"
+            "mesh_search_paths:\n"
+            f"  - {mesh_directory.as_posix()}\n"
+        )
+    else:
+        metadata = (
+            "name: test_robot\n"
+            "retarget:\n"
+            "  references:\n"
+            "    smpl:\n"
+            f"      scaler_config: {scaler.as_posix()}\n"
+        )
+    (bundle_root / "robot.yaml").write_text(metadata, encoding="utf-8")
+
+    with pytest.raises(RobotAssetDiscoveryError) as caught:
+        discover_robot_bundle(bundle_root)
+
+    assert caught.value.code == "ROBOT_METADATA_INVALID"
+    _assert_no_host_path(caught.value.api_error.model_dump(mode="json"), tmp_path)
+
+
 def test_missing_referenced_mesh_is_a_stable_bundle_error(tmp_path: Path) -> None:
     bundle_root = tmp_path / "robot"
     urdf = _write_valid_robot(bundle_root)
@@ -196,6 +280,108 @@ def test_mesh_references_cannot_escape_candidate_bundle(
     assert caught.value.code == "ASSET_OUTSIDE_ALLOWED_ROOT"
     assert caught.value.api_error.stage is ErrorStage.ASSET_INSPECTION
     _assert_no_host_path(caught.value.api_error.model_dump(mode="json"), tmp_path)
+
+
+def test_absolute_mesh_inside_bundle_is_rejected_for_new_and_persisted_assets(
+    tmp_path: Path,
+) -> None:
+    bundle_root = tmp_path / "robot"
+    urdf = _write_valid_robot(bundle_root)
+    metadata = bundle_root / "robot.yaml"
+    dae = bundle_root / "meshes" / "source_body.dae"
+    dae.write_text("<COLLADA/>", encoding="utf-8")
+    urdf.write_text(
+        urdf.read_text(encoding="utf-8").replace(
+            "../meshes/body.stl",
+            dae.resolve().as_posix(),
+        ),
+        encoding="utf-8",
+    )
+    generated_stl = dae.with_suffix(".stl")
+
+    with pytest.raises(RobotAssetDiscoveryError) as caught:
+        discover_robot_bundle(bundle_root)
+
+    assert caught.value.code == "ASSET_OUTSIDE_ALLOWED_ROOT"
+    assert not generated_stl.exists()
+    _assert_no_host_path(caught.value.api_error.model_dump(mode="json"), tmp_path)
+
+    # Bundles persisted by an older release receive the same fail-closed check
+    # during the full inspection that precedes Agent snapshot materialization.
+    manifest = AssetBundle(
+        asset_id=_asset_id("legacy-absolute-mesh"),
+        kind=AssetKind.ROBOT_BUNDLE,
+        category=AssetCategory.ROBOT_MODEL,
+        display_name="Legacy absolute mesh",
+        primary_file="urdf/robot.urdf",
+        files=[
+            AssetFile(
+                role=AssetFileRole.ROBOT_DESCRIPTION,
+                relative_path="urdf/robot.urdf",
+                sha256=_digest(urdf),
+                size_bytes=urdf.stat().st_size,
+            ),
+            AssetFile(
+                role=AssetFileRole.METADATA,
+                relative_path="robot.yaml",
+                sha256=_digest(metadata),
+                size_bytes=metadata.stat().st_size,
+            ),
+            AssetFile(
+                role=AssetFileRole.COLLISION_MESH,
+                relative_path="meshes/source_body.dae",
+                sha256=_digest(dae),
+                size_bytes=dae.stat().st_size,
+            ),
+        ],
+    )
+
+    inspection = RobotAssetInspector().inspect(manifest, bundle_root)
+
+    assert inspection.status is InspectionStatus.INVALID
+    assert "ASSET_OUTSIDE_ALLOWED_ROOT" in {
+        error.code for error in inspection.errors
+    }
+    assert not generated_stl.exists()
+    _assert_no_host_path(inspection.model_dump(mode="json"), tmp_path)
+
+
+@pytest.mark.parametrize("meshdir_kind", ["absolute_inside", "relative_escape"])
+def test_mujoco_compiler_directories_must_remain_inside_snapshot(
+    tmp_path: Path,
+    meshdir_kind: str,
+) -> None:
+    bundle_root = tmp_path / "robot"
+    urdf = _write_valid_robot(bundle_root)
+    original_discovery = discover_robot_bundle(bundle_root)
+    if meshdir_kind == "absolute_inside":
+        meshdir = (bundle_root / "meshes").resolve().as_posix()
+    else:
+        meshdir = "../../outside-meshes"
+    urdf.write_text(
+        urdf.read_text(encoding="utf-8").replace(
+            "</robot>",
+            f'  <mujoco><compiler meshdir="{meshdir}"/></mujoco>\n</robot>',
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RobotAssetDiscoveryError) as caught:
+        discover_robot_bundle(bundle_root)
+
+    assert caught.value.code == "ASSET_OUTSIDE_ALLOWED_ROOT"
+    assert caught.value.api_error.details == {"attribute": "meshdir"}
+    _assert_no_host_path(caught.value.api_error.model_dump(mode="json"), tmp_path)
+
+    # Recompute hashes from the modified files while retaining the old
+    # manifest shape to model a bundle registered by a previous release.
+    persisted_manifest = _bundle(bundle_root, original_discovery)
+    inspection = RobotAssetInspector().inspect(persisted_manifest, bundle_root)
+    assert inspection.status is InspectionStatus.INVALID
+    assert "ASSET_OUTSIDE_ALLOWED_ROOT" in {
+        error.code for error in inspection.errors
+    }
+    _assert_no_host_path(inspection.model_dump(mode="json"), tmp_path)
 
 
 def test_mesh_symlink_cannot_escape_candidate_bundle(tmp_path: Path) -> None:

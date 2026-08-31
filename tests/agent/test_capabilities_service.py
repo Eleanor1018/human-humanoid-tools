@@ -58,10 +58,17 @@ def test_capabilities_report_unlimited_defaults_and_backend_specific_dependencie
         "agent_rest": True,
         "asset_inspection": False,
         "asset_registry": False,
+        "artifact_store": False,
+        "idempotent_jobs": False,
+        "job_cancellation": False,
+        "job_execution": False,
+        "job_retry": False,
         "job_spec_v2": True,
-        "json_cli": False,
+        "json_cli": True,
         "mcp": False,
+        "persistent_jobs": False,
         "preflight": False,
+        "revision_polling": False,
     }
     backends = {backend.backend_id: backend for backend in response.backends}
     assert backends["interaction_mesh"].available is True
@@ -127,6 +134,36 @@ def test_scheduler_reports_effective_unlimited_mode_when_queue_limit_is_ignored(
 
     assert response.scheduler.mode is SchedulerMode.UNLIMITED
     assert response.scheduler.max_queued_jobs == 8
+
+
+def test_job_features_distinguish_durable_services_from_trusted_execution() -> None:
+    durable_only = CapabilitiesService(
+        robot_provider=lambda: [],
+        device_probe=_cpu_devices,
+        artifact_store_available=True,
+        job_manager_available=True,
+        job_execution_available=False,
+    ).get_capabilities()
+
+    assert durable_only.features["artifact_store"] is True
+    assert durable_only.features["persistent_jobs"] is True
+    assert durable_only.features["idempotent_jobs"] is True
+    assert durable_only.features["revision_polling"] is True
+    assert durable_only.features["job_execution"] is False
+    assert durable_only.features["job_cancellation"] is False
+    assert durable_only.features["job_retry"] is False
+
+    executable = CapabilitiesService(
+        robot_provider=lambda: [],
+        device_probe=_cpu_devices,
+        artifact_store_available=True,
+        job_manager_available=True,
+        job_execution_available=True,
+    ).get_capabilities()
+
+    assert executable.features["job_execution"] is True
+    assert executable.features["job_cancellation"] is True
+    assert executable.features["job_retry"] is True
 
 
 def test_robot_capabilities_explain_missing_retarget_inputs(

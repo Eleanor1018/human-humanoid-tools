@@ -98,6 +98,13 @@ class RobotCapability(ContractModel):
     unavailable_reason: str | None = None
 
 
+class RobotListResponse(ContractModel):
+    """Stable envelope for MCP robot discovery without repeating all capabilities."""
+
+    schema_version: SchemaVersion = SchemaVersion.V1
+    robots: list[RobotCapability] = Field(default_factory=list)
+
+
 class CapabilityResponse(ContractModel):
     """Compact discovery response used before an agent builds a plan."""
 

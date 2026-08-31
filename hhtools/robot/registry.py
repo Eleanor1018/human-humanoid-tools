@@ -138,6 +138,23 @@ def preset_from_dir(drop: Path) -> RobotPreset:
     return preset
 
 
+def preset_from_yaml(yaml_path: Path) -> RobotPreset:
+    """Load one exact existing preset YAML without caching or scaffolding.
+
+    Agent preflight uses this after binding the YAML hash to a RobotBundle so
+    a previously populated process cache cannot supply stale ``dof_order`` or
+    ``ik_map`` values.  The function is read-only and never synthesizes files.
+    """
+
+    path = Path(yaml_path).resolve(strict=True)
+    if not path.is_file() or not (
+        path.name == "robot.yaml"
+        or (path.name.startswith("robot.") and path.name.endswith(".yaml"))
+    ):
+        raise FileNotFoundError(f"no robot preset YAML at {path}")
+    return _load_preset(path, path.parent)
+
+
 def clear_cache() -> None:
     """Wipe the cache so the next access re-scans.  Used in tests."""
     global _CACHE
