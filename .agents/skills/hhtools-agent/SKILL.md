@@ -40,8 +40,9 @@ token.
    - Select a supported `robot_id` from `list_robots` or the capability snapshot and pair it with
      the inspected robot bundle's `asset_id`. Do not guess either identity.
 3. Call `preflight_retarget` with a versioned `RetargetPreflightRequest`. Put
-   `run_mode: smoke` in `request.parameters`, use `output_policy: create_new` unless the user
-   explicitly chose another safe policy, and include the registered motion and robot asset IDs.
+   `run_mode: smoke` in `request.parameters`, use the currently supported
+   `output_policy: create_new`, and include the registered motion and robot asset IDs. Other
+   output policies are rejected in this phase.
 4. Branch on the preflight `status`.
    - `ready`: retain the returned immutable smoke `plan_id` and continue.
    - `human_action_required`: pause and present every `required_action`. Stop or disconnect the
@@ -72,6 +73,7 @@ token.
 | `MCP_ONLY` | Use HHTools MCP tools/resources only; never fall back to shell, JSON CLI, REST, or direct service imports. |
 | `ALLOWLISTED_ASSETS` | Asset registration accepts only a capability-advertised `root_id` plus normalized `relative_path`, never an arbitrary or absolute path. |
 | `PREFLIGHT_OWNS_MODE` | `run_mode` belongs in preflight `request.parameters`; `start_retarget` accepts only `plan_id` and `idempotency_key`. |
+| `OUTPUT_CREATE_NEW` | Use `output_policy: create_new`; other output policies are unsupported in the current H2R Agent service. |
 | `IDEMPOTENT_START` | Replay an ambiguous start with the exact same plan and idempotency key; never create a second key for the same logical submission. |
 | `NEW_FULL_PLAN` | A full run requires explicit approval, a new full preflight, a new plan, and a new idempotency key. |
 | `JOB_SCOPED_ARTIFACTS` | List or resolve an artifact with both `job_id` and `artifact_id`; never trust or expose an unbound artifact identity. |

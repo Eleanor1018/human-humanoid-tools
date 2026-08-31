@@ -53,7 +53,9 @@ binary content.
 
 ## Field placement and identity rules
 
-- All public documents currently use `schema_version: "1.0"` and reject unknown fields.
+- Operational Agent v1 request and response envelopes use `schema_version: "1.0"` and reject
+  unknown fields. The audit-only JobSpec v2 embedded in a manifest is the explicit exception and
+  uses integer `schema_version: 2`.
 - `register_asset_bundle` identifies a deployment-owned source with `root_id + relative_path`.
   Backslashes, absolute paths, drive paths, `.` segments, and `..` traversal are not portable
   registration inputs.
@@ -62,8 +64,8 @@ binary content.
 - `run_mode` is `RetargetPreflightRequest.parameters.run_mode`. It is frozen in the returned
   plan. [Job start](../../../../docs/schemas/agent/v1/job-start-request.schema.json) has no mode
   override.
-- Default to `output_policy: create_new`; never overwrite an existing result without explicit
-  user intent and a successful preflight.
+- Use `output_policy: create_new`. The current PreflightService rejects `overwrite` and
+  `fail_if_exists` as unsupported rather than treating them as user-selectable alternatives.
 - An idempotency key binds one logical start request. Reuse it only with the exact same plan
   when delivery of the response is uncertain.
 - `AgentJobView.artifacts` is compact and may contain only the first page. Use
@@ -73,8 +75,9 @@ binary content.
 
 ## Audit-only public schemas
 
-The immutable [JobSpec v2](../../../../docs/schemas/agent/v1/job-spec-v2.schema.json) appears in
-the terminal manifest but is not a replacement for preflight. The public REST/CLI legacy upgrade
+The immutable [JobSpec v2](../../../../docs/schemas/agent/v1/job-spec-v2.schema.json), with integer
+`schema_version: 2`, appears in the terminal manifest but is not a replacement for preflight. The
+public REST/CLI legacy upgrade
 contracts—[request](../../../../docs/schemas/agent/v1/legacy-job-upgrade-request.schema.json),
 [response](../../../../docs/schemas/agent/v1/legacy-job-upgrade-response.schema.json), and
 [receipt](../../../../docs/schemas/agent/v1/legacy-migration-receipt.schema.json)—remain useful for

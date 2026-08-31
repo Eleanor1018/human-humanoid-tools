@@ -142,6 +142,7 @@ def test_workflow_invariants_preserve_transport_and_execution_boundaries() -> No
         "MCP_ONLY",
         "ALLOWLISTED_ASSETS",
         "PREFLIGHT_OWNS_MODE",
+        "OUTPUT_CREATE_NEW",
         "IDEMPOTENT_START",
         "NEW_FULL_PLAN",
         "JOB_SCOPED_ARTIFACTS",
@@ -161,6 +162,10 @@ def test_workflow_invariants_preserve_transport_and_execution_boundaries() -> No
     assert all(
         term in normalized["PREFLIGHT_OWNS_MODE"]
         for term in ("run_mode", "preflight", "plan_id", "idempotency_key")
+    )
+    assert all(
+        term in normalized["OUTPUT_CREATE_NEW"]
+        for term in ("output_policy", "create_new", "unsupported")
     )
     assert "same plan and idempotency key" in normalized["IDEMPOTENT_START"]
     assert all(
@@ -211,6 +216,13 @@ def test_stop_matrix_blocks_unsafe_continuation_and_duplicate_work() -> None:
     rejected = " ".join(rows["rejected"]).casefold()
     assert "stop" in rejected and "do not start a job" in rejected
 
+    mismatch = " ".join(rows["CALIBRATION_MISMATCH"]).casefold()
+    assert all(term in mismatch for term in ("rejected", "stop", "only if one is actually present"))
+    assert all(
+        term in mismatch
+        for term in ("do not assume a human action", "automatically preflight again")
+    )
+
     stale = " ".join(rows["PLAN_STALE"]).casefold()
     assert all(term in stale for term in ("new preflight", "new plan", "new start key"))
     assert "do not reuse the old plan" in stale
@@ -218,6 +230,10 @@ def test_stop_matrix_blocks_unsafe_continuation_and_duplicate_work() -> None:
     ambiguous = " ".join(rows["transport ambiguity"]).casefold()
     assert all(term in ambiguous for term in ("same `plan_id`", "idempotency key"))
     assert all(term in ambiguous for term in ("do not call `retry_job`", "new key"))
+
+    conflict = " ".join(rows["JOB_CONFLICT"]).casefold()
+    assert all(term in conflict for term in ("stop", "different plan or retry parent"))
+    assert all(term in conflict for term in ("do not evade", "another key", "duplicate job"))
 
     interrupted = " ".join(rows["JOB_INTERRUPTED"]).casefold()
     assert all(
