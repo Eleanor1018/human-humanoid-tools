@@ -16,6 +16,11 @@ import type { RuntimeState } from '../shared/runtime-state'
 import { AppLifecycle } from './app-lifecycle'
 import { DesktopLogger } from './desktop-logger'
 import { diagnosticsDataUrl } from './diagnostics-page'
+import {
+  configureGraphicsCommandLine,
+  decideGraphicsStartup,
+  softwareRenderingRelaunchArgs
+} from './graphics-mode'
 import { registerDesktopHandlers } from './ipc/register-desktop-handlers'
 import { createMainWindow } from './main-window'
 import { findAvailablePort } from './network'
@@ -26,6 +31,87 @@ import { SidecarSupervisor, type SidecarSnapshot } from './sidecar-supervisor'
 import { WindowStateStore } from './window-state-store'
 
 const lifecycle = new AppLifecycle()
+// Chromium graphics switches are immutable after `ready`, so configure the
+// second (software-rendered) launch as soon as Electron is imported.
+const softwareRendering = configureGraphicsCommandLine(app.commandLine)
+
+interface GraphicsProbeResult {
+  webgl2: boolean
+  renderer?: string
+  error?: string
+}
+
+let graphicsProbe: GraphicsProbeResult | undefined
+
+/** Probe WebGL2 before Python or the real Three.js WebUI starts. */
+async function probeWebGL2(): Promise<GraphicsProbeResult> {
+  const probeWindow = new BrowserWindow({
+    width: 16,
+    height: 16,
+    show: false,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true
+    }
+  })
+
+  try {
+    await probeWindow.loadURL('data:text/html;charset=utf-8,<title>hhtools graphics probe</title>')
+    const result: unknown = await probeWindow.webContents.executeJavaScript(`(() => {
+      const canvas = document.createElement('canvas')
+      const context = canvas.getContext('webgl2', { failIfMajorPerformanceCaveat: false })
+      if (context === null) return { webgl2: false }
+
+      const debugInfo = context.getExtension('WEBGL_debug_renderer_info')
+      const renderer = debugInfo === null
+        ? context.getParameter(context.RENDERER)
+        : context.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL)
+      return { webgl2: true, renderer: String(renderer) }
+    })()`, true)
+
+    if (
+      typeof result === 'object' &&
+      result !== null &&
+      'webgl2' in result &&
+      typeof result.webgl2 === 'boolean'
+    ) {
+      return {
+        webgl2: result.webgl2,
+        renderer: 'renderer' in result && typeof result.renderer === 'string'
+          ? result.renderer
+          : undefined
+      }
+    }
+    return { webgl2: false, error: 'The graphics probe returned an invalid result.' }
+  } catch (reason) {
+    return {
+      webgl2: false,
+      error: reason instanceof Error ? reason.message : String(reason)
+    }
+  } finally {
+    if (!probeWindow.isDestroyed()) probeWindow.destroy()
+  }
+}
+
+async function prepareDesktopGraphics(): Promise<boolean> {
+  graphicsProbe = await probeWebGL2()
+  const action = decideGraphicsStartup(graphicsProbe.webgl2, softwareRendering)
+  if (action === 'start') return true
+
+  if (action === 'relaunch') {
+    console.warn('WebGL2 is unavailable; relaunching hhtools with software rendering.')
+    app.relaunch({ args: softwareRenderingRelaunchArgs() })
+    app.exit(0)
+    return false
+  }
+
+  const detail = graphicsProbe.error === undefined ? '' : ` ${graphicsProbe.error}`
+  throw new Error(
+    `WebGL2 is unavailable${softwareRendering ? ' with the bundled software renderer' : ''}.${detail}`
+  )
+}
 
 function desktopIconPath(): string {
   return join(app.getAppPath(), 'resources', 'icon.png')
@@ -102,6 +188,10 @@ async function startDesktop(): Promise<void> {
   })
   logger = new DesktopLogger(runtime.logDirectory)
   logger.info('Desktop startup began', { repoRoot: runtime.repoRoot, bundled: runtime.bundled })
+  logger.info('Graphics preflight passed', {
+    renderer: graphicsProbe?.renderer,
+    softwareRendering
+  })
 
   const sidecarEnvironment = (): NodeJS.ProcessEnv => ({
     ...optionalComponents?.sidecarEnvironment(),
@@ -268,9 +358,18 @@ if (!hasSingleInstanceLock) {
     mainWindow.focus()
   })
 
-  app.whenReady().then(startDesktop).catch((reason: unknown) => void showStartupFailure(reason))
+  app.whenReady()
+    .then(async () => {
+      if (!(await prepareDesktopGraphics())) return
+      await startDesktop()
+    })
+    .catch((reason: unknown) => void showStartupFailure(reason))
 
-  app.on('window-all-closed', () => app.quit())
+  app.on('window-all-closed', () => {
+    // Destroying the temporary WebGL probe leaves no windows as well. Do not
+    // turn that expected preflight event into an application shutdown.
+    if (mainWindow !== undefined) app.quit()
+  })
   app.on('before-quit', (event) => {
     if (allowQuit) return
 

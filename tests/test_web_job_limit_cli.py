@@ -38,6 +38,26 @@ def test_web_cli_reads_env_and_explicit_options_override_it(monkeypatch) -> None
     assert captured["max_queued_jobs"] == 24
 
 
+def test_web_cli_reads_packaged_runtime_paths_from_environment(monkeypatch) -> None:
+    captured: dict = {}
+    monkeypatch.setattr(server, "run_web", lambda **kwargs: captured.update(kwargs))
+
+    result = CliRunner().invoke(
+        web.app,
+        ["--source", "/explicit/motions"],
+        env={
+            "HHTOOLS_SOURCE_ROOT": "/bundled/motions",
+            "HHTOOLS_SAVE_DIR": "/home/user/.local/share/hhtools/save_npz",
+            "HHTOOLS_CACHE_DIR": "/home/user/.cache/hhtools",
+        },
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["source_root"] == Path("/explicit/motions")
+    assert captured["save_dir"] == Path("/home/user/.local/share/hhtools/save_npz")
+    assert captured["cache_dir"] == Path("/home/user/.cache/hhtools")
+
+
 def test_web_cli_rejects_negative_job_limits() -> None:
     result = CliRunner().invoke(web.app, ["--max-running-jobs", "-1"])
 

@@ -4,6 +4,8 @@ import os
 import subprocess
 import sys
 
+from hhtools.cli import main
+
 
 def test_cli_entrypoint_overrides_legacy_windows_encoding() -> None:
     env = os.environ.copy()
@@ -22,3 +24,9 @@ def test_cli_entrypoint_overrides_legacy_windows_encoding() -> None:
 
     assert completed.returncode == 0, completed.stderr.decode("utf-8", errors="replace")
     assert completed.stdout.decode("utf-8").strip() == "✓ 中文文件名"
+
+
+def test_version_flag_does_not_load_optional_command_trees(monkeypatch) -> None:
+    monkeypatch.setattr(sys, "argv", ["hhtools", "--version"])
+
+    assert main._subcommands_for_argv() == []

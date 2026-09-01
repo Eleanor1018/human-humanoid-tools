@@ -19,6 +19,8 @@ export interface ResolveRuntimeOptions {
   isPackaged?: boolean
   resourcesPath?: string
   env?: NodeJS.ProcessEnv
+  /** Override the host platform in deterministic resolver tests. */
+  platform?: NodeJS.Platform
 }
 
 function isRepositoryRoot(candidate: string): boolean {
@@ -44,7 +46,7 @@ function bundledRuntime(options: ResolveRuntimeOptions): {
   const runtimeRoot = join(options.resourcesPath, 'runtime')
   const repoRoot = join(runtimeRoot, 'app')
   const pythonExecutable =
-    process.platform === 'win32'
+    (options.platform ?? process.platform) === 'win32'
       ? join(runtimeRoot, 'python', 'python.exe')
       : join(runtimeRoot, 'python', 'bin', 'python3')
 
@@ -76,7 +78,11 @@ function resolveRepositoryRoot(options: ResolveRuntimeOptions, env: NodeJS.Proce
   throw new Error('Unable to find the hhtools repository. Set HHTOOLS_REPO_ROOT.')
 }
 
-function resolvePython(repoRoot: string, env: NodeJS.ProcessEnv): string {
+function resolvePython(
+  repoRoot: string,
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform
+): string {
   if (env.HHTOOLS_PYTHON !== undefined) {
     if (isAbsolute(env.HHTOOLS_PYTHON) && !existsSync(env.HHTOOLS_PYTHON)) {
       throw new Error(`HHTOOLS_PYTHON does not exist: ${env.HHTOOLS_PYTHON}`)
@@ -85,18 +91,20 @@ function resolvePython(repoRoot: string, env: NodeJS.ProcessEnv): string {
   }
 
   const candidates =
-    process.platform === 'win32'
+    platform === 'win32'
       ? [join(repoRoot, '.venv', 'Scripts', 'python.exe')]
       : [join(repoRoot, '.venv', 'bin', 'python')]
   const localPython = candidates.find((candidate) => existsSync(candidate))
-  return localPython ?? (process.platform === 'win32' ? 'python' : 'python3')
+  return localPython ?? (platform === 'win32' ? 'python' : 'python3')
 }
 
 export function resolveRuntime(options: ResolveRuntimeOptions): RuntimeConfig {
   const env = options.env ?? process.env
+  const platform = options.platform ?? process.platform
   const packaged = env.HHTOOLS_REPO_ROOT === undefined ? bundledRuntime(options) : undefined
   const repoRoot = packaged?.repoRoot ?? resolveRepositoryRoot(options, env)
-  const pythonExecutable = env.HHTOOLS_PYTHON ?? packaged?.pythonExecutable ?? resolvePython(repoRoot, env)
+  const pythonExecutable =
+    env.HHTOOLS_PYTHON ?? packaged?.pythonExecutable ?? resolvePython(repoRoot, env, platform)
 
   return {
     repoRoot,
@@ -113,6 +121,8 @@ export function resolveRuntime(options: ResolveRuntimeOptions): RuntimeConfig {
 const ENV_ALLOWLIST = new Set([
   'APPDATA',
   'COMSPEC',
+  'DBUS_SESSION_BUS_ADDRESS',
+  'DISPLAY',
   'HOME',
   'HHTOOLS_MAX_QUEUED_JOBS',
   'HHTOOLS_MAX_RUNNING_JOBS',
@@ -125,11 +135,14 @@ const ENV_ALLOWLIST = new Set([
   'HHTOOLS_ROBOT_PATH',
   'HHTOOLS_WEB_SETTINGS_PATH',
   'LOCALAPPDATA',
+  'LD_LIBRARY_PATH',
+  'MUJOCO_GL',
   'NUMBER_OF_PROCESSORS',
   'PATH',
   'PATHEXT',
   'PROCESSOR_ARCHITECTURE',
   'PROGRAMDATA',
+  'PYOPENGL_PLATFORM',
   'SYSTEMDRIVE',
   'SYSTEMROOT',
   'TEMP',
@@ -138,7 +151,10 @@ const ENV_ALLOWLIST = new Set([
   'VIRTUAL_ENV',
   'WINDIR',
   'XDG_CONFIG_HOME',
-  'XDG_DATA_HOME'
+  'XDG_DATA_HOME',
+  'XDG_RUNTIME_DIR',
+  'WAYLAND_DISPLAY',
+  'XAUTHORITY'
 ])
 
 export function buildSidecarEnvironment(

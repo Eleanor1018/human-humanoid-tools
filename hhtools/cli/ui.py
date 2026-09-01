@@ -23,6 +23,8 @@ def launch(
         Path("assets/motions"),
         "--source",
         "-s",
+        envvar="HHTOOLS_SOURCE_ROOT",
+        show_envvar=True,
         help="Raw-dataset root scanned recursively for the folder-indexed library. "
         "Intermediate grouping folders (mimic/ intermimic/ meshmimic/ ...) are "
         "transparent — only the innermost dataset directory names matter.",
@@ -30,12 +32,16 @@ def launch(
     cache: Path | None = typer.Option(
         None,
         "--cache",
+        envvar="HHTOOLS_CACHE_DIR",
+        show_envvar=True,
         help="Per-session NPZ cache directory. Defaults to a fresh tempfile.mkdtemp "
         "under /tmp that is rmtree'd on shutdown regardless of saves.",
     ),
     save_dir: Path = typer.Option(
         Path("assets/save_npz"),
         "--save-dir",
+        envvar="HHTOOLS_SAVE_DIR",
+        show_envvar=True,
         help="Destination for NPZs the user explicitly persists via the 'Save' buttons.",
     ),
     keep_cache: bool = typer.Option(

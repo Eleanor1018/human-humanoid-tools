@@ -60,6 +60,10 @@ def _subcommands_for_argv() -> list[tuple[str, str, str]]:
         # imports its transport adapter.  Do not import unrelated solver/UI
         # command trees for a lightweight JSON request.
         return []
+    if arg in {"--version", "-V"}:
+        # Version reporting must stay instant and must not initialize optional
+        # viewer, solver, or GPU-related command modules.
+        return []
     if arg.startswith("-"):
         return _SUBCOMMANDS
     for name, path, help_text in _SUBCOMMANDS:

@@ -1,6 +1,7 @@
 import { BrowserWindow, screen, shell } from 'electron'
 
 import type { LoggerLike } from './desktop-logger'
+import { waitForWindowReadiness } from './window-readiness'
 import { WindowStateStore } from './window-state-store'
 
 export interface MainWindowResult {
@@ -86,6 +87,8 @@ export function createMainWindow(options: {
     options.logger.error('Renderer failed to load', { code, description, url: validatedUrl })
   })
 
-  const readyToShow = new Promise<void>((resolve) => window.once('ready-to-show', () => resolve()))
+  // `did-finish-load` is a necessary fallback on Wayland, where an initially
+  // hidden BrowserWindow can finish rendering without emitting ready-to-show.
+  const readyToShow = waitForWindowReadiness(window, window.webContents)
   return { window, readyToShow }
 }
