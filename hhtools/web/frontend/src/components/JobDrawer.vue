@@ -426,7 +426,9 @@ onBeforeUnmount(() => {
       class="job-drawer-summary"
       :aria-expanded="false"
       aria-controls="job-drawer-panel"
-      :title="docked ? text('Toggle Tasks (Ctrl+J)', '切换任务面板 (Ctrl+J)') : '展开任务历史'"
+      :title="docked
+        ? text('Toggle Tasks (Ctrl+J)', '切换任务面板 (Ctrl+J)')
+        : text('Expand task history', '展开任务历史')"
       @click="togglePanel"
     >
       <span class="job-summary-title">{{ text('Tasks', '任务') }}</span>

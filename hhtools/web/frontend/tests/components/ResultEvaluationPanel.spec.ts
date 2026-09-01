@@ -12,7 +12,9 @@ afterEach(() => wrappers.splice(0).forEach((wrapper) => wrapper.unmount()))
 
 describe('ResultEvaluationPanel', () => {
   it('renders diagnostics and requests comparison presets', async () => {
-    const wrapper = mount(ResultEvaluationPanel, { props: { workflow: 'h2r' } })
+    const wrapper = mount(ResultEvaluationPanel, {
+      props: { workflow: 'h2r', locale: 'zh-CN' },
+    })
     wrappers.push(wrapper)
     const detail: ResultDiagnosticsDetail = {
       workflow: 'h2r',
@@ -78,5 +80,35 @@ describe('ResultEvaluationPanel', () => {
     window.removeEventListener('hhtools:comparison-command', receive)
 
     expect(commands).toEqual(['result'])
+
+    await wrapper.setProps({ locale: 'en' })
+    expect(wrapper.get('.result-quality').text()).toBe('Stable tracking')
+    expect(wrapper.get('[data-preset="source"]').text()).toBe('Source data')
+    expect(wrapper.text()).toContain('Mean error')
+  })
+
+  it('relocalizes the built-in unavailable reason without another runtime event', async () => {
+    const wrapper = mount(ResultEvaluationPanel, {
+      props: { workflow: 'r2r', locale: 'en' },
+    })
+    wrappers.push(wrapper)
+    window.dispatchEvent(new CustomEvent<ResultDiagnosticsDetail>('hhtools:result-diagnostics', {
+      detail: {
+        workflow: 'r2r',
+        comparisonPreset: 'overlay',
+        diagnostics: {
+          schema_version: 1,
+          available: false,
+          reason: '当前结果未返回可用的 tracking/contact 诊断。',
+        },
+      },
+    }))
+    await nextTick()
+
+    expect(wrapper.text()).toContain(
+      'The current result did not return usable tracking/contact diagnostics.',
+    )
+    await wrapper.setProps({ locale: 'zh-CN' })
+    expect(wrapper.text()).toContain('当前结果未返回可用的 tracking/contact 诊断。')
   })
 })

@@ -32,7 +32,7 @@ async function importTrajectory(options?: { folder?: boolean }): Promise<void> {
 <template>
   <div class="panel-stack workflow-panel-stack">
     <h2>{{ text('Robot → Robot', '机器人 → 机器人') }}</h2>
-    <WorkflowPipeline workflow="r2r" />
+    <WorkflowPipeline workflow="r2r" :locale="locale" />
 
     <details id="r2r-step-source" class="video-workflow-step" open>
       <summary class="video-workflow-step-summary">
@@ -109,7 +109,7 @@ async function importTrajectory(options?: { folder?: boolean }): Promise<void> {
         <div id="r2r-calibration-save-summary" class="calibration-save-summary" aria-live="polite"></div>
 
         <div id="r2r-calib-edit" class="workflow-calibration-editor" style="display:none">
-          <CalibrationEditorControls workflow="r2r" />
+          <CalibrationEditorControls workflow="r2r" :locale="locale" />
           <div id="r2r-calib-sliders" class="calibration-joint-list"></div>
           <div class="workflow-button-row">
             <button id="r2r-calib-zero" type="button" class="btn secondary small">{{ text('Zero', '归零') }}</button>
@@ -143,7 +143,7 @@ async function importTrajectory(options?: { folder?: boolean }): Promise<void> {
         <div id="r2r-progress" class="progress video-workflow-progress" style="display:none"><div class="bar"></div></div>
         <p id="r2r-status" class="hint workflow-status-line" role="status"></p>
 
-        <ResultEvaluationPanel workflow="r2r" />
+        <ResultEvaluationPanel workflow="r2r" :locale="locale" />
 
         <div id="r2r-export-card" class="workflow-export-section" style="display:none">
           <div class="workflow-field-grid">

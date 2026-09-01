@@ -32,7 +32,7 @@ function openMotionImport(_options?: { folder?: boolean }): void {
 <template>
   <div class="panel-stack workflow-panel-stack">
     <h2>{{ text('Human → Robot', '人体 → 机器人') }}</h2>
-    <WorkflowPipeline workflow="h2r" />
+    <WorkflowPipeline workflow="h2r" :locale="locale" />
 
     <details id="h2r-step-motion" class="video-workflow-step" open>
       <summary class="video-workflow-step-summary">
@@ -101,7 +101,7 @@ function openMotionImport(_options?: { folder?: boolean }): void {
         <div id="calib-card" class="workflow-calibration-editor" style="display:none">
           <p id="calibration-scope" class="hint">{{ text('Target robot + source reference', '目标机器人 + 源参考格式') }}</p>
           <div id="calibration-validation-summary" class="validation-summary" aria-live="polite"></div>
-          <CalibrationEditorControls workflow="h2r" />
+          <CalibrationEditorControls workflow="h2r" :locale="locale" />
           <div id="calib-sliders" class="calibration-joint-list"></div>
           <div class="workflow-button-row">
             <button id="calib-zero" type="button" class="btn secondary small">{{ text('Zero', '归零') }}</button>
@@ -136,7 +136,7 @@ function openMotionImport(_options?: { folder?: boolean }): void {
         <div id="rt-progress" class="progress video-workflow-progress" style="display:none"><div class="bar"></div></div>
         <p id="rt-status" class="hint workflow-status-line" role="status"></p>
 
-        <ResultEvaluationPanel workflow="h2r" />
+        <ResultEvaluationPanel workflow="h2r" :locale="locale" />
 
         <div id="rt-export-card" class="workflow-export-section" style="display:none">
           <div class="workflow-field-grid">

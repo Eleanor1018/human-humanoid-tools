@@ -15,6 +15,43 @@ afterEach(() => {
 })
 
 describe('retarget workflow panels', () => {
+  it('switches the Human to Robot panel and shared pipeline together', async () => {
+    const wrapper = mount(HumanToRobotWorkflow, {
+      props: { locale: 'en' },
+      attachTo: document.body,
+    })
+    mountedWrappers.push(wrapper)
+
+    expect(wrapper.get('h2').text()).toBe('Human → Robot')
+    expect(wrapper.findAll('.video-workflow-step-summary').map((step) => step.text())).toEqual([
+      '1. Motion',
+      '2. Target robot',
+      '3. Calibration',
+      '4. Result',
+    ])
+    expect(wrapper.findAll('.workflow-node-label').map((node) => node.text())).toEqual([
+      'Motion',
+      'Robot',
+      'Calibration',
+      'Result',
+    ])
+
+    await wrapper.setProps({ locale: 'zh-CN' })
+    expect(wrapper.get('h2').text()).toBe('人体 → 机器人')
+    expect(wrapper.findAll('.video-workflow-step-summary').map((step) => step.text())).toEqual([
+      '1. 动作',
+      '2. 目标机器人',
+      '3. 标定',
+      '4. 结果',
+    ])
+    expect(wrapper.findAll('.workflow-node-label').map((node) => node.text())).toEqual([
+      '动作',
+      '机器人',
+      '标定',
+      '结果',
+    ])
+  })
+
   it('presents Human to Robot as four compact steps', async () => {
     const wrapper = mount(HumanToRobotWorkflow, {
       props: { locale: 'zh-CN' },

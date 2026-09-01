@@ -11,7 +11,9 @@ afterEach(() => wrappers.splice(0).forEach((wrapper) => wrapper.unmount()))
 
 describe('CalibrationEditorControls', () => {
   it('renders runtime state and emits typed commands', async () => {
-    const wrapper = mount(CalibrationEditorControls, { props: { workflow: 'h2r' } })
+    const wrapper = mount(CalibrationEditorControls, {
+      props: { workflow: 'h2r', locale: 'zh-CN' },
+    })
     wrappers.push(wrapper)
 
     const state: CalibrationEditorStateDetail = {
@@ -51,5 +53,10 @@ describe('CalibrationEditorControls', () => {
       { workflow: 'h2r', command: 'search', value: 'shoulder' },
       { workflow: 'h2r', command: 'region', value: 'left-arm' },
     ])
+
+    await wrapper.setProps({ locale: 'en' })
+    expect(wrapper.find('.calibration-region-tabs button.active').text()).toBe('Left arm')
+    expect(wrapper.get('input[type="search"]').attributes('placeholder')).toBe('Search joints')
+    expect(wrapper.text()).toContain('17 mapped')
   })
 })

@@ -76,6 +76,7 @@ from hhtools.viewer.library import (
     list_folders,
     scan_library,
 )
+from hhtools.viewer.markdown_compat import add_safe_markdown, set_safe_markdown
 from hhtools.viewer.panels import PlaybackPanel
 from hhtools.viewer.renderers import (
     CapsuleMeshRenderer,
@@ -420,7 +421,8 @@ def run_viewer(
     # Keep the top of the sidebar airy: a single low-contrast badge in place of the
     # old h2 title. The full brand string still lives in the browser titlebar via
     # ``label=TITLEBAR`` on the Viser server above.
-    server.gui.add_markdown(
+    add_safe_markdown(
+        server.gui,
         f"<div style='padding:4px 0 2px 0;"
         f"color:{PALETTE.text_muted};font-size:0.82em;letter-spacing:0.04em;'>"
         f"<span style='color:{PALETTE.accent};font-weight:600;'>HHTOOLS</span>"
@@ -462,7 +464,7 @@ def run_viewer(
             # NPZ conversion, Save whole folder, etc.). We live-update both widgets AND
             # call server.flush() from the progress helper so the browser paints during
             # long synchronous Python calls.
-            progress_label_md = server.gui.add_markdown("")
+            progress_label_md = add_safe_markdown(server.gui, "")
             progress_bar = server.gui.add_progress_bar(
                 value=0.0, visible=False, animated=False,
             )
@@ -487,7 +489,9 @@ def run_viewer(
             # ``_load_by_label`` is wired up later in this function because it
             # depends on ``_on_clip_pick`` being defined, but the read-only
             # getters work as soon as the picker exists.
-            status_md = server.gui.add_markdown(_make_status(entries, entries, cache))
+            status_md = add_safe_markdown(
+                server.gui, _make_status(entries, entries, cache)
+            )
             save_clip_btn = server.gui.add_button(
                 "Save this clip", icon="device-floppy",
                 hint="Copy the current clip's NPZ into assets/save_npz.",
@@ -499,7 +503,7 @@ def run_viewer(
             # Persistent save log (multi-line markdown). Auto-updated by save callbacks
             # with "saved N clip(s) to <path>" so users get permanent feedback even after
             # the transient toast notification disappears.
-            save_log_md = server.gui.add_markdown(_SAVE_LOG_EMPTY)
+            save_log_md = add_safe_markdown(server.gui, _SAVE_LOG_EMPTY)
 
             if not entries:
                 save_clip_btn.disabled = True
@@ -507,14 +511,31 @@ def run_viewer(
 
             # Clip info + Upload nested inside "Library" so the group is self-contained.
             with server.gui.add_folder("Clip info", expand_by_default=True):
-                motion_label = server.gui.add_text("Name", initial_value="(none)")
-                motion_label.disabled = True
-                info_label = server.gui.add_text("Frames · FPS · Bones", initial_value="—")
-                info_label.disabled = True
-                axis_label = server.gui.add_text("Up axis (src → view)", initial_value="—")
-                axis_label.disabled = True
-                saved_label = server.gui.add_text("Persisted", initial_value="no")
-                saved_label.disabled = True
+                # Viser 1.0.x renders disabled text inputs at extremely low
+                # contrast.  Clip metadata is read-only, so expose it as safe
+                # markdown instead of pretending that it is an editable form.
+                clip_info_state = {
+                    "name": "(none)",
+                    "summary": "—",
+                    "axis": "—",
+                    "persisted": "no",
+                }
+
+                def _render_clip_info() -> str:
+                    return (
+                        f"<b>Name</b>: <code>{_html_escape(clip_info_state['name'])}</code><br/>"
+                        f"<b>Frames · FPS · Bones</b>: "
+                        f"{_html_escape(clip_info_state['summary'])}<br/>"
+                        f"<b>Up axis (src → view)</b>: "
+                        f"{_html_escape(clip_info_state['axis'])}<br/>"
+                        f"<b>Persisted</b>: {_html_escape(clip_info_state['persisted'])}"
+                    )
+
+                clip_info_md = add_safe_markdown(server.gui, _render_clip_info())
+
+                def _set_clip_info(**changes: str) -> None:
+                    clip_info_state.update(changes)
+                    set_safe_markdown(clip_info_md, _render_clip_info())
 
             with server.gui.add_folder("Upload", expand_by_default=False):
                 file_picker = server.gui.add_upload_button(
@@ -530,7 +551,7 @@ def run_viewer(
                     tmp.write_bytes(upload.content)
                     lib_state["current"] = None
                     _load_path(tmp)
-                    saved_label.value = "upload (not persisted)"
+                    _set_clip_info(persisted="upload (not persisted)")
 
         # ---- Display options (parent group) --------------------------------------
         # Appearance-style toggles and transform toggles share no state but users tend
@@ -964,11 +985,14 @@ def run_viewer(
         _rebuild_renderers(reset_playback=True)
         m_final = state.get("final")
         if isinstance(m_final, Motion):
-            motion_label.value = m_final.name
-            info_label.value = (
-                f"{m_final.num_frames} · {m_final.framerate:.1f} · {m_final.num_bones}"
+            _set_clip_info(
+                name=m_final.name,
+                summary=(
+                    f"{m_final.num_frames} · {m_final.framerate:.1f} · "
+                    f"{m_final.num_bones}"
+                ),
+                axis=f"{original_axis} → Z",
             )
-            axis_label.value = f"{original_axis} → Z"
             _fit_camera_to_motion(server, m_final)
         _fire_motion_loaded_callbacks()
 
@@ -1016,18 +1040,21 @@ def run_viewer(
                 _rebuild_renderers(reset_playback=True)
                 m_final = state.get("final")
                 if isinstance(m_final, Motion):
-                    motion_label.value = m_final.name
-                    info_label.value = (
-                        f"{m_final.num_frames} · {m_final.framerate:.1f} · "
-                        f"{m_final.num_bones}"
+                    _set_clip_info(
+                        name=m_final.name,
+                        summary=(
+                            f"{m_final.num_frames} · {m_final.framerate:.1f} · "
+                            f"{m_final.num_bones}"
+                        ),
+                        axis=f"{_cached.up_axis} → Z",
                     )
-                    axis_label.value = f"{_cached.up_axis} → Z"
                     _fit_camera_to_motion(server, m_final)
-                saved_label.value = (
-                    "yes" if cache.is_saved(entry) else "no (ephemeral)"
+                _set_clip_info(
+                    persisted="yes" if cache.is_saved(entry) else "no (ephemeral)"
                 )
-                status_md.content = _make_status(
-                    entries, lib_state["filtered"], cache,
+                set_safe_markdown(
+                    status_md,
+                    _make_status(entries, lib_state["filtered"], cache),
                 )
                 _fire_motion_loaded_callbacks()
             return
@@ -1055,8 +1082,13 @@ def run_viewer(
                         library_entry=entry,
                     )
                     _motion_mem_cache[_cache_key] = state["raw"]
-                    saved_label.value = "yes" if cache.is_saved(entry) else "no (ephemeral)"
-                    status_md.content = _make_status(entries, lib_state["filtered"], cache)
+                    _set_clip_info(
+                        persisted="yes" if cache.is_saved(entry) else "no (ephemeral)"
+                    )
+                    set_safe_markdown(
+                        status_md,
+                        _make_status(entries, lib_state["filtered"], cache),
+                    )
                 finally:
                     progress.done()
             return
@@ -1110,15 +1142,22 @@ def run_viewer(
                     _rebuild_renderers(reset_playback=True)
                     m_final = state.get("final")
                     if isinstance(m_final, Motion):
-                        motion_label.value = m_final.name
-                        info_label.value = (
-                            f"{m_final.num_frames} · {m_final.framerate:.1f} · "
-                            f"{m_final.num_bones}"
+                        _set_clip_info(
+                            name=m_final.name,
+                            summary=(
+                                f"{m_final.num_frames} · {m_final.framerate:.1f} · "
+                                f"{m_final.num_bones}"
+                            ),
+                            axis=f"{motion.up_axis} → Z",
                         )
-                        axis_label.value = f"{motion.up_axis} → Z"
                         _fit_camera_to_motion(server, m_final)
-                    saved_label.value = "yes" if cache.is_saved(entry) else "no (ephemeral)"
-                    status_md.content = _make_status(entries, lib_state["filtered"], cache)
+                    _set_clip_info(
+                        persisted="yes" if cache.is_saved(entry) else "no (ephemeral)"
+                    )
+                    set_safe_markdown(
+                        status_md,
+                        _make_status(entries, lib_state["filtered"], cache),
+                    )
                     _fire_motion_loaded_callbacks()
                 finally:
                     progress.done()
@@ -1138,9 +1177,12 @@ def run_viewer(
                     lib_state["current"] = entry
                     _load_path(entry.source_path, library_entry=entry)
                     _motion_mem_cache[_cache_key] = state["raw"]
-                    saved_label.value = "yes" if cache.is_saved(entry) else "no (ephemeral)"
-                    status_md.content = _make_status(
-                        entries, lib_state["filtered"], cache,
+                    _set_clip_info(
+                        persisted="yes" if cache.is_saved(entry) else "no (ephemeral)"
+                    )
+                    set_safe_markdown(
+                        status_md,
+                        _make_status(entries, lib_state["filtered"], cache),
                     )
                 finally:
                     progress.done()
@@ -1175,8 +1217,13 @@ def run_viewer(
             lib_state["current"] = entry
             _load_path(npz_path, library_entry=entry)
             _motion_mem_cache[_cache_key] = state["raw"]
-            saved_label.value = "yes" if cache.is_saved(entry) else "no (ephemeral)"
-            status_md.content = _make_status(entries, lib_state["filtered"], cache)
+            _set_clip_info(
+                persisted="yes" if cache.is_saved(entry) else "no (ephemeral)"
+            )
+            set_safe_markdown(
+                status_md,
+                _make_status(entries, lib_state["filtered"], cache),
+            )
             progress.done()
 
     # -------- Library callbacks ----------------------------------------------
@@ -1216,7 +1263,7 @@ def run_viewer(
             # guaranteed when the value is set programmatically (e.g. Robot-tab
             # folder/search sync while the Motion-tab guard is active).
             _on_clip_pick(None)
-        status_md.content = _make_status(entries, filtered, cache)
+        set_safe_markdown(status_md, _make_status(entries, filtered, cache))
         _notify_library_refreshed(
             tuple(clip_picker.options), str(clip_picker.value),
         )
@@ -1305,8 +1352,10 @@ def run_viewer(
                 # wrong.  The Clip Info panel still shows the truncated one-liner for
                 # persistence, but the toast carries the actual multi-line message
                 # (install instructions for missing FBX backends, etc.).
-                motion_label.value = f"(load failed) {type(exc).__name__}"
-                info_label.value = str(exc).splitlines()[0][:100]
+                _set_clip_info(
+                    name=f"(load failed) {type(exc).__name__}",
+                    summary=str(exc).splitlines()[0][:100],
+                )
                 _notify_all(
                     server,
                     f"Could not load {entry.stem}",
@@ -1354,15 +1403,21 @@ def run_viewer(
             except Exception as exc:  # pragma: no cover
                 progress.done()
                 msg = f"{type(exc).__name__}: {exc}"
-                saved_label.value = f"save failed: {type(exc).__name__}"
+                _set_clip_info(persisted=f"save failed: {type(exc).__name__}")
                 _notify_all(server, "Save failed", msg, color="red")
                 return
             rel = _relative_to_repo(dst)
-            saved_label.value = f"yes → {rel}"
-            status_md.content = _make_status(entries, lib_state["filtered"], cache)
-            save_log_md.content = _format_save_log(
-                heading="Saved 1 clip",
-                lines=[f"`{rel}`"],
+            _set_clip_info(persisted=f"yes → {rel}")
+            set_safe_markdown(
+                status_md,
+                _make_status(entries, lib_state["filtered"], cache),
+            )
+            set_safe_markdown(
+                save_log_md,
+                _format_save_log(
+                    heading="Saved 1 clip",
+                    lines=[f"`{rel}`"],
+                ),
             )
             _notify_all(
                 server,
@@ -1419,20 +1474,26 @@ def run_viewer(
             except Exception as exc:  # pragma: no cover
                 progress.done()
                 msg = f"{type(exc).__name__}: {exc}"
-                saved_label.value = f"save folder failed: {type(exc).__name__}"
+                _set_clip_info(persisted=f"save folder failed: {type(exc).__name__}")
                 _notify_all(server, "Save folder failed", msg, color="red")
                 return
             count = len(saved)
             rel_root = _relative_to_repo(dst_root)
-            saved_label.value = f"saved {count} clips → {rel_root}"
-            status_md.content = _make_status(entries, lib_state["filtered"], cache)
+            _set_clip_info(persisted=f"saved {count} clips → {rel_root}")
+            set_safe_markdown(
+                status_md,
+                _make_status(entries, lib_state["filtered"], cache),
+            )
             preview = [f"`{_relative_to_repo(p)}`" for p in saved[:5]]
             if count > 5:
                 preview.append(f"… and {count - 5} more")
-            save_log_md.content = _format_save_log(
-                heading=f"Saved {count} clip(s) from "
-                        f"<b>{_html_escape(label)}</b>",
-                lines=preview,
+            set_safe_markdown(
+                save_log_md,
+                _format_save_log(
+                    heading=f"Saved {count} clip(s) from "
+                    f"<b>{_html_escape(label)}</b>",
+                    lines=preview,
+                ),
             )
             _notify_all(
                 server,
@@ -1588,8 +1649,10 @@ def run_viewer(
             import traceback
 
             traceback.print_exc()
-            motion_label.value = f"(load failed) {type(exc).__name__}"
-            info_label.value = str(exc)[:80]
+            _set_clip_info(
+                name=f"(load failed) {type(exc).__name__}",
+                summary=str(exc)[:80],
+            )
             progress.done()
 
     threading.Thread(target=_initial_load, daemon=True, name="hhtools-initial-load").start()
@@ -1809,16 +1872,18 @@ class _ProgressReporter:
                 self._bar.animated = bar_animated
                 self._bar.value = initial_value
                 self._bar.visible = True
-                self._label.content = _progress_md(
-                    title, initial_value, bar_animated, elapsed=0.0,
+                set_safe_markdown(
+                    self._label,
+                    _progress_md(title, initial_value, bar_animated, elapsed=0.0),
                 )
                 for mbar, mmd in self._mirrors:
                     try:
                         mbar.animated = bar_animated
                         mbar.value = initial_value
                         mbar.visible = True
-                        mmd.content = _progress_md(
-                            title, initial_value, bar_animated, elapsed=0.0,
+                        set_safe_markdown(
+                            mmd,
+                            _progress_md(title, initial_value, bar_animated, elapsed=0.0),
                         )
                     except Exception:
                         pass
@@ -1840,11 +1905,14 @@ class _ProgressReporter:
                     clamped = float(max(0.0, min(100.0, value)))
                     self._bar.value = clamped
                 elapsed = time.monotonic() - self._started_at
-                self._label.content = _progress_md(
-                    message,
-                    float(self._bar.value) if not self._bar.animated else 0.0,
-                    bool(self._bar.animated),
-                    elapsed=elapsed,
+                set_safe_markdown(
+                    self._label,
+                    _progress_md(
+                        message,
+                        float(self._bar.value) if not self._bar.animated else 0.0,
+                        bool(self._bar.animated),
+                        elapsed=elapsed,
+                    ),
                 )
                 pv = float(self._bar.value) if not self._bar.animated else 0.0
                 anim = bool(self._bar.animated)
@@ -1852,7 +1920,9 @@ class _ProgressReporter:
                     try:
                         if value is not None and not mbar.animated:
                             mbar.value = clamped
-                        mmd.content = _progress_md(message, pv, anim, elapsed=elapsed)
+                        set_safe_markdown(
+                            mmd, _progress_md(message, pv, anim, elapsed=elapsed)
+                        )
                     except Exception:
                         pass
                 self._server.flush()
@@ -1883,15 +1953,26 @@ class _ProgressReporter:
                 value = self._compute_value_locked()
                 self._bar.value = value
                 elapsed = time.monotonic() - self._started_at
-                self._label.content = _progress_md(
-                    self._title, value, bool(self._bar.animated), elapsed=elapsed,
+                set_safe_markdown(
+                    self._label,
+                    _progress_md(
+                        self._title,
+                        value,
+                        bool(self._bar.animated),
+                        elapsed=elapsed,
+                    ),
                 )
                 for mbar, mmd in self._mirrors:
                     try:
                         mbar.value = value
-                        mmd.content = _progress_md(
-                            self._title, value, bool(self._bar.animated),
-                            elapsed=elapsed,
+                        set_safe_markdown(
+                            mmd,
+                            _progress_md(
+                                self._title,
+                                value,
+                                bool(self._bar.animated),
+                                elapsed=elapsed,
+                            ),
                         )
                     except Exception:
                         pass
@@ -1913,16 +1994,20 @@ class _ProgressReporter:
                     self._bar.visible = True
                     self._bar.value = 100.0
                     elapsed = time.monotonic() - self._started_at
-                    self._label.content = _progress_md(
-                        last_message, 100.0, False, elapsed=elapsed,
+                    set_safe_markdown(
+                        self._label,
+                        _progress_md(last_message, 100.0, False, elapsed=elapsed),
                     )
                     for mbar, mmd in self._mirrors:
                         try:
                             mbar.animated = False
                             mbar.visible = True
                             mbar.value = 100.0
-                            mmd.content = _progress_md(
-                                last_message, 100.0, False, elapsed=elapsed,
+                            set_safe_markdown(
+                                mmd,
+                                _progress_md(
+                                    last_message, 100.0, False, elapsed=elapsed
+                                ),
                             )
                         except Exception:
                             pass
@@ -1931,13 +2016,13 @@ class _ProgressReporter:
                 self._bar.visible = False
                 self._bar.animated = False
                 self._bar.value = 0.0
-                self._label.content = ""
+                set_safe_markdown(self._label, "")
                 for mbar, mmd in self._mirrors:
                     try:
                         mbar.visible = False
                         mbar.animated = False
                         mbar.value = 0.0
-                        mmd.content = ""
+                        set_safe_markdown(mmd, "")
                     except Exception:
                         pass
                 self._server.flush()
@@ -1989,21 +2074,27 @@ class _ProgressReporter:
                         pv = (
                             float(self._bar.value) if not self._bar.animated else 0.0
                         )
-                        self._label.content = _progress_md(
-                            self._title,
-                            pv,
-                            bool(self._bar.animated),
-                            elapsed=elapsed,
+                        set_safe_markdown(
+                            self._label,
+                            _progress_md(
+                                self._title,
+                                pv,
+                                bool(self._bar.animated),
+                                elapsed=elapsed,
+                            ),
                         )
                         for mbar, mmd in self._mirrors:
                             try:
                                 if self._expected_seconds is not None:
                                     mbar.value = self._compute_value_locked()
-                                mmd.content = _progress_md(
-                                    self._title,
-                                    float(mbar.value) if not mbar.animated else 0.0,
-                                    bool(mbar.animated),
-                                    elapsed=elapsed,
+                                set_safe_markdown(
+                                    mmd,
+                                    _progress_md(
+                                        self._title,
+                                        float(mbar.value) if not mbar.animated else 0.0,
+                                        bool(mbar.animated),
+                                        elapsed=elapsed,
+                                    ),
                                 )
                             except Exception:
                                 pass
@@ -2113,7 +2204,8 @@ def _build_robot_tab(  # type: ignore[no-untyped-def]
     }
 
     if not presets:
-        server.gui.add_markdown(
+        add_safe_markdown(
+            server.gui,
             f"<div style='opacity:0.7;padding:8px 0;'>"
             f"No robot presets found under <code>configs/robots/</code>.  "
             f"Copy <code>configs/robots/_template/</code> and edit."
@@ -2141,7 +2233,7 @@ def _build_robot_tab(  # type: ignore[no-untyped-def]
         ),
     )
 
-    stats_md = server.gui.add_markdown("")
+    stats_md = add_safe_markdown(server.gui, "")
 
     # Library — identical controls + sync with Motion → Library (Search / Folder / Clip).
     initial_clip_labels: tuple[str, ...] = ("(no matches)",)
@@ -2170,7 +2262,7 @@ def _build_robot_tab(  # type: ignore[no-untyped-def]
             pass
 
     with server.gui.add_folder("Library", expand_by_default=True):
-        robot_lib_prog_md = server.gui.add_markdown("")
+        robot_lib_prog_md = add_safe_markdown(server.gui, "")
         robot_lib_prog_bar = server.gui.add_progress_bar(
             value=0.0, visible=False, animated=False,
         )
@@ -2452,8 +2544,9 @@ def _build_robot_tab(  # type: ignore[no-untyped-def]
         retarget_bar = server.gui.add_progress_bar(
             0.0, animated=False, visible=False,
         )
-        retarget_progress_md = server.gui.add_markdown("")
-        retarget_status = server.gui.add_markdown(
+        retarget_progress_md = add_safe_markdown(server.gui, "")
+        retarget_status = add_safe_markdown(
+            server.gui,
             "<span style='opacity:0.6'>Select a motion in the Motion tab, "
             "then click Retarget above.</span>"
         )
@@ -2560,13 +2653,14 @@ def _build_robot_tab(  # type: ignore[no-untyped-def]
                     f" Reference pose auto-switched to "
                     f"<b>{_html_escape(suggested_ref)}</b>."
                 )
-            retarget_status.content = (
+            set_safe_markdown(
+                retarget_status,
                 f"<span style='color:{PALETTE.ui_warn}'>⚠ Rig type changed:</span> "
                 f"<b>{esc_prev}</b> → <b>{esc_curr}</b>. "
                 f"Mapping coverage: <b>{coverage}/17</b> canonical joints."
                 f"{ref_note} "
                 f"Please verify the <b>calibration</b> is correct "
-                f"for this data source."
+                f"for this data source.",
             )
             _notify_all(
                 server, "Data source type changed",
@@ -2578,13 +2672,14 @@ def _build_robot_tab(  # type: ignore[no-untyped-def]
             )
         elif coverage < 10:
             esc_curr = _html_escape(current_rig)
-            retarget_status.content = (
+            set_safe_markdown(
+                retarget_status,
                 f"<span style='color:{PALETTE.ui_error}'>⚠ Low mapping coverage:</span> "
                 f"rig=<b>{esc_curr}</b>, "
                 f"only <b>{coverage}/17</b> canonical joints resolved. "
                 f"Scale/retarget results may be incorrect. "
                 f"Try selecting a different reference that matches "
-                f"your data source's joint naming convention."
+                f"your data source's joint naming convention.",
             )
             _notify_all(
                 server, f"Low mapping coverage ({coverage}/17)",
@@ -2592,11 +2687,12 @@ def _build_robot_tab(  # type: ignore[no-untyped-def]
                 color="orange",
             )
         elif ref_switched and suggested_ref:
-            retarget_status.content = (
+            set_safe_markdown(
+                retarget_status,
                 f"<span style='color:{PALETTE.ui_ok}'>✓</span> "
                 f"Detected rig: <b>{_html_escape(current_rig)}</b>. "
                 f"Reference pose auto-switched to "
-                f"<b>{_html_escape(suggested_ref)}</b>."
+                f"<b>{_html_escape(suggested_ref)}</b>.",
             )
 
         _last_rig_type["value"] = current_rig
@@ -2619,7 +2715,7 @@ def _build_robot_tab(  # type: ignore[no-untyped-def]
     # session lives in the same right-hand panel as the rest of the
     # Robot tab — no occlusion, no dimming.
     with server.gui.add_folder("Retarget calibration"):
-        calib_status_md = server.gui.add_markdown("")
+        calib_status_md = add_safe_markdown(server.gui, "")
         calib_reference_picker = server.gui.add_dropdown(
             "Reference pose",
             options=(
@@ -2683,7 +2779,7 @@ def _build_robot_tab(  # type: ignore[no-untyped-def]
             _sync_calib_reference_after_motion_load,
         )
 
-    progress_md = server.gui.add_markdown("")
+    progress_md = add_safe_markdown(server.gui, "")
 
     def _render_stats(preset: RobotPreset) -> str:
         esc_name = _html_escape(preset.display_name)
@@ -2939,11 +3035,11 @@ def _build_robot_tab(  # type: ignore[no-untyped-def]
     @picker.on_update
     def _on_pick(_):  # type: ignore[no-untyped-def]
         preset = label_to_preset[picker.value]
-        stats_md.content = _render_stats(preset)
+        set_safe_markdown(stats_md, _render_stats(preset))
         load_btn.disabled = not preset.has_urdf
 
     # Prime the stats + button state.
-    stats_md.content = _render_stats(label_to_preset[picker.value])
+    set_safe_markdown(stats_md, _render_stats(label_to_preset[picker.value]))
     load_btn.disabled = not label_to_preset[picker.value].has_urdf
 
     # Persistent references for modal widgets so they aren't garbage-
@@ -2960,7 +3056,8 @@ def _build_robot_tab(  # type: ignore[no-untyped-def]
         modal = server.gui.add_modal("Calibration exists")
         _load_modal_refs["modal"] = modal
         with modal:
-            server.gui.add_markdown(
+            add_safe_markdown(
+                server.gui,
                 f"<b>{_html_escape(preset.display_name)}</b> already has a "
                 "saved calibration.<br>"
                 "Do you want to open the calibration editor?"
@@ -2984,9 +3081,10 @@ def _build_robot_tab(  # type: ignore[no-untyped-def]
         preset = label_to_preset[picker.value]
 
         def _worker() -> None:
-            progress_md.content = (
+            set_safe_markdown(
+                progress_md,
                 f"<span style='opacity:0.8'>⟳</span> "
-                f"Loading <b>{_html_escape(preset.display_name)}</b>…"
+                f"Loading <b>{_html_escape(preset.display_name)}</b>…",
             )
             try:
                 server.flush()
@@ -2995,9 +3093,10 @@ def _build_robot_tab(  # type: ignore[no-untyped-def]
             try:
                 model = load_robot(preset, build_collision_scene=True)
             except Exception as err:
-                progress_md.content = (
+                set_safe_markdown(
+                    progress_md,
                     f"<span style='color:{PALETTE.ui_error}'>Load failed:</span> "
-                    f"<code>{_html_escape(f'{type(err).__name__}: {err}')}</code>"
+                    f"<code>{_html_escape(f'{type(err).__name__}: {err}')}</code>",
                 )
                 _notify_all(
                     server, "Robot load failed",
@@ -3010,18 +3109,20 @@ def _build_robot_tab(  # type: ignore[no-untyped-def]
             try:
                 n = _render_robot(model)
             except Exception as err:
-                progress_md.content = (
+                set_safe_markdown(
+                    progress_md,
                     f"<span style='color:{PALETTE.ui_error}'>Render failed:</span> "
-                    f"<code>{_html_escape(f'{type(err).__name__}: {err}')}</code>"
+                    f"<code>{_html_escape(f'{type(err).__name__}: {err}')}</code>",
                 )
                 return
             animator = state["animator"]
             ground_lift = getattr(animator, "ground_offset_z", 0.0)
-            progress_md.content = (
+            set_safe_markdown(
+                progress_md,
                 f"<span style='color:{PALETTE.ui_ok}'>✓</span> "
                 f"Loaded <b>{_html_escape(preset.display_name)}</b> · "
                 f"{len(model.actuated_joints)} DOF · {n} meshes · "
-                f"lifted {ground_lift:.3f} m to ground"
+                f"lifted {ground_lift:.3f} m to ground",
             )
             _notify_all(
                 server, "Robot loaded",
@@ -3080,8 +3181,8 @@ def _build_robot_tab(  # type: ignore[no-untyped-def]
     def _on_clear(_):  # type: ignore[no-untyped-def]
         _exit_calibration_mode()
         _clear_scene()
-        progress_md.content = (
-            "<span style='opacity:0.6'>Scene cleared.</span>"
+        set_safe_markdown(
+            progress_md, "<span style='opacity:0.6'>Scene cleared.</span>"
         )
         _refresh_calib_status()
 
@@ -3143,7 +3244,7 @@ def _build_robot_tab(  # type: ignore[no-untyped-def]
 
     def _refresh_calib_status() -> None:
         try:
-            calib_status_md.content = _render_calib_status()
+            set_safe_markdown(calib_status_md, _render_calib_status())
         except Exception:
             pass
 
@@ -3945,17 +4046,19 @@ def _build_robot_tab(  # type: ignore[no-untyped-def]
                 _publish_scaled_preview(preview)
                 if sc is not None:
                     _publish_robot_objects(sc, human_h)
-                retarget_status.content = (
+                set_safe_markdown(
+                    retarget_status,
                     f"<span style='color:{PALETTE.ui_ok}'>✓</span> "
                     f"Scaled preview · {preview.num_frames} frames · "
                     f"{len(preview.joint_names)} ik_map joints · "
                     f"rig: <b>{rig_label}</b> · "
-                    f"height assumption: {human_h:.3f}m"
+                    f"height assumption: {human_h:.3f}m",
                 )
             except Exception as err:  # noqa: BLE001
-                retarget_status.content = (
+                set_safe_markdown(
+                    retarget_status,
                     f"<span style='color:{PALETTE.ui_error}'>Scaled preview failed:</span> "
-                    f"<code>{_html_escape(f'{type(err).__name__}: {err}')}</code>"
+                    f"<code>{_html_escape(f'{type(err).__name__}: {err}')}</code>",
                 )
 
         threading.Thread(
@@ -4095,12 +4198,13 @@ def _build_robot_tab(  # type: ignore[no-untyped-def]
                     f"{len(written)} pkl → {rel_root}",
                     color="green",
                 )
-                retarget_status.content = (
+                set_safe_markdown(
+                    retarget_status,
                     f"<span style='color:{PALETTE.ui_ok}'>✓</span> "
                     f"Robot clip saved → "
                     f"<code>{_html_escape(str(rel_root))}/</code> "
                     f"({len(written)} pkl: "
-                    f"{', '.join(written.keys())})"
+                    f"{', '.join(written.keys())})",
                 )
             except Exception as exc:  # noqa: BLE001
                 import traceback
@@ -4285,8 +4389,10 @@ def _build_robot_tab(  # type: ignore[no-untyped-def]
                     )
 
                 if not clips:
-                    retarget_status.content = (
-                        f"<span style='color:{PALETTE.ui_error}'>Nothing was retargeted.</span>"
+                    set_safe_markdown(
+                        retarget_status,
+                        f"<span style='color:{PALETTE.ui_error}'>"
+                        "Nothing was retargeted.</span>",
                     )
                     return
 
@@ -4627,8 +4733,10 @@ def _build_robot_tab(  # type: ignore[no-untyped-def]
                             )
 
                 if not exported:
-                    retarget_status.content = (
-                        f"<span style='color:{PALETTE.ui_error}'>Nothing was retargeted.</span>"
+                    set_safe_markdown(
+                        retarget_status,
+                        f"<span style='color:{PALETTE.ui_error}'>"
+                        "Nothing was retargeted.</span>",
                     )
                     return
 
@@ -4643,14 +4751,15 @@ def _build_robot_tab(  # type: ignore[no-untyped-def]
                         if use_newton_batch
                         else "per-clip solvers · "
                     )
-                    retarget_status.content = (
+                    set_safe_markdown(
+                        retarget_status,
                         f"<span style='color:{PALETTE.ui_ok}'>✓</span> "
                         f"Retargeted <b>{len(exported)}</b> clip(s) · "
                         f"{batch_note}"
                         f"rig: <b>{rig_label}</b> · "
                         f"last result playing now · "
                         f"<code>{_html_escape(head.parent)}/</code> "
-                        f"(see {_html_escape(head.name)}, …)"
+                        f"(see {_html_escape(head.name)}, …)",
                     )
                     _notify_all(
                         server, f"Retargeted × {len(exported)}",
@@ -4659,12 +4768,13 @@ def _build_robot_tab(  # type: ignore[no-untyped-def]
                 else:
                     path = exported[0]
                     assert last_result is not None
-                    retarget_status.content = (
+                    set_safe_markdown(
+                        retarget_status,
                         f"<span style='color:{PALETTE.ui_ok}'>✓</span> "
                         f"Retargeted {last_result.num_frames} frames · "
                         f"{len(last_result.dof_names)} DOF · "
                         f"rig: <b>{rig_label}</b> → "
-                        f"<code>{_html_escape(path)}</code>"
+                        f"<code>{_html_escape(path)}</code>",
                     )
                     _notify_all(
                         server, "Retargeted",
@@ -4672,9 +4782,10 @@ def _build_robot_tab(  # type: ignore[no-untyped-def]
                         color="green",
                     )
             except Exception as err:  # noqa: BLE001
-                retarget_status.content = (
+                set_safe_markdown(
+                    retarget_status,
                     f"<span style='color:{PALETTE.ui_error}'>Retarget failed:</span> "
-                    f"<code>{_html_escape(f'{type(err).__name__}: {err}')}</code>"
+                    f"<code>{_html_escape(f'{type(err).__name__}: {err}')}</code>",
                 )
                 _notify_all(
                     server, "Retarget failed",
@@ -4986,7 +5097,8 @@ def _build_robot_tab(  # type: ignore[no-untyped-def]
         c2n, _ = _current_ref_mappings()
 
         if not options:
-            server.gui.add_markdown(
+            add_safe_markdown(
+                server.gui,
                 f"<span style='color:{PALETTE.ui_error}'>No reference joints available "
                 "— mapping editor disabled.</span>"
             )
@@ -4995,7 +5107,8 @@ def _build_robot_tab(  # type: ignore[no-untyped-def]
         with server.gui.add_folder(
             "Joint mapping", expand_by_default=False,
         ):
-            server.gui.add_markdown(
+            add_safe_markdown(
+                server.gui,
                 "For each robot link, pick which human joint from the "
                 f"<b>{_html_escape(calib_reference_picker.value)}</b> "
                 "reference should drive it.  Edits here are saved into "
@@ -5072,7 +5185,8 @@ def _build_robot_tab(  # type: ignore[no-untyped-def]
 
         handles: dict[str, object] = {}
         with session:
-            server.gui.add_markdown(
+            add_safe_markdown(
+                server.gui,
                 "Drag each slider so the robot's pose overlays the blue "
                 "reference human.  When you click **Save**, the closed-"
                 "form per-limb scale + offset will be derived and cached "
@@ -5443,9 +5557,10 @@ def _build_robot_tab(  # type: ignore[no-untyped-def]
             f"{out}  ({len(cols)} columns)",
             color="blue",
         )
-        progress_md.content = (
+        set_safe_markdown(
+            progress_md,
             f"<span style='color:{PALETTE.ui_ok}'>✓</span> "
-            f"Wrote <code>{_html_escape(out)}</code> · {len(cols)} columns"
+            f"Wrote <code>{_html_escape(out)}</code> · {len(cols)} columns",
         )
 
 
