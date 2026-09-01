@@ -259,6 +259,10 @@ def _validate_retarget_plan_projection(
         raise _InvalidDocumentError("parameters must be a JSON object")
 
     profile_source = profile.get("source")
+    # Older v1 plans predate writable per-user calibration overlays.  Treat a
+    # missing discriminator as the original robot-bundle storage so persisted
+    # plans retain their meaning after an upgrade.
+    profile_storage = profile.get("storage", "robot_bundle")
     profile_digest = profile.get("digest")
     calibration_id = profile.get("calibration_id")
     profile_relative_path = profile.get("relative_path")
@@ -266,6 +270,21 @@ def _validate_retarget_plan_projection(
         raise _InvalidDocumentError("retarget profile digest must be SHA-256")
     if not _is_portable_relative_path(profile_relative_path):
         raise _InvalidDocumentError("retarget profile path must be portable and relative")
+    if profile_storage not in {"robot_bundle", "user_calibration"}:
+        raise _InvalidDocumentError("unsupported retarget profile storage")
+    if profile_storage == "user_calibration":
+        robot_id = robot.get("robot_id")
+        reference = motion.get("reference")
+        if not isinstance(robot_id, str) or not isinstance(reference, str):
+            raise _InvalidDocumentError("user calibration identity is incomplete")
+        expected_paths = {
+            f"{robot_id}/retarget_calibration_{reference}.yaml",
+            f"{robot_id}/retarget_calibration.yaml",
+        }
+        if profile_relative_path not in expected_paths:
+            raise _InvalidDocumentError(
+                "user calibration path must match the plan robot and reference"
+            )
     if profile_source == "calibration":
         if not isinstance(calibration_id, str):
             raise _InvalidDocumentError("manual calibration must have an id")
@@ -273,6 +292,8 @@ def _validate_retarget_plan_projection(
             raise _InvalidDocumentError("manual calibration id must match the profile digest")
         projected_calibration_digest: Any = profile_digest
     elif profile_source == "bundled_scaler":
+        if profile_storage != "robot_bundle":
+            raise _InvalidDocumentError("bundled scaler must use robot-bundle storage")
         if calibration_id is not None:
             raise _InvalidDocumentError("bundled scaler cannot have a calibration id")
         projected_calibration_digest = None

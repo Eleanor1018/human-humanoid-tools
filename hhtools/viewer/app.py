@@ -3162,10 +3162,10 @@ def _build_robot_tab(  # type: ignore[no-untyped-def]
 
             # After successful load, check if a calibration already
             # exists and prompt the user about recalibrating.
-            from hhtools.retarget.calibration import resolve_calibration_file
+            from hhtools.retarget.calibration import resolve_preset_calibration_file
             cal_path = (
-                resolve_calibration_file(
-                    preset.urdf_path.parent,
+                resolve_preset_calibration_file(
+                    preset,
                     str(calib_reference_picker.value),
                 )
                 if preset.urdf_path is not None else None
@@ -3316,7 +3316,7 @@ def _build_robot_tab(  # type: ignore[no-untyped-def]
         calib_state["current_q"] = q
 
     def _resolve_robot_calibration(model: URDFRobotModel):
-        """Look up the retarget calibration yaml sitting next to the URDF.
+        """Look up a user calibration override or the bundled robot yaml.
 
         Returns a :class:`~hhtools.retarget.calibration.RobotRetargetCalibration`
         or ``None`` if no yaml exists yet — callers gate retarget on a
@@ -3325,14 +3325,14 @@ def _build_robot_tab(  # type: ignore[no-untyped-def]
         """
         from hhtools.retarget.calibration import (
             load_calibration,
-            resolve_calibration_file,
+            resolve_preset_calibration_file,
         )
 
         preset = model.preset
         if preset.urdf_path is None:
             return None
-        cal_path = resolve_calibration_file(
-            preset.urdf_path.parent,
+        cal_path = resolve_preset_calibration_file(
+            preset,
             str(calib_reference_picker.value),
         )
         if cal_path is None:
@@ -4313,7 +4313,7 @@ def _build_robot_tab(  # type: ignore[no-untyped-def]
 
         def _worker() -> None:
             from hhtools.io.robot_csv import save_robot_csv
-            from hhtools.retarget.calibration import resolve_calibration_file
+            from hhtools.retarget.calibration import resolve_preset_calibration_file
             from hhtools.retarget.interaction_mesh import (
                 InteractionMeshPipeline,
                 InteractionMeshPipelineConfig,
@@ -4438,8 +4438,8 @@ def _build_robot_tab(  # type: ignore[no-untyped-def]
                 )
                 cal_path_str: str | None = None
                 if preset.urdf_path is not None:
-                    cr = resolve_calibration_file(
-                        preset.urdf_path.parent,
+                    cr = resolve_preset_calibration_file(
+                        preset,
                         ref_name,
                     )
                     if cr is not None and cr.is_file():
@@ -4822,7 +4822,9 @@ def _build_robot_tab(  # type: ignore[no-untyped-def]
         """Gather the session's slider state, derive + persist, teardown UI.
 
         Side-effects:
-          * Writes ``retarget_calibration_<reference>.yaml`` next to the URDF.
+          * Writes ``retarget_calibration_<reference>.yaml`` next to a
+            writable source preset, or to the per-user overlay for an
+            installed read-only preset.
           * Mirrors the closed-form scale/offset cache into the yaml for
             diffability (see :func:`save_calibration`).
           * Removes the session folder and clears the reference skeleton.
@@ -4854,9 +4856,8 @@ def _build_robot_tab(  # type: ignore[no-untyped-def]
         }
         from hhtools.retarget.calibration import (
             RobotRetargetCalibration,
-            calibration_path_for,
             derive_calibration_params,
-            save_calibration,
+            save_calibration_for_preset,
         )
 
         cal = RobotRetargetCalibration(
@@ -4886,12 +4887,12 @@ def _build_robot_tab(  # type: ignore[no-untyped-def]
                 color="orange",
             )
 
-        cal_path = calibration_path_for(
-            preset.urdf_path.parent,
-            reference=str(calib_reference_picker.value),
-        )
         try:
-            save_calibration(cal, cal_path, derived=derived)
+            cal_path = save_calibration_for_preset(
+                cal,
+                preset,
+                derived=derived,
+            )
         except Exception as err:  # noqa: BLE001
             _notify_all(
                 server, "Save failed",

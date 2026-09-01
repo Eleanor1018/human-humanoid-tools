@@ -15,6 +15,7 @@ layer.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import platform
 import re
@@ -44,6 +45,7 @@ from hhtools.contracts import (
     NextAction,
     RetargetPlan,
 )
+from hhtools.utils.paths import user_robot_dir
 
 from .assets import AssetServiceError
 from .plans import PlanStore, PlanStoreError
@@ -221,6 +223,69 @@ def _asset_digest(asset_id: str) -> str:
     return asset_id.removeprefix(_ASSET_ID_PREFIX)
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _verify_user_calibration_profile(
+    *,
+    plan_id: str,
+    relative_path: Any,
+    expected_digest: Any,
+) -> None:
+    """Verify one managed user calibration without trusting the robot manifest.
+
+    User calibration overlays intentionally live outside immutable packaged
+    robot bundles.  The canonical plan therefore binds their portable path and
+    exact content digest directly.  Resolve the path under the current user's
+    managed robot root and re-hash it immediately before materializing a
+    JobSpec, so switching users, changing ``HHTOOLS_ROBOT_DIR``, path escape,
+    deletion, and post-preflight edits all make the plan stale.
+    """
+
+    if not isinstance(relative_path, str) or not isinstance(expected_digest, str):
+        raise _service_error(
+            "PLAN_STALE",
+            "The managed calibration identity recorded by the plan is incomplete.",
+            details={"plan_id": plan_id},
+            next_action=_preflight_action(plan_id),
+        )
+    try:
+        root = user_robot_dir().resolve(strict=True)
+        candidate = (root / Path(relative_path)).resolve(strict=True)
+        candidate.relative_to(root)
+        if not candidate.is_file():
+            raise ValueError("managed calibration is not a regular file")
+        before = candidate.stat()
+        actual_digest = _sha256_file(candidate)
+        after = candidate.stat()
+        stable_identity = (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+        ) == (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+        )
+    except (OSError, RuntimeError, ValueError):
+        actual_digest = None
+        stable_identity = False
+    if not stable_identity or actual_digest != expected_digest:
+        raise _service_error(
+            "PLAN_STALE",
+            "The managed user calibration no longer matches the immutable plan.",
+            details={"plan_id": plan_id},
+            next_action=_preflight_action(plan_id),
+        )
+
+
 class RetargetService:
     """Resolve a verified immutable plan into a stable, non-executing JobSpec."""
 
@@ -341,20 +406,39 @@ class RetargetService:
             )
 
         profile_source = profile_payload.get("source")
+        profile_storage = profile_payload.get("storage", "robot_bundle")
         profile_digest = profile_payload.get("digest")
         profile_relative_path = profile_payload.get("relative_path")
-        profile_file = next(
-            (item for item in robot_bundle.files if item.relative_path == profile_relative_path),
-            None,
-        )
-        if (
-            profile_file is None
-            or profile_file.role.value != "metadata"
-            or profile_file.sha256 != profile_digest
-        ):
+        if profile_storage == "robot_bundle":
+            profile_file = next(
+                (
+                    item
+                    for item in robot_bundle.files
+                    if item.relative_path == profile_relative_path
+                ),
+                None,
+            )
+            if (
+                profile_file is None
+                or profile_file.role.value != "metadata"
+                or profile_file.sha256 != profile_digest
+            ):
+                raise _service_error(
+                    "PLAN_STALE",
+                    "The retarget profile is not bound into the current robot bundle.",
+                    details={"plan_id": plan_id},
+                    next_action=_preflight_action(plan_id),
+                )
+        elif profile_storage == "user_calibration" and profile_source == "calibration":
+            _verify_user_calibration_profile(
+                plan_id=plan_id,
+                relative_path=profile_relative_path,
+                expected_digest=profile_digest,
+            )
+        else:
             raise _service_error(
                 "PLAN_STALE",
-                "The retarget profile is not bound into the current robot bundle.",
+                "The retarget profile storage recorded by the plan is unsupported.",
                 details={"plan_id": plan_id},
                 next_action=_preflight_action(plan_id),
             )

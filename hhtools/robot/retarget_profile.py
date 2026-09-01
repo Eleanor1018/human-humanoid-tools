@@ -514,13 +514,13 @@ def _shoulder_roll_scale_ratios(
 
     from hhtools.retarget.calibration.calibration import (
         load_calibration,
-        resolve_calibration_file,
+        resolve_preset_calibration_file,
     )
     from hhtools.robot.joint_scales import _CALIBRATION_REF_ORDER
 
     calibration = None
     for ref in _CALIBRATION_REF_ORDER:
-        cal_path = resolve_calibration_file(preset.root_dir, ref)
+        cal_path = resolve_preset_calibration_file(preset, ref)
         if cal_path is None or not cal_path.is_file():
             continue
         try:

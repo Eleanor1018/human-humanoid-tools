@@ -341,6 +341,72 @@ def test_calibration_content_change_changes_plan_identity(tmp_path: Path) -> Non
     assert baseline.plan.calibration_digest != changed.plan.calibration_digest
 
 
+def test_user_calibration_overlay_is_content_bound_without_robot_reregistration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, motion_id, robot_id, _ = _setup(tmp_path, calibration=False)
+    user_root = tmp_path / "user-robots"
+    calibration = user_root / "test_robot" / "retarget_calibration_smpl.yaml"
+    calibration.parent.mkdir(parents=True)
+    calibration.write_text(
+        "robot: test_robot\n"
+        "reference: smpl\n"
+        "calibrated_joint_q:\n"
+        "  hip: 0.0\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HHTOOLS_ROBOT_DIR", str(user_root))
+
+    first = service.preflight_retarget(_request(motion_id, robot_id))
+
+    assert first.status is PreflightStatus.READY
+    assert first.plan is not None
+    first_payload = service._plan_store.get_payload(first.plan.plan_id)  # noqa: SLF001
+    profile = first_payload["retarget_profile"]
+    assert isinstance(profile, dict)
+    assert profile["storage"] == "user_calibration"
+    assert profile["relative_path"] == "test_robot/retarget_calibration_smpl.yaml"
+    assert first.plan.calibration_id == (
+        f"cal:sha256:{hashlib.sha256(calibration.read_bytes()).hexdigest()}"
+    )
+
+    calibration.write_text(
+        calibration.read_text(encoding="utf-8").replace("hip: 0.0", "hip: 0.5"),
+        encoding="utf-8",
+    )
+    changed = service.preflight_retarget(_request(motion_id, robot_id))
+
+    assert changed.status is PreflightStatus.READY
+    assert changed.plan is not None
+    assert changed.plan.plan_id != first.plan.plan_id
+    assert changed.plan.calibration_digest != first.plan.calibration_digest
+
+
+def test_invalid_user_calibration_override_does_not_fall_back_to_bundle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, motion_id, robot_id, _ = _setup(tmp_path)
+    user_root = tmp_path / "user-robots"
+    calibration = user_root / "test_robot" / "retarget_calibration_smpl.yaml"
+    calibration.parent.mkdir(parents=True)
+    calibration.write_text(
+        "robot: another_robot\n"
+        "reference: smpl\n"
+        "calibrated_joint_q:\n"
+        "  hip: 0.0\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HHTOOLS_ROBOT_DIR", str(user_root))
+
+    response = service.preflight_retarget(_request(motion_id, robot_id))
+
+    assert response.status is PreflightStatus.REJECTED
+    assert response.error is not None
+    assert response.error.code == "CALIBRATION_MISMATCH"
+
+
 def test_preflight_preserves_actionable_asset_integrity_error_codes(
     tmp_path: Path,
 ) -> None:

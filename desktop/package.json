@@ -3,7 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "description": "Standalone desktop GUI for human-humanoid-tools",
+  "desktopName": "hhtools",
   "author": "hhtools contributors",
+  "homepage": "https://github.com/Roboparty/human-humanoid-tools",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Roboparty/human-humanoid-tools.git"
+  },
   "type": "module",
   "main": "out/main/index.js",
   "scripts": {
@@ -14,7 +20,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run --config vitest.config.ts",
     "test:e2e": "npm run build && playwright test --config playwright.config.ts",
-    "dist:win": "npm run build && npm run prepare:runtime && electron-builder --win nsis"
+    "dist:win": "npm run build && npm run prepare:runtime && electron-builder --win nsis",
+    "dist:linux": "npm run build && npm run prepare:runtime && electron-builder --linux deb --x64"
   },
   "devDependencies": {
     "@playwright/test": "1.62.1",
@@ -55,6 +62,29 @@
       "target": [
         "nsis"
       ]
+    },
+    "linux": {
+      "artifactName": "hhtools-${version}-${arch}.${ext}",
+      "category": "Science",
+      "executableName": "hhtools-desktop",
+      "icon": "resources/icon.png",
+      "syncDesktopName": true,
+      "target": [
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "deb": {
+      "fpm": [
+        "--before-install=scripts/linux-before-install.sh",
+        ".runtime/cli/hhtools=/usr/bin/hhtools"
+      ],
+      "maintainer": "hhtools contributors <53653538+Eleanor1018@users.noreply.github.com>",
+      "synopsis": "Desktop workflows for Human-Humanoid Tools"
     },
     "nsis": {
       "oneClick": false,
