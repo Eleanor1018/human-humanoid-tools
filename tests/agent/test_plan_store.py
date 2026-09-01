@@ -159,6 +159,61 @@ def test_manual_calibration_id_must_match_its_content_digest(tmp_path: Path) -> 
     _assert_code(captured, "PLAN_CONFLICT")
 
 
+def test_user_calibration_storage_is_a_valid_content_bound_profile(
+    tmp_path: Path,
+) -> None:
+    payload = _retarget_payload()
+    profile = payload["retarget_profile"]
+    assert isinstance(profile, dict)
+    profile["storage"] = "user_calibration"
+    profile["relative_path"] = "g1/retarget_calibration_smpl.yaml"
+    plan = _retarget_plan(payload)
+
+    inserted = PlanStore(tmp_path / "state").put_if_absent(plan, payload)
+
+    assert inserted == plan
+
+
+@pytest.mark.parametrize(
+    ("profile_source", "storage"),
+    [
+        ("calibration", "remote_calibration"),
+        ("bundled_scaler", "user_calibration"),
+    ],
+)
+def test_retarget_profile_storage_must_match_the_profile_source(
+    tmp_path: Path,
+    profile_source: str,
+    storage: str,
+) -> None:
+    payload = _retarget_payload(profile_source=profile_source)
+    profile = payload["retarget_profile"]
+    assert isinstance(profile, dict)
+    profile["storage"] = storage
+    plan = _retarget_plan(payload, profile_source=profile_source)
+
+    with pytest.raises(PlanStoreError) as captured:
+        PlanStore(tmp_path / "state").put_if_absent(plan, payload)
+
+    _assert_code(captured, "PLAN_CONFLICT")
+
+
+def test_user_calibration_path_must_match_plan_robot_and_reference(
+    tmp_path: Path,
+) -> None:
+    payload = _retarget_payload()
+    profile = payload["retarget_profile"]
+    assert isinstance(profile, dict)
+    profile["storage"] = "user_calibration"
+    profile["relative_path"] = "other_robot/retarget_calibration_smpl.yaml"
+    plan = _retarget_plan(payload)
+
+    with pytest.raises(PlanStoreError) as captured:
+        PlanStore(tmp_path / "state").put_if_absent(plan, payload)
+
+    _assert_code(captured, "PLAN_CONFLICT")
+
+
 @pytest.mark.parametrize(
     "relative_path",
     ["../retarget_calibration.yaml", "C:/robot/scaler.yaml", "config\\scaler.yaml"],

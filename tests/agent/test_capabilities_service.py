@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from hhtools.contracts import DeviceCapability, SchedulerMode
 from hhtools.robot import registry as robot_registry
 from hhtools.robot.base import RobotPreset
@@ -264,3 +266,35 @@ def test_reference_readiness_separates_valid_calibration_from_contained_scaler(
 
     assert calibrated == ["smpl"]
     assert scalers == ["smplx"]
+
+
+def test_reference_readiness_includes_managed_user_calibration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "robot"
+    description = root / "description"
+    description.mkdir(parents=True)
+    urdf = description / "robot.urdf"
+    urdf.write_text("<robot name='ready'/>", encoding="utf-8")
+    user_root = tmp_path / "user-robots"
+    calibration = user_root / "ready" / "retarget_calibration_smpl.yaml"
+    calibration.parent.mkdir(parents=True)
+    calibration.write_text(
+        "robot: ready\nreference: smpl\ncalibrated_joint_q:\n  hip_joint: 0.0\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HHTOOLS_ROBOT_DIR", str(user_root))
+    preset = RobotPreset(
+        name="ready",
+        display_name="Ready",
+        root_dir=root,
+        urdf_path=urdf,
+        ik_map={"hips": "pelvis"},
+        dof_order=("hip_joint",),
+    )
+
+    calibrated, scalers = capabilities_module._reference_readiness(preset)
+
+    assert calibrated == ["smpl"]
+    assert scalers == []

@@ -51,6 +51,7 @@ from hhtools.robot.base import RobotPreset
 from hhtools.services.asset_service import AgentAssetService
 from hhtools.services.assets import AssetServiceError
 from hhtools.services.plans import PlanStore, PlanStoreError, compute_plan_id
+from hhtools.utils.paths import user_robot_dir
 
 _PLAN_SEMANTICS = "hhtools.retarget.plan.v1"
 _SUPPORTED_OUTPUT_FORMATS = frozenset({"csv", "pkl"})
@@ -982,22 +983,35 @@ def _manual_calibration(
     reference: str,
     limits: Mapping[str, tuple[float | None, float | None]],
     robot_bundle: AssetBundle,
-) -> tuple[Path, str, str] | None:
+) -> tuple[Path, str, str, str] | None:
     from hhtools.retarget.calibration import (
         load_calibration,
         normalize_calibration_reference,
+        resolve_preset_calibration_file,
     )
 
-    assert preset.urdf_path is not None
-    calibration_root = preset.urdf_path.parent.resolve()
-    preferred = calibration_root / f"retarget_calibration_{reference}.yaml"
-    legacy = calibration_root / "retarget_calibration.yaml"
-    is_legacy = not preferred.is_file() and legacy.is_file()
-    path = preferred if preferred.is_file() else legacy if is_legacy else None
+    try:
+        managed_user_root = user_robot_dir().resolve(strict=True)
+        path = resolve_preset_calibration_file(
+            preset,
+            reference,
+            user_root=managed_user_root,
+        )
+    except (OSError, RuntimeError, TypeError, ValueError, YAMLError):
+        _fail(
+            "CALIBRATION_MISMATCH",
+            "The matching robot calibration exists but is malformed.",
+            details={"robot_id": preset.name, "reference": reference},
+        )
     if path is None:
         return None
     try:
-        contained = _contained_file(path, calibration_root)
+        try:
+            contained = _contained_file(path, managed_user_root)
+            storage = "user_calibration"
+        except ValueError:
+            contained = _contained_file(path, preset.root_dir)
+            storage = "robot_bundle"
         calibration, digest = _parse_stable_file(contained, load_calibration)
     except _FileChangedError:
         _fail(
@@ -1020,10 +1034,6 @@ def _manual_calibration(
             "The matching robot calibration declares an unsupported reference.",
             details={"robot_id": preset.name, "reference": reference},
         )
-    if is_legacy and calibration_reference != reference:
-        # A valid legacy file for a different reference is not corrupt; it is
-        # simply not a usable profile for this request.
-        return None
     if calibration.robot != preset.name:
         _fail(
             "CALIBRATION_MISMATCH",
@@ -1057,7 +1067,10 @@ def _manual_calibration(
                 "The calibration contains a joint value outside its URDF limit.",
                 details={"joint_name": name},
             )
-    if digest not in _manifest_hashes(robot_bundle, role="metadata"):
+    if storage == "robot_bundle" and digest not in _manifest_hashes(
+        robot_bundle,
+        role="metadata",
+    ):
         action = _register_asset_action(
             _bundle_registration_request(robot_bundle),
             message="Register the robot bundle again so the calibration is content-bound.",
@@ -1068,7 +1081,7 @@ def _manual_calibration(
             details={"robot_id": preset.name, "reference": reference},
             next_action=action,
         )
-    return contained, digest, f"cal:sha256:{digest}"
+    return contained, digest, f"cal:sha256:{digest}", storage
 
 
 def _bundled_scaler(
@@ -1119,7 +1132,7 @@ def _retarget_profile(
     reference: str,
     limits: Mapping[str, tuple[float | None, float | None]],
     robot_bundle: AssetBundle,
-) -> tuple[str, str, str | None, float, str]:
+) -> tuple[str, str, str | None, float, str, str]:
     manual = _manual_calibration(preset, reference, limits, robot_bundle)
     scaler = None
     if backend == "newton" and manual is None:
@@ -1148,7 +1161,7 @@ def _retarget_profile(
             ),
         )
     if manual is not None:
-        profile_path, digest, calibration_id = manual
+        profile_path, digest, calibration_id, storage = manual
         source = "calibration"
         from hhtools.robot.retarget_profile import default_human_height
 
@@ -1158,6 +1171,7 @@ def _retarget_profile(
         profile_path, digest, human_height_default = scaler
         calibration_id = None
         source = "bundled_scaler"
+        storage = "robot_bundle"
     if request.calibration_id is not None and request.calibration_id != calibration_id:
         _fail(
             "CALIBRATION_MISMATCH",
@@ -1169,14 +1183,23 @@ def _retarget_profile(
             },
         )
     try:
-        relative_path = profile_path.relative_to(preset.root_dir.resolve()).as_posix()
+        profile_root = (
+            user_robot_dir().resolve(strict=True)
+            if storage == "user_calibration"
+            else preset.root_dir.resolve(strict=True)
+        )
+        relative_path = profile_path.relative_to(profile_root).as_posix()
     except (OSError, ValueError):
         _fail(
             "ROBOT_BUNDLE_MISMATCH",
-            "The selected retarget profile is outside the robot bundle.",
-            details={"robot_id": preset.name, "reference": reference},
+            "The selected retarget profile is outside its managed storage boundary.",
+            details={
+                "robot_id": preset.name,
+                "reference": reference,
+                "storage": storage,
+            },
         )
-    return source, digest, calibration_id, human_height_default, relative_path
+    return source, digest, calibration_id, human_height_default, relative_path, storage
 
 
 def _scheduler_check(scheduler: SchedulerCapability) -> PreflightCheck:
@@ -1342,6 +1365,7 @@ class PreflightService:
                 calibration_id,
                 human_height_default,
                 profile_relative_path,
+                profile_storage,
             ) = _retarget_profile(
                 request,
                 backend=backend.backend_id,
@@ -1359,6 +1383,7 @@ class PreflightService:
                         "robot_id": preset.name,
                         "reference": reference,
                         "profile_source": profile_source,
+                        "profile_storage": profile_storage,
                     },
                 )
             )
@@ -1414,6 +1439,7 @@ class PreflightService:
                 "backend": backend.backend_id,
                 "retarget_profile": {
                     "source": profile_source,
+                    "storage": profile_storage,
                     "calibration_id": calibration_id,
                     "digest": profile_digest,
                     "relative_path": profile_relative_path,

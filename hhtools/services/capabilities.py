@@ -213,26 +213,28 @@ def _reference_readiness(preset: RobotPreset) -> tuple[list[str], list[str]]:
     both facts separate so clients can make backend-specific decisions.
     """
 
-    from hhtools.retarget.calibration import load_calibration, resolve_calibration_file
+    from hhtools.retarget.calibration import (
+        load_calibration,
+        normalize_calibration_reference,
+        resolve_preset_calibration_file,
+    )
     from hhtools.retarget.newton_basic.config import load_scaler_config
     from hhtools.robot.retarget_profile import bundled_scaler_path
 
     calibrated: list[str] = []
     scalers: list[str] = []
     known_joints = set(preset.dof_order)
-    calibration_root = (
-        preset.urdf_path.parent if preset.urdf_path is not None else preset.root_dir
-    ).resolve()
     preset_root = preset.root_dir.resolve()
     for reference in _CALIBRATION_REFERENCES:
         try:
-            calibration_path = resolve_calibration_file(calibration_root, reference)
+            calibration_path = resolve_preset_calibration_file(preset, reference)
             if calibration_path is not None:
-                calibration_path.resolve(strict=True).relative_to(calibration_root)
                 calibration = load_calibration(calibration_path)
                 calibration_joints = set(calibration.calibrated_joint_q)
-                robot_matches = not calibration.robot or calibration.robot == preset.name
-                reference_matches = calibration.reference == reference
+                robot_matches = calibration.robot == preset.name
+                reference_matches = (
+                    normalize_calibration_reference(str(calibration.reference)) == reference
+                )
                 joints_match = not calibration_joints.difference(known_joints)
                 if robot_matches and reference_matches and joints_match:
                     calibrated.append(reference)

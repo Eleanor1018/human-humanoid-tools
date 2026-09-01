@@ -218,7 +218,7 @@ def retarget(
     from hhtools.io.robot_csv import save_robot_csv
     from hhtools.retarget.calibration import (
         load_calibration,
-        resolve_calibration_file,
+        resolve_preset_calibration_file,
     )
     from hhtools.robot.retarget_profile import (
         build_feet_stabilizer_config,
@@ -244,19 +244,20 @@ def retarget(
         raise typer.BadParameter(str(err)) from err
     robot_model = load_robot(preset)
 
-    # Require a retarget calibration yaml next to the URDF (per reference
-    # format, or legacy single file when its embedded reference matches).
+    # Resolve either a writable per-user override or the calibration bundled
+    # with the robot preset.  Installed applications keep bundled assets
+    # immutable, so calibrations saved from the GUI normally live in the
+    # user's hhtools robot configuration directory.
     if preset.urdf_path is None:
         raise typer.BadParameter(
             f"robot preset {robot!r} has no URDF on disk; calibration "
             "cannot be resolved."
         )
-    preset_dir = preset.urdf_path.parent
-    cal_path = resolve_calibration_file(preset_dir, calibration_reference)
+    cal_path = resolve_preset_calibration_file(preset, calibration_reference)
     if cal_path is None:
         raise typer.BadParameter(
             f"no retarget calibration for robot {robot!r} with reference "
-            f"{calibration_reference!r} under {preset_dir}.\n"
+            f"{calibration_reference!r}.\n"
             "Expected e.g. "
             f"`retarget_calibration_{calibration_reference}.yaml`, or a "
             "legacy `retarget_calibration.yaml` whose `reference` field "
@@ -429,7 +430,7 @@ def interaction_mesh_precompute_laplacian(
     )
     from pathlib import Path as _P
 
-    from hhtools.retarget.calibration import resolve_calibration_file
+    from hhtools.retarget.calibration import resolve_preset_calibration_file
     from hhtools.retarget.interaction_mesh.pipeline import InteractionMeshPipeline
     from hhtools.robot.loader import load_robot
     from hhtools.robot.registry import get as get_preset
@@ -445,7 +446,7 @@ def interaction_mesh_precompute_laplacian(
 
     motion = _load_motion_any(src)
     ref = _calibration_reference_for_motion(motion, calibration_reference)
-    cal_path = resolve_calibration_file(preset.urdf_path.parent, ref)
+    cal_path = resolve_preset_calibration_file(preset, ref)
     if cal_path is None:
         raise typer.BadParameter(f"no calibration for {robot!r} ref={ref!r}")
     if limit_frames is not None and motion.num_frames > limit_frames:
@@ -503,7 +504,7 @@ def interaction_mesh_run(
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     from hhtools.io.robot_csv import save_robot_csv
-    from hhtools.retarget.calibration import resolve_calibration_file
+    from hhtools.retarget.calibration import resolve_preset_calibration_file
     from hhtools.retarget.interaction_mesh.pipeline import InteractionMeshPipeline
     from hhtools.robot.loader import load_robot
     from hhtools.robot.registry import get as get_preset
@@ -525,7 +526,7 @@ def interaction_mesh_run(
     for src in files:
         motion = _load_motion_any(src)
         ref = _calibration_reference_for_motion(motion, calibration_reference)
-        cal_path = resolve_calibration_file(preset.urdf_path.parent, ref)
+        cal_path = resolve_preset_calibration_file(preset, ref)
         if cal_path is None:
             raise typer.BadParameter(f"no calibration for {robot!r} ref={ref!r}")
         if limit_frames is not None and motion.num_frames > limit_frames:

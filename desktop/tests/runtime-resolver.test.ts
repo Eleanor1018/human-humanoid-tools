@@ -92,6 +92,7 @@ describe('resolveRuntime', () => {
       HHTOOLS_MAX_QUEUED_JOBS: '32',
       HHTOOLS_WEB_SETTINGS_PATH: 'C:\\config\\web-settings.json',
       HHTOOLS_MOTION_LIBRARY_SETTINGS_PATH: 'C:\\config\\motion-library-settings.json',
+      HHTOOLS_ROBOT_DIR: 'C:\\config\\robots',
       LD_LIBRARY_PATH: '/opt/cuda/lib64',
       XDG_RUNTIME_DIR: '/run/user/1000',
       DISPLAY: ':1',
@@ -113,6 +114,7 @@ describe('resolveRuntime', () => {
     expect(environment.HHTOOLS_MOTION_LIBRARY_SETTINGS_PATH).toBe(
       'C:\\config\\motion-library-settings.json'
     )
+    expect(environment.HHTOOLS_ROBOT_DIR).toBe('C:\\config\\robots')
     expect(environment.LD_LIBRARY_PATH).toBe('/opt/cuda/lib64')
     expect(environment.XDG_RUNTIME_DIR).toBe('/run/user/1000')
     expect(environment.DISPLAY).toBe(':1')

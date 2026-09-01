@@ -218,7 +218,10 @@ def build_calibration_session(
     motion: Motion | None,
 ) -> dict[str, Any]:
     """Payload for entering calibration mode in the browser."""
-    from hhtools.retarget.calibration import load_calibration, resolve_calibration_file
+    from hhtools.retarget.calibration import (
+        load_calibration,
+        resolve_preset_calibration_file,
+    )
 
     joint_order = [j.name for j in model.actuated_joints if j.joint_type != "fixed"]
     if not joint_order:
@@ -228,7 +231,7 @@ def build_calibration_session(
     urdf_parent = getattr(model.preset, "urdf_path", None)
     cal_path = None
     if urdf_parent is not None:
-        cal_path = resolve_calibration_file(urdf_parent.parent, reference)
+        cal_path = resolve_preset_calibration_file(model.preset, reference)
         if cal_path is not None:
             cal = load_calibration(cal_path)
             for name, value in cal.calibrated_joint_q.items():

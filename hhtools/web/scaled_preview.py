@@ -33,14 +33,17 @@ def resolve_web_scaler_config(
 ):
     """Same scaler resolution as :func:`_retarget_single` (bundled > calibration)."""
 
-    from hhtools.retarget.calibration import load_calibration, resolve_calibration_file
+    from hhtools.retarget.calibration import (
+        load_calibration,
+        resolve_preset_calibration_file,
+    )
     from hhtools.robot.retarget_profile import (
         bundled_scaler_path,
         resolve_retarget_scaler_config,
     )
 
     preset = model.preset
-    cal_path = resolve_calibration_file(preset.urdf_path.parent, reference)
+    cal_path = resolve_preset_calibration_file(preset, reference)
     if cal_path is None and bundled_scaler_path(preset, reference) is None:
         raise ValueError(
             f"robot {preset.name!r} has no bundled scaler or calibration "

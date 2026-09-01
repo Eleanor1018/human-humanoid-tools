@@ -3223,7 +3223,7 @@ def _create_app_owned(
 
     @app.get("/api/calibration/status")
     def calibration_status(robot: str, reference: str) -> dict:
-        from hhtools.retarget.calibration import resolve_calibration_file
+        from hhtools.retarget.calibration import resolve_preset_calibration_file
         from hhtools.robot.registry import get as get_preset
         from hhtools.robot.retarget_profile import bundled_scaler_path
 
@@ -3233,7 +3233,7 @@ def _create_app_owned(
             raise HTTPException(status_code=404, detail=str(err)) from err
         if preset.urdf_path is None:
             return {"calibrated": False, "path": None}
-        path = resolve_calibration_file(preset.urdf_path.parent, reference)
+        path = resolve_preset_calibration_file(preset, reference)
         bundled = bundled_scaler_path(preset, reference)
         joint_q: dict[str, float] | None = None
         if path is not None:
@@ -3288,9 +3288,8 @@ def _create_app_owned(
     async def calibration_save(body: dict) -> dict:
         from hhtools.retarget.calibration import (
             RobotRetargetCalibration,
-            calibration_path_for,
             derive_calibration_params,
-            save_calibration,
+            save_calibration_for_preset,
         )
         from hhtools.robot.registry import get as get_preset
 
@@ -3318,8 +3317,7 @@ def _create_app_owned(
             derived = derive_calibration_params(
                 cal, model, reference_motion=motion,
             )
-            path = calibration_path_for(preset.urdf_path.parent, reference=reference)
-            save_calibration(cal, path, derived=derived)
+            path = save_calibration_for_preset(cal, preset, derived=derived)
             # Do not sync derived.scales into robot.yaml joint_scale_multipliers:
             # that global table is shared across references and would pollute
             # the next dataset's retarget (see active_joint_scale_overrides).
@@ -4195,13 +4193,14 @@ def _create_app_owned(
 
                     src_model = load_robot(_get_preset(src_name), compile_mjcf=False)
                     state.robots[src_name] = src_model
-                tgt_name = rec["robot"]
                 calib = None
                 if src_name and model is not None:
                     from hhtools.retarget import robot_to_robot as r2r
 
                     calib = r2r.load_r2r_calibration(
-                        model.preset.urdf_path.parent, src_name,
+                        model.preset.urdf_path.parent,
+                        src_name,
+                        target_robot=model.preset.name,
                     )
                 if src_model is None or not calib:
                     raise RuntimeError(
@@ -4390,7 +4389,7 @@ def _create_app_owned(
             tgt = _r2r_get_model(target, compile_mjcf=False)
             path = r2r.save_r2r_calibration(
                 tgt.preset.urdf_path.parent,
-                target_robot=target,
+                target_robot=tgt.preset.name,
                 source_robot=source,
                 calibrated_joint_q=joint_q,
             )
@@ -4407,7 +4406,11 @@ def _create_app_owned(
 
         try:
             preset = _get_preset(target)
-            saved = r2r.load_r2r_calibration(preset.urdf_path.parent, source)
+            saved = r2r.load_r2r_calibration(
+                preset.urdf_path.parent,
+                source,
+                target_robot=preset.name,
+            )
         except Exception:  # noqa: BLE001
             saved = None
         return {"calibrated": bool(saved)}
@@ -4442,7 +4445,11 @@ def _create_app_owned(
 
             tgt = _r2r_get_model(target)
             src = _r2r_get_model(source, compile_mjcf=False)
-            calib = r2r.load_r2r_calibration(tgt.preset.urdf_path.parent, source)
+            calib = r2r.load_r2r_calibration(
+                tgt.preset.urdf_path.parent,
+                source,
+                target_robot=tgt.preset.name,
+            )
             if not calib:
                 raise ValueError(
                     "target robot is not calibrated against this source robot; "
@@ -5101,7 +5108,11 @@ def _build_r2r_calibration_session(target_model, source_model) -> dict:
     saved: dict[str, float] | None = None
     urdf_path = getattr(target_model.preset, "urdf_path", None)
     if urdf_path is not None:
-        saved = r2r.load_r2r_calibration(urdf_path.parent, source_model.preset.name)
+        saved = r2r.load_r2r_calibration(
+            urdf_path.parent,
+            source_model.preset.name,
+            target_robot=target_model.preset.name,
+        )
         if saved:
             for name, value in saved.items():
                 if name in joint_q:
@@ -5592,7 +5603,11 @@ def _run_r2r_batch_job(job: Job, body: dict, state: SessionState) -> None:
 
             src = load_robot(_get_preset(source), compile_mjcf=False)
             state.robots[source] = src
-        calib = r2r.load_r2r_calibration(tgt.preset.urdf_path.parent, source)
+        calib = r2r.load_r2r_calibration(
+            tgt.preset.urdf_path.parent,
+            source,
+            target_robot=tgt.preset.name,
+        )
         if not calib:
             raise ValueError(
                 f"target {target!r} is not calibrated against source {source!r}"
@@ -5911,7 +5926,10 @@ def _retarget_newton_batch_chunk(
     foot_clamp_anti_penetration: bool = False,
 ) -> tuple[list[tuple[dict, object, object, object]], object]:
     """Retarget pre-loaded clips; multi-env GPU when ``len(loaded) > 1``."""
-    from hhtools.retarget.calibration import load_calibration, resolve_calibration_file
+    from hhtools.retarget.calibration import (
+        load_calibration,
+        resolve_preset_calibration_file,
+    )
     from hhtools.retarget.newton_basic import NewtonBasicPipeline
     from hhtools.retarget.newton_basic._warp_config import configure as configure_warp_cache
     from hhtools.robot.registry import get as get_preset
@@ -5976,7 +5994,7 @@ def _retarget_newton_batch_chunk(
     )
 
     preset = get_preset(robot_name)
-    cal_path = resolve_calibration_file(preset.urdf_path.parent, reference)
+    cal_path = resolve_preset_calibration_file(preset, reference)
     if cal_path is None and bundled_scaler_path(preset, reference) is None:
         raise ValueError(
             f"robot {robot_name!r} not calibrated for reference {reference!r}; calibrate first"
@@ -6851,7 +6869,7 @@ def _retarget_single(
     preset=None,
 ):
     """Run one clip through the requested backend, returning RetargetedMotion."""
-    from hhtools.retarget.calibration import resolve_calibration_file
+    from hhtools.retarget.calibration import resolve_preset_calibration_file
     from hhtools.robot.retarget_profile import bundled_scaler_path
 
     if preset is None:
@@ -6860,7 +6878,7 @@ def _retarget_single(
         preset = get_preset(robot_name)
     elif preset.name != robot_name:
         raise ValueError("the injected robot preset does not match the requested robot")
-    cal_path = resolve_calibration_file(preset.urdf_path.parent, reference)
+    cal_path = resolve_preset_calibration_file(preset, reference)
     if cal_path is None and bundled_scaler_path(preset, reference) is None:
         raise ValueError(
             f"robot {robot_name!r} not calibrated for reference {reference!r}; calibrate first"

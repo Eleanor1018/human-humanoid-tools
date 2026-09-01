@@ -119,6 +119,16 @@ def _write_calibration(root: Path) -> Path:
     return path
 
 
+def _write_user_calibration(root: Path) -> Path:
+    path = root / "test_robot" / "retarget_calibration_smpl.yaml"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        "robot: test_robot\nreference: smpl\ncalibrated_joint_q:\n  hip: 0.0\n",
+        encoding="utf-8",
+    )
+    return path
+
+
 def _fixed_provenance() -> JobSpecProvenance:
     return JobSpecProvenance(
         hhtools_git_commit="f" * 40,
@@ -139,6 +149,7 @@ def _fixture(
     tmp_path: Path,
     *,
     profile_source: str = "bundled_scaler",
+    profile_storage: str = "robot_bundle",
     semantics: str = "hhtools.retarget.plan.v1",
     category: str | None = None,
 ) -> _Fixture:
@@ -148,7 +159,12 @@ def _fixture(
     robot_dir = robot_root / "test_robot"
     _write_motion(motion_path)
     robot_urdf, scaler = _write_robot(robot_dir)
-    calibration_path = _write_calibration(robot_dir) if profile_source == "calibration" else None
+    if profile_source == "calibration" and profile_storage == "user_calibration":
+        calibration_path = _write_user_calibration(tmp_path / "user-robots")
+    elif profile_source == "calibration":
+        calibration_path = _write_calibration(robot_dir)
+    else:
+        calibration_path = None
 
     assets = AgentAssetService(
         AssetRegistry(
@@ -184,6 +200,22 @@ def _fixture(
         "retarget_profile": profile_source,
         "ik_iterations": 24,
     }
+    profile_payload: dict[str, object] = {
+        "source": profile_source,
+        "calibration_id": calibration_id,
+        "digest": profile_digest,
+        "relative_path": (
+            "test_robot/retarget_calibration_smpl.yaml"
+            if profile_storage == "user_calibration"
+            else (
+                "urdf/retarget_calibration_smpl.yaml"
+                if profile_source == "calibration"
+                else "config/smpl_scaler.yaml"
+            )
+        ),
+    }
+    if profile_storage != "robot_bundle":
+        profile_payload["storage"] = profile_storage
     payload: dict[str, object] = {
         "semantics": semantics,
         "motion": {
@@ -199,16 +231,7 @@ def _fixture(
             "robot_id": "test_robot",
         },
         "backend": "newton",
-        "retarget_profile": {
-            "source": profile_source,
-            "calibration_id": calibration_id,
-            "digest": profile_digest,
-            "relative_path": (
-                "urdf/retarget_calibration_smpl.yaml"
-                if profile_source == "calibration"
-                else "config/smpl_scaler.yaml"
-            ),
-        },
+        "retarget_profile": profile_payload,
         "output": {"format": "csv", "policy": "create_new"},
         "parameters": parameters,
     }
@@ -308,6 +331,61 @@ def test_manual_calibration_is_materialized_in_job_spec(tmp_path: Path) -> None:
     assert spec.calibration is not None
     assert spec.calibration.calibration_id == fixture.plan.calibration_id
     assert spec.calibration.sha256 == fixture.plan.calibration_digest
+
+
+def test_user_calibration_overlay_is_verified_outside_the_robot_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user_root = tmp_path / "user-robots"
+    monkeypatch.setenv("HHTOOLS_ROBOT_DIR", str(user_root))
+    fixture = _fixture(
+        tmp_path,
+        profile_source="calibration",
+        profile_storage="user_calibration",
+    )
+    service = RetargetService(
+        fixture.store,
+        fixture.assets,
+        provenance_provider=_fixed_provenance,
+    )
+
+    spec = service.get_job_spec(fixture.plan.plan_id)
+
+    assert spec.calibration is not None
+    assert spec.calibration.calibration_id == fixture.plan.calibration_id
+    assert spec.calibration.sha256 == fixture.plan.calibration_digest
+
+
+def test_changed_user_calibration_overlay_makes_the_plan_stale(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user_root = tmp_path / "user-robots"
+    monkeypatch.setenv("HHTOOLS_ROBOT_DIR", str(user_root))
+    fixture = _fixture(
+        tmp_path,
+        profile_source="calibration",
+        profile_storage="user_calibration",
+    )
+    assert fixture.calibration_path is not None
+    service = RetargetService(
+        fixture.store,
+        fixture.assets,
+        provenance_provider=_fixed_provenance,
+    )
+    fixture.calibration_path.write_text(
+        fixture.calibration_path.read_text(encoding="utf-8").replace(
+            "hip: 0.0",
+            "hip: 0.5",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RetargetServiceError) as captured:
+        service.get_job_spec(fixture.plan.plan_id)
+
+    _assert_error(captured, "PLAN_STALE")
 
 
 def test_changed_manual_calibration_makes_the_plan_stale(tmp_path: Path) -> None:
