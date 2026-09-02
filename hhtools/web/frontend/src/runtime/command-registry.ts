@@ -1,3 +1,11 @@
+/**
+ * Builds the single command model consumed by menus, the command palette, and
+ * keyboard routes. Most commands publish typed application intents so React
+ * chrome does not need to know which compatibility-runtime control implements
+ * an action. The returned list is a snapshot and should be rebuilt when its
+ * context (active panel, locale, theme, or capabilities) changes.
+ */
+
 import type {
   ComparisonPreset,
   ImportCommandTarget,
@@ -7,11 +15,6 @@ import type {
   WorkflowId,
 } from './types'
 
-/**
- * Single source of truth for menus, the command palette, and keyboard routes.
- * Commands publish typed application intents; individual chrome components do
- * not duplicate navigation or import behavior.
- */
 export type DesktopMenuId = 'file' | 'workflows' | 'analysis' | 'settings' | 'help'
 export type DesktopSubmenuId = 'file-import' | 'file-export'
 
@@ -109,6 +112,9 @@ function localize(locale: WorkspaceLocale, en: string, zh: string): string {
   return locale === 'zh-CN' ? zh : en
 }
 
+// Custom events are the temporary, typed seam between React-owned chrome and
+// the imperative workflow runtime. Keeping them here prevents callers from
+// coupling themselves to legacy DOM ids.
 function requestPanel(panel: WorkspacePanelId): void {
   window.dispatchEvent(new CustomEvent('hhtools:panel-request', { detail: panel }))
 }
@@ -154,6 +160,8 @@ export function createApplicationCommands(
   const commands: ApplicationCommand[] = []
   const locale = context.locale ?? (context.applicationMode ? 'en' : 'zh-CN')
 
+  // Desktop-like File/Settings/Help commands are intentionally absent from the
+  // compact embedded mode, while workflow and playback commands remain shared.
   if (context.applicationMode) {
     commands.push(
       importCommand({
@@ -340,6 +348,8 @@ export function createApplicationCommands(
   )
 
   const workflow = workflowForPanel(context.activePanel)
+  // Comparison layers exist only for the two retarget workspaces, so avoid
+  // exposing commands that cannot have an effect on other active panels.
   if (workflow) {
     const comparisonCommands: Array<[ComparisonPreset, string, string, string]> = [
       ['source', 'Source Only', '只看源数据', 'Alt+S'],

@@ -45,6 +45,12 @@ type CategoryHistogramLayout = {
   dim: string
 }
 type HistogramLayout = NumericHistogramLayout | CategoryHistogramLayout
+
+/**
+ * Module-singleton store for the compatibility implementation. React receives
+ * only the small `DataAnalysisStateDetail` projection used by pipeline chrome;
+ * filtering, selection, plot geometry, and upload state remain private here.
+ */
 type DatasetState = {
   clips: DatasetClip[]
   summary: DatasetSummary | null
@@ -81,6 +87,10 @@ type DatasetState = {
   analysisMessage: string
 }
 
+/**
+ * Resolve the bridge created by `webui-runtime.ts`. LegacyRuntimeService loads
+ * that module first, after React has committed all stable DOM mount points.
+ */
 const bridge = (): HhAppBridge => {
   if (!window.__hhApp) throw new Error('The WebUI bridge is not ready')
   return window.__hhApp
@@ -144,6 +154,7 @@ const DYN_TAGS = ["static", "low_dynamic", "mid_dynamic", "high_dynamic", "burst
 const CAT_DIMS = ["cluster_id", "folder_label", "quality_band", "dynamics_band", "source_kind"];
 const CATEGORICAL = ["#6366f1", "#14b8a6", "#f472b6", "#fb923c", "#38bdf8", "#a78bfa", "#34d399", "#fbbf24", "#f87171", "#64748b"];
 
+/** Publish only renderer-safe progress, not the mutable dataset store itself. */
 function emitAnalysisState(): void {
   window.dispatchEvent(new CustomEvent('hhtools:data-analysis-state', {
     detail: {
@@ -338,6 +349,7 @@ function clipInBrush(clip: DatasetClip): boolean {
 function tagFilteredClips(): DatasetClip[] { return okClips().filter(clipMatchesTags); }
 function visibleClips(): DatasetClip[] { return tagFilteredClips().filter(clipInBrush); }
 
+/** Export the union of algorithm recommendations and explicit user additions. */
 function exportTargetIds(): string[] {
   return [...new Set([...state.subsetIds, ...manualSelectedIds()])];
 }
@@ -404,7 +416,9 @@ async function previewClip(clip: DatasetClip): Promise<void> {
   }
 }
 
-// ------------------------------------------------------------------ subset FPS
+// ------------------------------------------------- subset FPS (farthest-point sampling)
+// Here FPS means farthest-point sampling, not frames per second. The algorithm
+// balances coverage in embedding space against motion complexity.
 function rankNormalize(values: number[]): number[] {
   const n = values.length;
   if (n <= 1) return values.map(() => 0);
@@ -420,6 +434,7 @@ function globalWeightedFps(
   k: number,
   alpha: number,
 ): number[] {
+  // alpha=1 favours geometric coverage; alpha=0 favours complex clips.
   const n = embeddings.length;
   if (!n || k <= 0) return [];
   k = Math.min(k, n);
@@ -482,6 +497,9 @@ function scheduleSubset() {
 }
 
 // ------------------------------------------------------------------ upload / analyze
+// Directory uploads use the non-standard FileSystemEntry API so relative paths
+// survive multipart upload; the backend needs them to identify dataset layouts
+// and their object/terrain sidecars.
 function walkEntry(entry: FileSystemEntry, out: UploadFile[], prefix = ""): Promise<void> {
   return new Promise<void>((resolve) => {
     if (entry.isFile) {
@@ -777,6 +795,7 @@ async function pickFolder(expectedKind: UploadDataKind) {
   inp.click();
 }
 
+/** Start a backend analysis job and project its polled progress into React. */
 async function runAnalysis(): Promise<void> {
   const { API, toast } = bridge();
   await loadCatalog();
@@ -1270,6 +1289,8 @@ function renderScatter() {
     minY = Math.min(minY, c.scatter[1]); maxY = Math.max(maxY, c.scatter[1]);
   }
   scatterBounds = { minX, maxX, minY, maxY };
+  // Preserve the complete embedding context: filtered points remain visible but
+  // are dimmed instead of disappearing and rescaling the plot unexpectedly.
   const visIds = new Set(visibleClips().map((c) => c.clip_id));
   const colorMap = new Map<string, string>();
   let hoverPt: ScatterPoint | null = null;
@@ -1548,6 +1569,8 @@ function setupScatterNav() {
   });
 }
 
+// Uploaded clips may point at a server-side temporary directory. Exports include
+// this user-supplied real root so the backend can create a reusable manifest.
 function getUserSourceRoot() {
   return ($("dv-user-source-root")?.value || localStorage.getItem(DV_USER_ROOT_KEY) || "").trim();
 }
@@ -1704,6 +1727,10 @@ function setupDropzone(
   });
 }
 
+/**
+ * Bind once after React has mounted the compatibility DOM. This module currently
+ * has no dispose lifecycle, so it relies on ES modules being evaluated once.
+ */
 function bind() {
   loadCatalog();
   syncUserRootField();

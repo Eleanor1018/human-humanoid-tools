@@ -1,3 +1,9 @@
+/**
+ * Versioned persistence boundary for UI-only workspace preferences. Backend
+ * settings (job admission, model paths, and library roots) do not belong here.
+ * Every value read from localStorage is validated before entering React state.
+ */
+
 import type {
   ComparisonPreset,
   WorkspaceLocale,
@@ -63,6 +69,7 @@ function clampSpeed(value: unknown): number {
   return Number.isFinite(speed) ? Math.min(4, Math.max(0.1, speed)) : 1
 }
 
+/** Parse, migrate, and normalize storage into a complete preference object. */
 export function loadWorkspacePreferences(
   systemLanguageTags: readonly string[] = readSystemLanguageTags(),
 ): WorkspacePreferences {
@@ -72,6 +79,8 @@ export function loadWorkspacePreferences(
   }
 
   try {
+    // Treat persisted data as untrusted and merge it field-by-field so an older
+    // or hand-edited record cannot introduce unsupported panels or enum values.
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}') as Partial<WorkspacePreferences>
     const storedPanel = saved.activePanel as unknown
     // Migrate the retired standalone Video workspace into the unified workflow.
@@ -109,6 +118,7 @@ export function updateWorkspacePreferences(
     comparisonPresets?: Partial<Record<WorkflowId, ComparisonPreset>>
   },
 ): WorkspacePreferences {
+  // Read-modify-write preserves fields owned by other workbench components.
   const current = loadWorkspacePreferences()
   const next: WorkspacePreferences = {
     ...current,

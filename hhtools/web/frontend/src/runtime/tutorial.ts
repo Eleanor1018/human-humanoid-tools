@@ -1,4 +1,10 @@
-/** Interactive first-run guide for the hhtools workspace. */
+/**
+ * Imperative overlay adapter for the first-run guide. The step definitions are
+ * declarative, but highlighting and positioning remain here because they must
+ * measure DOM nodes after React has laid out the requested workspace panel.
+ * React owns the anchors; this module temporarily reveals them and restores
+ * their previous state when a step is left.
+ */
 
 const STORAGE_KEY = "hhtools.web.tutorial.v2.seen";
 const LEGACY_DONE_STORAGE_KEY = "hhtools.web.tutorial.v1.done";
@@ -69,6 +75,10 @@ export function markFirstRunTutorialSeen(storage: TutorialStorage | undefined = 
   }
 }
 
+/**
+ * Ordered product journey; selectors are part of the React/runtime DOM contract.
+ * Hooks that reveal an element must restore it with the matching leave hook.
+ */
 const STEPS: readonly TourStep[] = [
   {
     id: "welcome",
@@ -344,10 +354,14 @@ export class GuidedTour {
     this.popover?.classList.remove("visible");
     switchPanel(step.panel);
     step.beforeShow?.(this._stepCtx());
+    // One frame lets React commit the panel change; the second lets the browser
+    // calculate its new layout before getBoundingClientRect() is sampled.
     requestAnimationFrame(() => {
       requestAnimationFrame(() => this._positionCurrent());
     });
     this.titleEl.textContent = localized(step.title);
+    // Tutorial copy is a compile-time constant and intentionally supports only
+    // its embedded <b>/<code> markup. Never pass file names or API text here.
     this.bodyEl.innerHTML = localized(step.body);
     this.stepEl.textContent = `${this.idx + 1} / ${STEPS.length}`;
     this.skipBtn.textContent = localized(copy("Skip tutorial", "跳过教程"));
@@ -419,6 +433,7 @@ export class GuidedTour {
 
 export function initTutorial(toastFn: ToastFunction): GuidedTour {
   const tour = new GuidedTour(toastFn);
+  // Help-menu commands use this narrow global bridge to restart the singleton.
   window.__hhTour = tour;
   return tour;
 }

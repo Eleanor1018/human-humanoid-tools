@@ -1,4 +1,14 @@
+/**
+ * Shared protocol types at the React ↔ compatibility runtime ↔ FastAPI seams.
+ * This file contains data shapes only: importing it must never start a job,
+ * touch the DOM, or create Three.js objects. Snake_case fields intentionally
+ * mirror backend JSON; camelCase fields describe renderer-owned UI state.
+ */
+
 import type * as THREE from 'three'
+
+// ---------------------------------------------------------------------------
+// Geometry, scene, and motion payloads returned by FastAPI.
 
 export type Vec3 = [number, number, number]
 export type Quaternion = [number, number, number, number]
@@ -86,6 +96,9 @@ export interface PlaybackUiState {
   speed: number
   label: string
 }
+
+// ---------------------------------------------------------------------------
+// Workbench identities and typed CustomEvent payloads.
 
 export type PlaybackAction = 'toggle' | 'seek' | 'speed' | 'loop'
 
@@ -242,6 +255,9 @@ export interface PlaybackCommandDetail {
   value?: number
 }
 
+// ---------------------------------------------------------------------------
+// Robot models, trajectories, and calibration sessions.
+
 export interface RobotFrame {
   root?: [number, number, number, number, number, number, number]
   mesh_z_lift?: number
@@ -349,6 +365,9 @@ export interface CalibrationStatus {
   path?: string | null
   joint_q?: Record<string, number> | null
 }
+
+// ---------------------------------------------------------------------------
+// Motion library entries and retarget workflow results.
 
 export type MotionCategory = 'motion' | 'object' | 'terrain'
 
@@ -528,6 +547,9 @@ export interface BatchRetargetResult {
   failure_log?: string
 }
 
+// ---------------------------------------------------------------------------
+// Background-job history, replay, and scheduler settings.
+
 export type JobStatus = 'pending' | 'running' | 'done' | 'error'
 
 export type JobParameterValue = string | number | boolean
@@ -689,6 +711,7 @@ export interface GvhmrOptionalComponentState {
   estimatedAdditionalBytes: number
 }
 
+/** Base GVHMR paths; capability fields augment this shape near the API map below. */
 export interface GvhmrRuntimeStatus {
   ready: boolean
   missing: string[]
@@ -716,6 +739,9 @@ export interface ScaledPreviewResponse {
   preview: MotionPayload
   scaled_scene?: ScenePayload
 }
+
+// ---------------------------------------------------------------------------
+// Dataset-analysis payloads and export metadata.
 
 export interface DatasetMetricSummary {
   min?: number
@@ -833,6 +859,10 @@ export interface BasicResponse {
   [key: string]: unknown
 }
 
+/**
+ * Additional GVHMR capability fields. TypeScript declaration merging combines
+ * this block with the base path fields above into one response contract.
+ */
 export interface GvhmrRuntimeStatus {
   ready: boolean
   missing: string[]
@@ -845,6 +875,13 @@ export interface GvhmrRuntimeStatus {
   training_enabled: boolean
 }
 
+// ---------------------------------------------------------------------------
+// Typed HTTP route maps and the deliberately narrow cross-module bridge.
+
+/**
+ * Infer the response shape for known GET routes; unknown routes stay generic.
+ * This is compile-time guidance only and does not validate JSON at runtime.
+ */
 export type ApiGetResponse<Url extends string> =
   Url extends '/api/health' ? HealthResponse
     : Url extends '/api/video-to-motion/status' ? GvhmrRuntimeStatus
@@ -953,6 +990,7 @@ export interface HhAppBridge {
   >
 }
 
+/** Common surface implemented by every object driven by the shared timeline. */
 export interface PlaybackView {
   group: THREE.Group
   joints?: unknown[] | null

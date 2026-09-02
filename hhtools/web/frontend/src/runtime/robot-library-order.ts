@@ -1,3 +1,9 @@
+/**
+ * Pure presentation ordering for Robot Library summaries. It stays separate
+ * from the catalog and backend flags so display priority cannot accidentally
+ * grant built-in status or change whether a robot may be deleted.
+ */
+
 /** Minimal robot summary shape needed by the Robot Library sorter. */
 interface NamedRobotSummary {
   name: string
@@ -25,10 +31,12 @@ function pinnedFirstOrder(name: string): number | undefined {
     : undefined
 }
 
+/** Return a new three-part ordering: pinned first, localized, then pinned last. */
 export function sortRobotLibrarySummaries<T extends NamedRobotSummary>(
   summaries: readonly T[],
   labelFor: (summary: T) => string,
 ): T[] {
+  // Sort a copy: API responses may also be observed by workflow selectors.
   return [...summaries].sort((left, right) => {
     const leftPinned = pinnedFirstOrder(left.name)
     const rightPinned = pinnedFirstOrder(right.name)
