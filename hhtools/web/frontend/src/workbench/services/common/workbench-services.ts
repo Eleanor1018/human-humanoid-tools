@@ -1,4 +1,5 @@
 import type { IDisposable } from "@/base/common/disposable";
+import type { ICommandService } from "@/platform/commands/common/command-service";
 import type { IHostService } from "@/platform/host/common/host-service";
 import type { IRequestService } from "@/platform/request/common/request-service";
 import type { IGvhmrComponentService } from "@/workbench/services/gvhmr/common/gvhmr-component-service";
@@ -17,6 +18,7 @@ import type { ISettingsService } from "@/workbench/services/settings/common/sett
  * concrete implementations, which also makes each service replaceable in tests.
  */
 export interface IWorkbenchServices extends IDisposable {
+  readonly commandService: ICommandService;
   readonly hostService: IHostService;
   readonly requestService: IRequestService;
   readonly gvhmrComponentService: IGvhmrComponentService;

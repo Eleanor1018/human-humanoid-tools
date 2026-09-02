@@ -1,4 +1,5 @@
 import { DisposableStore } from "@/base/common/disposable";
+import { CommandService } from "@/platform/commands/common/command-service";
 import { BrowserHostService } from "@/platform/host/browser/browser-host-service";
 import { BrowserRequestService } from "@/platform/request/browser/browser-request-service";
 import type { IWorkbenchServices } from "@/workbench/services/common/workbench-services";
@@ -16,6 +17,7 @@ import { BrowserSettingsService } from "@/workbench/services/settings/browser/br
  */
 export function createBrowserWorkbenchServices(): IWorkbenchServices {
   const ownedServices = new DisposableStore();
+  const commandService = ownedServices.add(new CommandService());
   const requestService = new BrowserRequestService();
   const jobService = ownedServices.add(new BrowserJobService(requestService));
   const legacyRuntimeService = ownedServices.add(
@@ -23,6 +25,7 @@ export function createBrowserWorkbenchServices(): IWorkbenchServices {
   );
 
   return {
+    commandService,
     hostService: new BrowserHostService(),
     requestService,
     gvhmrComponentService: new BrowserGvhmrComponentService(),
