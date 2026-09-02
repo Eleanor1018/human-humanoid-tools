@@ -3,11 +3,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   GvhmrRuntimeStatus,
   HhAppBridge,
+  JobStartResponse,
   LibraryEntry,
   MotionPayload,
   UploadFile,
   WorkspaceLocale,
 } from "@/runtime/types";
+import type { JobStatusResponse } from "@/workbench/services/jobs/common/job-service";
+import { useWorkbenchServices } from "./workbench-service-context";
 
 export type VideoBatchStatus =
   "queued" | "uploading" | "running" | "done" | "error";
@@ -48,9 +51,38 @@ export interface VideoBatchModel {
 
 const VIDEO_SUFFIXES = new Set(["mp4", "mov", "mkv", "avi", "webm", "m4v"]);
 const VIDEO_ACCEPT = ".mp4,.mov,.mkv,.avi,.webm,.m4v,video/*";
+const UPLOAD_PROGRESS_WEIGHT = 0.08;
+
+type LegacyVideoBatchBridge = Pick<
+  HhAppBridge,
+  | "pickFiles"
+  | "collectDroppedFiles"
+  | "addToBasket"
+  | "refreshLibrary"
+  | "toast"
+>;
+
+/**
+ * Return only the currently available legacy capabilities used by this slice.
+ * Lifecycle waiting belongs to `requireLegacyBridge`, not to this synchronous
+ * accessor, because drop-event file handles cannot survive an async wait.
+ */
+function legacyVideoBatchBridge(): LegacyVideoBatchBridge | null {
+  return window.__hhApp ?? null;
+}
+
+function boundedProgress(value: number | null | undefined): number {
+  return Math.max(0, Math.min(1, value ?? 0));
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
 
 /** React model shared by the center input view and right-side V2M inspector. */
 export function useVideoBatch(locale: WorkspaceLocale): VideoBatchModel {
+  const { jobService, legacyRuntimeService, requestService } =
+    useWorkbenchServices();
   const text = useCallback(
     (en: string, zh: string) => (locale === "zh-CN" ? zh : en),
     [locale],
@@ -69,22 +101,57 @@ export function useVideoBatch(locale: WorkspaceLocale): VideoBatchModel {
   const [busy, setBusy] = useState(false);
   const [statusMessage, setStatusMessage] = useState("");
   const nextId = useRef(1);
+  const mounted = useRef(true);
+  const runAbortController = useRef<AbortController | null>(null);
+  const runtimeStatusAbortController = useRef<AbortController | null>(null);
 
-  const waitForBridge = useCallback(
-    async (timeoutMs = 4_000): Promise<HhAppBridge> => {
-      // The compatibility runtime is code-split and starts after React mounts;
-      // a short bounded wait makes early clicks deterministic without hanging.
-      const deadline = Date.now() + timeoutMs;
-      while (!window.__hhApp && Date.now() < deadline)
-        await new Promise((resolve) => window.setTimeout(resolve, 50));
-      if (!window.__hhApp)
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      runAbortController.current?.abort();
+      runtimeStatusAbortController.current?.abort();
+    };
+  }, []);
+
+  const requireLegacyBridge = useCallback(
+    async (): Promise<LegacyVideoBatchBridge> => {
+      // File picking and library publication are still legacy capabilities. Wait
+      // on their injected lifecycle owner instead of polling a window property.
+      await legacyRuntimeService.start();
+      const bridge = legacyVideoBatchBridge();
+      if (!bridge) {
         throw new Error(
           text(
-            "The application runtime is not ready.",
-            "应用运行环境尚未就绪。",
+            "The compatibility UI is not ready.",
+            "兼容界面尚未就绪。",
           ),
         );
-      return window.__hhApp;
+      }
+      return bridge;
+    },
+    [legacyRuntimeService, text],
+  );
+
+  const toast = useCallback((message: string, isError = false) => {
+    legacyVideoBatchBridge()?.toast(message, isError);
+  }, []);
+
+  const formatJobProgress = useCallback(
+    (job: JobStatusResponse<MotionPayload>) => {
+      const progress = boundedProgress(job.progress);
+      const percent = Math.round(progress * 100);
+      const detail = job.message?.trim();
+      const message = text(
+        `Generating motion… ${percent}%`,
+        `正在生成动作…… ${percent}%`,
+      );
+      return {
+        progress:
+          UPLOAD_PROGRESS_WEIGHT +
+          progress * (1 - UPLOAD_PROGRESS_WEIGHT),
+        message: detail ? `${message} · ${detail}` : message,
+      };
     },
     [text],
   );
@@ -122,68 +189,96 @@ export function useVideoBatch(locale: WorkspaceLocale): VideoBatchModel {
         return [...current, ...additions];
       });
       if (rejected)
-        queueMicrotask(() =>
-          window.__hhApp?.toast(
+        queueMicrotask(() => {
+          if (!mounted.current) return;
+          toast(
             text(
               `${rejected} unsupported file(s) were skipped.`,
               `已跳过 ${rejected} 个不支持的文件。`,
             ),
             true,
-          ),
-        );
+          );
+        });
     },
-    [text],
+    [text, toast],
   );
 
   const pickVideos = useCallback(
     async (folder = false) => {
       try {
-        const bridge = await waitForBridge();
-        addFiles(
-          await bridge.pickFiles({
-            folder,
-            accept: folder ? "" : VIDEO_ACCEPT,
-          }),
-        );
+        const bridge = await requireLegacyBridge();
+        if (!mounted.current) return;
+        const files = await bridge.pickFiles({
+          folder,
+          accept: folder ? "" : VIDEO_ACCEPT,
+        });
+        if (mounted.current) addFiles(files);
       } catch (cause) {
-        window.__hhApp?.toast(
+        toast(
           cause instanceof Error ? cause.message : String(cause),
           true,
         );
       }
     },
-    [addFiles, waitForBridge],
+    [addFiles, requireLegacyBridge, toast],
   );
   const dropVideos = useCallback(
     async (dataTransfer: DataTransfer | null) => {
       if (busy) return;
       try {
-        const bridge = await waitForBridge();
-        addFiles(await bridge.collectDroppedFiles(dataTransfer));
+        const readyBridge = legacyVideoBatchBridge();
+        if (!readyBridge) {
+          // DataTransfer directory entries expire after native event dispatch.
+          // Start the contribution for the next attempt, but never await it
+          // before capturing files from this event.
+          setStatusMessage(
+            text(
+              "The interface is still starting. Drop the files again shortly.",
+              "界面仍在启动，请稍后重新拖入文件。",
+            ),
+          );
+          void legacyRuntimeService.start().catch(() => undefined);
+          return;
+        }
+        const collection = readyBridge.collectDroppedFiles(dataTransfer);
+        const files = await collection;
+        if (mounted.current) addFiles(files);
       } catch (cause) {
-        window.__hhApp?.toast(
+        toast(
           cause instanceof Error ? cause.message : String(cause),
           true,
         );
       }
     },
-    [addFiles, busy, waitForBridge],
+    [addFiles, busy, legacyRuntimeService, text, toast],
   );
-  const refreshRuntime = useCallback(async () => {
-    setRuntimeChecking(true);
-    setRuntimeError("");
-    setEnvironmentConfirmed(false);
-    try {
-      setRuntime(
-        await (await waitForBridge()).API.get("/api/video-to-motion/status"),
-      );
-    } catch (cause) {
-      setRuntime(null);
-      setRuntimeError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setRuntimeChecking(false);
-    }
-  }, [waitForBridge]);
+  const refreshRuntime = useCallback(
+    async () => {
+      runtimeStatusAbortController.current?.abort();
+      const controller = new AbortController();
+      runtimeStatusAbortController.current = controller;
+      setRuntimeChecking(true);
+      setRuntimeError("");
+      setEnvironmentConfirmed(false);
+      try {
+        const nextRuntime = await requestService.get<GvhmrRuntimeStatus>(
+          "/api/video-to-motion/status",
+          { signal: controller.signal },
+        );
+        if (!controller.signal.aborted) setRuntime(nextRuntime);
+      } catch (cause) {
+        if (isAbortError(cause)) return;
+        setRuntime(null);
+        setRuntimeError(cause instanceof Error ? cause.message : String(cause));
+      } finally {
+        if (runtimeStatusAbortController.current === controller) {
+          runtimeStatusAbortController.current = null;
+          if (mounted.current) setRuntimeChecking(false);
+        }
+      }
+    },
+    [requestService],
+  );
   useEffect(() => {
     void refreshRuntime();
   }, [refreshRuntime]);
@@ -204,17 +299,19 @@ export function useVideoBatch(locale: WorkspaceLocale): VideoBatchModel {
     const rawFocalLength = focalLength.trim();
     const fMm = rawFocalLength ? Number(rawFocalLength) : undefined;
     if (fMm !== undefined && (!Number.isSafeInteger(fMm) || fMm <= 0)) {
-      window.__hhApp?.toast(
+      toast(
         text("Focal length must be a positive integer.", "焦距必须是正整数。"),
         true,
       );
       return;
     }
-    const bridge = await waitForBridge();
     const pending = videosRef.current.filter((item) => item.status !== "done");
     const generated: LibraryEntry[] = [];
     let completed = videosRef.current.length - pending.length;
     let failed = 0;
+    runAbortController.current?.abort();
+    const controller = new AbortController();
+    runAbortController.current = controller;
     setBusy(true);
     setStatusMessage(
       text(
@@ -222,69 +319,136 @@ export function useVideoBatch(locale: WorkspaceLocale): VideoBatchModel {
         `正在处理 ${pending.length} 个视频……`,
       ),
     );
-    const patchItem = (id: string, patch: Partial<VideoBatchItem>) =>
+    const patchItem = (id: string, patch: Partial<VideoBatchItem>) => {
+      if (!mounted.current || controller.signal.aborted) return;
       setVideos((current) =>
         current.map((item) => (item.id === id ? { ...item, ...patch } : item)),
       );
-    // Run sequentially: multiple GVHMR processes would compete for the same
-    // GPU and make progress/error attribution much harder for the user.
-    for (let index = 0; index < pending.length; index += 1) {
-      const item = pending[index];
-      patchItem(item.id, {
-        status: "uploading",
-        progress: 0,
-        message: text("Uploading video…", "正在上传视频……"),
-      });
-      try {
-        const started = await bridge.uploadFilesXHR(
-          "/api/video-to-motion/upload",
-          [item.file],
-          { staticCam: staticCamera, fMm },
-          (fraction) =>
-            patchItem(item.id, { progress: (fraction ?? 0) * 0.08 }),
-        );
-        patchItem(item.id, { status: "running" });
-        const payload = await bridge.waitMotionJob<MotionPayload>(
-          started.job_id,
-          (progress, message) => patchItem(item.id, { progress, message }),
-          { uploadFrac: 0.08 },
-        );
+    };
+
+    try {
+      // Run sequentially: multiple GVHMR processes would compete for the same
+      // GPU and make progress/error attribution much harder for the user.
+      for (let index = 0; index < pending.length; index += 1) {
+        const item = pending[index];
         patchItem(item.id, {
-          status: "done",
-          progress: 1,
-          message: payload.name,
-          result: payload.library_entry,
+          status: "uploading",
+          progress: 0,
+          message: text("Uploading video…", "正在上传视频……"),
         });
-        completed += 1;
-        if (payload.library_entry) generated.push(payload.library_entry);
-      } catch (cause) {
-        failed += 1;
-        patchItem(item.id, {
-          status: "error",
-          message: cause instanceof Error ? cause.message : String(cause),
-        });
+        try {
+          const query = new URLSearchParams({
+            static_cam: String(staticCamera),
+          });
+          if (fMm !== undefined) query.set("f_mm", String(fMm));
+          const started = await requestService.upload<JobStartResponse>(
+            `/api/video-to-motion/upload?${query.toString()}`,
+            [
+              {
+                fieldName: "files",
+                data: item.file,
+                filename: item.file._relpath || item.file.name,
+              },
+            ],
+            {
+              signal: controller.signal,
+              onProgress: ({ fraction }) => {
+                const uploadProgress = boundedProgress(fraction);
+                const percent = Math.round(uploadProgress * 100);
+                patchItem(item.id, {
+                  progress: uploadProgress * UPLOAD_PROGRESS_WEIGHT,
+                  message: text(
+                    `Uploading video… ${percent}%`,
+                    `正在上传视频…… ${percent}%`,
+                  ),
+                });
+              },
+            },
+          );
+          patchItem(item.id, { status: "running" });
+          const payload = await jobService.waitForResult<MotionPayload>(
+            started.job_id,
+            {
+              expectedKind: "video_to_motion",
+              signal: controller.signal,
+              onProgress: (job) => {
+                patchItem(item.id, formatJobProgress(job));
+              },
+            },
+          );
+          patchItem(item.id, {
+            status: "done",
+            progress: 1,
+            message: payload.name,
+            result: payload.library_entry,
+          });
+          completed += 1;
+          if (payload.library_entry) generated.push(payload.library_entry);
+        } catch (cause) {
+          // Unmount/disposal aborts the whole client-side batch. Treating it as
+          // one failed item would incorrectly submit every remaining video.
+          if (controller.signal.aborted || isAbortError(cause)) return;
+          failed += 1;
+          patchItem(item.id, {
+            status: "error",
+            message: cause instanceof Error ? cause.message : String(cause),
+          });
+        }
+        if (!mounted.current) return;
+        setStatusMessage(
+          text(
+            `Processed ${index + 1} of ${pending.length}.`,
+            `已处理 ${index + 1}/${pending.length}。`,
+          ),
+        );
       }
-      setStatusMessage(
-        text(
-          `Processed ${index + 1} of ${pending.length}.`,
-          `已处理 ${index + 1}/${pending.length}。`,
-        ),
+
+      let publicationError = "";
+      if (generated.length) {
+        // Publishing is a separate compatibility step: generated motions stay
+        // successful even if the legacy basket cannot refresh its local view.
+        try {
+          if (!mounted.current || controller.signal.aborted) return;
+          const bridge = await requireLegacyBridge();
+          if (!mounted.current || controller.signal.aborted) return;
+          await bridge.addToBasket(generated, { silent: true });
+          if (!mounted.current || controller.signal.aborted) return;
+          await bridge.refreshLibrary();
+        } catch (cause) {
+          publicationError =
+            cause instanceof Error ? cause.message : String(cause);
+        }
+      }
+      if (!mounted.current || controller.signal.aborted) return;
+      const summary = text(
+        `${completed} completed, ${failed} failed.`,
+        `已完成 ${completed} 个，失败 ${failed} 个。`,
       );
+      const message = publicationError
+        ? `${summary} ${text(
+            "Library refresh failed: ",
+            "资源库刷新失败：",
+          )}${publicationError}`
+        : summary;
+      setStatusMessage(message);
+      toast(message, failed > 0 || Boolean(publicationError));
+    } finally {
+      if (runAbortController.current === controller) {
+        runAbortController.current = null;
+        if (mounted.current) setBusy(false);
+      }
     }
-    if (generated.length) {
-      // Publish successful outputs only after the batch settles. Failed inputs
-      // stay in this queue for retry, without duplicating completed motions.
-      await bridge.addToBasket(generated, { silent: true });
-      await bridge.refreshLibrary().catch(() => undefined);
-    }
-    setBusy(false);
-    const message = text(
-      `${completed} completed, ${failed} failed.`,
-      `已完成 ${completed} 个，失败 ${failed} 个。`,
-    );
-    setStatusMessage(message);
-    bridge.toast(message, failed > 0);
-  }, [canRun, focalLength, staticCamera, text, waitForBridge]);
+  }, [
+    canRun,
+    focalLength,
+    formatJobProgress,
+    jobService,
+    requestService,
+    requireLegacyBridge,
+    staticCamera,
+    text,
+    toast,
+  ]);
 
   return useMemo(
     () => ({

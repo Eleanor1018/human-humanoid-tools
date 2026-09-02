@@ -23,9 +23,9 @@ import { WorkspaceDrawerHandle } from "./components/workspace-drawer-handle";
 import { WorkspaceSettingsDialog } from "./components/workspace-settings-dialog";
 import { usePanelLayout } from "./use-panel-layout";
 import { useVideoBatch } from "./use-video-batch";
+import { useWorkbenchServices } from "./workbench-service-context";
 import { useLocaleText } from "@/hooks/use-locale-text";
 import { windowEventBus } from "@/platform/events/browser/window-event-bus";
-import { hostService } from "@/platform/host/browser/browser-host-service";
 import type {
   GvhmrOptionalComponentState,
   GvhmrRuntimeStatus,
@@ -41,14 +41,10 @@ import {
   loadWorkspacePreferences,
   updateWorkspacePreferences,
 } from "@/runtime/workspace-preferences";
-import { settingsService } from "@/workbench/services/settings/settings-service";
-import { LegacyRuntimeService } from "@/workbench/services/runtime/legacy-runtime-service";
 import { cn } from "@/lib/utils";
 
-const runtimeService = new LegacyRuntimeService();
-
 // Command-palette imports resolve to stable compatibility elements. Keeping
-// this map at the composition root prevents menus from knowing panel markup.
+// this map in the shell prevents individual menus from knowing panel markup.
 const importTargets: Record<
   Exclude<ImportCommandTarget, "job-spec">,
   {
@@ -81,17 +77,25 @@ const importTargets: Record<
 };
 
 /**
- * Application composition root, comparable to VS Code's workbench shell.
+ * Application shell, comparable to VS Code's workbench surface.
  *
  * Ownership is intentionally split:
- * - React owns navigation, dialogs, panel layout, and view-model state.
+ * - React owns navigation, dialogs, layout, and migrated view-model state.
  * - platform/services own host capabilities and HTTP/event boundaries.
- * - the compatibility runtime owns Three.js and the existing IK workflows
+ * - the compatibility runtime still owns Three.js and unmigrated IK workflows
  *   until those domain slices are migrated behind dedicated services.
  *
  * Both FastAPI WebUI and Electron instantiate this exact component tree.
  */
 export function Workbench() {
+  // These concrete implementations are assembled in main.tsx; the shell only
+  // sees their stable interfaces. Remaining window bridges below are explicit
+  // migration seams, not members of the new service graph.
+  const {
+    hostService,
+    legacyRuntimeService: runtimeService,
+    settingsService,
+  } = useWorkbenchServices();
   const initial = useMemo(() => loadWorkspacePreferences(), []);
   const [activePanel, setActivePanelState] = useState<WorkspacePanelId>(
     initial.activePanel,

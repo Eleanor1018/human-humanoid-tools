@@ -2,17 +2,23 @@ import { createRoot } from "react-dom/client";
 
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Workbench } from "@/workbench/browser/workbench";
+import { WorkbenchServicesProvider } from "@/workbench/browser/workbench-service-context";
+import { createBrowserWorkbenchServices } from "@/workbench/services/browser/browser-workbench-services";
 import "./styles/tailwind.css";
 import "./webui.css";
 
 const root = document.getElementById("app-root");
 if (!root) throw new Error("Missing #app-root mount point");
 
-// Keep the entry point deliberately small: host detection, service startup,
-// routing, and feature state all belong to the workbench composition root.
-// Electron loads this same bundle; its extra capabilities arrive via preload.
+// This is the one composition root that knows concrete browser services.
+// Feature state stays inside Workbench, and DOM-dependent legacy startup still
+// happens after React commits. Electron shares this graph and adds capabilities
+// through its preload boundary rather than through a second renderer bundle.
+const services = createBrowserWorkbenchServices();
 createRoot(root).render(
-  <TooltipProvider>
-    <Workbench />
-  </TooltipProvider>,
+  <WorkbenchServicesProvider services={services}>
+    <TooltipProvider>
+      <Workbench />
+    </TooltipProvider>
+  </WorkbenchServicesProvider>,
 );

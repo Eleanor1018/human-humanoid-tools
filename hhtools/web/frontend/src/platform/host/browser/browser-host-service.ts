@@ -30,5 +30,3 @@ export class BrowserHostService implements IHostService {
     return (await window.hhtoolsDesktop.getOptionalComponents()).gvhmr;
   }
 }
-
-export const hostService = new BrowserHostService();

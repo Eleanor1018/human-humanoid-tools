@@ -3827,15 +3827,25 @@ function setupDropzone<DropContext = void>(
   el: HTMLElement,
   onFiles: (files: UploadFile[], context: DropContext) => void | Promise<void>,
   captureDropContext?: () => DropContext,
+  acceptsEvent: (event: DragEvent) => boolean = () => true,
 ): void {
   ["dragenter", "dragover"].forEach((ev) =>
-    el.addEventListener(ev, (event) => { event.preventDefault(); el.classList.add("hover"); })
+    el.addEventListener(ev, (event) => {
+      if (!acceptsEvent(event as DragEvent)) return;
+      event.preventDefault();
+      el.classList.add("hover");
+    })
   );
   ["dragleave", "drop"].forEach((ev) =>
-    el.addEventListener(ev, (event) => { event.preventDefault(); el.classList.remove("hover"); })
+    el.addEventListener(ev, (event) => {
+      if (!acceptsEvent(event as DragEvent)) return;
+      event.preventDefault();
+      el.classList.remove("hover");
+    })
   );
   el.addEventListener("drop", (event) => {
     const dropEvent = event as DragEvent;
+    if (!acceptsEvent(dropEvent)) return;
     dropEvent.stopPropagation();
     el.classList.remove("hover");
     // Snapshot mutable UI state before recursively walking a potentially large
@@ -4444,9 +4454,19 @@ function initGvhmrWorkspace(): void {
 }
 
 initGvhmrWorkspace();
-setupDropzone(document.getElementById("stage"), (files) => {
-  void ingestMotionFiles(files, "mimic");
-});
+setupDropzone(
+  document.getElementById("stage"),
+  (files) => {
+    void ingestMotionFiles(files, "mimic");
+  },
+  undefined,
+  (event) => {
+    // The V2M batch area is React-owned. Let its delegated `onDrop` reach the
+    // React root instead of swallowing the event in this legacy stage handler.
+    const target = event.target;
+    return !(target instanceof Element && target.closest("#v2m-batch-drop"));
+  },
+);
 
 document.getElementById("add-to-basket").onclick = () => {
   if (state.libraryEntry) {

@@ -1,0 +1,21 @@
+import type { IDisposable } from "@/base/common/disposable";
+import type { IHostService } from "@/platform/host/common/host-service";
+import type { IRequestService } from "@/platform/request/common/request-service";
+import type { IJobService } from "@/workbench/services/jobs/common/job-service";
+import type { ILegacyRuntimeService } from "@/workbench/services/runtime/common/legacy-runtime-service";
+import type { ISettingsService } from "@/workbench/services/settings/common/settings-service";
+
+/**
+ * Stable services available to React workbench features.
+ *
+ * Views depend on this interface rather than importing browser singletons. The
+ * browser composition root is therefore the only place that needs to know the
+ * concrete implementations, which also makes each service replaceable in tests.
+ */
+export interface IWorkbenchServices extends IDisposable {
+  readonly hostService: IHostService;
+  readonly requestService: IRequestService;
+  readonly jobService: IJobService;
+  readonly settingsService: ISettingsService;
+  readonly legacyRuntimeService: ILegacyRuntimeService;
+}

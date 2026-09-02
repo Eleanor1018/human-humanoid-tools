@@ -5,13 +5,24 @@ vi.mock("../../src/runtime/webui-runtime", () => ({}));
 vi.mock("../../src/runtime/dataset-viz", () => ({}));
 
 import { Workbench } from "../../src/workbench/browser/workbench";
+import { WorkbenchServicesProvider } from "../../src/workbench/browser/workbench-service-context";
+import { createBrowserWorkbenchServices } from "../../src/workbench/services/browser/browser-workbench-services";
 import runtimeSource from "../../src/runtime/webui-runtime.ts?raw";
 
 afterEach(() => cleanup());
 
+function renderWorkbench() {
+  const services = createBrowserWorkbenchServices();
+  return render(
+    <WorkbenchServicesProvider services={services}>
+      <Workbench />
+    </WorkbenchServicesProvider>,
+  );
+}
+
 describe("Workbench DOM contract", () => {
   it("mounts every runtime contribution before the compatibility service starts", () => {
-    render(<Workbench />);
+    renderWorkbench();
     const ids = [
       "three-canvas",
       "motion-drop-shared",
@@ -34,7 +45,7 @@ describe("Workbench DOM contract", () => {
   });
 
   it("preserves every literal element id consumed by the existing runtime", () => {
-    render(<Workbench />);
+    renderWorkbench();
     const requiredIds = [
       ...runtimeSource.matchAll(/getElementById\("([^"]+)"\)/g),
     ].map((match) => match[1]);
