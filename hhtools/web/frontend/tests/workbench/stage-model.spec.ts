@@ -38,7 +38,7 @@ describe("StageModel", () => {
     expect(Object.keys(model.state.display.layers)).toEqual(STAGE_LAYER_IDS);
     expect(
       Object.values(model.state.display.layers).every(
-        (layer) => !layer.available && !layer.visible,
+        (layer) => !layer.available && !layer.visible && !layer.canToggle,
       ),
     ).toBe(true);
     expect(Object.isFrozen(model.state)).toBe(true);
@@ -72,8 +72,12 @@ describe("StageModel", () => {
         empty: false,
         canResetView: true,
         layers: {
-          sourceSkeleton: { available: true, visible: true },
-          resultRobot: { available: true, visible: true },
+          sourceSkeleton: {
+            available: true,
+            visible: true,
+            canToggle: true,
+          },
+          resultRobot: { available: true, visible: true, canToggle: true },
         },
       },
     });
@@ -95,8 +99,12 @@ describe("StageModel", () => {
         empty: false,
         canResetView: true,
         layers: {
-          sourceSkeleton: { available: true, visible: true },
-          resultRobot: { available: true, visible: true },
+          sourceSkeleton: {
+            available: true,
+            visible: true,
+            canToggle: true,
+          },
+          resultRobot: { available: true, visible: true, canToggle: true },
         },
       },
     });
@@ -125,6 +133,15 @@ describe("StageModel", () => {
       motionIdentity: { id: "motion-1", label: "Walk" },
       robotIdentity: { id: "robot-1", label: "G1" },
       playback: { previewSourceDuration: 12 },
+      display: {
+        layers: {
+          sourceSkeleton: {
+            available: true,
+            visible: true,
+            canToggle: true,
+          },
+        },
+      },
     });
     model.onDidChangeState(listener);
 
@@ -132,12 +149,26 @@ describe("StageModel", () => {
       motionIdentity: undefined,
       robotIdentity: undefined,
       playback: { previewSourceDuration: undefined },
+      display: {
+        layers: {
+          sourceSkeleton: {
+            available: undefined,
+            visible: undefined,
+            canToggle: undefined,
+          },
+        },
+      },
     });
 
     expect(listener).not.toHaveBeenCalled();
     expect(model.state.motionIdentity?.id).toBe("motion-1");
     expect(model.state.robotIdentity?.id).toBe("robot-1");
     expect(model.state.playback.previewSourceDuration).toBe(12);
+    expect(model.state.display.layers.sourceSkeleton).toEqual({
+      available: true,
+      visible: true,
+      canToggle: true,
+    });
   });
 
   it("normalizes playback values and semantic display invariants", () => {
@@ -156,7 +187,11 @@ describe("StageModel", () => {
         empty: true,
         canResetView: true,
         layers: {
-          sourceEnvironment: { available: false, visible: true },
+          sourceEnvironment: {
+            available: false,
+            visible: true,
+            canToggle: true,
+          },
         },
       },
     });
@@ -173,6 +208,7 @@ describe("StageModel", () => {
     expect(model.state.display.layers.sourceEnvironment).toEqual({
       available: false,
       visible: false,
+      canToggle: false,
     });
   });
 
@@ -185,7 +221,13 @@ describe("StageModel", () => {
     model.updateState({ playback: { speed: 1 } });
     model.updateState({
       display: {
-        layers: { sourceSkeleton: { available: false, visible: true } },
+        layers: {
+          sourceSkeleton: {
+            available: false,
+            visible: true,
+            canToggle: true,
+          },
+        },
       },
     });
     expect(listener).not.toHaveBeenCalled();
@@ -204,9 +246,13 @@ describe("StageModel", () => {
       display: {
         empty: false,
         layers: {
-          sourceSkeleton: { available: true, visible: true },
-          sourceBody: { available: true, visible: true },
-          resultRobot: { available: true, visible: true },
+          sourceSkeleton: {
+            available: true,
+            visible: true,
+            canToggle: true,
+          },
+          sourceBody: { available: true, visible: true, canToggle: true },
+          resultRobot: { available: true, visible: true, canToggle: true },
         },
       },
     });
@@ -221,9 +267,84 @@ describe("StageModel", () => {
 
     expect(listener).toHaveBeenCalledTimes(2);
     expect(model.state.display.layers).toMatchObject({
-      sourceSkeleton: { available: false, visible: false },
-      sourceBody: { available: true, visible: false },
-      resultRobot: { available: true, visible: true },
+      sourceSkeleton: {
+        available: false,
+        visible: false,
+        canToggle: false,
+      },
+      sourceBody: { available: true, visible: false, canToggle: true },
+      resultRobot: { available: true, visible: true, canToggle: true },
+    });
+  });
+
+  it("keeps visibility independent from a temporary interaction lock", () => {
+    const { model } = createModel();
+
+    model.updateState({
+      display: {
+        layers: {
+          resultRobot: {
+            available: true,
+            visible: true,
+            canToggle: false,
+          },
+        },
+      },
+    });
+
+    expect(model.state.display.layers.resultRobot).toEqual({
+      available: true,
+      visible: true,
+      canToggle: false,
+    });
+
+    const listener = vi.fn();
+    model.onDidChangeState(listener);
+    model.updateState({
+      display: { layers: { resultRobot: { canToggle: true } } },
+    });
+    model.updateState({
+      display: { layers: { resultRobot: { canToggle: true } } },
+    });
+
+    expect(listener).toHaveBeenCalledOnce();
+    expect(model.state.display.layers.resultRobot).toEqual({
+      available: true,
+      visible: true,
+      canToggle: true,
+    });
+  });
+
+  it("does not resurrect visibility or interaction after a resource reload", () => {
+    const { model } = createModel();
+    model.updateState({
+      display: {
+        layers: {
+          scaledSkeleton: {
+            available: true,
+            visible: true,
+            canToggle: true,
+          },
+        },
+      },
+    });
+
+    model.updateState({
+      display: { layers: { scaledSkeleton: { available: false } } },
+    });
+    expect(model.state.display.layers.scaledSkeleton).toEqual({
+      available: false,
+      visible: false,
+      canToggle: false,
+    });
+
+    model.updateState({
+      display: { layers: { scaledSkeleton: { available: true } } },
+    });
+    expect(model.state.display.layers.scaledSkeleton).toEqual({
+      available: true,
+      visible: false,
+      canToggle: false,
     });
   });
 

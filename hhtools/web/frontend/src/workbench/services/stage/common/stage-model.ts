@@ -52,6 +52,8 @@ function freezeLayer(state: StageLayerState): StageLayerState {
     available,
     // An unavailable renderer layer cannot truthfully be visible.
     visible: available && Boolean(state.visible),
+    // Interaction also fails closed when the underlying resource is absent.
+    canToggle: available && Boolean(state.canToggle),
   });
 }
 
@@ -59,7 +61,7 @@ function createInitialLayers(): StageLayerStates {
   const layers = Object.fromEntries(
     STAGE_LAYER_IDS.map((id) => [
       id,
-      freezeLayer({ available: false, visible: false }),
+      freezeLayer({ available: false, visible: false, canToggle: false }),
     ]),
   ) as Record<StageLayerId, StageLayerState>;
   return Object.freeze(layers);
@@ -81,10 +83,18 @@ function updateLayers(
       continue;
     }
 
-    const candidate = freezeLayer({ ...previous, ...layerPatch });
+    // Treat explicit `undefined` like an omitted optional field, matching the
+    // top-level Stage patch contract instead of accidentally clearing state
+    // through object spread when exactOptionalPropertyTypes is disabled.
+    const candidate = freezeLayer({
+      available: layerPatch.available ?? previous.available,
+      visible: layerPatch.visible ?? previous.visible,
+      canToggle: layerPatch.canToggle ?? previous.canToggle,
+    });
     if (
       candidate.available === previous.available &&
-      candidate.visible === previous.visible
+      candidate.visible === previous.visible &&
+      candidate.canToggle === previous.canToggle
     ) {
       next[id] = previous;
     } else {

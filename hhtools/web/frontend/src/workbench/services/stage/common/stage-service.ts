@@ -29,8 +29,17 @@ export const MIN_STAGE_PLAYBACK_SPEED = 0.1;
 export const MAX_STAGE_PLAYBACK_SPEED = 4;
 
 export interface StageLayerState {
+  /** Whether the renderer currently has content for this semantic layer. */
   readonly available: boolean;
+  /** Whether that content is currently rendered. */
   readonly visible: boolean;
+  /**
+   * Whether the current Stage mode lets the user change visibility.
+   *
+   * This is deliberately separate from availability: calibration can keep a
+   * loaded layer available and visible while temporarily locking its control.
+   */
+  readonly canToggle: boolean;
 }
 
 export type StageLayerStates = Readonly<
