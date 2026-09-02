@@ -170,6 +170,8 @@ function contributionPath(file) {
 function importRuleFor(source, target) {
   const sourceLayer = classifyLayer(source);
   const targetLayer = classifyLayer(target);
+  const sourceContribution = contributionPath(source);
+  const targetContribution = contributionPath(target);
 
   // Legacy runtime is deliberately outside the new layer graph. Any remaining
   // reference to it must be an exact, reviewable migration seam.
@@ -183,11 +185,12 @@ function importRuleFor(source, target) {
     return "legacy-imports-workbench";
   }
 
-  // Feature implementation is loaded by the composition entry point and
-  // contributes descriptors to the shell. Core/services must never import a
-  // concrete contribution, otherwise adding a feature changes the framework.
+  // Feature implementation is loaded by the composition entry point. Public
+  // common contracts remain importable from higher layers, but concrete
+  // browser/controller code must never leak back into the framework.
   if (
     targetLayer === "workbench-contrib" &&
+    targetContribution?.area !== "common" &&
     sourceLayer !== "workbench-contrib" &&
     sourceLayer !== "entrypoint"
   ) {
@@ -196,8 +199,6 @@ function importRuleFor(source, target) {
 
   // Features may collaborate through another contribution's deliberately
   // public common contract, never through its browser/controller internals.
-  const sourceContribution = contributionPath(source);
-  const targetContribution = contributionPath(target);
   if (
     sourceContribution &&
     targetContribution &&

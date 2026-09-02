@@ -136,6 +136,29 @@ test("contributions share only their explicit common contracts", (t) => {
   );
 });
 
+test("higher layers may consume feature common contracts, not implementations", (t) => {
+  const projectRoot = createProject(t, {
+    "src/workbench/contrib/video/common/video.ts":
+      "export type VideoContract = { ready: boolean };",
+    "src/workbench/contrib/video/browser/view.ts": "export const view = 1;",
+    "src/workbench/browser/good.ts":
+      'export type { VideoContract } from "@/workbench/contrib/video/common/video";',
+    "src/workbench/browser/bad.ts":
+      'export { view } from "@/workbench/contrib/video/browser/view";',
+    "src/workbench/services/jobs/common/bad.ts":
+      'export type { VideoContract } from "@/workbench/contrib/video/common/video";',
+  });
+
+  const result = audit(projectRoot);
+  assert.deepEqual(
+    result.unexpectedImports.map(({ rule, source }) => [rule, source]),
+    [
+      ["contribution-imported-outside-entrypoint", "workbench/browser/bad.ts"],
+      ["upward-layer-import", "workbench/services/jobs/common/bad.ts"],
+    ],
+  );
+});
+
 test("domain and workbench common contracts stay below services", (t) => {
   const projectRoot = createProject(t, {
     "src/base/common/value.ts": "export const value = 1;",
