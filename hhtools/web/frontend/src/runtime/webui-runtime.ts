@@ -1,7 +1,15 @@
-// hhtools web — Three.js/IK compatibility runtime.
-// All heavy compute happens on the FastAPI backend. During the React migration,
-// this module owns domain orchestration and mutates only the stable ports mounted
-// by Workbench. New UI behavior belongs in React services/components, not here.
+/**
+ * HHTools compatibility domain runtime, loaded only after React has committed
+ * the stable DOM ports declared by Workbench.
+ *
+ * This module owns same-origin FastAPI/job orchestration, the shared Three.js
+ * stage and timeline, H2R/R2R/Batch/Video-to-Motion sessions, and the remaining
+ * imperative DOM adapters. IK, FK, dataset analysis, and video inference stay on
+ * the backend; the browser uploads, polls, coordinates, and visualizes results.
+ *
+ * New UI state belongs in React services/components. Until each domain is moved,
+ * typed window events and `window.__hhApp` are the explicit migration seams.
+ */
 
 
 /** Parse a positive FPS from a number input, or ``null`` to mean “use default”. */
@@ -278,6 +286,7 @@ interface CalibrationSliderRow {
   region: CalibrationJointRegion;
 }
 
+/** H2R/shared-stage session state; the R2R workflow owns an isolated state below. */
 interface AppState {
   motion: MotionPayload | null;
   libraryEntry: LibraryEntry | null;
@@ -332,6 +341,11 @@ async function httpError(r: Response): Promise<Error> {
   return new Error(msg || `${r.status} ${r.statusText}`);
 }
 
+/**
+ * Same-origin FastAPI transport used by the compatibility runtime. Expensive
+ * endpoints normally return a job id; callers then poll `/api/job/:id` before
+ * committing the resulting payload to workflow and scene state.
+ */
 const API: ApiClient = {
   async get<Url extends string>(url: Url): Promise<ApiGetResponse<Url>> {
     const r = await fetch(url);
@@ -402,6 +416,8 @@ function toast(msg: unknown, isErr = false): void {
 }
 
 // ---------------------------------------------------------- shared job drawer
+// React owns the drawer UI. This store polls backend history and exchanges
+// immutable snapshots/commands with it through typed window events.
 let jobHistoryState: JobHistoryStateDetail = {
   jobs: [],
   loading: false,
@@ -701,6 +717,10 @@ function formatJobProgress(job: JobResponse, prefix = ""): string {
   return `${prefix}${msg} (${pct}%)`;
 }
 
+/**
+ * Shared long-job completion boundary. `uploadFrac` reserves the first part of
+ * a combined progress bar for XHR upload; backend progress fills the remainder.
+ */
 async function waitMotionJob<Result = JobResult>(
   jobId: string,
   onProgress?: JobProgressCallback,
@@ -724,6 +744,8 @@ async function waitMotionJob<Result = JobResult>(
 }
 
 // ----------------------------------------------------------------- 3D scene
+// One persistent WebGL canvas is shared by every workflow. Views are stable
+// groups under this scene; loading data updates them instead of remounting React.
 const canvas = document.getElementById("three-canvas");
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -2678,7 +2700,12 @@ async function refreshScaledPreview(): Promise<void> {
   }
 }
 
-// =================================================================  STATE
+// =================================================================  H2R STATE
+/**
+ * Canonical H2R session state. Loading another motion or robot invalidates the
+ * calibration, trajectory, diagnostics, and export values derived from the old
+ * pair. Compatibility DOM controls are projections, never another state source.
+ */
 const state: AppState = {
   motion: null, // serialized payload incl token
   libraryEntry: null, // resource-library row for batch basket
@@ -3197,7 +3224,7 @@ function updatePills(): void {
     ? `🤖 ${state.robot.display_name}` : runtimeText("No robot loaded", "未加载机器人");
 }
 
-// =================================================================  NAV
+// =================================================================  NAVIGATION BRIDGE
 let inspectorPanelSwitchHook: ((panelId: string) => void) | null = null;
 
 function switchInspectorPanel(panelId: string): void {
@@ -3227,6 +3254,10 @@ async function routeAfterRobotLoad(): Promise<void> {
 }
 
 // =================================================================  MOTION
+/**
+ * Commit a newly loaded human motion, invalidate prior H2R results, and rebuild
+ * every source-motion Three.js layer before publishing the new workflow state.
+ */
 async function loadMotionPayload(payload: MotionPayload): Promise<void> {
   state.motion = payload;
   state.libraryEntry = payload.library_entry || null;
@@ -3702,7 +3733,7 @@ window.addEventListener("hhtools:workspace-locale-change", () => {
   if (r2r.calibrating) updateR2rCalibBanner();
 });
 
-// drag-drop helpers (folder-aware)
+// ================================================ FILE IMPORT (folder-aware)
 function readAllDirectoryEntries(
   reader: FileSystemDirectoryReader,
 ): Promise<FileSystemEntry[]> {
@@ -3928,10 +3959,16 @@ function initMotionImportZone(): void {
 }
 initMotionImportZone();
 
+// ========================================================= VIDEO TO MOTION
 const GVHMR_VIDEO_ACCEPT =
   "video/mp4,video/quicktime,video/x-matroska,video/x-msvideo,video/webm,.m4v";
 const GVHMR_VIDEO_EXTENSIONS = new Set([".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v"]);
 
+/**
+ * Video-to-Motion state machine. `renderGvhmrWorkspace` projects it both to the
+ * compatibility DOM and to an immutable React event; the selected File and its
+ * object URL intentionally remain private to this runtime.
+ */
 interface GvhmrWorkspaceState {
   file: UploadFile | null;
   previewUrl: string | null;
@@ -4492,6 +4529,10 @@ function populateBatchRobotSelect(preferredName?: string): void {
   populateWorkflowRobotSelect("batch-robot-select", "batch-robot-load", preferredName);
 }
 
+/**
+ * Reference-counted workspace lock: overlapping async workflows may share the
+ * robot controls, so one completion must not unlock another caller's operation.
+ */
 function setRobotPanelLocked(locked: boolean): void {
   if (locked) _robotPanelLockDepth++;
   else _robotPanelLockDepth = Math.max(0, _robotPanelLockDepth - 1);
@@ -6113,6 +6154,8 @@ async function buildCalibSliders(
   previewCalibPose();
 }
 
+// Coalesce rapid slider/pointer edits to one FK request per animation frame. If
+// a request is already in flight, retain one follow-up that reads the latest q.
 let calibFkRaf = 0;
 let calibFkInFlight = false;
 let calibFkQueued = false;
@@ -6167,6 +6210,10 @@ async function _runCalibFk(): Promise<void> {
   }
 }
 
+/**
+ * Reconcile the current H2R robot/reference pair with saved calibration. This
+ * is orchestration, not a pure render: a missing calibration may open the editor.
+ */
 async function refreshRetargetPanel(): Promise<void> {
   document.getElementById("rt-motion").textContent = state.motion
     ? state.motion.name
@@ -6594,6 +6641,10 @@ interface BatchReferenceGroup {
   datasets: Set<string>;
 }
 
+/**
+ * Check calibration once per reference format represented in the basket. The
+ * revision guard discards responses started for an older basket/robot choice.
+ */
 async function syncBatchRefHint(): Promise<void> {
   const revision = ++batchCompatibilityRevision;
   const el = document.getElementById("batch-ref-hint");
@@ -7979,6 +8030,10 @@ function r2rLoadTgtScene(
   if (envBtn) envBtn.disabled = false;
 }
 
+/**
+ * Sole authority for R2R stage visibility: hide H2R views while R2R owns the
+ * shared canvas, then project the workflow's visibility model onto its views.
+ */
 function r2rApplyStage(): void {
   if (!r2r.active) {
     r2rSrc.group.visible = false;
@@ -8071,6 +8126,10 @@ window.addEventListener("hhtools:comparison-command", (event) => {
   else applyR2rComparisonPreset(preset);
 });
 
+/**
+ * Transfer the shared canvas/player from H2R to R2R. The prior visibility and
+ * playback cursor are snapshotted here and restored by `r2rLeavePanel`.
+ */
 function r2rEnterPanel(): void {
   if (r2r.active) { r2rApplyStage(); return; }
   r2r.active = true;
@@ -8315,6 +8374,8 @@ function r2rCalibCtx(): CalibrationContext {
   };
 }
 
+// R2R mirrors the H2R FK coalescing contract: at most one request plus one
+// latest-state follow-up may be pending during continuous manipulation.
 function r2rPreviewCalibPose(
   { flush = false }: CalibrationPreviewOptions = {},
 ): void {
@@ -9235,6 +9296,11 @@ function r2rInit(): void {
 }
 
 // =================================================================  INIT
+/**
+ * Module bootstrap contract: React has already committed every compatibility
+ * DOM id. `__hhtoolsReady` means bindings and the RAF loop are live; catalog,
+ * robot, reference, and health requests continue asynchronously in `init`.
+ */
 animate(); // start the render loop now that `player` is initialised
 window.__hh = { skel, mesh, skin, scaledSkel, robot, player, scene, world }; // debug handle
 window.__hhtoolsReady = true;
@@ -9242,8 +9308,8 @@ window.addEventListener("hhtools:calibration-editor-command", (event) => {
   void handleCalibrationEditorCommand(event);
 });
 
-// Bridge for the optional dataset-viz module (loaded after this file). Exposes
-// the few helpers it needs without making it depend on app.js internals.
+// Narrow capability bridge for dataset-viz, which is loaded next. Keeping this
+// explicit avoids importing or reaching into this module's private singleton state.
 window.__hhApp = {
   API,
   toast,
@@ -9292,6 +9358,7 @@ async function verifyUiBuild() {
   // React owns panel dimensions and persistence; the runtime only consumes the resulting canvas size.
   document.getElementById("lib-link-path")?.addEventListener("click", () => linkLibraryPath());
   await verifyUiBuild();
+  // Independent catalogs load together; none is allowed to delay the others.
   await Promise.all([loadReferenceCatalog(), refreshLibrary(), refreshRobotList()]);
   renderBasket();
   r2rInit();

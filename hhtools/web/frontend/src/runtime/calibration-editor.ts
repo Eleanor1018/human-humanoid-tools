@@ -1,3 +1,10 @@
+/**
+ * Pure calibration-editor rules shared by the React controls and the legacy
+ * runtime. This module deliberately has no DOM or Three.js dependency: joint
+ * grouping, filtering, and angle conversion can therefore be tested in
+ * isolation while the runtime remains the owner of the actual robot pose.
+ */
+
 import type {
   CalibrationAngleUnit,
   CalibrationJointRegion,
@@ -20,6 +27,7 @@ export function classifyCalibrationJoint(name: string): CalibrationJointRegion {
   const left = normalized.startsWith('left') || LEFT_TOKEN.test(normalized)
   const right = normalized.startsWith('right') || RIGHT_TOKEN.test(normalized)
 
+  // Specific end effectors win before the broader arm/leg rules.
   if (hasAny(normalized, ['finger', 'thumb', 'hand', 'gripper'])) return 'hands'
   if (hasAny(normalized, ['head', 'neck', 'antenna'])) return 'head'
 
@@ -47,6 +55,7 @@ export function calibrationJointMatches(
   return queryMatches && (region === 'all' || classifyCalibrationJoint(name) === region)
 }
 
+/** Runtime and backend angles are radians; conversion happens only at the UI edge. */
 export function angleForDisplay(valueRad: number, unit: CalibrationAngleUnit): number {
   return unit === 'deg' ? valueRad * 180 / Math.PI : valueRad
 }

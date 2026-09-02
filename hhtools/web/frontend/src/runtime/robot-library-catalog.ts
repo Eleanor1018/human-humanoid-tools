@@ -1,3 +1,9 @@
+/**
+ * Product metadata for robots bundled and supported by HHTools. The backend is
+ * still authoritative for availability and deletability; this frontend catalog
+ * contributes only curated labels and artwork.
+ */
+
 /** The generic HHTools mark remains the fallback for user-imported robots. */
 export const DEFAULT_ROBOT_LIBRARY_ICON = "./hhtools-robot.svg"
 
@@ -48,6 +54,7 @@ export const CURATED_ROBOT_LIBRARY_ITEMS: Readonly<Record<string, CuratedRobotLi
 }
 
 export function curatedRobotLibraryItem(name: string): CuratedRobotLibraryItem | undefined {
+  // Do not read inherited keys such as "constructor" as robot identifiers.
   return Object.prototype.hasOwnProperty.call(CURATED_ROBOT_LIBRARY_ITEMS, name)
     ? CURATED_ROBOT_LIBRARY_ITEMS[name]
     : undefined
