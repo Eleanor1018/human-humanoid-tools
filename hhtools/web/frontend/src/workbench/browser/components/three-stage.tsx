@@ -3,6 +3,7 @@ import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import { useLocaleText } from "@/workbench/services/localization/browser/use-locale-text";
 import type { WorkspaceLocale } from "@/workbench/common/workspace";
 import type {
+  IStageDisplayCommands,
   IStageModelService,
   IStagePlaybackCommands,
 } from "@/workbench/services/stage/common/stage-service";
@@ -11,11 +12,13 @@ import { PlaybackBar } from "./playback-bar";
 /** Stable DOM contract consumed by the Three.js stage compatibility service. */
 export function ThreeStage({
   locale,
+  stageDisplayCommands,
   stageModelService,
   stagePlaybackCommands,
   batchWorkspace,
 }: {
   locale: WorkspaceLocale;
+  stageDisplayCommands: IStageDisplayCommands;
   stageModelService: IStageModelService;
   stagePlaybackCommands: IStagePlaybackCommands;
   batchWorkspace?: ReactNode;
@@ -111,6 +114,7 @@ export function ThreeStage({
           id="view-reset-btn"
           title={text("Reset view", "回到默认视角")}
           aria-label={text("Reset view", "回到默认视角")}
+          onClick={() => stageDisplayCommands.resetView()}
         >
           <svg
             className="view-reset-icon"

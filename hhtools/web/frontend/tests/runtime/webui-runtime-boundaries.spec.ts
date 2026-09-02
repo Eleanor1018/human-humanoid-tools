@@ -3,6 +3,13 @@ import { describe, expect, it } from "vitest";
 import runtimeSource from "../../src/runtime/webui-runtime.ts?raw";
 
 describe("legacy runtime ownership boundaries", () => {
+  it("exposes Stage reset without installing a DOM click owner", () => {
+    expect(runtimeSource).toContain("export function resetStageView");
+    expect(runtimeSource).not.toContain(
+      'addEventListener("click", resetDefaultView)',
+    );
+  });
+
   it("lets the React-owned V2M batch dropzone handle its own files", () => {
     const start = runtimeSource.indexOf(
       'setupDropzone(\n  document.getElementById("stage")',

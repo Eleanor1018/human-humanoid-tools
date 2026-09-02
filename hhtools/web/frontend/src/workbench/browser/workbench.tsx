@@ -101,6 +101,7 @@ export function Workbench({ panelContributions }: WorkbenchProps) {
     commandService,
     gvhmrComponentService,
     hostService,
+    stageDisplayCommands,
     stageModelService,
     stagePlaybackCommands,
     settingsService,
@@ -386,6 +387,7 @@ export function Workbench({ panelContributions }: WorkbenchProps) {
         />
         <ThreeStage
           locale={locale}
+          stageDisplayCommands={stageDisplayCommands}
           stageModelService={stageModelService}
           stagePlaybackCommands={stagePlaybackCommands}
           batchWorkspace={

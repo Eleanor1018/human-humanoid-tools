@@ -10,6 +10,7 @@ import type {
 import type { ILegacyRuntimeService } from "@/workbench/services/runtime/common/legacy-runtime-service";
 import type { ISettingsService } from "@/workbench/services/settings/common/settings-service";
 import type {
+  IStageDisplayCommands,
   IStageModelService,
   IStagePlaybackCommands,
 } from "@/workbench/services/stage/common/stage-service";
@@ -29,6 +30,7 @@ export interface IWorkbenchServices extends IDisposable {
   readonly jobService: IJobService;
   readonly motionResultPresentationService: IMotionResultPresentationService;
   readonly settingsService: ISettingsService;
+  readonly stageDisplayCommands: IStageDisplayCommands;
   readonly stageModelService: IStageModelService;
   readonly stagePlaybackCommands: IStagePlaybackCommands;
   readonly legacyRuntimeService: ILegacyRuntimeService;

@@ -882,6 +882,11 @@ function resetDefaultView(): void {
   focusRobotView({ resetOffset: true });
 }
 
+/** Narrow browser-service port used while camera ownership remains legacy. */
+export function resetStageView(): void {
+  resetDefaultView();
+}
+
 function calibRobotGroup(): THREE.Group {
   return r2r.calibrating ? r2rTgt.group : robot.group;
 }
@@ -2524,8 +2529,6 @@ function revealStage(): void {
   document.getElementById("view-hud").classList.remove("hidden");
   document.getElementById("stage-empty").style.display = "none";
 }
-
-document.getElementById("view-reset-btn")?.addEventListener("click", resetDefaultView);
 
 window.addEventListener("hhtools:playback-command", (event) => {
   const { action, value } = event.detail || {};

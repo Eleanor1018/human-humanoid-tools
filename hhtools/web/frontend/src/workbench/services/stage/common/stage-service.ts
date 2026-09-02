@@ -97,6 +97,11 @@ export interface IStagePlaybackCommands {
   togglePlaybackLoop(): void;
 }
 
+/** View-level Stage intents whose concrete rendering remains host-owned. */
+export interface IStageDisplayCommands {
+  resetView(): void;
+}
+
 /** Playback progress is derived rather than stored as a second source of truth. */
 export function getStagePlaybackProgress(
   playback: StagePlaybackState,

@@ -4,6 +4,10 @@ import type {
 } from "@/workbench/services/motion/common/motion-result-presentation-service";
 import type { ILegacyRuntimeService } from "../common/legacy-runtime-service";
 
+interface LoadedLegacyRuntime extends IMotionResultPresentationService {
+  resetStageView(): void;
+}
+
 /**
  * Temporary strangler boundary around the existing Three.js/workflow runtime.
  *
@@ -15,7 +19,7 @@ export class BrowserLegacyRuntimeService
   implements ILegacyRuntimeService, IMotionResultPresentationService
 {
   #startPromise: Promise<void> | null = null;
-  #runtime: IMotionResultPresentationService | null = null;
+  #runtime: LoadedLegacyRuntime | null = null;
 
   start(): Promise<void> {
     // Return the same promise to every caller. A boolean "started" flag would
@@ -32,6 +36,17 @@ export class BrowserLegacyRuntimeService
       throw new Error("Legacy runtime did not finish initialization");
     }
     await this.#runtime.presentHumanMotion(payload);
+  }
+
+  /** Browser-only migration capability; intentionally absent from the common
+   * ILegacyRuntimeService lifecycle contract.
+   */
+  async resetStageView(): Promise<void> {
+    await this.start();
+    if (!this.#runtime) {
+      throw new Error("Legacy runtime did not finish initialization");
+    }
+    this.#runtime.resetStageView();
   }
 
   dispose(): void {

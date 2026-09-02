@@ -15,6 +15,7 @@ import { SearchField } from "../../src/workbench/browser/components/search-field
 import { SidebarNavigation } from "../../src/workbench/browser/components/sidebar-navigation";
 import { JobDrawer } from "../../src/workbench/browser/components/job-drawer";
 import { StageModel } from "../../src/workbench/services/stage/common/stage-model";
+import { ThreeStage } from "../../src/workbench/browser/components/three-stage";
 
 afterEach(() => {
   cleanup();
@@ -112,6 +113,29 @@ describe("React workbench components", () => {
     ]);
     fireEvent.click(screen.getByLabelText("切换循环播放"));
     expect(stagePlaybackCommands.togglePlaybackLoop).toHaveBeenCalledOnce();
+    stageModel.dispose();
+  });
+
+  it("routes the Stage reset button through its narrow command contract", () => {
+    const stageModel = new StageModel(vi.fn());
+    const resetView = vi.fn();
+
+    render(
+      <ThreeStage
+        locale="en"
+        stageDisplayCommands={{ resetView }}
+        stageModelService={stageModel}
+        stagePlaybackCommands={{
+          togglePlayback: vi.fn(),
+          seekToFraction: vi.fn(),
+          setPlaybackSpeed: vi.fn(),
+          togglePlaybackLoop: vi.fn(),
+        }}
+      />,
+    );
+    fireEvent.click(screen.getByLabelText("Reset view"));
+
+    expect(resetView).toHaveBeenCalledOnce();
     stageModel.dispose();
   });
 
