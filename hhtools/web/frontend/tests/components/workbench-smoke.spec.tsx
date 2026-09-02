@@ -129,6 +129,12 @@ describe("Workbench DOM contract", () => {
   });
 
   it("projects legacy playback state through the Stage model into React", () => {
+    const commands: unknown[] = [];
+    window.addEventListener(
+      "hhtools:playback-command",
+      (event) => commands.push(event.detail),
+      { once: true },
+    );
     renderWorkbench();
 
     act(() => {
@@ -148,6 +154,8 @@ describe("Workbench DOM contract", () => {
 
     expect(screen.getByText("1.50 / 6.00 s")).toBeInTheDocument();
     expect(document.getElementById("playbar")).not.toHaveAttribute("hidden");
+    fireEvent.click(screen.getByLabelText("暂停"));
+    expect(commands).toEqual([{ action: "toggle", value: undefined }]);
   });
 
   it("routes video imports through the contributed command without DOM lookup", async () => {

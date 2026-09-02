@@ -7,6 +7,7 @@ import { BrowserGvhmrComponentService } from "@/workbench/services/gvhmr/browser
 import { BrowserJobService } from "@/workbench/services/jobs/browser/browser-job-service";
 import { BrowserLegacyRuntimeService } from "@/workbench/services/runtime/browser/browser-legacy-runtime-service";
 import { BrowserSettingsService } from "@/workbench/services/settings/browser/browser-settings-service";
+import { BrowserLegacyStagePlaybackCommands } from "@/workbench/services/stage/browser/browser-legacy-stage-playback-commands";
 import { BrowserLegacyStageStateAdapter } from "@/workbench/services/stage/browser/browser-legacy-stage-state-adapter";
 import { StageModel } from "@/workbench/services/stage/common/stage-model";
 
@@ -33,6 +34,7 @@ export function createBrowserWorkbenchServices(
   // This migration adapter is deliberately registered after both endpoints.
   // Reverse disposal removes its window listener before either endpoint dies.
   ownedServices.add(new BrowserLegacyStageStateAdapter(stageModelService));
+  const stagePlaybackCommands = new BrowserLegacyStagePlaybackCommands();
 
   return {
     commandService,
@@ -44,6 +46,7 @@ export function createBrowserWorkbenchServices(
     motionResultPresentationService: legacyRuntimeService,
     settingsService: new BrowserSettingsService(requestService),
     stageModelService,
+    stagePlaybackCommands,
     legacyRuntimeService,
     dispose: () => ownedServices.dispose(),
   };

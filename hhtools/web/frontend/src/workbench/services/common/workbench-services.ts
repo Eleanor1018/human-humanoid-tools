@@ -9,7 +9,10 @@ import type {
 } from "@/workbench/services/motion/common/motion-result-presentation-service";
 import type { ILegacyRuntimeService } from "@/workbench/services/runtime/common/legacy-runtime-service";
 import type { ISettingsService } from "@/workbench/services/settings/common/settings-service";
-import type { IStageModelService } from "@/workbench/services/stage/common/stage-service";
+import type {
+  IStageModelService,
+  IStagePlaybackCommands,
+} from "@/workbench/services/stage/common/stage-service";
 
 /**
  * Stable services available to React workbench features.
@@ -27,5 +30,6 @@ export interface IWorkbenchServices extends IDisposable {
   readonly motionResultPresentationService: IMotionResultPresentationService;
   readonly settingsService: ISettingsService;
   readonly stageModelService: IStageModelService;
+  readonly stagePlaybackCommands: IStagePlaybackCommands;
   readonly legacyRuntimeService: ILegacyRuntimeService;
 }

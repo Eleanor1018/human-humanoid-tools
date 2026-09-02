@@ -1,6 +1,8 @@
 import { Emitter } from "@/base/common/event";
 
 import {
+  MAX_STAGE_PLAYBACK_SPEED,
+  MIN_STAGE_PLAYBACK_SPEED,
   STAGE_LAYER_IDS,
   type IStageModelService,
   type StageContentIdentity,
@@ -32,9 +34,6 @@ export interface StageStateUpdate {
     layers?: StageLayerPatch;
   }>;
 }
-
-const MIN_PLAYBACK_SPEED = 0.1;
-const MAX_PLAYBACK_SPEED = 4;
 
 function finiteOr(value: number, fallback: number): number {
   return Number.isFinite(value) ? value : fallback;
@@ -126,9 +125,9 @@ function updatePlayback(
       ? null
       : Math.max(0, finiteOr(rawPreviewSourceDuration, duration));
   const speed = Math.min(
-    MAX_PLAYBACK_SPEED,
+    MAX_STAGE_PLAYBACK_SPEED,
     Math.max(
-      MIN_PLAYBACK_SPEED,
+      MIN_STAGE_PLAYBACK_SPEED,
       finiteOr(patch.speed ?? current.speed, current.speed),
     ),
   );

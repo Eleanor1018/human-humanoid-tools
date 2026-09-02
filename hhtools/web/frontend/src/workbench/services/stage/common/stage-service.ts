@@ -25,6 +25,9 @@ export const STAGE_LAYER_IDS = [
 
 export type StageLayerId = (typeof STAGE_LAYER_IDS)[number];
 
+export const MIN_STAGE_PLAYBACK_SPEED = 0.1;
+export const MAX_STAGE_PLAYBACK_SPEED = 4;
+
 export interface StageLayerState {
   readonly available: boolean;
   readonly visible: boolean;
@@ -76,6 +79,22 @@ export interface StageState {
 export interface IStageModelService extends IDisposable {
   readonly state: StageState;
   readonly onDidChangeState: Event<StageState>;
+}
+
+/**
+ * Narrow playback intents available to Views and other features.
+ *
+ * These methods do not expose the owner-side state patch API. The current
+ * browser implementation adapts them to the compatibility player; a future
+ * renderer can implement the same contract directly.
+ */
+export interface IStagePlaybackCommands {
+  togglePlayback(): void;
+  /** Seek to a normalized position; values are clamped to `[0, 1]`. */
+  seekToFraction(fraction: number): void;
+  /** Set playback rate; values are clamped to `[0.1, 4]`. */
+  setPlaybackSpeed(multiplier: number): void;
+  togglePlaybackLoop(): void;
 }
 
 /** Playback progress is derived rather than stored as a second source of truth. */

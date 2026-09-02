@@ -1,24 +1,19 @@
-import { windowEventBus } from "@/platform/events/browser/window-event-bus";
 import { cn } from "@/lib/utils";
 import type { WorkspaceLocale } from "@/workbench/common/workspace";
 import { useStageModelState } from "@/workbench/services/stage/browser/use-stage-model-state";
 import {
   getStagePlaybackProgress,
   type IStageModelService,
+  type IStagePlaybackCommands,
   type StagePlaybackState,
 } from "@/workbench/services/stage/common/stage-service";
-
-type PlaybackCommand =
-  WindowEventMap["hhtools:playback-command"]["detail"];
 
 function formatPlaybackLabel(
   playback: StagePlaybackState,
   locale: WorkspaceLocale,
 ): string {
   let label = `${playback.currentTime.toFixed(2)} / ${playback.duration.toFixed(2)} s`;
-  if (
-    playback.previewSourceDuration !== null
-  ) {
+  if (playback.previewSourceDuration !== null) {
     const source = playback.previewSourceDuration.toFixed(1);
     label +=
       locale === "zh-CN"
@@ -31,19 +26,15 @@ function formatPlaybackLabel(
 export function PlaybackBar({
   locale,
   stageModelService,
+  stagePlaybackCommands,
 }: {
   readonly locale: WorkspaceLocale;
   readonly stageModelService: IStageModelService;
+  readonly stagePlaybackCommands: IStagePlaybackCommands;
 }) {
   const state = useStageModelState(stageModelService).playback;
   const progress = getStagePlaybackProgress(state);
   const label = formatPlaybackLabel(state, locale);
-
-  // Commands remain on the compatibility bridge until the Stage command
-  // contribution moves in a separate, reversible migration step.
-  const send = (action: PlaybackCommand["action"], value?: number): void => {
-    windowEventBus.emit("hhtools:playback-command", { action, value });
-  };
 
   return (
     <div id="playbar" className="playbar" hidden={!state.controlsVisible}>
@@ -52,7 +43,7 @@ export function PlaybackBar({
         type="button"
         className="icon-btn"
         aria-label={state.playing ? "暂停" : "播放"}
-        onClick={() => send("toggle")}
+        onClick={() => stagePlaybackCommands.togglePlayback()}
       >
         {state.playing ? "❚❚" : "▶"}
       </button>
@@ -65,7 +56,9 @@ export function PlaybackBar({
         value={progress * 100}
         aria-label="播放进度"
         onChange={(event) =>
-          send("seek", Number(event.currentTarget.value) / 100)
+          stagePlaybackCommands.seekToFraction(
+            Number(event.currentTarget.value) / 100,
+          )
         }
       />
       <span id="time-label" className="time-label" title={label}>
@@ -74,7 +67,7 @@ export function PlaybackBar({
       <span
         className="speed-ctrl"
         title="播放速度（拖动调节，双击复位 1×）"
-        onDoubleClick={() => send("speed", 1)}
+        onDoubleClick={() => stagePlaybackCommands.setPlaybackSpeed(1)}
       >
         <span className="speed-icon" aria-hidden="true">
           🐢
@@ -88,7 +81,11 @@ export function PlaybackBar({
           step="0.1"
           value={state.speed}
           aria-label="播放速度"
-          onChange={(event) => send("speed", Number(event.currentTarget.value))}
+          onChange={(event) =>
+            stagePlaybackCommands.setPlaybackSpeed(
+              Number(event.currentTarget.value),
+            )
+          }
         />
         <span id="speed-label" className="speed-label">
           {state.speed.toFixed(1)}×
@@ -100,7 +97,7 @@ export function PlaybackBar({
         className={cn("icon-btn ghost", !state.loop && "off")}
         title="循环"
         aria-label="切换循环播放"
-        onClick={() => send("loop")}
+        onClick={() => stagePlaybackCommands.togglePlaybackLoop()}
       >
         🔁
       </button>

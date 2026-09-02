@@ -2,17 +2,22 @@ import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
 
 import { useLocaleText } from "@/workbench/services/localization/browser/use-locale-text";
 import type { WorkspaceLocale } from "@/workbench/common/workspace";
-import type { IStageModelService } from "@/workbench/services/stage/common/stage-service";
+import type {
+  IStageModelService,
+  IStagePlaybackCommands,
+} from "@/workbench/services/stage/common/stage-service";
 import { PlaybackBar } from "./playback-bar";
 
 /** Stable DOM contract consumed by the Three.js stage compatibility service. */
 export function ThreeStage({
   locale,
   stageModelService,
+  stagePlaybackCommands,
   batchWorkspace,
 }: {
   locale: WorkspaceLocale;
   stageModelService: IStageModelService;
+  stagePlaybackCommands: IStagePlaybackCommands;
   batchWorkspace?: ReactNode;
 }) {
   const text = useLocaleText(locale);
@@ -123,6 +128,7 @@ export function ThreeStage({
         <PlaybackBar
           locale={locale}
           stageModelService={stageModelService}
+          stagePlaybackCommands={stagePlaybackCommands}
         />
       </div>
     </main>

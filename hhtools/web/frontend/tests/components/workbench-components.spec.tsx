@@ -59,15 +59,19 @@ describe("React workbench components", () => {
   });
 
   it("renders Stage playback state while commands use the migration bridge", () => {
-    const commands: unknown[] = [];
     const stageModel = new StageModel(vi.fn());
-    window.addEventListener(
-      "hhtools:playback-command",
-      (event) => commands.push((event as CustomEvent).detail),
-      { once: true },
-    );
+    const stagePlaybackCommands = {
+      togglePlayback: vi.fn(),
+      seekToFraction: vi.fn(),
+      setPlaybackSpeed: vi.fn(),
+      togglePlaybackLoop: vi.fn(),
+    };
     const view = render(
-      <PlaybackBar locale="en" stageModelService={stageModel} />,
+      <PlaybackBar
+        locale="en"
+        stageModelService={stageModel}
+        stagePlaybackCommands={stagePlaybackCommands}
+      />,
     );
     act(() => {
       stageModel.updateState({
@@ -84,12 +88,30 @@ describe("React workbench components", () => {
     expect(screen.getByText("2.00 / 8.00 s (preview; source 12.0 s)"))
       .toBeInTheDocument();
     view.rerender(
-      <PlaybackBar locale="zh-CN" stageModelService={stageModel} />,
+      <PlaybackBar
+        locale="zh-CN"
+        stageModelService={stageModel}
+        stagePlaybackCommands={stagePlaybackCommands}
+      />,
     );
     expect(screen.getByText("2.00 / 8.00 s（预览，原片 12.0 s）"))
       .toBeInTheDocument();
     fireEvent.click(screen.getByLabelText("暂停"));
-    expect(commands).toEqual([{ action: "toggle", value: undefined }]);
+    expect(stagePlaybackCommands.togglePlayback).toHaveBeenCalledOnce();
+    fireEvent.change(screen.getByLabelText("播放进度"), {
+      target: { value: "50" },
+    });
+    expect(stagePlaybackCommands.seekToFraction).toHaveBeenCalledWith(0.5);
+    fireEvent.change(screen.getByLabelText("播放速度"), {
+      target: { value: "2.5" },
+    });
+    fireEvent.doubleClick(screen.getByTitle("播放速度（拖动调节，双击复位 1×）"));
+    expect(stagePlaybackCommands.setPlaybackSpeed.mock.calls).toEqual([
+      [2.5],
+      [1],
+    ]);
+    fireEvent.click(screen.getByLabelText("切换循环播放"));
+    expect(stagePlaybackCommands.togglePlaybackLoop).toHaveBeenCalledOnce();
     stageModel.dispose();
   });
 
