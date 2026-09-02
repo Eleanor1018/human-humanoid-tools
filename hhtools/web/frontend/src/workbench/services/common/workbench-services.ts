@@ -1,6 +1,7 @@
 import type { IDisposable } from "@/base/common/disposable";
 import type { IHostService } from "@/platform/host/common/host-service";
 import type { IRequestService } from "@/platform/request/common/request-service";
+import type { IGvhmrComponentService } from "@/workbench/services/gvhmr/common/gvhmr-component-service";
 import type { IJobService } from "@/workbench/services/jobs/common/job-service";
 import type { ILegacyRuntimeService } from "@/workbench/services/runtime/common/legacy-runtime-service";
 import type { ISettingsService } from "@/workbench/services/settings/common/settings-service";
@@ -15,6 +16,7 @@ import type { ISettingsService } from "@/workbench/services/settings/common/sett
 export interface IWorkbenchServices extends IDisposable {
   readonly hostService: IHostService;
   readonly requestService: IRequestService;
+  readonly gvhmrComponentService: IGvhmrComponentService;
   readonly jobService: IJobService;
   readonly settingsService: ISettingsService;
   readonly legacyRuntimeService: ILegacyRuntimeService;

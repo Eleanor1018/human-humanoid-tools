@@ -2,6 +2,7 @@ import { DisposableStore } from "@/base/common/disposable";
 import { BrowserHostService } from "@/platform/host/browser/browser-host-service";
 import { BrowserRequestService } from "@/platform/request/browser/browser-request-service";
 import type { IWorkbenchServices } from "@/workbench/services/common/workbench-services";
+import { BrowserGvhmrComponentService } from "@/workbench/services/gvhmr/browser/browser-gvhmr-component-service";
 import { BrowserJobService } from "@/workbench/services/jobs/browser/browser-job-service";
 import { BrowserLegacyRuntimeService } from "@/workbench/services/runtime/browser/browser-legacy-runtime-service";
 import { BrowserSettingsService } from "@/workbench/services/settings/browser/browser-settings-service";
@@ -22,6 +23,7 @@ export function createBrowserWorkbenchServices(): IWorkbenchServices {
   return {
     hostService: new BrowserHostService(),
     requestService,
+    gvhmrComponentService: new BrowserGvhmrComponentService(),
     jobService,
     settingsService: new BrowserSettingsService(requestService),
     legacyRuntimeService,

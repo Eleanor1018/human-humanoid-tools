@@ -26,7 +26,6 @@ import { useVideoBatch } from "./use-video-batch";
 import { useWorkbenchServices } from "./workbench-service-context";
 import { useLocaleText } from "@/hooks/use-locale-text";
 import { windowEventBus } from "@/platform/events/browser/window-event-bus";
-import type { GvhmrOptionalComponentState } from "@/platform/host/common/gvhmr-component";
 import type {
   GvhmrRuntimeStatus,
   ImportCommandTarget,
@@ -42,6 +41,7 @@ import {
   updateWorkspacePreferences,
 } from "@/runtime/workspace-preferences";
 import { cn } from "@/lib/utils";
+import type { GvhmrOptionalComponentState } from "@/workbench/services/gvhmr/common/gvhmr-component-service";
 
 // Command-palette imports resolve to stable compatibility elements. Keeping
 // this map in the shell prevents individual menus from knowing panel markup.
@@ -92,6 +92,7 @@ export function Workbench() {
   // sees their stable interfaces. Remaining window bridges below are explicit
   // migration seams, not members of the new service graph.
   const {
+    gvhmrComponentService,
     hostService,
     legacyRuntimeService: runtimeService,
     settingsService,
@@ -166,7 +167,7 @@ export function Workbench() {
       const [jobs, library, optional, gvhmr] = await Promise.all([
         settingsService.getJobAdmission(),
         settingsService.getMotionLibrary(),
-        hostService.getGvhmrComponent(),
+        gvhmrComponentService.getState(),
         settingsService.getGvhmrRuntime().catch(() => null),
       ]);
       setJobAdmission(jobs);
@@ -178,7 +179,7 @@ export function Workbench() {
     } finally {
       setSettingsLoading(false);
     }
-  }, []);
+  }, [gvhmrComponentService, settingsService]);
 
   const chooseMotionLibrary = useCallback(async () => {
     if (settingsSaving) return;
@@ -227,11 +228,11 @@ export function Workbench() {
     }
   };
   const setupGvhmr = async () => {
-    if (!window.hhtoolsDesktop) return;
     setSettingsSaving(true);
     setSettingsError(null);
     try {
-      const result = await window.hhtoolsDesktop.setupGvhmr();
+      const result = await gvhmrComponentService.setup();
+      if (!result) return;
       setGvhmrComponent(result.state);
       await refreshSettings();
     } catch (cause) {

@@ -1,5 +1,3 @@
-import type { GvhmrOptionalComponentState } from "./gvhmr-component";
-
 export type HostKind = "web" | "desktop";
 
 /**
@@ -15,5 +13,4 @@ export interface IHostService {
   readonly isDesktop: boolean;
   selectDirectory(): Promise<string | null>;
   openExternal(url: string): Promise<void>;
-  getGvhmrComponent(): Promise<GvhmrOptionalComponentState | null>;
 }

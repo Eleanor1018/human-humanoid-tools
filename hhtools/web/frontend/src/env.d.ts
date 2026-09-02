@@ -17,7 +17,10 @@ import type {
   VideoToMotionStateDetail,
   WorkflowStateDetail,
 } from "./runtime/types";
-import type { GvhmrOptionalComponentState } from "./platform/host/common/gvhmr-component";
+import type {
+  GvhmrOptionalComponentState,
+  GvhmrSetupResult,
+} from "./workbench/services/gvhmr/common/gvhmr-component-service";
 import type { GuidedTour } from "./runtime/tutorial";
 
 // These id unions are an explicit compile-time contract between declarative
@@ -199,10 +202,7 @@ declare global {
         gvhmr: GvhmrOptionalComponentState;
       }>;
       restartBackend: () => Promise<unknown>;
-      setupGvhmr: () => Promise<{
-        action: "cancelled" | "configured" | "guide-opened";
-        state: GvhmrOptionalComponentState;
-      }>;
+      setupGvhmr: () => Promise<GvhmrSetupResult>;
       selectDirectory: () => Promise<string | null>;
       openExternal: (url: string) => Promise<void>;
       onRuntimeStateChanged: (listener: (state: unknown) => void) => () => void;

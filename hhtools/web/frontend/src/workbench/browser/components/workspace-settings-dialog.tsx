@@ -8,7 +8,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import type { GvhmrOptionalComponentState } from "@/platform/host/common/gvhmr-component";
 import type {
   GvhmrRuntimeStatus,
   JobAdmissionSettings,
@@ -16,6 +15,7 @@ import type {
   MotionLibrarySettingsSnapshot,
   WorkspaceLocale,
 } from "@/runtime/types";
+import type { GvhmrOptionalComponentState } from "@/workbench/services/gvhmr/common/gvhmr-component-service";
 
 interface WorkspaceSettingsDialogProps {
   open: boolean;
