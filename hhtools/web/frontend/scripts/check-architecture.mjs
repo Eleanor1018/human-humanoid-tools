@@ -20,7 +20,6 @@ const LEGACY_RUNTIME_TYPE_CONSUMERS = [
   "workbench/browser/components/motion-picker-dialog.tsx",
   "workbench/browser/components/playback-bar.tsx",
   "workbench/browser/components/result-evaluation-panel.tsx",
-  "workbench/contrib/video-to-motion/browser/video-to-motion-pipeline.tsx",
   "workbench/browser/components/workflow-pipeline.tsx",
   "workbench/browser/components/workspace-settings-dialog.tsx",
   "workbench/browser/use-video-batch.ts",
@@ -73,6 +72,13 @@ export const LEGACY_IMPORT_ALLOWLIST = [
     target: "workbench/common/workspace.ts",
     reason: "Legacy runtime modules consume the extracted workspace identity contract until they are removed.",
   })),
+  {
+    rule: "legacy-imports-workbench",
+    source: "runtime/webui-runtime.ts",
+    target:
+      "workbench/contrib/video-to-motion/common/video-to-motion-state.ts",
+    reason: "The legacy V2M controller emits the feature-owned state until its React replacement lands.",
+  },
 ];
 
 /**

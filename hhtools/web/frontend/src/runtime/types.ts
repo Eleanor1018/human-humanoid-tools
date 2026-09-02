@@ -203,37 +203,6 @@ export interface WorkflowStateDetail {
   blockedReason: string | null
 }
 
-export type VideoToMotionStage =
-  | 'idle'
-  | 'uploading'
-  | 'running'
-  | 'completed'
-  | 'failed'
-
-/** Custom checkpoints are forwarded as selected and remain best-effort. */
-export type GvhmrWeightSource = 'official' | 'custom'
-
-export interface VideoToMotionResultSummary {
-  name: string
-  frames: number | null
-  duration: number | null
-  framerate: number | null
-}
-
-/** Renderer-safe state for the GVHMR workflow; the selected File stays private. */
-export interface VideoToMotionStateDetail {
-  videoName: string | null
-  weightSource: GvhmrWeightSource
-  checkpointName: string | null
-  runtimeState: 'checking' | 'ready' | 'unavailable'
-  runtimeMessage: string
-  environmentConfirmed: boolean
-  stage: VideoToMotionStage
-  progress: number
-  message: string
-  result: VideoToMotionResultSummary | null
-}
-
 export type DataAnalysisKind = 'human' | 'robot' | 'mixed' | 'unknown'
 
 export type DataAnalysisStage = 'idle' | 'uploading' | 'running' | 'completed' | 'failed'

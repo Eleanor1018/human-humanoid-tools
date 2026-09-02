@@ -14,9 +14,9 @@ import type {
   PlaybackUiState,
   ResultDiagnosticsDetail,
   UploadFile,
-  VideoToMotionStateDetail,
   WorkflowStateDetail,
 } from "./runtime/types";
+import type { VideoToMotionStateDetail } from "./workbench/contrib/video-to-motion/common/video-to-motion-state";
 import type {
   GvhmrOptionalComponentState,
   GvhmrSetupResult,

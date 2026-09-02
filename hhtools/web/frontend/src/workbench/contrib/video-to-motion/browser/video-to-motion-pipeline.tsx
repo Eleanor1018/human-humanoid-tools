@@ -7,8 +7,8 @@ import {
 import { useLocaleText } from "@/workbench/services/localization/browser/use-locale-text";
 import { useWindowEvent } from "@/platform/events/browser/use-window-event";
 import { windowEventBus } from "@/platform/events/browser/window-event-bus";
-import type { VideoToMotionStateDetail } from "@/runtime/types";
 import type { WorkspaceLocale } from "@/workbench/common/workspace";
+import type { VideoToMotionStateDetail } from "@/workbench/contrib/video-to-motion/common/video-to-motion-state";
 
 const initialState: VideoToMotionStateDetail = {
   videoName: null,

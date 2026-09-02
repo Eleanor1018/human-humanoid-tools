@@ -187,6 +187,11 @@ import type {
   JobListResponse,
 } from "@/domain/jobs/job";
 import type {
+  GvhmrWeightSource,
+  VideoToMotionResultSummary,
+  VideoToMotionStateDetail,
+} from "@/workbench/contrib/video-to-motion/common/video-to-motion-state";
+import type {
   ApiClient,
   ApiGetResponse,
   ApiPostResponse,
@@ -202,7 +207,6 @@ import type {
   CalibrationReferencePayload,
   ComparisonPreset,
   GvhmrRuntimeStatus,
-  GvhmrWeightSource,
   JobHistoryStateDetail,
   JobResponse,
   JobResult,
@@ -229,8 +233,6 @@ import type {
   TerrainPayload,
   UploadFile,
   Vec3,
-  VideoToMotionResultSummary,
-  VideoToMotionStateDetail,
   WorkflowNodeState,
   WorkflowNodeStatus,
   WorkflowStateDetail,
