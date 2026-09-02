@@ -2576,7 +2576,9 @@ function syncEnvToggleButton(): void {
   const btn = document.getElementById("tg-env");
   if (!btn) return;
   const available = motionHasEnvironment(state.motion);
-  btn.disabled = !available;
+  // Availability alone is not enough: calibration deliberately locks every
+  // comparison layer while leaving only the target robot independently usable.
+  btn.disabled = !available || state.calibrationMode;
   btn.classList.toggle(
     "on",
     available && h2rRequestedVisibility.sourceEnvironment,
@@ -5587,16 +5589,17 @@ function _setCalibViewTogglesDisabled(disabled: boolean): void {
 }
 
 function _restoreViewToggleButtons(): void {
+  const comparisonLocked = state.calibrationMode;
   const skBtn = document.getElementById("tg-skeleton");
   const meshBtn = document.getElementById("tg-mesh");
-  if (skBtn) skBtn.disabled = false;
-  if (meshBtn) meshBtn.disabled = false;
+  if (skBtn) skBtn.disabled = comparisonLocked;
+  if (meshBtn) meshBtn.disabled = comparisonLocked;
   syncEnvToggleButton();
   const scaledReady = !!(state.motion && state.robot && state.calibration);
   const ss = document.getElementById("tg-scaled");
   const se = document.getElementById("tg-scaled-env");
-  if (ss) ss.disabled = !scaledReady;
-  if (se) se.disabled = !scaledReady;
+  if (ss) ss.disabled = comparisonLocked || !scaledReady;
+  if (se) se.disabled = comparisonLocked || !scaledReady;
 }
 
 function updateCalibBanner(_reference: string): void {

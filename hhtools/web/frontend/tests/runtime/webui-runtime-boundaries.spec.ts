@@ -135,6 +135,32 @@ describe("legacy runtime ownership boundaries", () => {
     );
   });
 
+  it("preserves comparison toggle locks across projection and R2R return", () => {
+    const syncEnvironment = runtimeSource.slice(
+      runtimeSource.indexOf("function syncEnvToggleButton"),
+      runtimeSource.indexOf("type ViewToggleButtonId"),
+    );
+    const restoreButtons = runtimeSource.slice(
+      runtimeSource.indexOf("function _restoreViewToggleButtons"),
+      runtimeSource.indexOf("function updateCalibBanner"),
+    );
+
+    expect(syncEnvironment).toContain(
+      "btn.disabled = !available || state.calibrationMode",
+    );
+    expect(restoreButtons).toContain(
+      "const comparisonLocked = state.calibrationMode",
+    );
+    expect(restoreButtons).toContain("skBtn.disabled = comparisonLocked");
+    expect(restoreButtons).toContain("meshBtn.disabled = comparisonLocked");
+    expect(restoreButtons).toContain(
+      "ss.disabled = comparisonLocked || !scaledReady",
+    );
+    expect(restoreButtons).toContain(
+      "se.disabled = comparisonLocked || !scaledReady",
+    );
+  });
+
   it("reprojects resource-only changes before a display batch is published", () => {
     const batch = runtimeSource.slice(
       runtimeSource.indexOf("function withH2rStageDisplayBatch"),
