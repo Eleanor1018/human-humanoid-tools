@@ -34,6 +34,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[formats,dev]"
 
+      - name: Python architecture boundaries
+        run: python -m pytest -q tests/test_python_package_boundaries.py
+
       - name: Ruff (lint)
         run: ruff check hhtools
 
