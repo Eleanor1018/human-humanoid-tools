@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   H2R_STAGE_LAYER_IDS,
   H2rStageDisplayPublisher,
+  projectH2rStageDisplaySnapshot,
+  type H2rStageDisplayFacts,
   type H2rStageDisplaySnapshot,
 } from "../../src/runtime/h2r-stage-display";
 
@@ -33,6 +35,68 @@ function createMutableSnapshot() {
     },
   };
 }
+
+function createDisplayFacts(
+  overrides: Partial<H2rStageDisplayFacts> = {},
+): H2rStageDisplayFacts {
+  return {
+    ownsStage: true,
+    calibrationMode: false,
+    hasMotion: true,
+    hasRobot: true,
+    layers: Object.fromEntries(
+      H2R_STAGE_LAYER_IDS.map((id) => [
+        id,
+        { available: true, visible: true },
+      ]),
+    ) as H2rStageDisplayFacts["layers"],
+    ...overrides,
+  };
+}
+
+describe("projectH2rStageDisplaySnapshot", () => {
+  it("separates availability, visibility, and calibration capability", () => {
+    const facts = createDisplayFacts({
+      calibrationMode: true,
+      layers: {
+        ...createDisplayFacts().layers,
+        sourceEnvironment: { available: false, visible: true },
+      },
+    });
+
+    const snapshot = projectH2rStageDisplaySnapshot(facts);
+
+    expect(snapshot.layers.sourceEnvironment).toEqual({
+      available: false,
+      visible: false,
+      canToggle: false,
+    });
+    expect(snapshot.layers.sourceSkeleton.canToggle).toBe(false);
+    expect(snapshot.layers.scaledEnvironment.canToggle).toBe(false);
+    expect(snapshot.layers.targetRobot.canToggle).toBe(true);
+  });
+
+  it("closes all H2R commands while R2R owns the shared Stage", () => {
+    const snapshot = projectH2rStageDisplaySnapshot(
+      createDisplayFacts({ ownsStage: false }),
+    );
+
+    expect(snapshot.canResetView).toBe(false);
+    expect(
+      Object.values(snapshot.layers).every((layer) => !layer.canToggle),
+    ).toBe(true);
+  });
+
+  it("derives empty and reset state from loaded domain resources", () => {
+    const empty = projectH2rStageDisplaySnapshot(createDisplayFacts({
+      hasMotion: false,
+      hasRobot: false,
+    }));
+
+    expect(empty.empty).toBe(true);
+    expect(empty.canResetView).toBe(false);
+  });
+});
 
 describe("H2rStageDisplayPublisher", () => {
   it("immediately exposes one normalized, deeply frozen full snapshot", () => {

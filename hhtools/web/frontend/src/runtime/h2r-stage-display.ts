@@ -36,6 +36,49 @@ export interface H2rStageDisplaySnapshot {
   readonly layers: H2rStageLayerSnapshots;
 }
 
+/** Renderer facts supplied by the legacy boundary before policy is applied. */
+export interface H2rStageDisplayFacts {
+  readonly ownsStage: boolean;
+  readonly calibrationMode: boolean;
+  readonly hasMotion: boolean;
+  readonly hasRobot: boolean;
+  readonly layers: Readonly<
+    Record<H2rStageLayerId, Readonly<{ available: boolean; visible: boolean }>>
+  >;
+}
+
+/**
+ * Apply workflow policy to raw renderer facts without depending on the DOM or
+ * Three.js. Calibration locks the five comparison layers while leaving the
+ * target robot inspectable; R2R ownership locks every H2R control.
+ */
+export function projectH2rStageDisplaySnapshot(
+  facts: H2rStageDisplayFacts,
+): H2rStageDisplaySnapshot {
+  const ownsStage = Boolean(facts.ownsStage);
+  const empty = !facts.hasMotion && !facts.hasRobot;
+  const standardLayersCanToggle = ownsStage && !facts.calibrationMode;
+  const layers = Object.fromEntries(
+    H2R_STAGE_LAYER_IDS.map((id) => {
+      const available = Boolean(facts.layers[id].available);
+      return [id, {
+        available,
+        visible: available && Boolean(facts.layers[id].visible),
+        canToggle: available && (
+          id === "targetRobot" ? ownsStage : standardLayersCanToggle
+        ),
+      }];
+    }),
+  ) as Record<H2rStageLayerId, H2rStageLayerSnapshot>;
+
+  return {
+    ownsStage,
+    empty,
+    canResetView: ownsStage && !empty,
+    layers,
+  };
+}
+
 export type H2rStageDisplaySnapshotReader = () => H2rStageDisplaySnapshot;
 export type H2rStageDisplayListener = (
   snapshot: H2rStageDisplaySnapshot,
