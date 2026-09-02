@@ -50,6 +50,8 @@ function constrain(
   layout: PanelLayoutState,
   preferred?: PanelSide,
 ): PanelLayoutState {
+  // The center stage always wins. When the viewport shrinks, reduce the panel
+  // not being dragged first and then clamp both sides to their hard limits.
   const next = {
     ...layout,
     sidebarWidth: clamp(layout.sidebarWidth, SIDEBAR_MIN, SIDEBAR_MAX),
@@ -166,6 +168,8 @@ export function usePanelLayout() {
       const startWidth =
         side === "sidebar" ? state.sidebarWidth : state.inspectorWidth;
 
+      // Pointer listeners live on window so resizing remains continuous when
+      // the pointer leaves the narrow divider or an iframe-like canvas area.
       const move = (moveEvent: globalThis.PointerEvent): void => {
         const delta = moveEvent.clientX - startX;
         setState((current) =>

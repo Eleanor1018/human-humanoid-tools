@@ -7,6 +7,11 @@ import type {
   WorkflowId,
 } from './types'
 
+/**
+ * Single source of truth for menus, the command palette, and keyboard routes.
+ * Commands publish typed application intents; individual chrome components do
+ * not duplicate navigation or import behavior.
+ */
 export type DesktopMenuId = 'file' | 'workflows' | 'analysis' | 'settings' | 'help'
 export type DesktopSubmenuId = 'file-import' | 'file-export'
 

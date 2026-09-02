@@ -7,6 +7,10 @@ import { WorkflowPipeline } from "./workflow-pipeline";
 import type { WorkspaceLocale, WorkspacePanelId } from "@/runtime/types";
 import { useLocaleText } from "@/hooks/use-locale-text";
 
+/**
+ * Declarative H2R inspector. React owns composition and local dialogs; stable
+ * element ids are ports consumed by the temporary IK compatibility runtime.
+ */
 export function HumanToRobotWorkflow({
   locale,
   onRequestPanel,

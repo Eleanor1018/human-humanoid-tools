@@ -3,6 +3,7 @@ export interface IDisposable {
   dispose(): void;
 }
 
+/** Collects related subscriptions and releases them in reverse creation order. */
 export class DisposableStore implements IDisposable {
   readonly #items = new Set<IDisposable>();
 

@@ -1,4 +1,7 @@
-// Dataset Visualization & Analysis panel.
+// Dataset Visualization & Analysis compatibility contribution.
+// Workbench mounts its stable canvas/control ports before this module loads.
+// Keep new UI state in React; this file remains focused on the existing plotting
+// and analysis orchestration until that domain receives a dedicated service.
 
 import type {
   DataAnalysisKind,

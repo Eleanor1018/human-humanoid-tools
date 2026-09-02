@@ -23,6 +23,8 @@ interface MotionPickerDialogProps {
 }
 
 function normalizedAssetKind(entry: LibraryEntry): LibraryAssetKind {
+  // Older library entries predate asset_kind; infer it so upgraded libraries
+  // remain selectable without a data migration.
   if (entry.asset_kind) return entry.asset_kind;
   return entry.dataset === "robot" || entry.dataset === "r2r"
     ? "robot_trajectory"
@@ -36,7 +38,12 @@ function normalizedCategory(entry: LibraryEntry): MotionCategory {
     : "motion";
 }
 
-/** Shared, controlled library picker for single loads and batch selection. */
+/**
+ * Shared library picker for H2R, R2R, and Batch.
+ * `load` commits one entry immediately, while `basket` keeps a local Map until
+ * the user confirms. A source-path-derived key keeps selection stable across
+ * filtering without mutating API response objects.
+ */
 export function MotionPickerDialog({
   open,
   locale,

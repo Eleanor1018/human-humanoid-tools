@@ -1,5 +1,7 @@
-// hhtools web — three.js front-end.
-// All heavy compute happens on the FastAPI backend; this file renders + drives UX.
+// hhtools web — Three.js/IK compatibility runtime.
+// All heavy compute happens on the FastAPI backend. During the React migration,
+// this module owns domain orchestration and mutates only the stable ports mounted
+// by Workbench. New UI behavior belongs in React services/components, not here.
 
 
 /** Parse a positive FPS from a number input, or ``null`` to mean “use default”. */

@@ -32,6 +32,10 @@ function videoStatusLabel(
   return labels[status][locale === "zh-CN" ? 1 : 0];
 }
 
+/**
+ * Center-stage half of Batch. All three modes stay mounted because the legacy
+ * IK runtime retains references to their stable elements while modes switch.
+ */
 export function BatchStage({
   active,
   mode,
@@ -137,6 +141,8 @@ function HumanBatchStage({ locale }: { locale: WorkspaceLocale }) {
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState<"all" | MotionCategory>("all");
   useEffect(() => {
+    // Basket rows are still rendered by the compatibility runtime; publish
+    // React filter state as data rather than reaching into those rows here.
     window.dispatchEvent(
       new CustomEvent("hhtools:batch-filter", { detail: { query, category } }),
     );
@@ -415,6 +421,8 @@ export function BatchWorkflow({
           </label>
         ))}
       </div>
+      {/* The inspector shares the same V2M model as the center-stage list, so
+          progress cannot diverge between independently managed views. */}
       <div style={{ display: mode === "v2m" ? undefined : "none" }}>
         <VideoBatchInspector locale={locale} model={videoBatch} />
       </div>

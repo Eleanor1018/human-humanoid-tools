@@ -47,6 +47,8 @@ import { cn } from "@/lib/utils";
 
 const runtimeService = new LegacyRuntimeService();
 
+// Command-palette imports resolve to stable compatibility elements. Keeping
+// this map at the composition root prevents menus from knowing panel markup.
 const importTargets: Record<
   Exclude<ImportCommandTarget, "job-spec">,
   {
@@ -78,7 +80,17 @@ const importTargets: Record<
   "dataset-folder": { panel: "dataset-viz", selector: "#dv-pick-folder" },
 };
 
-/** Root composition service: owns workbench state; domain runtimes stay behind services/events. */
+/**
+ * Application composition root, comparable to VS Code's workbench shell.
+ *
+ * Ownership is intentionally split:
+ * - React owns navigation, dialogs, panel layout, and view-model state.
+ * - platform/services own host capabilities and HTTP/event boundaries.
+ * - the compatibility runtime owns Three.js and the existing IK workflows
+ *   until those domain slices are migrated behind dedicated services.
+ *
+ * Both FastAPI WebUI and Electron instantiate this exact component tree.
+ */
 export function Workbench() {
   const initial = useMemo(() => loadWorkspacePreferences(), []);
   const [activePanel, setActivePanelState] = useState<WorkspacePanelId>(
@@ -270,6 +282,8 @@ export function Workbench() {
         });
       },
     );
+    // React must commit every compatibility id before the legacy module binds
+    // its listeners. Starting it from this effect guarantees that ordering.
     void runtimeService.start().catch((cause) => {
       console.error("hhtools renderer failed to initialize", cause);
       showBoot(cause instanceof Error ? cause.message : String(cause));
@@ -398,6 +412,9 @@ export function Workbench() {
               settingsBusy={settingsLoading || settingsSaving}
               onChooseLibrary={() => void chooseMotionLibrary()}
             />
+            {/* Inactive workflows stay mounted during the migration. The
+                compatibility runtime retains listeners and element references,
+                so unmounting here would break the next panel switch. */}
             <section
               className={cn(
                 "panel",
@@ -504,6 +521,11 @@ export function Workbench() {
   );
 }
 
+/**
+ * Lifecycle-stable compatibility ports for global feedback.
+ * React owns these nodes; the existing runtime temporarily owns their text,
+ * classes, and progress. Producer and view should migrate together later.
+ */
 function RuntimeOverlays({ locale }: { locale: WorkspaceLocale }) {
   const text = useLocaleText(locale);
   return (

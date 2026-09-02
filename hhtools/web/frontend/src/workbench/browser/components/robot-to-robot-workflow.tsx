@@ -7,6 +7,10 @@ import { MotionPickerDialog } from "./motion-picker-dialog";
 import { ResultEvaluationPanel } from "./result-evaluation-panel";
 import { WorkflowPipeline } from "./workflow-pipeline";
 
+/**
+ * R2R workflow shell shared by browser and Electron. Hidden import controls at
+ * the bottom intentionally preserve profile-specific ports used by the runtime.
+ */
 export function RobotToRobotWorkflow({
   locale,
   onRequestPanel,
@@ -316,6 +320,8 @@ export function RobotToRobotWorkflow({
           </div>
         </div>
       </details>
+      {/* These controls are runtime ports, not duplicate UI. Keeping them
+          mounted lets command-palette imports reuse the tested upload path. */}
       <div className="workflow-hidden-runtime" hidden aria-hidden="true">
         <div id="r2r-drop-mimic" data-r2r-profile="mimic">
           <button type="button" data-r2r-pick="mimic" />

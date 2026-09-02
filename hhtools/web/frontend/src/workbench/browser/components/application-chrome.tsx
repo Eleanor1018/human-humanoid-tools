@@ -26,6 +26,8 @@ interface ApplicationChromeProps {
 function useApplicationCommands(
   props: ApplicationChromeProps,
 ): ApplicationCommand[] {
+  // Menus, keyboard shortcuts, and Ctrl+K are projections of one registry.
+  // Adding a command there automatically keeps every command surface aligned.
   return useMemo(
     () =>
       createApplicationCommands({
@@ -40,6 +42,8 @@ function useApplicationCommands(
         exitApplication: () => window.close(),
         canExportResult: true,
         exportResult: () => {
+          // Export buttons still belong to the compatibility runtime. This
+          // adapter is the only chrome-level place allowed to invoke them.
           const ids: Partial<Record<WorkspacePanelId, string>> = {
             h2r: "rt-export-btn",
             r2r: "r2r-export-btn",

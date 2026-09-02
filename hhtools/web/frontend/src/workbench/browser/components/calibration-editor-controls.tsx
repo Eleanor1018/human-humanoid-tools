@@ -32,6 +32,13 @@ function initialState(workflow: WorkflowId): CalibrationEditorStateDetail {
   };
 }
 
+/**
+ * Event-driven projection of the calibration domain state.
+ *
+ * The solver remains the source of truth: it publishes immutable snapshots and
+ * this component emits typed intents. That prevents a second calibration model
+ * from growing inside React during the staged runtime migration.
+ */
 export function CalibrationEditorControls({
   workflow,
   locale,

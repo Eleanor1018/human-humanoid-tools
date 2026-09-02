@@ -8,6 +8,9 @@ import "./webui.css";
 const root = document.getElementById("app-root");
 if (!root) throw new Error("Missing #app-root mount point");
 
+// Keep the entry point deliberately small: host detection, service startup,
+// routing, and feature state all belong to the workbench composition root.
+// Electron loads this same bundle; its extra capabilities arrive via preload.
 createRoot(root).render(
   <TooltipProvider>
     <Workbench />

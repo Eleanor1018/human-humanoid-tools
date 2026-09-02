@@ -20,6 +20,9 @@ import type {
 } from "./runtime/types";
 import type { GuidedTour } from "./runtime/tutorial";
 
+// These id unions are an explicit compile-time contract between declarative
+// React markup and the temporary imperative runtime. Removing or renaming a
+// port requires migrating its runtime consumer in the same change.
 export type HHToolsInputId =
   | "lib-search"
   | "robot-library-search"

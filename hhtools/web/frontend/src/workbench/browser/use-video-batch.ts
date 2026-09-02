@@ -56,6 +56,8 @@ export function useVideoBatch(locale: WorkspaceLocale): VideoBatchModel {
     [locale],
   );
   const [videos, setVideos] = useState<VideoBatchItem[]>([]);
+  // Async jobs span many React renders. The ref lets the sequential runner
+  // read the latest queue without making runBatch depend on the whole array.
   const videosRef = useRef(videos);
   videosRef.current = videos;
   const [runtime, setRuntime] = useState<GvhmrRuntimeStatus | null>(null);
@@ -70,6 +72,8 @@ export function useVideoBatch(locale: WorkspaceLocale): VideoBatchModel {
 
   const waitForBridge = useCallback(
     async (timeoutMs = 4_000): Promise<HhAppBridge> => {
+      // The compatibility runtime is code-split and starts after React mounts;
+      // a short bounded wait makes early clicks deterministic without hanging.
       const deadline = Date.now() + timeoutMs;
       while (!window.__hhApp && Date.now() < deadline)
         await new Promise((resolve) => window.setTimeout(resolve, 50));
@@ -88,6 +92,8 @@ export function useVideoBatch(locale: WorkspaceLocale): VideoBatchModel {
   const addFiles = useCallback(
     (files: UploadFile[]) => {
       let rejected = 0;
+      // Browser and Electron folder pickers expose paths differently, so the
+      // dedupe key combines their relative-path variants with file metadata.
       setVideos((current) => {
         const existing = new Set(
           current.map(
@@ -220,6 +226,8 @@ export function useVideoBatch(locale: WorkspaceLocale): VideoBatchModel {
       setVideos((current) =>
         current.map((item) => (item.id === id ? { ...item, ...patch } : item)),
       );
+    // Run sequentially: multiple GVHMR processes would compete for the same
+    // GPU and make progress/error attribution much harder for the user.
     for (let index = 0; index < pending.length; index += 1) {
       const item = pending[index];
       patchItem(item.id, {
@@ -264,6 +272,8 @@ export function useVideoBatch(locale: WorkspaceLocale): VideoBatchModel {
       );
     }
     if (generated.length) {
+      // Publish successful outputs only after the batch settles. Failed inputs
+      // stay in this queue for retry, without duplicating completed motions.
       await bridge.addToBasket(generated, { silent: true });
       await bridge.refreshLibrary().catch(() => undefined);
     }

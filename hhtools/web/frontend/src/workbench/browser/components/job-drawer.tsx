@@ -89,6 +89,8 @@ export function JobDrawer({ locale }: { locale: WorkspaceLocale }) {
   const importInput = useRef<HTMLInputElement>(null);
   const stopResizeRef = useRef<(() => void) | null>(null);
 
+  // Job history has one runtime-owned poller. This view consumes immutable
+  // snapshots and emits commands, avoiding a second polling/download layer.
   const dispatch = (detail: JobHistoryCommandDetail) =>
     windowEventBus.emit("hhtools:job-history-command", detail);
   const bridge = () => {
@@ -173,6 +175,8 @@ export function JobDrawer({ locale }: { locale: WorkspaceLocale }) {
     setEditorValidation(null);
   };
   const openEditor = (title: string, value: unknown) => {
+    // Imported full configs and duplicated jobs converge on one JobSpec editor;
+    // server validation normalizes both before replay is allowed.
     setEditorTitle(title);
     setEditorText(JSON.stringify(value, null, 2));
     resetEditorValidation();
@@ -224,6 +228,8 @@ export function JobDrawer({ locale }: { locale: WorkspaceLocale }) {
             `${text("Invalid JSON", "JSON 格式错误")}：${messageOf(cause)}`,
           );
         }
+        // The server, not the client, decides whether referenced source files are
+        // still replayable. React only presents that capability result.
         const result = await bridge().API.post(
           "/api/jobs/spec/validate",
           parsed,
