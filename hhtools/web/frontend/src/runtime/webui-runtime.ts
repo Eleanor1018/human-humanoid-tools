@@ -2372,8 +2372,8 @@ let playbarVisible = false;
 // `applyH2rPhysicalVisibility` may project these intents onto Three.js groups.
 const h2rRequestedVisibility: Record<H2rStageLayerId, boolean> = {
   sourceSkeleton: false,
-  // Matches the compatibility HUD's initial `tg-mesh on` preference. The
-  // availability projector still keeps both body groups hidden until loaded.
+  // Preserve the default source-body intent before a resource is available.
+  // The projector still keeps both body groups physically hidden until loaded.
   sourceBody: true,
   sourceEnvironment: false,
   scaledSkeleton: false,
@@ -2572,19 +2572,6 @@ function motionHasEnvironment(payload: MotionPayload | null | undefined): boolea
   return false;
 }
 
-function syncEnvToggleButton(): void {
-  const btn = document.getElementById("tg-env");
-  if (!btn) return;
-  const available = motionHasEnvironment(state.motion);
-  // Availability alone is not enough: calibration deliberately locks every
-  // comparison layer while leaving only the target robot independently usable.
-  btn.disabled = !available || state.calibrationMode;
-  btn.classList.toggle(
-    "on",
-    available && h2rRequestedVisibility.sourceEnvironment,
-  );
-}
-
 type ViewToggleButtonId =
   | "tg-skeleton"
   | "tg-mesh"
@@ -2638,16 +2625,6 @@ function applyH2rPhysicalVisibility(): void {
   scaledSkel.group.visible = physical.scaledSkeleton;
   scaledEnv.group.visible = physical.scaledEnvironment;
   robot.group.visible = physical.targetRobot;
-
-  for (const [buttonId, layerId] of Object.entries(
-    H2R_LAYER_BY_TOGGLE_ID,
-  ) as Array<[ViewToggleButtonId, H2rStageLayerId]>) {
-    document.getElementById(buttonId)?.classList.toggle(
-      "on",
-      available[layerId] && h2rRequestedVisibility[layerId],
-    );
-  }
-  syncEnvToggleButton();
 }
 
 function setViewVisible(btnId: ViewToggleButtonId, on: boolean): void {
@@ -2739,16 +2716,12 @@ function clearH2rScaledPreview(): void {
   withH2rStageDisplayBatch(() => {
     scaledSkel.clear();
     scaledEnv.clear();
-    document.getElementById("tg-scaled").disabled = true;
-    document.getElementById("tg-scaled-env").disabled = true;
     setViewVisible("tg-scaled", false);
     setViewVisible("tg-scaled-env", false);
   });
 }
 
 async function refreshScaledPreview(): Promise<void> {
-  const btnSkel = document.getElementById("tg-scaled");
-  const btnEnv = document.getElementById("tg-scaled-env");
   if (!state.motion || !state.robot || !state.calibration) {
     clearH2rScaledPreview();
     return;
@@ -2773,13 +2746,10 @@ async function refreshScaledPreview(): Promise<void> {
     const preview = data.preview ?? data;
     withH2rStageDisplayBatch(() => {
       scaledSkel.load(preview);
-      btnSkel.disabled = false;
       if (data.scaled_scene) {
         scaledEnv.load(data.scaled_scene, motionToken);
-        btnEnv.disabled = false;
       } else {
         scaledEnv.clear();
-        btnEnv.disabled = true;
       }
       // Preload yellow overlay data but keep it hidden until a retarget completes
       // (or the user explicitly toggles it on). Playing motion against a frozen
@@ -3588,7 +3558,6 @@ async function loadRobotExportPreview(result: RobotExportPreviewResult): Promise
         duration: clipDur,
         objectGlbUrl: (o) => datasetSceneGlbUrl(result.preview_token, o),
       });
-      document.getElementById("tg-scaled-env").disabled = false;
       setViewVisible("tg-scaled-env", true);
     } else {
       scaledEnv.clear();
@@ -3597,8 +3566,6 @@ async function loadRobotExportPreview(result: RobotExportPreviewResult): Promise
 
     setViewVisible("tg-skeleton", false);
     setBodyVisible(false);
-    document.getElementById("tg-scaled").disabled = true;
-    document.getElementById("tg-robot").disabled = false;
     setViewVisible("tg-robot", true);
     player.ready(robot.clipDuration || clipDur);
   });
@@ -4359,8 +4326,6 @@ async function applyRobot(
   updatePills();
   withH2rStageDisplayBatch(() => {
     clearH2rScaledPreview();
-    const tgRobot = document.getElementById("tg-robot");
-    tgRobot.disabled = false;
     setViewVisible("tg-robot", true);
   });
   revealStage();
@@ -5581,27 +5546,6 @@ function _setPlaybarVisible(on: boolean): void {
   publishPlaybackState();
 }
 
-function _setCalibViewTogglesDisabled(disabled: boolean): void {
-  for (const id of ["tg-skeleton", "tg-mesh", "tg-env", "tg-scaled", "tg-scaled-env"]) {
-    const btn = document.getElementById(id) as HTMLButtonElement | null;
-    if (btn) btn.disabled = disabled;
-  }
-}
-
-function _restoreViewToggleButtons(): void {
-  const comparisonLocked = state.calibrationMode;
-  const skBtn = document.getElementById("tg-skeleton");
-  const meshBtn = document.getElementById("tg-mesh");
-  if (skBtn) skBtn.disabled = comparisonLocked;
-  if (meshBtn) meshBtn.disabled = comparisonLocked;
-  syncEnvToggleButton();
-  const scaledReady = !!(state.motion && state.robot && state.calibration);
-  const ss = document.getElementById("tg-scaled");
-  const se = document.getElementById("tg-scaled-env");
-  if (ss) ss.disabled = comparisonLocked || !scaledReady;
-  if (se) se.disabled = comparisonLocked || !scaledReady;
-}
-
 function updateCalibBanner(_reference: string): void {
   const el = document.getElementById("calib-banner");
   if (!el) return;
@@ -5660,7 +5604,6 @@ function _applyCalibSceneLayout(): void {
     refSkel.group.visible = true;
     player.setPlaying(false);
     _setPlaybarVisible(false);
-    _setCalibViewTogglesDisabled(true);
   });
 }
 
@@ -5681,7 +5624,6 @@ function _restoreVis(snap: ViewVisibilitySnapshot | null): void {
     setViewVisible("tg-scaled-env", snap.scaledEnv);
     setViewVisible("tg-robot", snap.robot);
     _setPlaybarVisible(snap.playbar);
-    _restoreViewToggleButtons();
     player.t = snap.t;
     player.setPlaying(snap.playing);
     player.refreshFrame();
@@ -6274,14 +6216,11 @@ document.getElementById("retarget-btn").onclick = async () => {
       // playback already near its end.
       player.ready(robot.clipDuration);
       player.refreshFrame();
-      document.getElementById("tg-robot").disabled = false;
       if (j.result.scaled_preview) {
         scaledSkel.load(j.result.scaled_preview);
-        document.getElementById("tg-scaled").disabled = false;
       }
       if (j.result.scaled_scene) {
         scaledEnv.load(j.result.scaled_scene, retargetMotionToken);
-        document.getElementById("tg-scaled-env").disabled = false;
         setViewVisible("tg-scaled-env", true);
       }
       setViewVisible("tg-skeleton", true);
@@ -7975,9 +7914,8 @@ function r2rLeavePanel(): void {
   }
   document.getElementById("view-hud-r2r")?.classList.add("hidden");
   document.getElementById("view-hud")?.classList.remove("hidden");
-  _restoreViewToggleButtons();
-  // Re-open H2R capabilities only after its complete renderer snapshot, HUD,
-  // and toggle projections have been restored.
+  // Re-open H2R capabilities only after its renderer snapshot and HUD have
+  // been restored. React derives the toggle presentation from the publication.
   h2rOwnsStage = true;
   applyH2rPhysicalVisibility();
   if (player.active) player.refreshFrame();

@@ -6,15 +6,21 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import { Profiler } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { JobHistoryRecord } from "../../src/domain/jobs/job";
 import type { HhAppBridge } from "../../src/runtime/types";
+import { H2rStageLayerControls } from "../../src/workbench/browser/components/h2r-stage-layer-controls";
 import { PlaybackBar } from "../../src/workbench/browser/components/playback-bar";
 import { SearchField } from "../../src/workbench/browser/components/search-field";
 import { SidebarNavigation } from "../../src/workbench/browser/components/sidebar-navigation";
 import { JobDrawer } from "../../src/workbench/browser/components/job-drawer";
 import { StageModel } from "../../src/workbench/services/stage/common/stage-model";
+import {
+  STAGE_LAYER_IDS,
+  type StageLayerId,
+} from "../../src/workbench/services/stage/common/stage-service";
 import { ThreeStage } from "../../src/workbench/browser/components/three-stage";
 
 afterEach(() => {
@@ -136,6 +142,136 @@ describe("React workbench components", () => {
     fireEvent.click(screen.getByLabelText("Reset view"));
 
     expect(resetView).toHaveBeenCalledOnce();
+    stageModel.dispose();
+  });
+
+  it("renders H2R layer controls from canonical Stage state", () => {
+    const stageModel = new StageModel(vi.fn());
+    let renderCount = 0;
+    render(
+      <Profiler
+        id="h2r-layer-controls"
+        onRender={() => {
+          renderCount += 1;
+        }}
+      >
+        <H2rStageLayerControls
+          locale="en"
+          stageModelService={stageModel}
+        />
+      </Profiler>,
+    );
+    const toggleLayers = [
+      ["tg-skeleton", "sourceSkeleton"],
+      ["tg-mesh", "sourceBody"],
+      ["tg-env", "sourceEnvironment"],
+      ["tg-scaled", "scaledSkeleton"],
+      ["tg-scaled-env", "scaledEnvironment"],
+      ["tg-robot", "targetRobot"],
+    ] as const satisfies ReadonlyArray<readonly [string, StageLayerId]>;
+    const buttons = new Map(
+      toggleLayers.map(([id]) => [
+        id,
+        document.getElementById(id) as HTMLButtonElement,
+      ]),
+    );
+    const skeleton = buttons.get("tg-skeleton")!;
+    const legacyClick = vi.fn();
+    skeleton.onclick = legacyClick;
+
+    expect(renderCount).toBe(1);
+    for (const button of buttons.values()) {
+      expect(button).toBeDisabled();
+      expect(button).not.toHaveClass("on");
+    }
+
+    // A one-hot projection gives every DOM id a unique turn. Swapping any two
+    // descriptor mappings therefore fails instead of hiding behind equal state.
+    for (const [activeButtonId, activeLayerId] of toggleLayers) {
+      const layers = Object.fromEntries(
+        STAGE_LAYER_IDS.map((layerId) => {
+          const selected = layerId === activeLayerId;
+          return [
+            layerId,
+            {
+              available: selected,
+              visible: selected,
+              canToggle: selected,
+            },
+          ];
+        }),
+      ) as Record<
+        StageLayerId,
+        { available: boolean; visible: boolean; canToggle: boolean }
+      >;
+      act(() => {
+        stageModel.updateState({
+          display: {
+            empty: false,
+            canResetView: true,
+            layers,
+          },
+        });
+      });
+
+      for (const [buttonId] of toggleLayers) {
+        const button = buttons.get(buttonId)!;
+        const selected = buttonId === activeButtonId;
+        if (selected) expect(button).toHaveClass("on");
+        else expect(button).not.toHaveClass("on");
+        expect(button.disabled).toBe(!selected);
+        expect(document.getElementById(buttonId)).toBe(button);
+      }
+    }
+    expect(renderCount).toBe(1 + toggleLayers.length);
+
+    act(() => {
+      stageModel.updateState({
+        display: {
+          layers: {
+            sourceSkeleton: {
+              available: true,
+              visible: true,
+              canToggle: false,
+            },
+          },
+        },
+      });
+    });
+    expect(skeleton).toHaveClass("on");
+    expect(skeleton).toBeDisabled();
+    // Native activation, unlike a synthetic dispatch, respects `disabled`.
+    skeleton.click();
+    expect(legacyClick).not.toHaveBeenCalled();
+
+    act(() => {
+      stageModel.updateState({
+        display: {
+          layers: {
+            sourceSkeleton: { canToggle: true },
+          },
+        },
+      });
+    });
+    expect(document.getElementById("tg-skeleton")).toBe(skeleton);
+    fireEvent.click(skeleton);
+    expect(legacyClick).toHaveBeenCalledOnce();
+
+    const displayBeforePlayback = stageModel.state.display;
+    const renderCountBeforePlayback = renderCount;
+    act(() => {
+      stageModel.updateState({
+        playback: { active: true, duration: 8, currentTime: 2 },
+      });
+    });
+    expect(stageModel.state.display).toBe(displayBeforePlayback);
+    expect(renderCount).toBe(renderCountBeforePlayback);
+    for (const [id, button] of buttons) {
+      expect(document.getElementById(id)).toBe(button);
+      expect(button.isConnected).toBe(true);
+    }
+    fireEvent.click(skeleton);
+    expect(legacyClick).toHaveBeenCalledTimes(2);
     stageModel.dispose();
   });
 

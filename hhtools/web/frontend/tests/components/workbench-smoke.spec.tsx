@@ -91,6 +91,9 @@ describe("Workbench DOM contract", () => {
     mockWorkbenchGetRequests(services);
     let missingAtStartup: string[] | undefined;
     let missingAtSubscription: string[] | undefined;
+    let publishDisplay:
+      | ((snapshot: LegacyH2rStageDisplaySnapshot) => void)
+      | undefined;
     vi.spyOn(services.legacyRuntimeService, "start").mockImplementation(
       async () => {
         missingAtStartup = ids.filter(
@@ -121,6 +124,7 @@ describe("Workbench DOM contract", () => {
     };
     const displayStateSource: ILegacyStageDisplayStateSource = {
       subscribeH2rStageDisplayState: vi.fn(async (listener) => {
+        publishDisplay = listener;
         missingAtSubscription = ids.filter(
           (id) => document.getElementById(id) === null,
         );
@@ -166,6 +170,37 @@ describe("Workbench DOM contract", () => {
       empty: initialDisplay.empty,
       canResetView: initialDisplay.canResetView,
       layers: initialDisplay.layers,
+    });
+    await waitFor(() => {
+      expect(document.getElementById("tg-skeleton")).toHaveClass("on");
+      expect(document.getElementById("tg-skeleton")).toBeEnabled();
+      expect(document.getElementById("tg-robot")).toHaveClass("on");
+      expect(document.getElementById("tg-env")).toBeDisabled();
+    });
+
+    act(() => {
+      publishDisplay?.({
+        ...initialDisplay,
+        layers: {
+          ...initialDisplay.layers,
+          sourceSkeleton: {
+            available: true,
+            visible: false,
+            canToggle: false,
+          },
+          sourceEnvironment: {
+            available: true,
+            visible: true,
+            canToggle: true,
+          },
+        },
+      });
+    });
+    await waitFor(() => {
+      expect(document.getElementById("tg-skeleton")).not.toHaveClass("on");
+      expect(document.getElementById("tg-skeleton")).toBeDisabled();
+      expect(document.getElementById("tg-env")).toHaveClass("on");
+      expect(document.getElementById("tg-env")).toBeEnabled();
     });
   });
 

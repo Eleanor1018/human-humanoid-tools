@@ -113,6 +113,9 @@ describe("legacy runtime ownership boundaries", () => {
         (match) => match.index >= projectorStart && match.index < projectorEnd,
       ),
     ).toBe(true);
+    expect(runtimeSource.slice(projectorStart, projectorEnd)).not.toContain(
+      "document.",
+    );
   });
 
   it("snapshots and restores logical H2R visibility through semantic setters", () => {
@@ -135,30 +138,32 @@ describe("legacy runtime ownership boundaries", () => {
     );
   });
 
-  it("preserves comparison toggle locks across projection and R2R return", () => {
-    const syncEnvironment = runtimeSource.slice(
-      runtimeSource.indexOf("function syncEnvToggleButton"),
-      runtimeSource.indexOf("type ViewToggleButtonId"),
+  it("leaves H2R toggle presentation to React while retaining legacy commands", () => {
+    const expectedIds = [
+      "tg-skeleton",
+      "tg-mesh",
+      "tg-env",
+      "tg-scaled",
+      "tg-scaled-env",
+      "tg-robot",
+    ];
+    const lookupPattern =
+      /document\.getElementById\("(tg-(?:skeleton|mesh|env|scaled|scaled-env|robot))"\)/g;
+    const commandPattern =
+      /document\.getElementById\("(tg-(?:skeleton|mesh|env|scaled|scaled-env|robot))"\)\.onclick\s*=/g;
+
+    const lookupIds = [...runtimeSource.matchAll(lookupPattern)].map(
+      (match) => match[1],
     );
-    const restoreButtons = runtimeSource.slice(
-      runtimeSource.indexOf("function _restoreViewToggleButtons"),
-      runtimeSource.indexOf("function updateCalibBanner"),
+    const commandIds = [...runtimeSource.matchAll(commandPattern)].map(
+      (match) => match[1],
     );
 
-    expect(syncEnvironment).toContain(
-      "btn.disabled = !available || state.calibrationMode",
-    );
-    expect(restoreButtons).toContain(
-      "const comparisonLocked = state.calibrationMode",
-    );
-    expect(restoreButtons).toContain("skBtn.disabled = comparisonLocked");
-    expect(restoreButtons).toContain("meshBtn.disabled = comparisonLocked");
-    expect(restoreButtons).toContain(
-      "ss.disabled = comparisonLocked || !scaledReady",
-    );
-    expect(restoreButtons).toContain(
-      "se.disabled = comparisonLocked || !scaledReady",
-    );
+    expect(lookupIds).toEqual(expectedIds);
+    expect(commandIds).toEqual(expectedIds);
+    expect(runtimeSource).not.toContain("syncEnvToggleButton");
+    expect(runtimeSource).not.toContain("_setCalibViewTogglesDisabled");
+    expect(runtimeSource).not.toContain("_restoreViewToggleButtons");
   });
 
   it("reprojects resource-only changes before a display batch is published", () => {
@@ -195,9 +200,11 @@ describe("legacy runtime ownership boundaries", () => {
     expect(relinquish).toBeLessThan(hideH2rViews);
     expect(hideH2rViews).toBeLessThan(applyR2r);
     expect(applyR2r).toBeLessThan(publishHandoff);
-    expect(leave.indexOf("_restoreViewToggleButtons()")).toBeLessThan(
-      leave.indexOf("h2rOwnsStage = true"),
-    );
+    expect(
+      leave.indexOf(
+        'document.getElementById("view-hud")?.classList.remove("hidden")',
+      ),
+    ).toBeLessThan(leave.indexOf("h2rOwnsStage = true"));
     expect(leave.indexOf("h2rOwnsStage = true")).toBeLessThan(
       leave.indexOf("applyH2rPhysicalVisibility()"),
     );

@@ -7,7 +7,9 @@ import type {
   IStageModelService,
   IStagePlaybackCommands,
 } from "@/workbench/services/stage/common/stage-service";
+import { H2rStageLayerControls } from "./h2r-stage-layer-controls";
 import { PlaybackBar } from "./playback-bar";
+import { StageLayerToggle } from "./stage-layer-toggle";
 
 /** Stable DOM contract consumed by the Three.js stage compatibility service. */
 export function ThreeStage({
@@ -24,26 +26,20 @@ export function ThreeStage({
   batchWorkspace?: ReactNode;
 }) {
   const text = useLocaleText(locale);
-  const toggle = (
+  const legacyToggle = (
     id: string,
     en: string,
     zh: string,
     disabled = false,
     active = false,
   ) => (
-    <button
-      className={`seg-btn${active ? " on" : ""}`}
+    <StageLayerToggle
       id={id}
+      active={active}
       disabled={disabled}
       title={text(en, zh)}
-    >
-      <span className="eye" aria-hidden="true">
-        👁
-      </span>
-      <span className="lbl">
-        {text(en.split(" ")[0] || en, zh.split(" ")[0] || zh)}
-      </span>
-    </button>
+      label={text(en.split(" ")[0] || en, zh.split(" ")[0] || zh)}
+    />
   );
   return (
     <main id="stage">
@@ -65,30 +61,22 @@ export function ThreeStage({
         aria-hidden="true"
       />
       <div className="stage-top-tools">
-        <div className="view-hud" id="view-hud">
-          <div className="view-hud-row" data-row="motion">
-            {toggle("tg-skeleton", "Skeleton", "骨架")}
-            {toggle("tg-mesh", "Body", "身体", false, true)}
-            {toggle("tg-env", "Objects/Terrain", "物体/地形", true)}
-          </div>
-          <div className="view-hud-row" data-row="robot">
-            {toggle("tg-scaled", "Scaled Skeleton", "缩放骨架", true)}
-            {toggle("tg-scaled-env", "Scaled Scene", "缩放场景", true)}
-            {toggle("tg-robot", "Robot", "机器人", true)}
-          </div>
-        </div>
+        <H2rStageLayerControls
+          locale={locale}
+          stageModelService={stageModelService}
+        />
         <div className="view-hud hidden" id="view-hud-r2r">
           <div className="view-hud-row" data-row="r2r-src">
             <span className="view-hud-tag">{text("Source", "源")}</span>
-            {toggle("r2r-tg-src-robot", "Robot", "机器人", false, true)}
-            {toggle("r2r-tg-src-skel", "Skeleton", "骨架", true)}
-            {toggle("r2r-tg-src-env", "Objects/Terrain", "物体/地形", true)}
+            {legacyToggle("r2r-tg-src-robot", "Robot", "机器人", false, true)}
+            {legacyToggle("r2r-tg-src-skel", "Skeleton", "骨架", true)}
+            {legacyToggle("r2r-tg-src-env", "Objects/Terrain", "物体/地形", true)}
           </div>
           <div className="view-hud-row" data-row="r2r-tgt">
             <span className="view-hud-tag">{text("Target", "目标")}</span>
-            {toggle("r2r-tg-tgt-robot", "Robot", "机器人", true)}
-            {toggle("r2r-tg-tgt-skel", "Skeleton", "骨架", true)}
-            {toggle("r2r-tg-tgt-env", "Objects/Terrain", "物体/地形", true)}
+            {legacyToggle("r2r-tg-tgt-robot", "Robot", "机器人", true)}
+            {legacyToggle("r2r-tg-tgt-skel", "Skeleton", "骨架", true)}
+            {legacyToggle("r2r-tg-tgt-env", "Objects/Terrain", "物体/地形", true)}
           </div>
         </div>
       </div>
