@@ -3332,6 +3332,21 @@ async function loadMotionPayload(payload: MotionPayload): Promise<void> {
   toast(runtimeText(`Loaded ${payload.name}`, `已加载 ${payload.name}`));
 }
 
+/**
+ * Temporary aggregate presentation boundary used by migrated features.
+ * Keep the ordering here so views never coordinate Stage, library, and basket
+ * singleton state themselves; a future StageService can replace this adapter.
+ */
+export async function presentHumanMotion(
+  payload: MotionPayload,
+): Promise<void> {
+  await loadMotionPayload(payload);
+  await refreshLibrary();
+  if (payload.library_entry) {
+    addToBasket([payload.library_entry], { silent: true });
+  }
+}
+
 function datasetSceneGlbUrl(token: string | null | undefined, o: SceneObjectPayload): string | null {
   const mesh = o.mesh_file || "";
   if (!token || !mesh) return null;
@@ -4393,9 +4408,7 @@ async function runGvhmrVideoToMotion(): Promise<void> {
       renderGvhmrWorkspace();
     }, { uploadFrac: 0 });
     setLoadingProgress(1, gvhmrText("Building the motion preview…", "正在构建动作预览……"));
-    await loadMotionPayload(payload);
-    await refreshLibrary();
-    if (payload.library_entry) addToBasket([payload.library_entry], { silent: true });
+    await presentHumanMotion(payload);
 
     gvhmrWorkspace.stage = "completed";
     gvhmrWorkspace.progress = 1;

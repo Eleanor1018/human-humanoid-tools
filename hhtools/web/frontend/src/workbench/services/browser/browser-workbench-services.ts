@@ -27,6 +27,8 @@ export function createBrowserWorkbenchServices(): IWorkbenchServices {
     requestService,
     gvhmrComponentService: new BrowserGvhmrComponentService(),
     jobService,
+    // One adapter exposes two narrow contracts but remains owned exactly once.
+    motionResultPresentationService: legacyRuntimeService,
     settingsService: new BrowserSettingsService(requestService),
     legacyRuntimeService,
     dispose: () => ownedServices.dispose(),
