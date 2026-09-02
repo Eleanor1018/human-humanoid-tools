@@ -83,11 +83,12 @@ def test_video_upload_rejects_non_video_extension(tmp_path: Path, monkeypatch) -
     assert not list(app.state.session_state.upload_root.rglob("clip.txt"))
 
 
-def test_video_upload_rejects_unsupported_custom_checkpoint(
+def test_video_upload_accepts_arbitrary_custom_checkpoint_as_best_effort(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(gvhmr, "gvhmr_status", lambda: _status(ready=True))
+    monkeypatch.setattr(gvhmr, "run_gvhmr", lambda *_args, **_kwargs: None)
     app = _create_test_app(tmp_path, monkeypatch)
 
     with TestClient(app) as client:
@@ -99,9 +100,10 @@ def test_video_upload_rejects_unsupported_custom_checkpoint(
             ],
         )
 
-    assert response.status_code == 400
-    assert "CKPT" in response.json()["detail"]
-    assert not list(app.state.session_state.upload_root.rglob("weights.zip"))
+        assert response.status_code == 200
+        job = app.state.session_state.jobs[response.json()["job_id"]]
+        assert job.request["weights"] == "custom"
+        assert job.request["checkpoint_name"] == "weights.zip"
 
 
 def test_video_upload_records_custom_checkpoint_for_the_job(

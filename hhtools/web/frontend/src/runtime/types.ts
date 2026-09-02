@@ -199,6 +199,7 @@ export type VideoToMotionStage =
   | 'completed'
   | 'failed'
 
+/** Custom checkpoints are forwarded as selected and remain best-effort. */
 export type GvhmrWeightSource = 'official' | 'custom'
 
 export interface VideoToMotionResultSummary {

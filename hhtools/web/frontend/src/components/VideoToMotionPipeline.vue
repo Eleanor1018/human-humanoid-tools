@@ -56,7 +56,14 @@ const nodes = computed<Array<{
       id: 'runtime',
       label: text('Environment', '选择环境'),
       detail: state.value.environmentConfirmed
-        ? text('Official GVHMR confirmed', '已确认 GVHMR 官方环境')
+        ? state.value.weightSource === 'official'
+          ? text('Official GVHMR confirmed', '已确认 GVHMR 官方环境')
+          : state.value.checkpointName
+            ? text(
+                `Custom: ${state.value.checkpointName} (best effort)`,
+                `自定义：${state.value.checkpointName}（不保证兼容）`,
+              )
+            : text('Custom checkpoint not selected', '尚未选择自定义 checkpoint')
         : state.value.runtimeMessage,
       state: !runtimeReady
         ? state.value.runtimeState === 'checking' ? 'missing' : 'failed'

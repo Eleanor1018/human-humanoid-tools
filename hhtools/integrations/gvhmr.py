@@ -18,7 +18,7 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 GVHMR_ROOT_ENV = "HHTOOLS_GVHMR_ROOT"
@@ -36,9 +36,36 @@ _PUBLIC_CHECKPOINTS = {
     "YOLOv8": Path("yolo/yolov8x.pt"),
 }
 _VIDEO_SUFFIXES = frozenset({".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v"})
-_CHECKPOINT_SUFFIXES = frozenset({".ckpt", ".pt", ".pth"})
 _PROGRESS_RE = re.compile(r"^HHTOOLS_PROGRESS\s+([0-9.]+)\s+(.*)$")
 _RESULT_PREFIX = "HHTOOLS_RESULT "
+
+
+def _posix_container_identity() -> tuple[int, int] | None:
+    """Return the host identity used for writable bind mounts on Linux."""
+
+    if os.name != "posix" or not hasattr(os, "getuid") or not hasattr(os, "getgid"):
+        return None
+    return os.getuid(), os.getgid()
+
+
+def _docker_isolation_args(*, home: str) -> list[str]:
+    """Build the security and host-user options shared by GVHMR containers."""
+
+    arguments = [
+        "--gpus",
+        "all",
+        "--network",
+        "none",
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges",
+    ]
+    identity = _posix_container_identity()
+    if identity is not None:
+        uid, gid = identity
+        arguments.extend(["--user", f"{uid}:{gid}", "--env", f"HOME={home}"])
+    return arguments
 
 
 @dataclass(frozen=True)
@@ -48,6 +75,7 @@ class GvhmrConfig:
     image: str = DEFAULT_IMAGE
     docker: str = "docker"
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS
+    cuda_visible_devices: str | None = None
 
     @classmethod
     def from_environment(cls) -> GvhmrConfig:
@@ -69,6 +97,7 @@ class GvhmrConfig:
             image=os.environ.get(GVHMR_IMAGE_ENV, DEFAULT_IMAGE),
             docker=shutil.which("docker") or "docker",
             timeout_seconds=timeout,
+            cuda_visible_devices=(os.environ.get("CUDA_VISIBLE_DEVICES") or None),
         )
 
 
@@ -112,10 +141,11 @@ def gvhmr_status(config: GvhmrConfig | None = None) -> dict[str, Any]:
         missing.append(f"GVHMR official checkout: {cfg.root}")
 
     for label, relative in _PUBLIC_CHECKPOINTS.items():
-        available = (checkpoint_root / relative).is_file()
+        checkpoint_path = checkpoint_root / relative
+        available = checkpoint_path.is_file()
         checks[f"checkpoint_{label.lower()}"] = available
         if not available:
-            missing.append(f"{label} checkpoint: {checkpoint_root / relative}")
+            missing.append(f"{label} checkpoint: {checkpoint_path}")
 
     smplx = cfg.body_models_root / "smplx" / "SMPLX_NEUTRAL.npz"
     checks["smplx_neutral"] = smplx.is_file()
@@ -149,8 +179,10 @@ def gvhmr_status(config: GvhmrConfig | None = None) -> dict[str, Any]:
         "root": str(cfg.root),
         "body_models_root": str(cfg.body_models_root),
         "image": cfg.image,
+        "cuda_visible_devices": cfg.cuda_visible_devices,
         "uses_official_weights": True,
         "supports_custom_weights": True,
+        "custom_weights_support": "best_effort",
         "training_enabled": False,
     }
 
@@ -168,6 +200,33 @@ def _container_path(host_path: Path, mount_root: Path, container_root: str) -> s
     relative = host_path.resolve().relative_to(mount_root.resolve())
     suffix = "/".join(relative.parts)
     return f"{container_root}/{suffix}" if suffix else container_root
+
+
+def _host_result_path(job_root: Path, container_path: str) -> Path:
+    """Resolve a worker result without allowing traversal or output symlinks."""
+
+    container_result = PurePosixPath(container_path)
+    try:
+        relative = container_result.relative_to(PurePosixPath("/work/output"))
+    except ValueError as err:
+        raise RuntimeError("GVHMR published a result outside /work/output") from err
+    if relative.name != "hmr4d_results.pt" or ".." in relative.parts:
+        raise RuntimeError("GVHMR published an invalid result path")
+    work_root = job_root.resolve()
+    raw_output_root = work_root / "output"
+    if raw_output_root.is_symlink():
+        raise RuntimeError("GVHMR job output directory must not be a symlink")
+    output_root = raw_output_root.resolve()
+    try:
+        output_root.relative_to(work_root)
+    except ValueError as err:
+        raise RuntimeError("GVHMR output directory resolves outside the job") from err
+    result = (output_root / Path(*relative.parts)).resolve()
+    try:
+        result.relative_to(output_root)
+    except ValueError as err:
+        raise RuntimeError("GVHMR result resolves outside the job output directory") from err
+    return result
 
 
 def build_gvhmr_command(
@@ -194,17 +253,16 @@ def build_gvhmr_command(
         checkpoint.relative_to(work)
         if not checkpoint.is_file():
             raise FileNotFoundError(f"custom checkpoint does not exist: {checkpoint}")
-        if checkpoint.suffix.lower() not in _CHECKPOINT_SUFFIXES:
-            raise ValueError(f"unsupported checkpoint extension: {checkpoint.suffix or '<none>'}")
-
     output = work / "output"
     output.mkdir(parents=True, exist_ok=True)
+    isolation_args = _docker_isolation_args(home="/work/.container-home")
+    if "--user" in isolation_args:
+        (work / ".container-home").mkdir(exist_ok=True)
     command = [
         config.docker,
         "run",
         "--rm",
-        "--gpus",
-        "all",
+        *isolation_args,
         "--name",
         f"hhtools-gvhmr-{uuid.uuid4().hex[:10]}",
         "--mount",
@@ -212,6 +270,8 @@ def build_gvhmr_command(
         "--mount",
         f"type=bind,source={work},target=/work",
     ]
+    if config.cuda_visible_devices:
+        command.extend(["--env", f"CUDA_VISIBLE_DEVICES={config.cuda_visible_devices}"])
     default_body_models = (root / "inputs" / "checkpoints" / "body_models").resolve()
     if body_models != default_body_models:
         command.extend(
@@ -316,7 +376,7 @@ def run_gvhmr(
         if timed_out:
             raise TimeoutError(f"GVHMR exceeded the {cfg.timeout_seconds}-second inference timeout")
         return_code = process.wait(timeout=max(1.0, deadline - time.monotonic()))
-    except Exception:
+    except BaseException:
         process.kill()
         process.wait(timeout=30)
         try:
@@ -328,9 +388,9 @@ def run_gvhmr(
     if return_code != 0:
         diagnostic = "\n".join(recent[-12:])
         raise RuntimeError(f"GVHMR container exited with code {return_code}.\n{diagnostic}")
-    if not result_container_path or not result_container_path.startswith("/work/"):
+    if not result_container_path:
         raise RuntimeError("GVHMR completed without publishing a result path")
-    result = job_root.resolve() / Path(result_container_path).relative_to("/work")
+    result = _host_result_path(job_root, result_container_path)
     if not result.is_file():
         raise RuntimeError(f"GVHMR result was not found on the host: {result}")
     if progress is not None:

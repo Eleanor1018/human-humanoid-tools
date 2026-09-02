@@ -2808,11 +2808,6 @@ def _create_app_owned(
                 if len(stored_checkpoint) != 1:
                     raise HTTPException(status_code=400, detail="自定义权重上传为空")
                 _checkpoint_relative, checkpoint_path = stored_checkpoint[0]
-                if checkpoint_path.suffix.lower() not in {".ckpt", ".pt", ".pth"}:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="自定义 GVHMR 权重仅支持 CKPT、PT 和 PTH 文件",
-                    )
             job = _schedule_job(
                 "video_to_motion",
                 {

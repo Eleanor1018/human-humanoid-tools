@@ -180,16 +180,17 @@ robot library, so a clean builder intentionally produces a package without those
 The installed runtime is placed below the Electron application's `resources/runtime` directory and
 uses `python/bin/python3`; no system Python is required when the application runs.
 
-### Optional GVHMR
+### External GVHMR
 
-GVHMR is deliberately excluded from the core package. The installer can record that the user wants
-it configured; on first launch, **Settings → Optional components** opens the guided setup. The same
-entry remains available later for on-demand setup or repair.
+GVHMR is installed and run separately by the user; hhtools does not provide a second Debian package
+and does not bundle GVHMR source, checkpoints, or licensed SMPL/SMPL-X files. Import the resulting
+`hmr4d_results.pt` through **Motion** to preview it, add it to the Motion Library, or use it as the
+source of a Human → Robot workflow.
 
-The guided setup accepts an official GVHMR checkout and restarts the sidecar with
-`HHTOOLS_GVHMR_ROOT`. Docker Desktop, the hhtools GVHMR image, official checkpoints, and licensed
-SMPL/SMPL-X files stay external. The app never silently accepts or redistributes those third-party
-licenses. A complete setup currently needs roughly 22 GB in addition to the core application.
+The existing manual Docker bridge remains available for users who already maintain that runtime.
+Set `HHTOOLS_GVHMR_ROOT`, `HHTOOLS_GVHMR_IMAGE`, and `HHTOOLS_GVHMR_BODY_MODELS` before launching
+the desktop application; `HHTOOLS_GVHMR_TIMEOUT_SECONDS` is optional. These variables point hhtools
+at external resources and do not install or download them.
 
 ## Runtime model
 
