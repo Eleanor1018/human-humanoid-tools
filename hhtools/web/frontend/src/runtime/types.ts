@@ -51,6 +51,9 @@ export interface PlaybackUiState {
   active: boolean
   playing: boolean
   loop: boolean
+  currentTime: number
+  duration: number
+  sourceDuration: number | null
   progress: number
   speed: number
   label: string
