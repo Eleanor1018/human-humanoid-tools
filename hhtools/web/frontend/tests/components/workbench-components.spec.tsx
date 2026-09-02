@@ -130,6 +130,7 @@ describe("React workbench components", () => {
       <ThreeStage
         locale="en"
         stageDisplayCommands={{ resetView }}
+        stageLayerCommands={{ toggleLayer: vi.fn() }}
         stageModelService={stageModel}
         stagePlaybackCommands={{
           togglePlayback: vi.fn(),
@@ -145,8 +146,39 @@ describe("React workbench components", () => {
     stageModel.dispose();
   });
 
-  it("renders H2R layer controls from canonical Stage state", () => {
+  it("leaves R2R layer commands on the compatibility boundary", () => {
     const stageModel = new StageModel(vi.fn());
+    const toggleLayer = vi.fn();
+    render(
+      <ThreeStage
+        locale="en"
+        stageDisplayCommands={{ resetView: vi.fn() }}
+        stageLayerCommands={{ toggleLayer }}
+        stageModelService={stageModel}
+        stagePlaybackCommands={{
+          togglePlayback: vi.fn(),
+          seekToFraction: vi.fn(),
+          setPlaybackSpeed: vi.fn(),
+          togglePlaybackLoop: vi.fn(),
+        }}
+      />,
+    );
+    const r2rRobot = document.getElementById(
+      "r2r-tg-src-robot",
+    ) as HTMLButtonElement;
+    const legacyClick = vi.fn();
+    r2rRobot.addEventListener("click", legacyClick);
+
+    fireEvent.click(r2rRobot);
+
+    expect(legacyClick).toHaveBeenCalledOnce();
+    expect(toggleLayer).not.toHaveBeenCalled();
+    stageModel.dispose();
+  });
+
+  it("renders and commands H2R layers through canonical Stage contracts", () => {
+    const stageModel = new StageModel(vi.fn());
+    const toggleLayer = vi.fn();
     let renderCount = 0;
     render(
       <Profiler
@@ -157,6 +189,7 @@ describe("React workbench components", () => {
       >
         <H2rStageLayerControls
           locale="en"
+          stageLayerCommands={{ toggleLayer }}
           stageModelService={stageModel}
         />
       </Profiler>,
@@ -176,8 +209,6 @@ describe("React workbench components", () => {
       ]),
     );
     const skeleton = buttons.get("tg-skeleton")!;
-    const legacyClick = vi.fn();
-    skeleton.onclick = legacyClick;
 
     expect(renderCount).toBe(1);
     for (const button of buttons.values()) {
@@ -187,7 +218,8 @@ describe("React workbench components", () => {
 
     // A one-hot projection gives every DOM id a unique turn. Swapping any two
     // descriptor mappings therefore fails instead of hiding behind equal state.
-    for (const [activeButtonId, activeLayerId] of toggleLayers) {
+    for (const [index, toggle] of toggleLayers.entries()) {
+      const [activeButtonId, activeLayerId] = toggle;
       const layers = Object.fromEntries(
         STAGE_LAYER_IDS.map((layerId) => {
           const selected = layerId === activeLayerId;
@@ -222,8 +254,14 @@ describe("React workbench components", () => {
         expect(button.disabled).toBe(!selected);
         expect(document.getElementById(buttonId)).toBe(button);
       }
+      fireEvent.click(buttons.get(activeButtonId)!);
+      expect(toggleLayer).toHaveBeenNthCalledWith(index + 1, activeLayerId);
+      // Commands wait for a confirmed renderer snapshot; the View never
+      // performs an optimistic class mutation of its own.
+      expect(buttons.get(activeButtonId)).toHaveClass("on");
     }
     expect(renderCount).toBe(1 + toggleLayers.length);
+    expect(toggleLayer).toHaveBeenCalledTimes(toggleLayers.length);
 
     act(() => {
       stageModel.updateState({
@@ -240,9 +278,8 @@ describe("React workbench components", () => {
     });
     expect(skeleton).toHaveClass("on");
     expect(skeleton).toBeDisabled();
-    // Native activation, unlike a synthetic dispatch, respects `disabled`.
     skeleton.click();
-    expect(legacyClick).not.toHaveBeenCalled();
+    expect(toggleLayer).toHaveBeenCalledTimes(toggleLayers.length);
 
     act(() => {
       stageModel.updateState({
@@ -255,7 +292,8 @@ describe("React workbench components", () => {
     });
     expect(document.getElementById("tg-skeleton")).toBe(skeleton);
     fireEvent.click(skeleton);
-    expect(legacyClick).toHaveBeenCalledOnce();
+    expect(toggleLayer).toHaveBeenLastCalledWith("sourceSkeleton");
+    expect(toggleLayer).toHaveBeenCalledTimes(toggleLayers.length + 1);
 
     const displayBeforePlayback = stageModel.state.display;
     const renderCountBeforePlayback = renderCount;
@@ -271,7 +309,8 @@ describe("React workbench components", () => {
       expect(button.isConnected).toBe(true);
     }
     fireEvent.click(skeleton);
-    expect(legacyClick).toHaveBeenCalledTimes(2);
+    expect(toggleLayer).toHaveBeenLastCalledWith("sourceSkeleton");
+    expect(toggleLayer).toHaveBeenCalledTimes(toggleLayers.length + 2);
     stageModel.dispose();
   });
 

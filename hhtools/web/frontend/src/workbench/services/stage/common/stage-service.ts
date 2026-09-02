@@ -108,6 +108,12 @@ export interface IStagePlaybackCommands {
   togglePlaybackLoop(): void;
 }
 
+/** Semantic visibility intents available to Stage layer controls. */
+export interface IStageLayerCommands {
+  /** Toggle from authoritative Stage state, never from a stale View snapshot. */
+  toggleLayer(layerId: StageLayerId): void;
+}
+
 /** View-level Stage intents whose concrete rendering remains host-owned. */
 export interface IStageDisplayCommands {
   resetView(): void;

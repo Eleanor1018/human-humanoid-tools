@@ -4,12 +4,14 @@ const runtimeMocks = vi.hoisted(() => ({
   presentHumanMotion: vi.fn(),
   resetStageView: vi.fn(),
   subscribeH2rStageDisplayState: vi.fn(),
+  toggleH2rStageLayer: vi.fn(),
 }));
 
 vi.mock("../../src/runtime/webui-runtime", () => ({
   presentHumanMotion: runtimeMocks.presentHumanMotion,
   resetStageView: runtimeMocks.resetStageView,
   subscribeH2rStageDisplayState: runtimeMocks.subscribeH2rStageDisplayState,
+  toggleH2rStageLayer: runtimeMocks.toggleH2rStageLayer,
 }));
 vi.mock("../../src/runtime/dataset-viz", () => ({}));
 
@@ -35,6 +37,7 @@ beforeEach(() => {
   runtimeMocks.resetStageView.mockReset();
   runtimeMocks.subscribeH2rStageDisplayState.mockReset();
   runtimeMocks.subscribeH2rStageDisplayState.mockReturnValue(vi.fn());
+  runtimeMocks.toggleH2rStageLayer.mockReset();
 });
 
 describe("LegacyRuntimeService", () => {
@@ -42,6 +45,9 @@ describe("LegacyRuntimeService", () => {
     expectTypeOf<ILegacyRuntimeService>().not.toHaveProperty("resetStageView");
     expectTypeOf<ILegacyRuntimeService>().not.toHaveProperty(
       "subscribeH2rStageDisplayState",
+    );
+    expectTypeOf<ILegacyRuntimeService>().not.toHaveProperty(
+      "toggleH2rStageLayer",
     );
   });
 
@@ -84,6 +90,36 @@ describe("LegacyRuntimeService", () => {
 
     expect(runtimeMocks.resetStageView).toHaveBeenCalledOnce();
     await expect(service.start()).resolves.toBeUndefined();
+  });
+
+  it("joins readiness before forwarding a semantic H2R layer command", async () => {
+    const service = new BrowserLegacyRuntimeService();
+
+    await expect(
+      service.toggleH2rStageLayer("scaledEnvironment"),
+    ).resolves.toBeUndefined();
+
+    expect(runtimeMocks.toggleH2rStageLayer).toHaveBeenCalledOnce();
+    expect(runtimeMocks.toggleH2rStageLayer).toHaveBeenCalledWith(
+      "scaledEnvironment",
+    );
+    await expect(service.start()).resolves.toBeUndefined();
+  });
+
+  it("keeps readiness valid when the layer executor throws", async () => {
+    const service = new BrowserLegacyRuntimeService();
+    const readiness = service.start();
+    await readiness;
+    const failure = new Error("layer executor failed");
+    runtimeMocks.toggleH2rStageLayer.mockImplementationOnce(() => {
+      throw failure;
+    });
+
+    await expect(
+      service.toggleH2rStageLayer("sourceSkeleton"),
+    ).rejects.toBe(failure);
+
+    expect(service.start()).toBe(readiness);
   });
 
   it("forwards the synchronous initial H2R display snapshot after readiness", async () => {

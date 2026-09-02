@@ -102,7 +102,7 @@ describe("legacy runtime ownership boundaries", () => {
     );
     const preset = runtimeSource.slice(
       runtimeSource.indexOf("function applyH2rComparisonPreset"),
-      runtimeSource.indexOf('document.getElementById("tg-skeleton")'),
+      runtimeSource.indexOf("export function toggleH2rStageLayer"),
     );
     const requested = layerSetter.indexOf("h2rRequestedVisibility[layerId]");
     const projection = layerSetter.indexOf("applyH2rPhysicalVisibility()");
@@ -171,38 +171,85 @@ describe("legacy runtime ownership boundaries", () => {
     );
   });
 
-  it("leaves H2R toggle presentation to React while retaining legacy commands", () => {
-    const expectedIds = [
-      "tg-skeleton",
-      "tg-mesh",
-      "tg-env",
-      "tg-scaled",
-      "tg-scaled-env",
-      "tg-robot",
-    ];
+  it("executes semantic H2R commands without retaining a DOM owner", () => {
     const lookupPattern =
       /document\.getElementById\("(tg-(?:skeleton|mesh|env|scaled|scaled-env|robot))"\)/g;
     const commandPattern =
       /document\.getElementById\("(tg-(?:skeleton|mesh|env|scaled|scaled-env|robot))"\)\.onclick\s*=/g;
     const literalPattern =
       /"(tg-(?:skeleton|mesh|env|scaled|scaled-env|robot))"/g;
+    const start = runtimeSource.indexOf(
+      "export function toggleH2rStageLayer",
+    );
+    const end = runtimeSource.indexOf(
+      "function clearH2rScaledPreview",
+      start,
+    );
+    const command = runtimeSource.slice(start, end);
 
-    const lookupIds = [...runtimeSource.matchAll(lookupPattern)].map(
-      (match) => match[1],
+    expect([...runtimeSource.matchAll(lookupPattern)]).toEqual([]);
+    expect([...runtimeSource.matchAll(commandPattern)]).toEqual([]);
+    expect([...runtimeSource.matchAll(literalPattern)]).toEqual([]);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const identityGuard = command.indexOf(
+      "Object.hasOwn(h2rRequestedVisibility, layerId)",
     );
-    const commandIds = [...runtimeSource.matchAll(commandPattern)].map(
-      (match) => match[1],
+    const currentSnapshot = command.indexOf(
+      "collectH2rStageDisplaySnapshot().layers[layerId]",
     );
-    const literalIds = [...runtimeSource.matchAll(literalPattern)].map(
-      (match) => match[1],
+    const capabilityGuard = command.indexOf("if (!current.canToggle) return");
+    const toggle = command.indexOf(
+      "setH2rLayerVisible(layerId, !h2rRequestedVisibility[layerId])",
     );
 
-    expect(lookupIds).toEqual(expectedIds);
-    expect(commandIds).toEqual(expectedIds);
-    expect(literalIds).toEqual(expectedIds);
+    expect(identityGuard).toBeGreaterThanOrEqual(0);
+    expect(identityGuard).toBeLessThan(currentSnapshot);
+    expect(currentSnapshot).toBeLessThan(capabilityGuard);
+    expect(capabilityGuard).toBeLessThan(toggle);
+    for (const forbiddenDependency of [
+      "document.",
+      "window.",
+      "HTMLElement",
+      "CustomEvent",
+      "dispatchEvent",
+    ]) {
+      expect(command).not.toContain(forbiddenDependency);
+    }
+    expect(runtimeSource).not.toContain("hhtools:h2r-stage-layer-command");
     expect(runtimeSource).not.toContain("syncEnvToggleButton");
     expect(runtimeSource).not.toContain("_setCalibViewTogglesDisabled");
     expect(runtimeSource).not.toContain("_restoreViewToggleButtons");
+  });
+
+  it("keeps the six R2R layer commands on their explicit legacy boundary", () => {
+    const start = runtimeSource.indexOf(
+      "const toggleBindings: Array<readonly [string, R2rVisibilityKey]>",
+    );
+    const end = runtimeSource.indexOf(
+      'document.getElementById("r2r-source-load")',
+      start,
+    );
+    const bindings = runtimeSource.slice(start, end);
+    const ids = [...bindings.matchAll(/"(r2r-tg-[^"]+)"/g)].map(
+      (match) => match[1],
+    );
+
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    expect(ids).toEqual([
+      "r2r-tg-src-robot",
+      "r2r-tg-src-skel",
+      "r2r-tg-src-env",
+      "r2r-tg-tgt-robot",
+      "r2r-tg-tgt-skel",
+      "r2r-tg-tgt-env",
+    ]);
+    expect(bindings).toContain(
+      'document.getElementById(id)?.addEventListener("click"',
+    );
+    expect(bindings).toContain("r2rVis[key] = !r2rVis[key]");
+    expect(bindings).toContain("r2rApplyStage()");
   });
 
   it("reprojects resource-only changes before a display batch is published", () => {

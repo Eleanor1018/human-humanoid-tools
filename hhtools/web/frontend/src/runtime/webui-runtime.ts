@@ -2440,8 +2440,8 @@ function bodyUsesSkin(): boolean {
  * Commit one logical H2R layer intent, reconcile the legacy renderer, then
  * request a batch-aware Stage snapshot publication.
  *
- * Internal workflows use semantic layer ids rather than the temporary HUD ids;
- * the remaining DOM click adapters are now only boundary translators.
+ * Internal compatibility call sites delegate to this semantic primitive, so
+ * renderer state no longer depends on temporary HUD ids.
  */
 function setH2rLayerVisible(layerId: H2rStageLayerId, on: boolean): void {
   if (state.calibrationMode && layerId !== "targetRobot" && on) return;
@@ -2680,35 +2680,19 @@ function applyH2rComparisonPreset(preset: ComparisonPreset): void {
   emitComparisonState("h2r");
 }
 
-document.getElementById("tg-skeleton").onclick = () =>
-  setH2rLayerVisible("sourceSkeleton", !h2rRequestedVisibility.sourceSkeleton);
-document.getElementById("tg-mesh").onclick = () =>
-  setBodyVisible(!bodyIsRequestedVisible());
-document.getElementById("tg-env").onclick = (e) => {
-  if ((e.currentTarget as HTMLButtonElement).disabled) return;
-  setH2rLayerVisible(
-    "sourceEnvironment",
-    !h2rRequestedVisibility.sourceEnvironment,
-  );
-};
-document.getElementById("tg-scaled").onclick = (e) => {
-  if ((e.currentTarget as HTMLButtonElement).disabled) return;
-  setH2rLayerVisible(
-    "scaledSkeleton",
-    !h2rRequestedVisibility.scaledSkeleton,
-  );
-};
-document.getElementById("tg-scaled-env").onclick = (e) => {
-  if ((e.currentTarget as HTMLButtonElement).disabled) return;
-  setH2rLayerVisible(
-    "scaledEnvironment",
-    !h2rRequestedVisibility.scaledEnvironment,
-  );
-};
-document.getElementById("tg-robot").onclick = (e) => {
-  if ((e.currentTarget as HTMLButtonElement).disabled) return;
-  setH2rLayerVisible("targetRobot", !h2rRequestedVisibility.targetRobot);
-};
+/**
+ * Execute one H2R toggle against renderer-current state.
+ *
+ * The browser facade can cross an async readiness boundary after the click, so
+ * capability is deliberately revalidated here rather than trusted from the
+ * React snapshot that enabled the button.
+ */
+export function toggleH2rStageLayer(layerId: H2rStageLayerId): void {
+  if (!Object.hasOwn(h2rRequestedVisibility, layerId)) return;
+  const current = collectH2rStageDisplaySnapshot().layers[layerId];
+  if (!current.canToggle) return;
+  setH2rLayerVisible(layerId, !h2rRequestedVisibility[layerId]);
+}
 
 /** Remove preview resources derived from the previous motion/robot pair. */
 function clearH2rScaledPreview(): void {

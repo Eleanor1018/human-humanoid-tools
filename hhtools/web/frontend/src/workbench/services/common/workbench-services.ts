@@ -11,6 +11,7 @@ import type { ILegacyRuntimeService } from "@/workbench/services/runtime/common/
 import type { ISettingsService } from "@/workbench/services/settings/common/settings-service";
 import type {
   IStageDisplayCommands,
+  IStageLayerCommands,
   IStageModelService,
   IStagePlaybackCommands,
 } from "@/workbench/services/stage/common/stage-service";
@@ -31,6 +32,7 @@ export interface IWorkbenchServices extends IDisposable {
   readonly motionResultPresentationService: IMotionResultPresentationService;
   readonly settingsService: ISettingsService;
   readonly stageDisplayCommands: IStageDisplayCommands;
+  readonly stageLayerCommands: IStageLayerCommands;
   readonly stageModelService: IStageModelService;
   readonly stagePlaybackCommands: IStagePlaybackCommands;
   readonly legacyRuntimeService: ILegacyRuntimeService;

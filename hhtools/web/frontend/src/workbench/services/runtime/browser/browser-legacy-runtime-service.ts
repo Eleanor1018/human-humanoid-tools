@@ -7,10 +7,12 @@ import type {
   ILegacyStageDisplayStateSource,
   LegacyH2rStageDisplaySnapshot,
 } from "@/workbench/services/stage/browser/legacy-stage-display-state-source";
+import type { StageLayerId } from "@/workbench/services/stage/common/stage-service";
 import type { ILegacyRuntimeService } from "../common/legacy-runtime-service";
 
 interface LoadedLegacyRuntime extends IMotionResultPresentationService {
   resetStageView(): void;
+  toggleH2rStageLayer(layerId: StageLayerId): void;
   subscribeH2rStageDisplayState(
     listener: (snapshot: LegacyH2rStageDisplaySnapshot) => void,
   ): () => void;
@@ -58,6 +60,15 @@ export class BrowserLegacyRuntimeService
       throw new Error("Legacy runtime did not finish initialization");
     }
     this.#runtime.resetStageView();
+  }
+
+  /** Browser-only command capability kept off the common lifecycle service. */
+  async toggleH2rStageLayer(layerId: StageLayerId): Promise<void> {
+    await this.start();
+    if (!this.#runtime) {
+      throw new Error("Legacy runtime did not finish initialization");
+    }
+    this.#runtime.toggleH2rStageLayer(layerId);
   }
 
   /**

@@ -2,6 +2,7 @@ import type { WorkspaceLocale } from "@/workbench/common/workspace";
 import { useLocaleText } from "@/workbench/services/localization/browser/use-locale-text";
 import { useStageDisplayState } from "@/workbench/services/stage/browser/use-stage-model-state";
 import type {
+  IStageLayerCommands,
   IStageModelService,
   StageLayerId,
 } from "@/workbench/services/stage/common/stage-service";
@@ -53,16 +54,19 @@ const ROBOT_LAYER_TOGGLES = [
 ] as const satisfies readonly H2rLayerToggleDescriptor[];
 
 /**
- * React-owned read side for the six H2R layer controls.
+ * React-owned read and intent sides for the six H2R layer controls.
  *
- * The buttons remain permanently mounted so the compatibility runtime can own
- * their existing `onclick` commands without rebinding after every state change.
+ * A click emits only a semantic command. Presentation changes after the
+ * renderer publishes its next confirmed snapshot, so there is no optimistic
+ * second source of truth in this component.
  */
 export function H2rStageLayerControls({
   locale,
+  stageLayerCommands,
   stageModelService,
 }: {
   readonly locale: WorkspaceLocale;
+  readonly stageLayerCommands: IStageLayerCommands;
   readonly stageModelService: IStageModelService;
 }) {
   const text = useLocaleText(locale);
@@ -75,6 +79,7 @@ export function H2rStageLayerControls({
         id={descriptor.id}
         active={layer.visible}
         disabled={!layer.canToggle}
+        onClick={() => stageLayerCommands.toggleLayer(descriptor.layerId)}
         title={text(descriptor.en, descriptor.zh)}
         label={text(
           descriptor.en.split(" ")[0] || descriptor.en,

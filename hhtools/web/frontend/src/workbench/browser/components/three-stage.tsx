@@ -4,6 +4,7 @@ import { useLocaleText } from "@/workbench/services/localization/browser/use-loc
 import type { WorkspaceLocale } from "@/workbench/common/workspace";
 import type {
   IStageDisplayCommands,
+  IStageLayerCommands,
   IStageModelService,
   IStagePlaybackCommands,
 } from "@/workbench/services/stage/common/stage-service";
@@ -15,12 +16,14 @@ import { StageLayerToggle } from "./stage-layer-toggle";
 export function ThreeStage({
   locale,
   stageDisplayCommands,
+  stageLayerCommands,
   stageModelService,
   stagePlaybackCommands,
   batchWorkspace,
 }: {
   locale: WorkspaceLocale;
   stageDisplayCommands: IStageDisplayCommands;
+  stageLayerCommands: IStageLayerCommands;
   stageModelService: IStageModelService;
   stagePlaybackCommands: IStagePlaybackCommands;
   batchWorkspace?: ReactNode;
@@ -63,6 +66,7 @@ export function ThreeStage({
       <div className="stage-top-tools">
         <H2rStageLayerControls
           locale={locale}
+          stageLayerCommands={stageLayerCommands}
           stageModelService={stageModelService}
         />
         <div className="view-hud hidden" id="view-hud-r2r">

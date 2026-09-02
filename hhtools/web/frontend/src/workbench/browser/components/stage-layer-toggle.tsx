@@ -4,14 +4,15 @@ export interface StageLayerToggleProps {
   readonly label: string;
   readonly disabled: boolean;
   readonly active: boolean;
+  readonly onClick?: () => void;
 }
 
 /**
  * Presentational Stage toggle shared by the H2R and R2R HUD rows.
  *
- * Command ownership is intentionally absent here during the migration. H2R
- * passes canonical state; R2R still passes bootstrap presentation values. The
- * compatibility runtime attaches both workflows' existing handlers after commit.
+ * H2R supplies canonical presentation plus a React command. R2R still passes
+ * bootstrap values and omits `onClick`, leaving that workflow on its temporary
+ * compatibility handler without duplicating the button markup.
  */
 export function StageLayerToggle({
   id,
@@ -19,6 +20,7 @@ export function StageLayerToggle({
   label,
   disabled,
   active,
+  onClick,
 }: StageLayerToggleProps) {
   return (
     <button
@@ -26,6 +28,7 @@ export function StageLayerToggle({
       className={`seg-btn${active ? " on" : ""}`}
       id={id}
       disabled={disabled}
+      onClick={onClick}
       title={title}
     >
       <span className="eye" aria-hidden="true">

@@ -89,6 +89,9 @@ describe("Workbench DOM contract", () => {
     ];
     const services = createBrowserWorkbenchServices(vi.fn());
     mockWorkbenchGetRequests(services);
+    const toggleLayer = vi
+      .spyOn(services.stageLayerCommands, "toggleLayer")
+      .mockImplementation(() => undefined);
     let missingAtStartup: string[] | undefined;
     let missingAtSubscription: string[] | undefined;
     let publishDisplay:
@@ -177,6 +180,13 @@ describe("Workbench DOM contract", () => {
       expect(document.getElementById("tg-robot")).toHaveClass("on");
       expect(document.getElementById("tg-env")).toBeDisabled();
     });
+    const skeleton = document.getElementById(
+      "tg-skeleton",
+    ) as HTMLButtonElement;
+    fireEvent.click(skeleton);
+    expect(toggleLayer).toHaveBeenCalledOnce();
+    expect(toggleLayer).toHaveBeenCalledWith("sourceSkeleton");
+    expect(skeleton).toHaveClass("on");
 
     act(() => {
       publishDisplay?.({

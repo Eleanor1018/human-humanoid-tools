@@ -2,6 +2,7 @@ import { describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import { createBrowserWorkbenchServices } from "../../src/workbench/services/browser/browser-workbench-services";
 import { BrowserLegacyRuntimeService } from "../../src/workbench/services/runtime/browser/browser-legacy-runtime-service";
+import { BrowserLegacyStageLayerCommands } from "../../src/workbench/services/stage/browser/browser-legacy-stage-layer-commands";
 import { StageModel } from "../../src/workbench/services/stage/common/stage-model";
 
 describe("browser workbench service graph", () => {
@@ -11,6 +12,9 @@ describe("browser workbench service graph", () => {
     expectTypeOf(services.legacyRuntimeService).toEqualTypeOf<
       BrowserLegacyRuntimeService
     >();
+    expect(services.stageLayerCommands).toBeInstanceOf(
+      BrowserLegacyStageLayerCommands,
+    );
     const disposeStage = vi.spyOn(services.stageModelService, "dispose");
 
     expect(services.stageModelService.state.display.empty).toBe(true);
