@@ -1,5 +1,6 @@
 import type { IDisposable } from "@/base/common/disposable";
 import { Emitter, type Event } from "@/base/common/event";
+import type { MotionPayload } from "@/domain/motion/common/motion";
 import type {
   IRequestService,
   UploadPart,
@@ -10,6 +11,9 @@ import type {
   VideoToMotionStage,
 } from "@/workbench/contrib/video-to-motion/common/video-to-motion-state";
 import type { IJobService } from "@/workbench/services/jobs/common/job-service";
+import type {
+  IMotionResultPresentationService,
+} from "@/workbench/services/motion/common/motion-result-presentation-service";
 
 const VIDEO_SUFFIXES = new Set(["mp4", "mov", "mkv", "avi", "webm", "m4v"]);
 const UPLOAD_PROGRESS_WEIGHT = 0.08;
@@ -25,21 +29,6 @@ export interface VideoToMotionRuntimeStatus {
   readonly ready: boolean;
   readonly missing: readonly string[];
   readonly checks?: Readonly<Record<string, boolean>>;
-}
-
-/**
- * Fields used by the controller to summarize a result. The generic controller
- * preserves any richer payload returned by the server for the later Stage port.
- */
-export interface VideoToMotionJobResult {
-  readonly name: string;
-  readonly positions?: readonly unknown[];
-  readonly playback_frames?: number;
-  readonly num_frames_total?: number;
-  readonly playback_duration?: number;
-  readonly duration?: number;
-  readonly framerate?: number;
-  readonly sample_rate?: number;
 }
 
 export interface VideoToMotionVideoSelection {
@@ -85,6 +74,10 @@ export type VideoToMotionRequestPort = Pick<
 >;
 
 export type VideoToMotionJobPort = Pick<IJobService, "waitForResult">;
+export type VideoToMotionPresentationPort = Pick<
+  IMotionResultPresentationService,
+  "presentHumanMotion"
+>;
 
 export interface VideoPreviewUrlPort {
   createObjectURL(blob: Blob): string;
@@ -94,6 +87,7 @@ export interface VideoPreviewUrlPort {
 export interface VideoToMotionControllerDependencies {
   readonly requestService: VideoToMotionRequestPort;
   readonly jobService: VideoToMotionJobPort;
+  readonly presentationService: VideoToMotionPresentationPort;
   readonly previewUrls?: VideoPreviewUrlPort;
   /** Report observer failures without coupling the controller to a UI service. */
   readonly reportError: (error: unknown) => void;
@@ -130,7 +124,7 @@ function videoSuffix(name: string): string {
 }
 
 function resultSummary(
-  payload: VideoToMotionJobResult,
+  payload: MotionPayload,
 ): VideoToMotionResultSummary {
   return {
     name: payload.name,
@@ -169,11 +163,10 @@ function initialState(): VideoToMotionControllerState {
  * The controller owns cancellation and File lifetimes. It deliberately knows
  * nothing about React, DOM nodes, notifications, or the temporary legacy bridge.
  */
-export class VideoToMotionController<
-  Result extends VideoToMotionJobResult = VideoToMotionJobResult,
-> implements IDisposable {
+export class VideoToMotionController implements IDisposable {
   readonly #requestService: VideoToMotionRequestPort;
   readonly #jobService: VideoToMotionJobPort;
+  readonly #presentationService: VideoToMotionPresentationPort;
   readonly #previewUrls: VideoPreviewUrlPort;
   readonly #reportError: (error: unknown) => void;
   readonly #stateEmitter = new Emitter<VideoToMotionControllerState>();
@@ -190,6 +183,7 @@ export class VideoToMotionController<
   constructor(dependencies: VideoToMotionControllerDependencies) {
     this.#requestService = dependencies.requestService;
     this.#jobService = dependencies.jobService;
+    this.#presentationService = dependencies.presentationService;
     this.#previewUrls = dependencies.previewUrls ?? browserPreviewUrls;
     this.#reportError = dependencies.reportError;
   }
@@ -345,8 +339,8 @@ export class VideoToMotionController<
     }
   }
 
-  /** Run transport and polling only; presentation is injected in a later step. */
-  async run(): Promise<Result> {
+  /** Run upload, polling, and result presentation as one operation. */
+  async run(): Promise<MotionPayload> {
     this.#assertNotDisposed();
     if (!this.canRun || !this.#videoFile) {
       throw new Error("Video-to-motion is not ready to run");
@@ -399,7 +393,8 @@ export class VideoToMotionController<
       });
     }
 
-    let payload: Result;
+    let payload: MotionPayload;
+    let summary: VideoToMotionResultSummary;
     try {
       const started = await this.#requestService.upload<{ job_id: string }>(
         `/api/video-to-motion/upload?${query.toString()}`,
@@ -430,7 +425,7 @@ export class VideoToMotionController<
       this.#update({ stage: "running" });
       this.#assertCurrentOperation(request);
 
-      payload = await this.#jobService.waitForResult<Result>(
+      payload = await this.#jobService.waitForResult<MotionPayload>(
         started.job_id,
         {
           expectedKind: "video_to_motion",
@@ -457,6 +452,14 @@ export class VideoToMotionController<
         },
       );
       this.#assertCurrentOperation(request);
+      // Derive renderer state before committing side effects. Even if a future
+      // projection becomes stricter, a malformed result remains a failed run
+      // while this request still owns the workflow.
+      summary = resultSummary(payload);
+      // Presentation is part of the use case, not a responsibility left to the
+      // React view. A Stage/library failure therefore remains retryable state.
+      await this.#presentationService.presentHumanMotion(payload);
+      this.#assertCurrentOperation(request);
     } catch (error) {
       if (!this.#isCurrentOperation(request) || request.signal.aborted) {
         if (this.#operation === request) this.#operation = null;
@@ -480,7 +483,7 @@ export class VideoToMotionController<
       progress: 1,
       progressDetail: null,
       error: null,
-      result: resultSummary(payload),
+      result: summary,
     });
     return payload;
   }

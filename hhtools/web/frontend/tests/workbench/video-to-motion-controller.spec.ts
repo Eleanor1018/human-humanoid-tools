@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import type { MotionPayload } from "../../src/domain/motion/common/motion";
 import type {
   JsonRequestOptions,
   UploadPart,
@@ -9,7 +10,7 @@ import {
   VideoToMotionController,
   type VideoPreviewUrlPort,
   type VideoToMotionJobPort,
-  type VideoToMotionJobResult,
+  type VideoToMotionPresentationPort,
   type VideoToMotionRequestPort,
   type VideoToMotionRuntimeStatus,
 } from "../../src/workbench/contrib/video-to-motion/browser/video-to-motion-controller";
@@ -66,12 +67,12 @@ class FakeRequestService implements VideoToMotionRequestPort {
 
 interface JobWaitCall {
   readonly jobId: string;
-  readonly options?: WaitForJobOptions<VideoToMotionJobResult>;
+  readonly options?: WaitForJobOptions<MotionPayload>;
 }
 
 class FakeJobService implements VideoToMotionJobPort {
   readonly calls: JobWaitCall[] = [];
-  waitHandler: (call: JobWaitCall) => Promise<VideoToMotionJobResult> =
+  waitHandler: (call: JobWaitCall) => Promise<MotionPayload> =
     async () => {
       throw new Error("unexpected job wait");
     };
@@ -83,7 +84,7 @@ class FakeJobService implements VideoToMotionJobPort {
     const call = {
       jobId,
       options: options as
-        | WaitForJobOptions<VideoToMotionJobResult>
+        | WaitForJobOptions<MotionPayload>
         | undefined,
     };
     this.calls.push(call);
@@ -91,8 +92,15 @@ class FakeJobService implements VideoToMotionJobPort {
   }
 }
 
-interface TestMotionResult extends VideoToMotionJobResult {
-  readonly token: string;
+class FakePresentationService implements VideoToMotionPresentationPort {
+  readonly calls: MotionPayload[] = [];
+  presentHandler: (payload: MotionPayload) => Promise<void> = async () =>
+    undefined;
+
+  presentHumanMotion(payload: MotionPayload): Promise<void> {
+    this.calls.push(payload);
+    return this.presentHandler(payload);
+  }
 }
 
 const readyRuntime: VideoToMotionRuntimeStatus = {
@@ -105,10 +113,19 @@ function video(name = "clip.mp4"): File {
   return new File(["video"], name, { type: "video/mp4" });
 }
 
+function motionResult(name = "generated motion"): MotionPayload {
+  return {
+    name,
+    token: "motion-token",
+    positions: [],
+    parent_indices: [],
+  };
+}
+
 function runningJob(
   progress: number,
   message = "",
-): JobStatusResponse<VideoToMotionJobResult> {
+): JobStatusResponse<MotionPayload> {
   return {
     id: "job-42",
     kind: "video_to_motion",
@@ -137,21 +154,24 @@ function runningJob(
 function createHarness() {
   const requestService = new FakeRequestService();
   const jobService = new FakeJobService();
+  const presentationService = new FakePresentationService();
   let nextUrl = 1;
   const previewUrls: VideoPreviewUrlPort = {
     createObjectURL: vi.fn(() => `blob:test-${nextUrl++}`),
     revokeObjectURL: vi.fn(),
   };
   const reportError = vi.fn();
-  const controller = new VideoToMotionController<TestMotionResult>({
+  const controller = new VideoToMotionController({
     requestService,
     jobService,
+    presentationService,
     previewUrls,
     reportError,
   });
   return {
     controller,
     jobService,
+    presentationService,
     previewUrls,
     reportError,
     requestService,
@@ -329,9 +349,11 @@ describe("VideoToMotionController", () => {
     harness.controller.confirmEnvironment();
 
     const upload = deferred<{ job_id: string }>();
-    const completed = deferred<TestMotionResult>();
+    const completed = deferred<MotionPayload>();
+    const presented = deferred<void>();
     harness.requestService.uploadHandler = () => upload.promise;
     harness.jobService.waitHandler = () => completed.promise;
+    harness.presentationService.presentHandler = () => presented.promise;
 
     const run = harness.controller.run();
     const uploadCall = harness.requestService.uploadCalls[0]!;
@@ -384,15 +406,30 @@ describe("VideoToMotionController", () => {
       message: "halfway",
     });
 
-    const payload: TestMotionResult = {
-      name: "clip motion",
-      token: "motion-token",
+    const payload: MotionPayload = {
+      ...motionResult("clip motion"),
       positions: [[], [], []],
       playback_frames: 42,
       playback_duration: 1.5,
       sample_rate: 30,
     };
     completed.resolve(payload);
+
+    await vi.waitFor(() =>
+      expect(harness.presentationService.calls).toHaveLength(1),
+    );
+    expect(harness.presentationService.calls[0]).toBe(payload);
+    expect(harness.controller.state.stage).toBe("running");
+    expect(harness.controller.busy).toBe(true);
+    expect(harness.controller.canRun).toBe(false);
+    expect(() => harness.controller.setFocalLength("50")).toThrow(
+      "inputs cannot change while running",
+    );
+    await expect(harness.controller.run()).rejects.toThrow(
+      "Video-to-motion is not ready to run",
+    );
+    expect(harness.requestService.uploadCalls).toHaveLength(1);
+    presented.resolve();
 
     await expect(run).resolves.toBe(payload);
     expect(harness.controller.state).toMatchObject({
@@ -445,7 +482,7 @@ describe("VideoToMotionController", () => {
     const harness = createHarness();
     await prepareReadyController(harness);
     const upload = deferred<{ job_id: string }>();
-    const completed = deferred<TestMotionResult>();
+    const completed = deferred<MotionPayload>();
     harness.requestService.uploadHandler = () => upload.promise;
     harness.jobService.waitHandler = () => completed.promise;
 
@@ -465,7 +502,7 @@ describe("VideoToMotionController", () => {
     );
     expect(harness.controller.state.progress).toBe(0.08);
 
-    completed.resolve({ name: "finite motion", token: "motion-token" });
+    completed.resolve(motionResult("finite motion"));
     await expect(run).resolves.toMatchObject({ name: "finite motion" });
     expect(harness.controller.state.progress).toBe(1);
   });
@@ -478,10 +515,7 @@ describe("VideoToMotionController", () => {
     harness.requestService.uploadHandler = async () => ({ job_id: "job-42" });
     harness.jobService.waitHandler = async (call) => {
       call.options?.onProgress?.(runningJob(0.5, "halfway"));
-      return {
-        name: "observer-safe motion",
-        token: "motion-token",
-      };
+      return motionResult("observer-safe motion");
     };
     harness.controller.onDidChangeState(() => {
       throw failure;
@@ -502,6 +536,47 @@ describe("VideoToMotionController", () => {
     expect(harness.reportError).toHaveBeenCalledWith(failure);
     expect(harness.controller.state.stage).toBe("completed");
     expect(harness.controller.canRun).toBe(true);
+  });
+
+  it("publishes presentation failures as retryable workflow state", async () => {
+    const harness = createHarness();
+    await prepareReadyController(harness);
+    const payload = motionResult("unpresentable motion");
+    const failure = new Error("stage rejected motion");
+    harness.requestService.uploadHandler = async () => ({ job_id: "job-42" });
+    harness.jobService.waitHandler = async () => payload;
+    harness.presentationService.presentHandler = async () => {
+      throw failure;
+    };
+
+    await expect(harness.controller.run()).rejects.toBe(failure);
+
+    expect(harness.presentationService.calls).toEqual([payload]);
+    expect(harness.controller.state).toMatchObject({
+      stage: "failed",
+      error: "stage rejected motion",
+      result: null,
+    });
+    expect(harness.controller.canRun).toBe(true);
+  });
+
+  it("does not publish completion after disposal during presentation", async () => {
+    const harness = createHarness();
+    await prepareReadyController(harness);
+    const presented = deferred<void>();
+    harness.requestService.uploadHandler = async () => ({ job_id: "job-42" });
+    harness.jobService.waitHandler = async () => motionResult();
+    harness.presentationService.presentHandler = () => presented.promise;
+
+    const run = harness.controller.run();
+    await vi.waitFor(() =>
+      expect(harness.presentationService.calls).toHaveLength(1),
+    );
+    harness.controller.dispose();
+    presented.resolve();
+
+    await expect(run).rejects.toMatchObject({ name: "AbortError" });
+    expect(harness.controller.state.stage).toBe("running");
   });
 
   it("rejects an invalid focal length before starting transport", async () => {
@@ -535,6 +610,7 @@ describe("VideoToMotionController", () => {
       error: "GPU unavailable",
       result: null,
     });
+    expect(harness.presentationService.calls).toHaveLength(0);
     expect(harness.controller.busy).toBe(false);
     expect(harness.controller.canRun).toBe(true);
   });
