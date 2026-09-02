@@ -8,6 +8,7 @@ import type {
 } from "../../src/platform/request/common/request-service";
 import {
   VideoToMotionController,
+  VideoToMotionInputError,
   type VideoPreviewUrlPort,
   type VideoToMotionJobPort,
   type VideoToMotionPresentationPort,
@@ -304,8 +305,17 @@ describe("VideoToMotionController", () => {
     const firstUrl = harness.controller.state.video?.previewUrl;
 
     expect(() => harness.controller.selectVideo(video("notes.txt"))).toThrow(
-      "Supported formats",
+      VideoToMotionInputError,
     );
+    try {
+      harness.controller.selectVideo(video("notes.txt"));
+    } catch (error) {
+      expect(error).toMatchObject({
+        name: "VideoToMotionInputError",
+        code: "unsupported-video",
+        message: expect.stringContaining("Supported formats"),
+      });
+    }
     expect(harness.controller.state.video?.name).toBe("first.MP4");
     expect(harness.previewUrls.createObjectURL).toHaveBeenCalledOnce();
 
@@ -421,7 +431,11 @@ describe("VideoToMotionController", () => {
 
     await expect(
       harness.controller.importResult(existingResult("motion.pkl")),
-    ).rejects.toThrow("must be a .pt file");
+    ).rejects.toMatchObject({
+      name: "VideoToMotionInputError",
+      code: "invalid-result",
+      message: expect.stringContaining("must be a .pt file"),
+    });
 
     expect(harness.requestService.uploadCalls).toHaveLength(0);
     expect(harness.jobService.calls).toHaveLength(0);
@@ -695,9 +709,11 @@ describe("VideoToMotionController", () => {
     await prepareReadyController(harness);
     harness.controller.setFocalLength("12.5");
 
-    await expect(harness.controller.run()).rejects.toThrow(
-      "Focal length must be a positive integer",
-    );
+    await expect(harness.controller.run()).rejects.toMatchObject({
+      name: "VideoToMotionInputError",
+      code: "invalid-focal-length",
+      message: "Focal length must be a positive integer",
+    });
 
     expect(harness.requestService.uploadCalls).toHaveLength(0);
     expect(harness.jobService.calls).toHaveLength(0);

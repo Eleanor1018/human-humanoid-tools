@@ -26,6 +26,25 @@ export type VideoToMotionRuntimePhase =
 
 export type VideoToMotionOperation = "generate" | "import";
 
+export type VideoToMotionInputErrorCode =
+  | "unsupported-video"
+  | "not-ready"
+  | "invalid-focal-length"
+  | "operation-in-progress"
+  | "invalid-result"
+  | "input-locked";
+
+/** A user-correctable preflight failure that has not started an operation. */
+export class VideoToMotionInputError extends Error {
+  constructor(
+    readonly code: VideoToMotionInputErrorCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = "VideoToMotionInputError";
+  }
+}
+
 /** Minimal status projection consumed by this feature from the GVHMR endpoint. */
 export interface VideoToMotionRuntimeStatus {
   readonly ready: boolean;
@@ -231,7 +250,8 @@ export class VideoToMotionController implements IDisposable {
   selectVideo(file: File): void {
     this.#assertMutable();
     if (!VIDEO_SUFFIXES.has(videoSuffix(file.name))) {
-      throw new Error(
+      throw new VideoToMotionInputError(
+        "unsupported-video",
         "Supported formats: MP4, MOV, MKV, AVI, WebM, and M4V",
       );
     }
@@ -355,7 +375,10 @@ export class VideoToMotionController implements IDisposable {
   async run(): Promise<MotionPayload> {
     this.#assertNotDisposed();
     if (!this.canRun || !this.#videoFile) {
-      throw new Error("Video-to-motion is not ready to run");
+      throw new VideoToMotionInputError(
+        "not-ready",
+        "Video-to-motion is not ready to run",
+      );
     }
 
     const video = this.#videoFile;
@@ -370,7 +393,10 @@ export class VideoToMotionController implements IDisposable {
       focalLength !== undefined &&
       (!Number.isSafeInteger(focalLength) || focalLength <= 0)
     ) {
-      throw new Error("Focal length must be a positive integer");
+      throw new VideoToMotionInputError(
+        "invalid-focal-length",
+        "Focal length must be a positive integer",
+      );
     }
 
     const query = new URLSearchParams({
@@ -404,10 +430,16 @@ export class VideoToMotionController implements IDisposable {
   async importResult(file: File): Promise<MotionPayload> {
     this.#assertNotDisposed();
     if (this.busy) {
-      throw new Error("Video-to-motion is already running");
+      throw new VideoToMotionInputError(
+        "operation-in-progress",
+        "Video-to-motion is already running",
+      );
     }
     if (videoSuffix(file.name) !== "pt") {
-      throw new Error("A GVHMR result must be a .pt file");
+      throw new VideoToMotionInputError(
+        "invalid-result",
+        "A GVHMR result must be a .pt file",
+      );
     }
 
     return this.#executeMotionUpload({
@@ -606,7 +638,10 @@ export class VideoToMotionController implements IDisposable {
   #assertMutable(): void {
     this.#assertNotDisposed();
     if (this.busy) {
-      throw new Error("Video-to-motion inputs cannot change while running");
+      throw new VideoToMotionInputError(
+        "input-locked",
+        "Video-to-motion inputs cannot change while running",
+      );
     }
   }
 
