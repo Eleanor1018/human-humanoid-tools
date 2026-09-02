@@ -217,9 +217,9 @@ function createInitialState(): StageState {
 /**
  * Immutable state model for the shared Stage.
  *
- * This class intentionally does not drive the legacy renderer yet. The next
- * migration step can project legacy state into it without coupling this common
- * contract to window events, DOM ids, or Three.js resource ownership.
+ * This class never drives the legacy renderer. A browser adapter projects
+ * confirmed renderer snapshots into it without coupling this common contract
+ * to window events, DOM ids, or Three.js resource ownership.
  */
 export class StageModel implements IStageModelService {
   readonly #stateEmitter = new Emitter<StageState>();

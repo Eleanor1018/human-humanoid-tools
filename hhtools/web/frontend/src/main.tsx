@@ -36,7 +36,13 @@ function reportWorkbenchError(error: unknown): void {
 const services = createBrowserWorkbenchServices(reportWorkbenchError);
 const contributionLifecycle = new WorkbenchContributionLifecycle(
   services,
-  [createLegacyRuntimeContribution(services.legacyRuntimeService)],
+  [
+    createLegacyRuntimeContribution({
+      runtimeService: services.legacyRuntimeService,
+      displayStateSource: services.legacyRuntimeService,
+      stageOwner: services.stageModelService,
+    }),
+  ],
   reportWorkbenchError,
 );
 const panelContributions = [

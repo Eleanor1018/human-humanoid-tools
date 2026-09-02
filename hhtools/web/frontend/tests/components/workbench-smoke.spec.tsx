@@ -21,6 +21,10 @@ import { createLegacyRuntimeContribution } from "../../src/workbench/contrib/leg
 import { WorkbenchCommandIds } from "../../src/workbench/common/command-ids";
 import { createVideoToMotionPanelContribution } from "../../src/workbench/contrib/video-to-motion/browser/video-to-motion-contribution";
 import { createBrowserWorkbenchServices } from "../../src/workbench/services/browser/browser-workbench-services";
+import type {
+  ILegacyStageDisplayStateSource,
+  LegacyH2rStageDisplaySnapshot,
+} from "../../src/workbench/services/stage/browser/legacy-stage-display-state-source";
 import runtimeSource from "../../src/runtime/webui-runtime.ts?raw";
 
 afterEach(() => cleanup());
@@ -66,7 +70,7 @@ function renderWorkbench() {
 }
 
 describe("Workbench DOM contract", () => {
-  it("mounts every runtime contribution before the compatibility service starts", () => {
+  it("commits every runtime DOM port before startup and display attachment", async () => {
     const ids = [
       "three-canvas",
       "motion-drop-shared",
@@ -86,6 +90,7 @@ describe("Workbench DOM contract", () => {
     const services = createBrowserWorkbenchServices(vi.fn());
     mockWorkbenchGetRequests(services);
     let missingAtStartup: string[] | undefined;
+    let missingAtSubscription: string[] | undefined;
     vi.spyOn(services.legacyRuntimeService, "start").mockImplementation(
       async () => {
         missingAtStartup = ids.filter(
@@ -93,9 +98,45 @@ describe("Workbench DOM contract", () => {
         );
       },
     );
+    const initialDisplay: LegacyH2rStageDisplaySnapshot = {
+      ownsStage: true,
+      empty: false,
+      canResetView: true,
+      layers: {
+        sourceSkeleton: { available: true, visible: true, canToggle: true },
+        sourceBody: { available: true, visible: false, canToggle: true },
+        sourceEnvironment: {
+          available: false,
+          visible: false,
+          canToggle: false,
+        },
+        scaledSkeleton: { available: false, visible: false, canToggle: false },
+        scaledEnvironment: {
+          available: false,
+          visible: false,
+          canToggle: false,
+        },
+        targetRobot: { available: true, visible: true, canToggle: true },
+      },
+    };
+    const displayStateSource: ILegacyStageDisplayStateSource = {
+      subscribeH2rStageDisplayState: vi.fn(async (listener) => {
+        missingAtSubscription = ids.filter(
+          (id) => document.getElementById(id) === null,
+        );
+        listener(initialDisplay);
+        return { dispose: vi.fn() };
+      }),
+    };
     const lifecycle = new WorkbenchContributionLifecycle(
       services,
-      [createLegacyRuntimeContribution(services.legacyRuntimeService)],
+      [
+        createLegacyRuntimeContribution({
+          runtimeService: services.legacyRuntimeService,
+          displayStateSource,
+          stageOwner: services.stageModelService,
+        }),
+      ],
       vi.fn(),
     );
     lifecycle.advanceTo(WorkbenchLifecyclePhase.Ready);
@@ -115,6 +156,17 @@ describe("Workbench DOM contract", () => {
 
     expect(services.legacyRuntimeService.start).toHaveBeenCalledOnce();
     expect(missingAtStartup).toEqual([]);
+    await waitFor(() =>
+      expect(
+        displayStateSource.subscribeH2rStageDisplayState,
+      ).toHaveBeenCalledOnce(),
+    );
+    expect(missingAtSubscription).toEqual([]);
+    expect(services.stageModelService.state.display).toEqual({
+      empty: initialDisplay.empty,
+      canResetView: initialDisplay.canResetView,
+      layers: initialDisplay.layers,
+    });
   });
 
   it("preserves every literal element id consumed by the existing runtime", () => {
