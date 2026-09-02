@@ -369,6 +369,7 @@ describe("VideoToMotionController", () => {
       fraction: 0.25,
     });
     expect(harness.controller.state).toMatchObject({
+      operation: "import",
       stage: "uploading",
       progress: 0.02,
       progressDetail: {
@@ -397,6 +398,7 @@ describe("VideoToMotionController", () => {
 
     expect(harness.presentationService.calls).toEqual([payload]);
     expect(harness.controller.state).toMatchObject({
+      operation: "import",
       stage: "completed",
       progress: 1,
       result: {
@@ -405,6 +407,13 @@ describe("VideoToMotionController", () => {
       },
     });
     expect(harness.requestService.getCalls).toHaveLength(0);
+
+    harness.controller.selectVideo(video("next.mp4"));
+    expect(harness.controller.state).toMatchObject({
+      operation: null,
+      stage: "idle",
+      result: null,
+    });
   });
 
   it("rejects a non-PT import before starting transport", async () => {
@@ -417,6 +426,24 @@ describe("VideoToMotionController", () => {
     expect(harness.requestService.uploadCalls).toHaveLength(0);
     expect(harness.jobService.calls).toHaveLength(0);
     expect(harness.controller.state.stage).toBe("idle");
+  });
+
+  it("retains import intent when the shared workflow fails", async () => {
+    const harness = createHarness();
+    const failure = new Error("motion parser rejected result");
+    harness.requestService.uploadHandler = async () => {
+      throw failure;
+    };
+
+    await expect(
+      harness.controller.importResult(existingResult()),
+    ).rejects.toBe(failure);
+
+    expect(harness.controller.state).toMatchObject({
+      operation: "import",
+      stage: "failed",
+      error: "motion parser rejected result",
+    });
   });
 
   it("runs the exact multipart protocol and composes progress only once", async () => {
@@ -460,6 +487,7 @@ describe("VideoToMotionController", () => {
       fraction: 0.5,
     });
     expect(harness.controller.state).toMatchObject({
+      operation: "generate",
       stage: "uploading",
       progress: 0.04,
       progressDetail: {
@@ -515,6 +543,7 @@ describe("VideoToMotionController", () => {
 
     await expect(run).resolves.toBe(payload);
     expect(harness.controller.state).toMatchObject({
+      operation: "generate",
       stage: "completed",
       progress: 1,
       error: null,

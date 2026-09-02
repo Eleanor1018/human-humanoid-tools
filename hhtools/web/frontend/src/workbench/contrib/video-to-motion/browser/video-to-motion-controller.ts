@@ -24,6 +24,8 @@ export type VideoToMotionRuntimePhase =
   | "ready"
   | "unavailable";
 
+export type VideoToMotionOperation = "generate" | "import";
+
 /** Minimal status projection consumed by this feature from the GVHMR endpoint. */
 export interface VideoToMotionRuntimeStatus {
   readonly ready: boolean;
@@ -61,6 +63,8 @@ export interface VideoToMotionControllerState {
   readonly environmentConfirmed: boolean;
   readonly staticCamera: boolean;
   readonly focalLength: string;
+  /** Identifies the request whose progress/result is currently projected. */
+  readonly operation: VideoToMotionOperation | null;
   readonly stage: VideoToMotionStage;
   readonly progress: number;
   readonly progressDetail: VideoToMotionProgressDetail | null;
@@ -94,6 +98,7 @@ export interface VideoToMotionControllerDependencies {
 }
 
 interface MotionUploadOperation {
+  readonly kind: VideoToMotionOperation;
   readonly uploadUrl: string;
   readonly parts: readonly UploadPart[];
   readonly expectedJobKind: string;
@@ -155,6 +160,7 @@ function initialState(): VideoToMotionControllerState {
     environmentConfirmed: false,
     staticCamera: true,
     focalLength: "",
+    operation: null,
     stage: "idle",
     progress: 0,
     progressDetail: null,
@@ -387,6 +393,7 @@ export class VideoToMotionController implements IDisposable {
     }
 
     return this.#executeMotionUpload({
+      kind: "generate",
       uploadUrl: `/api/video-to-motion/upload?${query.toString()}`,
       parts,
       expectedJobKind: "video_to_motion",
@@ -404,6 +411,7 @@ export class VideoToMotionController implements IDisposable {
     }
 
     return this.#executeMotionUpload({
+      kind: "import",
       uploadUrl: "/api/motion/upload?profile=mimic",
       parts: [
         {
@@ -427,6 +435,7 @@ export class VideoToMotionController implements IDisposable {
     const request = new AbortController();
     this.#operation = request;
     this.#update({
+      operation: operation.kind,
       stage: "uploading",
       progress: 0,
       progressDetail: null,
@@ -556,9 +565,15 @@ export class VideoToMotionController implements IDisposable {
 
   #resetOperationState(): Pick<
     VideoToMotionControllerState,
-    "stage" | "progress" | "progressDetail" | "error" | "result"
+    | "operation"
+    | "stage"
+    | "progress"
+    | "progressDetail"
+    | "error"
+    | "result"
   > {
     return {
+      operation: null,
       stage: "idle",
       progress: 0,
       progressDetail: null,
