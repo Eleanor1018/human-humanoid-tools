@@ -113,6 +113,12 @@ function video(name = "clip.mp4"): File {
   return new File(["video"], name, { type: "video/mp4" });
 }
 
+function existingResult(name = "result.pt"): File {
+  return new File(["motion"], name, {
+    type: "application/octet-stream",
+  });
+}
+
 function motionResult(name = "generated motion"): MotionPayload {
   return {
     name,
@@ -335,6 +341,82 @@ describe("VideoToMotionController", () => {
     expect(harness.controller.canConfirmEnvironment).toBe(true);
     expect(harness.controller.canRun).toBe(false);
     expect(harness.controller.confirmEnvironment()).toBe(true);
+  });
+
+  it("imports one existing GVHMR result through the shared motion protocol", async () => {
+    const harness = createHarness();
+    const source = existingResult("recording.PT");
+    const upload = deferred<{ job_id: string }>();
+    const completed = deferred<MotionPayload>();
+    harness.requestService.uploadHandler = () => upload.promise;
+    harness.jobService.waitHandler = () => completed.promise;
+
+    const imported = harness.controller.importResult(source);
+    const uploadCall = harness.requestService.uploadCalls[0]!;
+    expect(uploadCall).toMatchObject({
+      url: "/api/motion/upload?profile=mimic",
+      parts: [
+        {
+          fieldName: "files",
+          data: source,
+          filename: "recording.PT",
+        },
+      ],
+    });
+    uploadCall.options?.onProgress?.({
+      loaded: 1,
+      total: 4,
+      fraction: 0.25,
+    });
+    expect(harness.controller.state).toMatchObject({
+      stage: "uploading",
+      progress: 0.02,
+      progressDetail: {
+        kind: "upload",
+        loadedBytes: 1,
+        totalBytes: 4,
+      },
+    });
+
+    upload.resolve({ job_id: "import-job" });
+    await vi.waitFor(() => expect(harness.jobService.calls).toHaveLength(1));
+    expect(harness.jobService.calls[0]).toMatchObject({
+      jobId: "import-job",
+      options: {
+        expectedKind: "motion_link",
+        signal: uploadCall.options?.signal,
+      },
+    });
+
+    const payload = {
+      ...motionResult("imported motion"),
+      playback_frames: 72,
+    };
+    completed.resolve(payload);
+    await expect(imported).resolves.toBe(payload);
+
+    expect(harness.presentationService.calls).toEqual([payload]);
+    expect(harness.controller.state).toMatchObject({
+      stage: "completed",
+      progress: 1,
+      result: {
+        name: "imported motion",
+        frames: 72,
+      },
+    });
+    expect(harness.requestService.getCalls).toHaveLength(0);
+  });
+
+  it("rejects a non-PT import before starting transport", async () => {
+    const harness = createHarness();
+
+    await expect(
+      harness.controller.importResult(existingResult("motion.pkl")),
+    ).rejects.toThrow("must be a .pt file");
+
+    expect(harness.requestService.uploadCalls).toHaveLength(0);
+    expect(harness.jobService.calls).toHaveLength(0);
+    expect(harness.controller.state.stage).toBe("idle");
   });
 
   it("runs the exact multipart protocol and composes progress only once", async () => {

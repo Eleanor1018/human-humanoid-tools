@@ -93,6 +93,12 @@ export interface VideoToMotionControllerDependencies {
   readonly reportError: (error: unknown) => void;
 }
 
+interface MotionUploadOperation {
+  readonly uploadUrl: string;
+  readonly parts: readonly UploadPart[];
+  readonly expectedJobKind: string;
+}
+
 const browserPreviewUrls: VideoPreviewUrlPort = {
   // Resolve URL lazily so importing the controller stays safe in test runtimes.
   createObjectURL: (blob) => URL.createObjectURL(blob),
@@ -361,19 +367,6 @@ export class VideoToMotionController implements IDisposable {
       throw new Error("Focal length must be a positive integer");
     }
 
-    const request = new AbortController();
-    this.#operation = request;
-    this.#update({
-      stage: "uploading",
-      progress: 0,
-      progressDetail: null,
-      error: null,
-      result: null,
-    });
-    // A synchronous observer may dispose its owning view during notification.
-    // Re-check ownership before starting a request with an aborted signal.
-    this.#assertCurrentOperation(request);
-
     const query = new URLSearchParams({
       static_cam: String(staticCamera),
     });
@@ -393,12 +386,63 @@ export class VideoToMotionController implements IDisposable {
       });
     }
 
+    return this.#executeMotionUpload({
+      uploadUrl: `/api/video-to-motion/upload?${query.toString()}`,
+      parts,
+      expectedJobKind: "video_to_motion",
+    });
+  }
+
+  /** Import one existing GVHMR result through the managed Motion Library. */
+  async importResult(file: File): Promise<MotionPayload> {
+    this.#assertNotDisposed();
+    if (this.busy) {
+      throw new Error("Video-to-motion is already running");
+    }
+    if (videoSuffix(file.name) !== "pt") {
+      throw new Error("A GVHMR result must be a .pt file");
+    }
+
+    return this.#executeMotionUpload({
+      uploadUrl: "/api/motion/upload?profile=mimic",
+      parts: [
+        {
+          fieldName: "files",
+          data: file,
+          filename: file.name,
+        },
+      ],
+      expectedJobKind: "motion_link",
+    });
+  }
+
+  /**
+   * Execute the protocol shared by inference and importing an existing result.
+   * The caller describes endpoint-specific input; this method owns lifecycle,
+   * progress composition, result presentation, and terminal state exactly once.
+   */
+  async #executeMotionUpload(
+    operation: MotionUploadOperation,
+  ): Promise<MotionPayload> {
+    const request = new AbortController();
+    this.#operation = request;
+    this.#update({
+      stage: "uploading",
+      progress: 0,
+      progressDetail: null,
+      error: null,
+      result: null,
+    });
+    // A synchronous observer may dispose its owning view during notification.
+    // Re-check ownership before starting a request with an aborted signal.
+    this.#assertCurrentOperation(request);
+
     let payload: MotionPayload;
     let summary: VideoToMotionResultSummary;
     try {
       const started = await this.#requestService.upload<{ job_id: string }>(
-        `/api/video-to-motion/upload?${query.toString()}`,
-        parts,
+        operation.uploadUrl,
+        operation.parts,
         {
           signal: request.signal,
           onProgress: ({ loaded, total, fraction }) => {
@@ -428,7 +472,7 @@ export class VideoToMotionController implements IDisposable {
       payload = await this.#jobService.waitForResult<MotionPayload>(
         started.job_id,
         {
-          expectedKind: "video_to_motion",
+          expectedKind: operation.expectedJobKind,
           signal: request.signal,
           onProgress: (job) => {
             if (
