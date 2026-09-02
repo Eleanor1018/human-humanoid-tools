@@ -33,7 +33,7 @@ function reportWorkbenchError(error: unknown): void {
 // Each feature declares a narrow contribution here instead of being imported by
 // the generic shell. Electron shares this graph and adds host capabilities only
 // through its preload boundary rather than through a second renderer bundle.
-const services = createBrowserWorkbenchServices();
+const services = createBrowserWorkbenchServices(reportWorkbenchError);
 const contributionLifecycle = new WorkbenchContributionLifecycle(
   services,
   [createLegacyRuntimeContribution(services.legacyRuntimeService)],

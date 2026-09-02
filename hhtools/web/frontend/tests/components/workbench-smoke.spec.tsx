@@ -45,7 +45,7 @@ function mockWorkbenchGetRequests(
 }
 
 function renderWorkbench() {
-  const services = createBrowserWorkbenchServices();
+  const services = createBrowserWorkbenchServices(vi.fn());
   mockWorkbenchGetRequests(services);
   const lifecycle = new WorkbenchContributionLifecycle(services, [], vi.fn());
   lifecycle.advanceTo(WorkbenchLifecyclePhase.Ready);
@@ -82,7 +82,7 @@ describe("Workbench DOM contract", () => {
       "dv-hist-canvas",
       "dv-scatter-canvas",
     ];
-    const services = createBrowserWorkbenchServices();
+    const services = createBrowserWorkbenchServices(vi.fn());
     mockWorkbenchGetRequests(services);
     let missingAtStartup: string[] | undefined;
     vi.spyOn(services.legacyRuntimeService, "start").mockImplementation(

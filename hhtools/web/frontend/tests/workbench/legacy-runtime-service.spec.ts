@@ -59,7 +59,7 @@ describe("LegacyRuntimeService", () => {
   });
 
   it("exposes both contracts through one owned browser adapter", () => {
-    const services = createBrowserWorkbenchServices();
+    const services = createBrowserWorkbenchServices(vi.fn());
 
     expect(services.motionResultPresentationService).toBe(
       services.legacyRuntimeService,

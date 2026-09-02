@@ -7,6 +7,7 @@ import { BrowserGvhmrComponentService } from "@/workbench/services/gvhmr/browser
 import { BrowserJobService } from "@/workbench/services/jobs/browser/browser-job-service";
 import { BrowserLegacyRuntimeService } from "@/workbench/services/runtime/browser/browser-legacy-runtime-service";
 import { BrowserSettingsService } from "@/workbench/services/settings/browser/browser-settings-service";
+import { StageModel } from "@/workbench/services/stage/common/stage-model";
 
 /**
  * Instantiate browser/Electron-renderer implementations and wire dependencies.
@@ -15,10 +16,15 @@ import { BrowserSettingsService } from "@/workbench/services/settings/browser/br
  * dependency-injection container. The graph is visible in constructor calls and
  * can grow into a richer registry only if the application actually needs one.
  */
-export function createBrowserWorkbenchServices(): IWorkbenchServices {
+export function createBrowserWorkbenchServices(
+  reportError: (error: unknown) => void,
+): IWorkbenchServices {
   const ownedServices = new DisposableStore();
   const commandService = ownedServices.add(new CommandService());
   const requestService = new BrowserRequestService();
+  // Register the model before any future renderer/legacy adapters so reverse
+  // disposal releases producers first and the state owner last.
+  const stageModelService = ownedServices.add(new StageModel(reportError));
   const jobService = ownedServices.add(new BrowserJobService(requestService));
   const legacyRuntimeService = ownedServices.add(
     new BrowserLegacyRuntimeService(),
@@ -33,6 +39,7 @@ export function createBrowserWorkbenchServices(): IWorkbenchServices {
     // One adapter exposes two narrow contracts but remains owned exactly once.
     motionResultPresentationService: legacyRuntimeService,
     settingsService: new BrowserSettingsService(requestService),
+    stageModelService,
     legacyRuntimeService,
     dispose: () => ownedServices.dispose(),
   };
