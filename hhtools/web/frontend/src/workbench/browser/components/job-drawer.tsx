@@ -14,13 +14,13 @@ import { cn } from "@/lib/utils";
 import { windowEventBus } from "@/platform/events/browser/window-event-bus";
 import type {
   JobConfigResponse,
-  JobHistoryCommandDetail,
   JobHistoryRecord,
   JobParameterValue,
   JobReplayCapability,
   JobSpecValidationResponse,
   JobStatus,
-} from "@/runtime/types";
+} from "@/domain/jobs/job";
+import type { JobHistoryCommandDetail } from "@/runtime/types";
 import type { WorkspaceLocale } from "@/workbench/common/workspace";
 
 const HEIGHT_KEY = "hhtools-desktop-job-panel-height-v1";

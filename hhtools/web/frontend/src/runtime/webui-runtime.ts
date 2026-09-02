@@ -183,6 +183,10 @@ import {
 } from "./robot-library-catalog";
 import { sortRobotLibrarySummaries } from "./robot-library-order";
 import type {
+  JobConfigResponse,
+  JobListResponse,
+} from "@/domain/jobs/job";
+import type {
   ApiClient,
   ApiGetResponse,
   ApiPostResponse,
@@ -199,9 +203,7 @@ import type {
   ComparisonPreset,
   GvhmrRuntimeStatus,
   GvhmrWeightSource,
-  JobConfigResponse,
   JobHistoryStateDetail,
-  JobListResponse,
   JobResponse,
   JobResult,
   JobStartResponse,

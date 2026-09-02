@@ -8,11 +8,12 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { JobHistoryRecord } from "../../src/domain/jobs/job";
+import type { HhAppBridge } from "../../src/runtime/types";
 import { PlaybackBar } from "../../src/workbench/browser/components/playback-bar";
 import { SearchField } from "../../src/workbench/browser/components/search-field";
 import { SidebarNavigation } from "../../src/workbench/browser/components/sidebar-navigation";
 import { JobDrawer } from "../../src/workbench/browser/components/job-drawer";
-import type { HhAppBridge, JobHistoryRecord } from "../../src/runtime/types";
 
 afterEach(() => {
   cleanup();

@@ -7,7 +7,7 @@ import type {
   JobReplayResponse,
   JobSpec,
   JobSpecValidationResponse,
-} from "@/runtime/types";
+} from "@/domain/jobs/job";
 
 /** Read-only projection intended for task-history views. */
 export interface JobHistorySnapshot {

@@ -1,16 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type {
+  JobHistoryRecord,
+  JobListResponse,
+  JobSpec,
+} from "../../src/domain/jobs/job";
+import type {
   IRequestService,
   JsonRequestOptions,
   UploadPart,
   UploadRequestOptions,
 } from "../../src/platform/request/common/request-service";
-import type {
-  JobHistoryRecord,
-  JobListResponse,
-  JobSpec,
-} from "../../src/runtime/types";
 import { BrowserJobService } from "../../src/workbench/services/jobs/browser/browser-job-service";
 import { JobFailedError } from "../../src/workbench/services/jobs/common/job-service";
 

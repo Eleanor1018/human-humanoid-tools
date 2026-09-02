@@ -26,8 +26,6 @@ const LEGACY_RUNTIME_TYPE_CONSUMERS = [
   "workbench/browser/components/workspace-settings-dialog.tsx",
   "workbench/browser/use-video-batch.ts",
   "workbench/browser/workbench.tsx",
-  "workbench/services/jobs/browser/browser-job-service.ts",
-  "workbench/services/jobs/common/job-service.ts",
   "workbench/services/settings/browser/browser-settings-service.ts",
   "workbench/services/settings/common/settings-service.ts",
 ];

@@ -1,6 +1,5 @@
 import { Emitter } from "@/base/common/event";
 import { toDisposable, type IDisposable } from "@/base/common/disposable";
-import type { IRequestService } from "@/platform/request/common/request-service";
 import type {
   JobCliResponse,
   JobConfigResponse,
@@ -8,7 +7,8 @@ import type {
   JobReplayResponse,
   JobSpec,
   JobSpecValidationResponse,
-} from "@/runtime/types";
+} from "@/domain/jobs/job";
+import type { IRequestService } from "@/platform/request/common/request-service";
 import {
   JobFailedError,
   type IJobService,
