@@ -68,7 +68,7 @@ _log = logging.getLogger(__name__)
 
 # Bump when static/ front-end behaviour changes.  Injected into ``index.html``
 # at serve time so collaborators only need to pull + restart (no triple-sync).
-UI_BUILD_ID = "20260830-r2r-motion-boundary"
+UI_BUILD_ID = "20260902-react-workbench"
 
 _UPLOAD_CHUNK_BYTES = 1024 * 1024
 # These are application-level resource controls, not transport tuning knobs.

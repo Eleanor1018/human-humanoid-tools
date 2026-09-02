@@ -1771,5 +1771,5 @@ function bind() {
 if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", bind);
 else bind();
 
-// Mark this file as an ES module so Vite can load it after the Vue tree is mounted.
+// Mark this file as an ES module so Vite can load it after the React tree is mounted.
 export {};

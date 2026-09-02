@@ -305,7 +305,7 @@ export class GuidedTour {
     this.active = true;
     this.root?.classList.add("active");
     document.body.classList.add("tour-active");
-    // Panel visibility is reactive in Vue; mutating CSS classes here would be overwritten.
+    // Panel visibility is reactive in React; mutating CSS classes here would be overwritten.
     window.__hhPanelLayout?.revealBoth();
     this._showStep();
   }

@@ -3502,7 +3502,7 @@ function setLibrarySearch(value: string): void {
     renderLibrary();
     return;
   }
-  // Dispatching a real input event keeps the Vue SearchField v-model, its
+  // Dispatching a real input event keeps the React SearchField state, its
   // clear affordance, and the imperative library renderer in one state.
   input.value = value;
   input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -3638,7 +3638,7 @@ window.addEventListener("hhtools:workspace-locale-change", () => {
     renderRobotDetails(state.robot);
   }
   // Workflow nodes and blocked reasons are emitted by the imperative runtime,
-  // so republish them after Vue switches locale instead of leaving stale copy.
+  // so republish them after React switches locale instead of leaving stale copy.
   publishH2rWorkflowState();
   publishR2rWorkflowState();
   updateH2rCalibrationValidation();
@@ -9287,7 +9287,7 @@ async function verifyUiBuild() {
 (async function init() {
   wrapSelectDropdowns();
   installJobHistoryBridge();
-  // Vue owns panel dimensions and persistence; the runtime only consumes the resulting canvas size.
+  // React owns panel dimensions and persistence; the runtime only consumes the resulting canvas size.
   document.getElementById("lib-link-path")?.addEventListener("click", () => linkLibraryPath());
   await verifyUiBuild();
   await Promise.all([loadReferenceCatalog(), refreshLibrary(), refreshRobotList()]);

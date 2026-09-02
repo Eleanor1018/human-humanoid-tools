@@ -92,6 +92,26 @@ hhtools-desktop
 [`desktop/README.md` 的 Linux package 章节](desktop/README.md#linux-package)；`npm run dev`
 属于开发启动方式，不是最终用户的安装方式。
 
+### 前端开发
+
+WebUI 与 Electron GUI 共用 `hhtools/web/frontend` 中同一套 React + TypeScript renderer；
+Electron 专属能力通过带类型的 host service 暴露，不复制两套 UI 组件。源码按类似 VS Code 的
+职责分层组织：`base/` 放生命周期基础设施，`platform/` 放宿主与事件边界，`workbench/` 负责
+组合可复用面板、工作流与服务。Tailwind CSS 提供 token 和工具类，项目维护的 shadcn/ui
+基础组件位于 `src/components/ui`。
+
+```bash
+cd hhtools/web/frontend
+npm install
+npm run typecheck
+npm test
+npm run build
+```
+
+生产构建写入 `hhtools/web/static`，FastAPI 与 Electron 原样复用这份产物。现有 Three.js/IK
+工作流运行时暂时通过有明确说明的兼容服务加载；新的 UI 状态与组件应放在 React workbench，
+不要继续增加直接 DOM 操作。
+
 Web 后台任务默认不限制并发。共享服务器或显存紧张时，可以显式启用 FIFO 调度：
 
 ```bash
