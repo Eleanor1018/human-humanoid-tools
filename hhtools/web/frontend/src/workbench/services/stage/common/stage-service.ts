@@ -20,7 +20,9 @@ export const STAGE_LAYER_IDS = [
   "sourceEnvironment",
   "scaledSkeleton",
   "scaledEnvironment",
-  "resultRobot",
+  // The same target robot renders a static/calibration pose before it owns a
+  // retargeted trajectory, so naming it as only a result would be misleading.
+  "targetRobot",
 ] as const;
 
 export type StageLayerId = (typeof STAGE_LAYER_IDS)[number];

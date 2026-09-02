@@ -77,7 +77,7 @@ describe("StageModel", () => {
             visible: true,
             canToggle: true,
           },
-          resultRobot: { available: true, visible: true, canToggle: true },
+          targetRobot: { available: true, visible: true, canToggle: true },
         },
       },
     });
@@ -104,7 +104,7 @@ describe("StageModel", () => {
             visible: true,
             canToggle: true,
           },
-          resultRobot: { available: true, visible: true, canToggle: true },
+          targetRobot: { available: true, visible: true, canToggle: true },
         },
       },
     });
@@ -252,7 +252,7 @@ describe("StageModel", () => {
             canToggle: true,
           },
           sourceBody: { available: true, visible: true, canToggle: true },
-          resultRobot: { available: true, visible: true, canToggle: true },
+          targetRobot: { available: true, visible: true, canToggle: true },
         },
       },
     });
@@ -273,7 +273,7 @@ describe("StageModel", () => {
         canToggle: false,
       },
       sourceBody: { available: true, visible: false, canToggle: true },
-      resultRobot: { available: true, visible: true, canToggle: true },
+      targetRobot: { available: true, visible: true, canToggle: true },
     });
   });
 
@@ -283,7 +283,7 @@ describe("StageModel", () => {
     model.updateState({
       display: {
         layers: {
-          resultRobot: {
+          targetRobot: {
             available: true,
             visible: true,
             canToggle: false,
@@ -292,7 +292,7 @@ describe("StageModel", () => {
       },
     });
 
-    expect(model.state.display.layers.resultRobot).toEqual({
+    expect(model.state.display.layers.targetRobot).toEqual({
       available: true,
       visible: true,
       canToggle: false,
@@ -301,14 +301,14 @@ describe("StageModel", () => {
     const listener = vi.fn();
     model.onDidChangeState(listener);
     model.updateState({
-      display: { layers: { resultRobot: { canToggle: true } } },
+      display: { layers: { targetRobot: { canToggle: true } } },
     });
     model.updateState({
-      display: { layers: { resultRobot: { canToggle: true } } },
+      display: { layers: { targetRobot: { canToggle: true } } },
     });
 
     expect(listener).toHaveBeenCalledOnce();
-    expect(model.state.display.layers.resultRobot).toEqual({
+    expect(model.state.display.layers.targetRobot).toEqual({
       available: true,
       visible: true,
       canToggle: true,
