@@ -1,6 +1,6 @@
 import { ChevronLeft, ChevronRight } from "lucide-react";
 
-import type { WorkspaceLocale } from "@/runtime/types";
+import type { WorkspaceLocale } from "@/workbench/common/workspace";
 import { cn } from "@/lib/utils";
 
 interface WorkspaceDrawerHandleProps {

@@ -6,11 +6,16 @@
 
 import type {
   ComparisonPreset,
-  WorkspaceLocale,
-  WorkspacePanelId,
-  WorkspaceTheme,
   WorkflowId,
 } from './types'
+import {
+  WORKSPACE_LOCALES,
+  WORKSPACE_PANEL_IDS,
+  WORKSPACE_THEMES,
+  type WorkspaceLocale,
+  type WorkspacePanelId,
+  type WorkspaceTheme,
+} from '@/workbench/common/workspace'
 
 export interface WorkspacePreferences {
   activePanel: WorkspacePanelId
@@ -35,18 +40,10 @@ const DEFAULT_PREFERENCES: WorkspacePreferences = {
   },
 }
 
-const PANELS = new Set<WorkspacePanelId>([
-  'motion',
-  'robot-assets',
-  'video-to-motion',
-  'h2r',
-  'batch',
-  'r2r',
-  'dataset-viz',
-])
+const PANELS = new Set<WorkspacePanelId>(WORKSPACE_PANEL_IDS)
 const PRESETS = new Set<ComparisonPreset>(['source', 'target', 'result', 'overlay'])
-const LOCALES = new Set<WorkspaceLocale>(['en', 'zh-CN'])
-const THEMES = new Set<WorkspaceTheme>(['light', 'dark'])
+const LOCALES = new Set<WorkspaceLocale>(WORKSPACE_LOCALES)
+const THEMES = new Set<WorkspaceTheme>(WORKSPACE_THEMES)
 
 function readSystemLanguageTags(): readonly string[] {
   if (typeof navigator === 'undefined') return []

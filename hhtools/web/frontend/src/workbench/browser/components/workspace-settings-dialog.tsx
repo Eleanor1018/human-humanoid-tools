@@ -13,8 +13,8 @@ import type {
   JobAdmissionSettings,
   JobAdmissionSnapshot,
   MotionLibrarySettingsSnapshot,
-  WorkspaceLocale,
 } from "@/runtime/types";
+import type { WorkspaceLocale } from "@/workbench/common/workspace";
 import type { GvhmrOptionalComponentState } from "@/workbench/services/gvhmr/common/gvhmr-component-service";
 
 interface WorkspaceSettingsDialogProps {

@@ -1,4 +1,4 @@
-import type { WorkspaceLocale } from "@/runtime/types";
+import type { WorkspaceLocale } from "@/workbench/common/workspace";
 import {
   Dialog,
   DialogContent,

@@ -1,4 +1,7 @@
-import type { WorkspaceLocale, WorkspacePanelId } from "@/runtime/types";
+import type {
+  WorkspaceLocale,
+  WorkspacePanelId,
+} from "@/workbench/common/workspace";
 import { cn } from "@/lib/utils";
 
 interface NavigationItem {

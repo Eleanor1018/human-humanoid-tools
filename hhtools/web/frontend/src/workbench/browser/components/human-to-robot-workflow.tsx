@@ -4,7 +4,10 @@ import { CalibrationEditorControls } from "./calibration-editor-controls";
 import { MotionPickerDialog } from "./motion-picker-dialog";
 import { ResultEvaluationPanel } from "./result-evaluation-panel";
 import { WorkflowPipeline } from "./workflow-pipeline";
-import type { WorkspaceLocale, WorkspacePanelId } from "@/runtime/types";
+import type {
+  WorkspaceLocale,
+  WorkspacePanelId,
+} from "@/workbench/common/workspace";
 import { useLocaleText } from "@/hooks/use-locale-text";
 
 /**

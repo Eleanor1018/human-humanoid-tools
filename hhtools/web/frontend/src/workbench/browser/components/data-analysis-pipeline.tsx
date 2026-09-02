@@ -2,7 +2,8 @@ import { useMemo, useState } from "react";
 
 import { useLocaleText } from "@/hooks/use-locale-text";
 import { useWindowEvent } from "@/hooks/use-window-event";
-import type { DataAnalysisStateDetail, WorkspaceLocale } from "@/runtime/types";
+import type { DataAnalysisStateDetail } from "@/runtime/types";
+import type { WorkspaceLocale } from "@/workbench/common/workspace";
 import { PipelineNav, type PipelineNode } from "./pipeline-nav";
 
 const initialState: DataAnalysisStateDetail = {

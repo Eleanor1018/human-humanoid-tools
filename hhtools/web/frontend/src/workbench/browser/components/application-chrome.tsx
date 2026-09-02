@@ -11,7 +11,7 @@ import type {
   WorkspaceLocale,
   WorkspacePanelId,
   WorkspaceTheme,
-} from "@/runtime/types";
+} from "@/workbench/common/workspace";
 import { cn } from "@/lib/utils";
 
 interface ApplicationChromeProps {

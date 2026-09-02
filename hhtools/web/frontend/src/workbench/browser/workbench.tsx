@@ -32,10 +32,12 @@ import type {
   JobAdmissionSettings,
   JobAdmissionSnapshot,
   MotionLibrarySettingsSnapshot,
+} from "@/runtime/types";
+import type {
   WorkspaceLocale,
   WorkspacePanelId,
   WorkspaceTheme,
-} from "@/runtime/types";
+} from "@/workbench/common/workspace";
 import {
   loadWorkspacePreferences,
   updateWorkspacePreferences,

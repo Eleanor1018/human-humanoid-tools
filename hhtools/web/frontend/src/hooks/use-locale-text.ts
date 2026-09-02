@@ -1,6 +1,6 @@
 import { useCallback } from "react";
 
-import type { WorkspaceLocale } from "@/runtime/types";
+import type { WorkspaceLocale } from "@/workbench/common/workspace";
 
 export type LocaleText = (english: string, chinese: string) => string;
 

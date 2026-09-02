@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 
 import { useLocaleText } from "@/hooks/use-locale-text";
+import type { MotionCategory } from "@/runtime/types";
 import type {
-  MotionCategory,
   WorkspaceLocale,
   WorkspacePanelId,
-} from "@/runtime/types";
+} from "@/workbench/common/workspace";
 import { MotionPickerDialog } from "./motion-picker-dialog";
 import { SearchField } from "./search-field";
 import type { VideoBatchModel, VideoBatchStatus } from "../use-video-batch";

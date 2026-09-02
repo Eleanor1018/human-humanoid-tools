@@ -6,9 +6,9 @@ import { windowEventBus } from "@/platform/events/browser/window-event-bus";
 import type {
   ComparisonPreset,
   ResultDiagnostics,
-  WorkspaceLocale,
   WorkflowId,
 } from "@/runtime/types";
+import type { WorkspaceLocale } from "@/workbench/common/workspace";
 import { loadWorkspacePreferences } from "@/runtime/workspace-preferences";
 import { cn } from "@/lib/utils";
 

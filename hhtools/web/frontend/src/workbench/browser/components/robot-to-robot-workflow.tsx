@@ -1,7 +1,10 @@
 import { useState } from "react";
 
 import { useLocaleText } from "@/hooks/use-locale-text";
-import type { WorkspaceLocale, WorkspacePanelId } from "@/runtime/types";
+import type {
+  WorkspaceLocale,
+  WorkspacePanelId,
+} from "@/workbench/common/workspace";
 import { CalibrationEditorControls } from "./calibration-editor-controls";
 import { MotionPickerDialog } from "./motion-picker-dialog";
 import { ResultEvaluationPanel } from "./result-evaluation-panel";

@@ -2,10 +2,8 @@ import { useState } from "react";
 
 import { useLocaleText } from "@/hooks/use-locale-text";
 import { useWindowEvent } from "@/hooks/use-window-event";
-import type {
-  MotionLibrarySettingsSnapshot,
-  WorkspaceLocale,
-} from "@/runtime/types";
+import type { MotionLibrarySettingsSnapshot } from "@/runtime/types";
+import type { WorkspaceLocale } from "@/workbench/common/workspace";
 import { SearchField } from "./search-field";
 
 type MotionUploadProfile = "mimic" | "intermimic" | "meshmimic";

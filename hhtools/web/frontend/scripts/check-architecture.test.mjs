@@ -147,16 +147,57 @@ test("legacy runtime edges require an exact allowlist entry", (t) => {
   assert.deepEqual(stale.staleImportAllowlist, [allowlistEntry]);
 });
 
-test("legacy runtime cannot create a cycle back into the workbench", (t) => {
+test("legacy runtime uses workbench contracts only through an exact allowlist", (t) => {
+  const projectRoot = createProject(t, {
+    "src/workbench/common/workspace.ts": "export type Panel = 'motion';",
+    "src/runtime/contracts.ts":
+      'import type { Panel } from "@/workbench/common/workspace"; export type { Panel };',
+  });
+  const allowlistEntry = {
+    rule: "legacy-imports-workbench",
+    source: "runtime/contracts.ts",
+    target: "workbench/common/workspace.ts",
+    reason: "Temporary type-extraction seam.",
+  };
+
+  assert.equal(audit(projectRoot).ok, false);
+  assert.equal(
+    audit(projectRoot, { importAllowlist: [allowlistEntry] }).ok,
+    true,
+  );
+
+  fs.writeFileSync(path.join(projectRoot, "src/runtime/contracts.ts"), "export {};\n");
+  const stale = audit(projectRoot, { importAllowlist: [allowlistEntry] });
+  assert.equal(stale.ok, false);
+  assert.deepEqual(stale.staleImportAllowlist, [allowlistEntry]);
+});
+
+test("legacy runtime cannot reach workbench implementations or reverse common", (t) => {
   const projectRoot = createProject(t, {
     "src/workbench/services/jobs/common/job.ts": "export const job = 1;",
-    "src/runtime/legacy.ts":
+    "src/workbench/contrib/video/browser/view.ts": "export const view = 1;",
+    "src/workbench/browser/shell.ts": "export const shell = 1;",
+    "src/workbench/common/bad.ts":
+      'import { legacy } from "@/runtime/legacy"; export { legacy };',
+    "src/runtime/legacy.ts": "export const legacy = 1;",
+    "src/runtime/service.ts":
       'import { job } from "@/workbench/services/jobs/common/job"; export { job };',
+    "src/runtime/contribution.ts":
+      'import { view } from "@/workbench/contrib/video/browser/view"; export { view };',
+    "src/runtime/browser.ts":
+      'import { shell } from "@/workbench/browser/shell"; export { shell };',
   });
 
   const result = audit(projectRoot);
-  assert.equal(result.unexpectedImports.length, 1);
-  assert.equal(result.unexpectedImports[0].rule, "legacy-imports-workbench");
+  assert.deepEqual(
+    result.unexpectedImports.map(({ rule, source }) => [rule, source]),
+    [
+      ["legacy-imports-workbench", "runtime/browser.ts"],
+      ["legacy-imports-workbench", "runtime/contribution.ts"],
+      ["legacy-imports-workbench", "runtime/service.ts"],
+      ["legacy-runtime-import", "workbench/common/bad.ts"],
+    ],
+  );
 });
 
 test("detects real global transport APIs without matching text or shadowed names", (t) => {

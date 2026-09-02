@@ -12,28 +12,17 @@ import ts from "typescript";
  */
 const LEGACY_RUNTIME_TYPE_CONSUMERS = [
   "env.d.ts",
-  "hooks/use-locale-text.ts",
-  "workbench/browser/components/about-dialog.tsx",
-  "workbench/browser/components/application-chrome.tsx",
   "workbench/browser/components/batch-workflow.tsx",
   "workbench/browser/components/calibration-editor-controls.tsx",
-  "workbench/browser/components/data-analysis-panel.tsx",
   "workbench/browser/components/data-analysis-pipeline.tsx",
-  "workbench/browser/components/human-to-robot-workflow.tsx",
   "workbench/browser/components/job-drawer.tsx",
   "workbench/browser/components/motion-panel.tsx",
   "workbench/browser/components/motion-picker-dialog.tsx",
   "workbench/browser/components/pipeline-nav.tsx",
   "workbench/browser/components/playback-bar.tsx",
   "workbench/browser/components/result-evaluation-panel.tsx",
-  "workbench/browser/components/robot-assets-panel.tsx",
-  "workbench/browser/components/robot-to-robot-workflow.tsx",
-  "workbench/browser/components/sidebar-navigation.tsx",
-  "workbench/browser/components/three-stage.tsx",
-  "workbench/browser/components/video-to-motion-panel.tsx",
   "workbench/browser/components/video-to-motion-pipeline.tsx",
   "workbench/browser/components/workflow-pipeline.tsx",
-  "workbench/browser/components/workspace-drawer-handle.tsx",
   "workbench/browser/components/workspace-settings-dialog.tsx",
   "workbench/browser/use-video-batch.ts",
   "workbench/browser/workbench.tsx",
@@ -76,6 +65,16 @@ export const LEGACY_IMPORT_ALLOWLIST = [
     source: "workbench/services/runtime/browser/browser-legacy-runtime-service.ts",
     target,
     reason: "This adapter is the intentional dynamic-import boundary around the legacy runtime.",
+  })),
+  ...[
+    "runtime/command-registry.ts",
+    "runtime/types.ts",
+    "runtime/workspace-preferences.ts",
+  ].map((source) => ({
+    rule: "legacy-imports-workbench",
+    source,
+    target: "workbench/common/workspace.ts",
+    reason: "Legacy runtime modules consume the extracted workspace identity contract until they are removed.",
   })),
 ];
 
@@ -170,8 +169,8 @@ function importRuleFor(source, target) {
     return "legacy-runtime-import";
   }
 
-  // The compatibility runtime may consume lower-level helpers while it is
-  // dismantled, but it must never reach back into its React replacement.
+  // The compatibility runtime must not acquire new dependencies on its React
+  // replacement. Even common-contract migration seams stay exact and reviewable.
   if (sourceLayer === "legacy-runtime" && targetLayer.startsWith("workbench-")) {
     return "legacy-imports-workbench";
   }

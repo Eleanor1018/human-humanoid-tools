@@ -20,8 +20,8 @@ import type {
   JobReplayCapability,
   JobSpecValidationResponse,
   JobStatus,
-  WorkspaceLocale,
 } from "@/runtime/types";
+import type { WorkspaceLocale } from "@/workbench/common/workspace";
 
 const HEIGHT_KEY = "hhtools-desktop-job-panel-height-v1";
 const MIN_HEIGHT = 180;

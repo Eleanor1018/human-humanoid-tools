@@ -1,7 +1,7 @@
 import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
 
 import { useLocaleText } from "@/hooks/use-locale-text";
-import type { WorkspaceLocale } from "@/runtime/types";
+import type { WorkspaceLocale } from "@/workbench/common/workspace";
 import { PlaybackBar } from "./playback-bar";
 
 /** Stable DOM contract consumed by the Three.js stage compatibility service. */

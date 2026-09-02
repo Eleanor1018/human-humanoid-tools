@@ -9,11 +9,13 @@
 import type {
   ComparisonPreset,
   ImportCommandTarget,
+  WorkflowId,
+} from './types'
+import type {
   WorkspaceLocale,
   WorkspacePanelId,
   WorkspaceTheme,
-  WorkflowId,
-} from './types'
+} from '@/workbench/common/workspace'
 
 export type DesktopMenuId = 'file' | 'workflows' | 'analysis' | 'settings' | 'help'
 export type DesktopSubmenuId = 'file-import' | 'file-export'

@@ -5,8 +5,8 @@ import type {
   LibraryAssetKind,
   LibraryEntry,
   MotionCategory,
-  WorkspaceLocale,
 } from "@/runtime/types";
+import type { WorkspaceLocale } from "@/workbench/common/workspace";
 import { cn } from "@/lib/utils";
 
 type MotionPickerMode = "load" | "basket";

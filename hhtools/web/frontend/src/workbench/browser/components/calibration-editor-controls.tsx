@@ -7,9 +7,9 @@ import type {
   CalibrationEditorCommand,
   CalibrationEditorStateDetail,
   CalibrationJointRegion,
-  WorkspaceLocale,
   WorkflowId,
 } from "@/runtime/types";
+import type { WorkspaceLocale } from "@/workbench/common/workspace";
 import { cn } from "@/lib/utils";
 
 function initialState(workflow: WorkflowId): CalibrationEditorStateDetail {

@@ -7,8 +7,8 @@ import type {
   LibraryEntry,
   MotionPayload,
   UploadFile,
-  WorkspaceLocale,
 } from "@/runtime/types";
+import type { WorkspaceLocale } from "@/workbench/common/workspace";
 import type { JobStatusResponse } from "@/workbench/services/jobs/common/job-service";
 import { useWorkbenchServices } from "./workbench-service-context";
 

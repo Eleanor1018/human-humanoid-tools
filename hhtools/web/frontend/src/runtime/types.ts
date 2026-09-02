@@ -6,6 +6,7 @@
  */
 
 import type * as THREE from 'three'
+import type { WorkspacePanelId } from '@/workbench/common/workspace'
 
 // ---------------------------------------------------------------------------
 // Geometry, scene, and motion payloads returned by FastAPI.
@@ -102,20 +103,7 @@ export interface PlaybackUiState {
 
 export type PlaybackAction = 'toggle' | 'seek' | 'speed' | 'loop'
 
-export type WorkspacePanelId =
-  | 'motion'
-  | 'robot-assets'
-  | 'video-to-motion'
-  | 'h2r'
-  | 'batch'
-  | 'r2r'
-  | 'dataset-viz'
-
 export type WorkflowId = 'h2r' | 'r2r'
-
-export type WorkspaceLocale = 'en' | 'zh-CN'
-
-export type WorkspaceTheme = 'light' | 'dark'
 
 export type ComparisonPreset = 'source' | 'target' | 'result' | 'overlay'
 

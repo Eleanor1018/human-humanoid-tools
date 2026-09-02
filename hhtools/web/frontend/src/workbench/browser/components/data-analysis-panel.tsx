@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 
 import { useLocaleText } from "@/hooks/use-locale-text";
-import type { WorkspaceLocale } from "@/runtime/types";
+import type { WorkspaceLocale } from "@/workbench/common/workspace";
 import { DataAnalysisPipeline } from "./data-analysis-pipeline";
 
 /** Dataset analysis workbench contribution with stable canvas/runtime mounts. */

@@ -1,7 +1,7 @@
 import { useState } from "react";
 
 import { useLocaleText } from "@/hooks/use-locale-text";
-import type { WorkspaceLocale } from "@/runtime/types";
+import type { WorkspaceLocale } from "@/workbench/common/workspace";
 import { SearchField } from "./search-field";
 
 export function RobotAssetsPanel({ locale }: { locale: WorkspaceLocale }) {
