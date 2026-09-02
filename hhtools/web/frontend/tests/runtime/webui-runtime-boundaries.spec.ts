@@ -10,6 +10,27 @@ describe("legacy runtime ownership boundaries", () => {
     );
   });
 
+  it("keeps both Stage HUDs aligned with the active renderer owner", () => {
+    const start = runtimeSource.indexOf("function revealStage");
+    const end = runtimeSource.indexOf(
+      'window.addEventListener("hhtools:playback-command"',
+      start,
+    );
+    const reveal = runtimeSource.slice(start, end);
+
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    expect(reveal).toContain(
+      '.getElementById("view-hud")\n    ?.classList.toggle("hidden", !h2rOwnsStage)',
+    );
+    expect(reveal).toContain(
+      '.getElementById("view-hud-r2r")\n    ?.classList.toggle("hidden", h2rOwnsStage)',
+    );
+    expect(reveal).not.toContain(
+      'getElementById("view-hud").classList.remove("hidden")',
+    );
+  });
+
   it("lets the React-owned V2M batch dropzone handle its own files", () => {
     const start = runtimeSource.indexOf(
       'setupDropzone(\n  document.getElementById("stage")',

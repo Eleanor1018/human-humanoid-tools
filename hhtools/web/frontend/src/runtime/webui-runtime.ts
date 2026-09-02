@@ -2543,7 +2543,15 @@ const player: PlayerController = {
 function revealStage(): void {
   _setPlaybarVisible(true);
   document.getElementById("view-reset-btn")?.classList.remove("hidden");
-  document.getElementById("view-hud").classList.remove("hidden");
+  // Resource commits can reveal the shared canvas from either workflow. Keep
+  // both HUDs aligned with the ownership flag instead of reviving H2R controls
+  // while an R2R projection is active.
+  document
+    .getElementById("view-hud")
+    ?.classList.toggle("hidden", !h2rOwnsStage);
+  document
+    .getElementById("view-hud-r2r")
+    ?.classList.toggle("hidden", h2rOwnsStage);
   document.getElementById("stage-empty").style.display = "none";
 }
 
