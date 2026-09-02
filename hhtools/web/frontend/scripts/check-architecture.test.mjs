@@ -102,6 +102,40 @@ test("only entrypoints load contributions and contributions cannot reach into th
   );
 });
 
+test("contributions share only their explicit common contracts", (t) => {
+  const projectRoot = createProject(t, {
+    "src/workbench/contrib/video/common/video.ts":
+      "export type VideoContract = { ready: boolean };",
+    "src/workbench/contrib/video/browser/view.ts":
+      "export const videoView = 1;",
+    "src/workbench/contrib/video/browser/controller.ts":
+      "export const videoController = 1;",
+    "src/workbench/contrib/video/browser/own.ts":
+      'export { videoController } from "./controller";',
+    "src/workbench/contrib/analysis/browser/good.ts":
+      'export type { VideoContract } from "@/workbench/contrib/video/common/video";',
+    "src/workbench/contrib/analysis/browser/bad-view.ts":
+      'export { videoView } from "@/workbench/contrib/video/browser/view";',
+    "src/workbench/contrib/analysis/browser/bad-controller.ts":
+      'export { videoController } from "@/workbench/contrib/video/browser/controller";',
+  });
+
+  const result = audit(projectRoot);
+  assert.deepEqual(
+    result.unexpectedImports.map(({ rule, source }) => [rule, source]),
+    [
+      [
+        "cross-contribution-internal-import",
+        "workbench/contrib/analysis/browser/bad-controller.ts",
+      ],
+      [
+        "cross-contribution-internal-import",
+        "workbench/contrib/analysis/browser/bad-view.ts",
+      ],
+    ],
+  );
+});
+
 test("domain and workbench common contracts stay below services", (t) => {
   const projectRoot = createProject(t, {
     "src/base/common/value.ts": "export const value = 1;",

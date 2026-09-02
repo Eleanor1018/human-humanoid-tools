@@ -157,6 +157,17 @@ function hasPathSegment(file, segment) {
   return file.split("/").includes(segment);
 }
 
+function contributionPath(file) {
+  const segments = file.split("/");
+  if (segments[0] !== "workbench" || segments[1] !== "contrib") {
+    return undefined;
+  }
+  return {
+    feature: segments[2],
+    area: segments[3],
+  };
+}
+
 function importRuleFor(source, target) {
   const sourceLayer = classifyLayer(source);
   const targetLayer = classifyLayer(target);
@@ -182,6 +193,19 @@ function importRuleFor(source, target) {
     sourceLayer !== "entrypoint"
   ) {
     return "contribution-imported-outside-entrypoint";
+  }
+
+  // Features may collaborate through another contribution's deliberately
+  // public common contract, never through its browser/controller internals.
+  const sourceContribution = contributionPath(source);
+  const targetContribution = contributionPath(target);
+  if (
+    sourceContribution &&
+    targetContribution &&
+    sourceContribution.feature !== targetContribution.feature &&
+    targetContribution.area !== "common"
+  ) {
+    return "cross-contribution-internal-import";
   }
 
   // Nothing inside the product may depend back on its composition root.
