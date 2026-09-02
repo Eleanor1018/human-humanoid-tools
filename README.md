@@ -32,29 +32,66 @@ We welcome suggestions and ideas — please open an issue or discussion anytime.
 
 ---
 
-## Quick start
+## Install and run
+
+hhtools has three user-facing modes. They share the same motion, robot, and retargeting core, but
+their installation and launch paths are intentionally separate:
+
+| Mode | Best for | Launch |
+|------|----------|--------|
+| **Terminal (CLI/TUI workflow)** | Batch jobs, servers, SSH, and automation | `uv run hhtools ...` |
+| **WebUI** | Browser-based visualization and interactive workflows | `uv run hhtools web` |
+| **Desktop GUI (`.deb`)** | Standalone Ubuntu desktop use | Application menu or `hhtools-desktop` |
+
+### Source checkout: Terminal or WebUI
+
+Clone the repository and use a uv-managed Python 3.12 environment:
 
 ```bash
 git clone https://github.com/Roboparty/human-humanoid-tools.git
 cd human-humanoid-tools
 curl -LsSf https://astral.sh/uv/install.sh | sh   # if needed
-uv sync --extra all
+uv python install 3.12
+```
+
+For the terminal command set:
+
+```bash
+uv sync --locked --managed-python --python 3.12
+uv run hhtools --help
+```
+
+Install only the extras required by your workflow. To provision every optional terminal format,
+viewer, robot, and retargeting integration, use:
+
+```bash
+uv sync --locked --managed-python --python 3.12 --extra all
+```
+
+For the browser WebUI:
+
+```bash
+uv sync --locked --managed-python --python 3.12 --extra web --extra retarget
 uv run hhtools web
 ```
 
-### Human-Humanoid Tools desktop app
+Open `http://127.0.0.1:8009`. For a preview-only WebUI without Newton IK, omit `--extra retarget`.
+If a required WebUI package is absent, startup exits with the missing package names and the exact
+recovery command instead of a Python import traceback.
 
-The desktop shell reuses the same FastAPI routes and three.js UI without a parallel renderer.
+### Standalone Ubuntu desktop GUI (`.deb`)
 
-```powershell
-cd desktop
-npm install
-npm run dev
+The Debian package includes Electron, the WebUI, and an isolated Python runtime. End users do not
+need to install Python, uv, Node.js, or the repository source:
+
+```bash
+sudo apt install ./hhtools-0.1.0-x64.deb
+hhtools-desktop
 ```
 
-See [`desktop/README.md`](desktop/README.md) for runtime overrides, tests, and Windows packaging.
-
-Open `http://127.0.0.1:8009`.
+You can also launch **Human-Humanoid Tools** from the application menu. See the
+[`desktop/README.md` Linux package section](desktop/README.md#linux-package) to build the `.deb`;
+`npm run dev` is the development path, not the end-user installation path.
 
 Web jobs are unlimited by default. To enable FIFO admission control on a shared or
 memory-constrained GPU, set positive concurrency and an optional queue capacity:

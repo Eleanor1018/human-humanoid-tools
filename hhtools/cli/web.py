@@ -10,6 +10,8 @@ from pathlib import Path
 
 import typer
 
+from hhtools.web.dependencies import MissingWebDependenciesError
+
 app = typer.Typer(help="Launch the HTML web UI (Apple-styled three.js front-end).")
 
 
@@ -62,26 +64,21 @@ def launch(
     """Start the web UI on ``host:port`` and open a browser."""
     if ctx.invoked_subcommand is not None:
         return
-    try:
-        from hhtools.web.server import run_web
-    except ImportError as exc:
-        typer.echo(
-            "The web UI requires the optional extras. Install them with:\n"
-            "    uv sync --extra web --extra retarget\n"
-            "Retarget (Newton IK) also needs the NVIDIA ``newton`` package per upstream docs.\n"
-            "    (or: pip install 'hhtools[web,retarget]')"
-        )
-        raise typer.Exit(code=1) from exc
+    from hhtools.web.server import run_web
 
-    run_web(
-        source_root=source,
-        save_dir=save_dir,
-        cache_dir=cache,
-        host=host,
-        port=port,
-        max_running_jobs=max_running_jobs,
-        max_queued_jobs=max_queued_jobs,
-    )
+    try:
+        run_web(
+            source_root=source,
+            save_dir=save_dir,
+            cache_dir=cache,
+            host=host,
+            port=port,
+            max_running_jobs=max_running_jobs,
+            max_queued_jobs=max_queued_jobs,
+        )
+    except MissingWebDependenciesError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from None
 
 
 __all__ = ["app"]

@@ -6,6 +6,8 @@ import argparse
 import os
 from pathlib import Path
 
+from hhtools.web.dependencies import MissingWebDependenciesError
+
 
 def _non_negative_int(value: str) -> int:
     parsed = int(value)
@@ -53,16 +55,19 @@ def main(argv: list[str] | None = None) -> None:
     # Delay the heavier web imports until arguments and writable directories are valid.
     from hhtools.web.server import run_desktop_sidecar
 
-    run_desktop_sidecar(
-        source_root=args.source,
-        save_dir=args.save_dir,
-        cache_dir=args.cache,
-        host=args.host,
-        port=args.port,
-        session_secret=session_secret,
-        max_running_jobs=args.max_running_jobs,
-        max_queued_jobs=args.max_queued_jobs,
-    )
+    try:
+        run_desktop_sidecar(
+            source_root=args.source,
+            save_dir=args.save_dir,
+            cache_dir=args.cache,
+            host=args.host,
+            port=args.port,
+            session_secret=session_secret,
+            max_running_jobs=args.max_running_jobs,
+            max_queued_jobs=args.max_queued_jobs,
+        )
+    except MissingWebDependenciesError as exc:
+        parser.exit(status=1, message=f"{exc}\n")
 
 
 if __name__ == "__main__":

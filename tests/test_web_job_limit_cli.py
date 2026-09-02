@@ -7,6 +7,7 @@ from typer.testing import CliRunner
 
 from hhtools.cli import desktop_sidecar, web
 from hhtools.web import server
+from hhtools.web.dependencies import MissingWebDependenciesError
 
 
 def test_web_cli_defers_default_job_settings_to_persistent_backend_config(monkeypatch) -> None:
@@ -62,6 +63,20 @@ def test_web_cli_rejects_negative_job_limits() -> None:
     result = CliRunner().invoke(web.app, ["--max-running-jobs", "-1"])
 
     assert result.exit_code == 2
+
+
+def test_web_cli_reports_missing_runtime_dependencies(monkeypatch) -> None:
+    def fail_to_start(**_kwargs) -> None:
+        raise MissingWebDependenciesError(("uvicorn", "python-multipart"))
+
+    monkeypatch.setattr(server, "run_web", fail_to_start)
+
+    result = CliRunner().invoke(web.app, [])
+
+    assert result.exit_code == 1
+    assert "uvicorn, python-multipart" in result.output
+    assert "uv sync --locked --extra web" in result.output
+    assert "ModuleNotFoundError" not in result.output
 
 
 def _desktop_args(tmp_path: Path) -> list[str]:
@@ -120,3 +135,23 @@ def test_desktop_sidecar_rejects_negative_job_limit(tmp_path: Path) -> None:
         desktop_sidecar.main([*_desktop_args(tmp_path), "--max-queued-jobs", "-1"])
 
     assert error.value.code == 2
+
+
+def test_desktop_sidecar_reports_missing_runtime_dependencies(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    def fail_to_start(**_kwargs) -> None:
+        raise MissingWebDependenciesError(("uvicorn",))
+
+    monkeypatch.setattr(server, "run_desktop_sidecar", fail_to_start)
+
+    with pytest.raises(SystemExit) as error:
+        desktop_sidecar.main(_desktop_args(tmp_path))
+
+    assert error.value.code == 1
+    captured = capsys.readouterr()
+    assert "uvicorn" in captured.err
+    assert "uv sync --locked --extra web" in captured.err
+    assert "ModuleNotFoundError" not in captured.err
