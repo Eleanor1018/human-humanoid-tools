@@ -774,9 +774,6 @@ export interface HhAppBridge {
       appendTo?: string
       libraryFolderLabel?: string
       userSourceRoot?: string
-      staticCam?: boolean
-      fMm?: number
-      checkpoint?: UploadFile
     },
     onProgress?: (progress: number | null, loaded: number, total: number) => void,
   ) => Promise<

@@ -243,9 +243,6 @@ interface UploadFilesXhrOptions {
   appendTo?: string;
   libraryFolderLabel?: string;
   userSourceRoot?: string;
-  staticCam?: boolean;
-  fMm?: number;
-  checkpoint?: UploadFile;
 }
 
 type UploadFilesXhrResponse<Url extends string> =
@@ -664,23 +661,17 @@ function uploadFilesXHR<Url extends string>(
     appendTo,
     libraryFolderLabel,
     userSourceRoot,
-    staticCam,
-    fMm,
-    checkpoint,
   }: UploadFilesXhrOptions = {},
   onUploadProgress?: ProgressCallback,
 ): Promise<UploadFilesXhrResponse<Url>> {
   return new Promise<UploadFilesXhrResponse<Url>>((resolve, reject) => {
     const fd = new FormData();
     for (const f of files) fd.append("files", f, f._relpath || f.name);
-    if (checkpoint) fd.append("checkpoint", checkpoint, checkpoint.name);
     const qs = new URLSearchParams();
     if (profile) qs.set("profile", profile);
     if (appendTo) qs.set("append_to", appendTo);
     if (libraryFolderLabel) qs.set("library_folder_label", libraryFolderLabel);
     if (userSourceRoot) qs.set("user_source_root", userSourceRoot);
-    if (staticCam !== undefined) qs.set("static_cam", String(staticCam));
-    if (fMm !== undefined) qs.set("f_mm", String(fMm));
     const q = qs.toString() ? `?${qs.toString()}` : "";
     const xhr = new XMLHttpRequest();
     xhr.upload.onprogress = (e) => {
