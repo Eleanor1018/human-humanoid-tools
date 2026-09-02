@@ -116,15 +116,15 @@ function updatePlayback(
   );
   // Unlike the numeric fields, `null` is a meaningful update here: it clears
   // preview metadata after a full-length result replaces a preview.
-  const rawSourceDuration =
-    Object.hasOwn(patch, "sourceDuration") &&
-    patch.sourceDuration !== undefined
-    ? patch.sourceDuration
-    : current.sourceDuration;
-  const sourceDuration =
-    rawSourceDuration === null
+  const rawPreviewSourceDuration =
+    Object.hasOwn(patch, "previewSourceDuration") &&
+    patch.previewSourceDuration !== undefined
+    ? patch.previewSourceDuration
+    : current.previewSourceDuration;
+  const previewSourceDuration =
+    rawPreviewSourceDuration === null
       ? null
-      : Math.max(0, finiteOr(rawSourceDuration, duration));
+      : Math.max(0, finiteOr(rawPreviewSourceDuration, duration));
   const speed = Math.min(
     MAX_PLAYBACK_SPEED,
     Math.max(
@@ -141,7 +141,7 @@ function updatePlayback(
     loop: patch.loop ?? current.loop,
     currentTime,
     duration,
-    sourceDuration,
+    previewSourceDuration,
     speed,
   };
   return playbackEquals(current, next) ? current : Object.freeze(next);
@@ -158,7 +158,7 @@ function playbackEquals(
     left.loop === right.loop &&
     left.currentTime === right.currentTime &&
     left.duration === right.duration &&
-    left.sourceDuration === right.sourceDuration &&
+    left.previewSourceDuration === right.previewSourceDuration &&
     left.speed === right.speed
   );
 }
@@ -189,7 +189,7 @@ function createInitialState(): StageState {
     loop: true,
     currentTime: 0,
     duration: 0,
-    sourceDuration: null,
+    previewSourceDuration: null,
     speed: 1,
   });
   const display: StageDisplayState = Object.freeze({

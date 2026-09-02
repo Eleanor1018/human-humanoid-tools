@@ -1,35 +1,52 @@
-import { useState } from "react";
-
-import { useWindowEvent } from "@/platform/events/browser/use-window-event";
 import { windowEventBus } from "@/platform/events/browser/window-event-bus";
-import type { PlaybackAction, PlaybackUiState } from "@/runtime/types";
 import { cn } from "@/lib/utils";
+import type { WorkspaceLocale } from "@/workbench/common/workspace";
+import { useStageModelState } from "@/workbench/services/stage/browser/use-stage-model-state";
+import {
+  getStagePlaybackProgress,
+  type IStageModelService,
+  type StagePlaybackState,
+} from "@/workbench/services/stage/common/stage-service";
 
-const initialState: PlaybackUiState = {
-  visible: false,
-  active: false,
-  playing: false,
-  loop: true,
-  currentTime: 0,
-  duration: 0,
-  sourceDuration: null,
-  progress: 0,
-  speed: 1,
-  label: "0.00 / 0.00 s",
-};
+type PlaybackCommand =
+  WindowEventMap["hhtools:playback-command"]["detail"];
 
-export function PlaybackBar() {
-  const [state, setState] = useState(initialState);
-  useWindowEvent("hhtools:playback-state", (event) => {
-    setState((current) => ({ ...current, ...event.detail }));
-  });
+function formatPlaybackLabel(
+  playback: StagePlaybackState,
+  locale: WorkspaceLocale,
+): string {
+  let label = `${playback.currentTime.toFixed(2)} / ${playback.duration.toFixed(2)} s`;
+  if (
+    playback.previewSourceDuration !== null
+  ) {
+    const source = playback.previewSourceDuration.toFixed(1);
+    label +=
+      locale === "zh-CN"
+        ? `（预览，原片 ${source} s）`
+        : ` (preview; source ${source} s)`;
+  }
+  return label;
+}
 
-  const send = (action: PlaybackAction, value?: number): void => {
+export function PlaybackBar({
+  locale,
+  stageModelService,
+}: {
+  readonly locale: WorkspaceLocale;
+  readonly stageModelService: IStageModelService;
+}) {
+  const state = useStageModelState(stageModelService).playback;
+  const progress = getStagePlaybackProgress(state);
+  const label = formatPlaybackLabel(state, locale);
+
+  // Commands remain on the compatibility bridge until the Stage command
+  // contribution moves in a separate, reversible migration step.
+  const send = (action: PlaybackCommand["action"], value?: number): void => {
     windowEventBus.emit("hhtools:playback-command", { action, value });
   };
 
   return (
-    <div id="playbar" className="playbar" hidden={!state.visible}>
+    <div id="playbar" className="playbar" hidden={!state.controlsVisible}>
       <button
         id="play-btn"
         type="button"
@@ -45,14 +62,14 @@ export function PlaybackBar() {
         type="range"
         min="0"
         max="100"
-        value={state.progress * 100}
+        value={progress * 100}
         aria-label="播放进度"
         onChange={(event) =>
           send("seek", Number(event.currentTarget.value) / 100)
         }
       />
-      <span id="time-label" className="time-label" title={state.label}>
-        {state.label}
+      <span id="time-label" className="time-label" title={label}>
+        {label}
       </span>
       <span
         className="speed-ctrl"

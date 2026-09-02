@@ -30,7 +30,7 @@ describe("StageModel", () => {
         loop: true,
         currentTime: 0,
         duration: 0,
-        sourceDuration: null,
+        previewSourceDuration: null,
         speed: 1,
       },
       display: { empty: true, canResetView: false },
@@ -66,7 +66,7 @@ describe("StageModel", () => {
         playing: true,
         currentTime: 2,
         duration: 8,
-        sourceDuration: 12,
+        previewSourceDuration: 12,
       },
       display: {
         empty: false,
@@ -89,7 +89,7 @@ describe("StageModel", () => {
         playing: true,
         currentTime: 2,
         duration: 8,
-        sourceDuration: 12,
+        previewSourceDuration: 12,
       },
       display: {
         empty: false,
@@ -111,11 +111,11 @@ describe("StageModel", () => {
 
   it("can explicitly clear nullable preview duration metadata", () => {
     const { model } = createModel();
-    model.updateState({ playback: { sourceDuration: 12 } });
+    model.updateState({ playback: { previewSourceDuration: 12 } });
 
-    model.updateState({ playback: { sourceDuration: null } });
+    model.updateState({ playback: { previewSourceDuration: null } });
 
-    expect(model.state.playback.sourceDuration).toBeNull();
+    expect(model.state.playback.previewSourceDuration).toBeNull();
   });
 
   it("treats explicit undefined like an omitted optional update", () => {
@@ -124,20 +124,20 @@ describe("StageModel", () => {
     model.updateState({
       motionIdentity: { id: "motion-1", label: "Walk" },
       robotIdentity: { id: "robot-1", label: "G1" },
-      playback: { sourceDuration: 12 },
+      playback: { previewSourceDuration: 12 },
     });
     model.onDidChangeState(listener);
 
     model.updateState({
       motionIdentity: undefined,
       robotIdentity: undefined,
-      playback: { sourceDuration: undefined },
+      playback: { previewSourceDuration: undefined },
     });
 
     expect(listener).not.toHaveBeenCalled();
     expect(model.state.motionIdentity?.id).toBe("motion-1");
     expect(model.state.robotIdentity?.id).toBe("robot-1");
-    expect(model.state.playback.sourceDuration).toBe(12);
+    expect(model.state.playback.previewSourceDuration).toBe(12);
   });
 
   it("normalizes playback values and semantic display invariants", () => {
@@ -149,7 +149,7 @@ describe("StageModel", () => {
         playing: true,
         currentTime: 20,
         duration: 5,
-        sourceDuration: -2,
+        previewSourceDuration: -2,
         speed: Number.POSITIVE_INFINITY,
       },
       display: {
@@ -166,7 +166,7 @@ describe("StageModel", () => {
       playing: false,
       currentTime: 5,
       duration: 5,
-      sourceDuration: 0,
+      previewSourceDuration: 0,
       speed: 1,
     });
     expect(model.state.display.canResetView).toBe(false);

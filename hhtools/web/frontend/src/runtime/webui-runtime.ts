@@ -2378,10 +2378,14 @@ function publishPlaybackState(extra: Partial<PlaybackUiState> = {}): void {
   const src = state.motion || state.robotTrajectory;
   let label = `${player.t.toFixed(2)} / ${player.duration.toFixed(2)} s`;
   const sourceDuration = src?.duration ?? 0;
-  if (isPlaybackPreview(src) && sourceDuration > player.duration + 0.5) {
+  const previewSourceDuration =
+    isPlaybackPreview(src) && sourceDuration > player.duration + 0.5
+      ? sourceDuration
+      : null;
+  if (previewSourceDuration !== null) {
     label += runtimeText(
-      ` (preview; source ${sourceDuration.toFixed(1)} s)`,
-      `（预览，原片 ${sourceDuration.toFixed(1)} s）`,
+      ` (preview; source ${previewSourceDuration.toFixed(1)} s)`,
+      `（预览，原片 ${previewSourceDuration.toFixed(1)} s）`,
     );
   }
   window.dispatchEvent(new CustomEvent("hhtools:playback-state", {
@@ -2392,7 +2396,7 @@ function publishPlaybackState(extra: Partial<PlaybackUiState> = {}): void {
       loop: player.loop,
       currentTime: player.t,
       duration: player.duration,
-      sourceDuration: sourceDuration > 0 ? sourceDuration : null,
+      previewSourceDuration,
       progress: player.duration > 0 ? player.t / player.duration : 0,
       speed: player.speed,
       label,

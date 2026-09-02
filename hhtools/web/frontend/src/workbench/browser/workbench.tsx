@@ -101,6 +101,7 @@ export function Workbench({ panelContributions }: WorkbenchProps) {
     commandService,
     gvhmrComponentService,
     hostService,
+    stageModelService,
     settingsService,
   } = useWorkbenchServices();
   const initial = useMemo(() => loadWorkspacePreferences(), []);
@@ -384,6 +385,7 @@ export function Workbench({ panelContributions }: WorkbenchProps) {
         />
         <ThreeStage
           locale={locale}
+          stageModelService={stageModelService}
           batchWorkspace={
             <BatchStage
               active={activePanel === "batch"}

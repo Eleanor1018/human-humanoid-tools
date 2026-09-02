@@ -53,7 +53,7 @@ export interface PlaybackUiState {
   loop: boolean
   currentTime: number
   duration: number
-  sourceDuration: number | null
+  previewSourceDuration: number | null
   progress: number
   speed: number
   label: string

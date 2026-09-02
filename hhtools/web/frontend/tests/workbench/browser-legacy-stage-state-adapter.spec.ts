@@ -41,7 +41,7 @@ describe("BrowserLegacyStageStateAdapter", () => {
       loop: false,
       currentTime: 2,
       duration: 8,
-      sourceDuration: 12,
+      previewSourceDuration: 12,
       progress: 0.25,
       speed: 1.5,
       label: "2.00 / 8.00 s (preview; source 12.0 s)",
@@ -55,7 +55,7 @@ describe("BrowserLegacyStageStateAdapter", () => {
       loop: false,
       currentTime: 2,
       duration: 8,
-      sourceDuration: 12,
+      previewSourceDuration: 12,
       speed: 1.5,
     });
     expect(getStagePlaybackProgress(model.state.playback)).toBe(0.25);
@@ -69,7 +69,7 @@ describe("BrowserLegacyStageStateAdapter", () => {
         playing: true,
         currentTime: 3,
         duration: 6,
-        sourceDuration: 9,
+        previewSourceDuration: 9,
       },
     });
     const listener = vi.fn();
@@ -83,17 +83,17 @@ describe("BrowserLegacyStageStateAdapter", () => {
       playing: true,
       currentTime: 3,
       duration: 6,
-      sourceDuration: 9,
+      previewSourceDuration: 9,
     });
   });
 
   it("forwards explicit null when preview metadata is cleared", () => {
     const { model } = createHarness();
-    model.updateState({ playback: { sourceDuration: 12 } });
+    model.updateState({ playback: { previewSourceDuration: 12 } });
 
-    publishPlayback({ sourceDuration: null });
+    publishPlayback({ previewSourceDuration: null });
 
-    expect(model.state.playback.sourceDuration).toBeNull();
+    expect(model.state.playback.previewSourceDuration).toBeNull();
   });
 
   it("stops projecting after idempotent disposal", () => {

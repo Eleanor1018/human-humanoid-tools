@@ -35,8 +35,8 @@ export class BrowserLegacyStageStateAdapter implements IDisposable {
       playback.currentTime = detail.currentTime;
     }
     if (detail.duration !== undefined) playback.duration = detail.duration;
-    if (detail.sourceDuration !== undefined) {
-      playback.sourceDuration = detail.sourceDuration;
+    if (detail.previewSourceDuration !== undefined) {
+      playback.previewSourceDuration = detail.previewSourceDuration;
     }
     if (detail.speed !== undefined) playback.speed = detail.speed;
 

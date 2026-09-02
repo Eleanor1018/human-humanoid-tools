@@ -14,6 +14,7 @@ import { PlaybackBar } from "../../src/workbench/browser/components/playback-bar
 import { SearchField } from "../../src/workbench/browser/components/search-field";
 import { SidebarNavigation } from "../../src/workbench/browser/components/sidebar-navigation";
 import { JobDrawer } from "../../src/workbench/browser/components/job-drawer";
+import { StageModel } from "../../src/workbench/services/stage/common/stage-model";
 
 afterEach(() => {
   cleanup();
@@ -57,23 +58,39 @@ describe("React workbench components", () => {
     expect(screen.getByRole("searchbox")).toHaveValue("");
   });
 
-  it("bridges playback state and commands through typed window events", () => {
+  it("renders Stage playback state while commands use the migration bridge", () => {
     const commands: unknown[] = [];
+    const stageModel = new StageModel(vi.fn());
     window.addEventListener(
       "hhtools:playback-command",
       (event) => commands.push((event as CustomEvent).detail),
       { once: true },
     );
-    render(<PlaybackBar />);
-    act(() =>
-      window.dispatchEvent(
-        new CustomEvent("hhtools:playback-state", {
-          detail: { visible: true, playing: true },
-        }),
-      ),
+    const view = render(
+      <PlaybackBar locale="en" stageModelService={stageModel} />,
     );
+    act(() => {
+      stageModel.updateState({
+        playback: {
+          controlsVisible: true,
+          active: true,
+          playing: true,
+          currentTime: 2,
+          duration: 8,
+          previewSourceDuration: 12,
+        },
+      });
+    });
+    expect(screen.getByText("2.00 / 8.00 s (preview; source 12.0 s)"))
+      .toBeInTheDocument();
+    view.rerender(
+      <PlaybackBar locale="zh-CN" stageModelService={stageModel} />,
+    );
+    expect(screen.getByText("2.00 / 8.00 s（预览，原片 12.0 s）"))
+      .toBeInTheDocument();
     fireEvent.click(screen.getByLabelText("暂停"));
     expect(commands).toEqual([{ action: "toggle", value: undefined }]);
+    stageModel.dispose();
   });
 
   it("keeps JobSpec duplicate, validate, and rerun actions available", async () => {

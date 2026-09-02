@@ -37,9 +37,9 @@ export type StageLayerStates = Readonly<
 /**
  * Renderer-independent playback state.
  *
- * `sourceDuration` may be longer than `duration` when the loaded result is a
- * preview. Human-readable labels are intentionally derived by the View so the
- * model remains independent of React and localization.
+ * `previewSourceDuration` is non-null only when the content owner knows the
+ * loaded result is a downsampled preview. Human-readable labels are derived by
+ * the View so the model remains independent of React and localization.
  */
 export interface StagePlaybackState {
   readonly controlsVisible: boolean;
@@ -48,7 +48,7 @@ export interface StagePlaybackState {
   readonly loop: boolean;
   readonly currentTime: number;
   readonly duration: number;
-  readonly sourceDuration: number | null;
+  readonly previewSourceDuration: number | null;
   readonly speed: number;
 }
 

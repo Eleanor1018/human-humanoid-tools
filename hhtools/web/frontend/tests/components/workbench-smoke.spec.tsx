@@ -1,4 +1,5 @@
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -125,6 +126,28 @@ describe("Workbench DOM contract", () => {
       (id) => document.getElementById(id) === null,
     );
     expect(missingIds).toEqual([]);
+  });
+
+  it("projects legacy playback state through the Stage model into React", () => {
+    renderWorkbench();
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("hhtools:playback-state", {
+          detail: {
+            visible: true,
+            active: true,
+            playing: true,
+            currentTime: 1.5,
+            duration: 6,
+            previewSourceDuration: null,
+          },
+        }),
+      );
+    });
+
+    expect(screen.getByText("1.50 / 6.00 s")).toBeInTheDocument();
+    expect(document.getElementById("playbar")).not.toHaveAttribute("hidden");
   });
 
   it("routes video imports through the contributed command without DOM lookup", async () => {
