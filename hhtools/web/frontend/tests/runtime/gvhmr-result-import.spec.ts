@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import appSource from '../../src/App.vue?raw'
+import appSource from '../../src/workbench/browser/components/video-to-motion-panel.tsx?raw'
 import runtimeSource from '../../src/runtime/webui-runtime.ts?raw'
 
 describe('GVHMR result import frontend contract', () => {

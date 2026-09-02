@@ -32,6 +32,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 from hhtools.services.runtime_lease import AgentRuntimeLease
+from hhtools.web.dependencies import require_web_runtime_dependencies
 from hhtools.web.job_scheduler import (
     JobQueueFullError,
     JobReservation,
@@ -67,7 +68,7 @@ _log = logging.getLogger(__name__)
 
 # Bump when static/ front-end behaviour changes.  Injected into ``index.html``
 # at serve time so collaborators only need to pull + restart (no triple-sync).
-UI_BUILD_ID = "20260830-r2r-motion-boundary"
+UI_BUILD_ID = "20260902-react-workbench"
 
 _UPLOAD_CHUNK_BYTES = 1024 * 1024
 # These are application-level resource controls, not transport tuning knobs.
@@ -7050,6 +7051,7 @@ def run_web(
     job_settings_path: Path | None = None,
 ) -> None:
     """Launch the uvicorn server (blocking)."""
+    require_web_runtime_dependencies()
     import uvicorn
 
     job_settings, resolved_settings_path = effective_job_admission_settings(
@@ -7117,6 +7119,7 @@ def run_desktop_sidecar(
     if not session_secret:
         raise ValueError("The desktop sidecar requires a session secret")
 
+    require_web_runtime_dependencies()
     import uvicorn
 
     job_settings, resolved_settings_path = effective_job_admission_settings(

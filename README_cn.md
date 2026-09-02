@@ -32,29 +32,85 @@
 
 ---
 
-## 快速开始
+## 安装与启动
+
+hhtools 有三种面向用户的运行方式。它们共享同一套动作、机器人与重映射核心，但安装和启动
+入口彼此独立：
+
+| 方式 | 适用场景 | 启动入口 |
+|------|----------|----------|
+| **终端（CLI/TUI 工作流）** | 批处理、服务器、SSH 与自动化 | `uv run hhtools ...` |
+| **WebUI** | 浏览器中的可视化与交互工作流 | `uv run hhtools web` |
+| **桌面 GUI（`.deb`）** | Ubuntu 桌面独立使用 | 应用菜单或 `hhtools-desktop` |
+
+### 源码安装：终端或 WebUI
+
+克隆仓库，并使用 uv 管理的 Python 3.12 环境：
 
 ```bash
 git clone https://github.com/Roboparty/human-humanoid-tools.git
 cd human-humanoid-tools
 curl -LsSf https://astral.sh/uv/install.sh | sh   # 若未安装
-uv sync --extra all
+uv python install 3.12
+```
+
+只使用终端命令时：
+
+```bash
+uv sync --locked --managed-python --python 3.12
+uv run hhtools --help
+```
+
+请按实际工作流安装额外依赖。如果需要所有可选的终端格式、查看器、机器人和重映射集成，使用：
+
+```bash
+uv sync --locked --managed-python --python 3.12 --extra all
+```
+
+使用浏览器 WebUI 时：
+
+```bash
+uv sync --locked --managed-python --python 3.12 --extra web --extra retarget
 uv run hhtools web
 ```
 
-### Human-Humanoid Tools 桌面应用
+浏览器打开 `http://127.0.0.1:8009`。如果只需要预览、不使用 Newton IK，可省略
+`--extra retarget`。缺少 WebUI 必需包时，启动程序会列出缺失包及准确的修复命令，不再直接显示
+Python import traceback。
 
-桌面壳直接复用同一套 FastAPI 接口和 three.js 页面，不维护第二套 Renderer。
+### Ubuntu 独立桌面 GUI（`.deb`）
 
-```powershell
-cd desktop
-npm install
-npm run dev
+Debian 安装包已经包含 Electron、WebUI 和隔离的 Python runtime。普通用户无需安装 Python、
+uv、Node.js 或仓库源码：
+
+```bash
+sudo apt install ./hhtools-0.1.0-x64.deb
+hhtools-desktop
 ```
 
-运行时覆盖、自动化测试和 Windows 打包说明见 [`desktop/README.md`](desktop/README.md)。
+也可以从应用菜单启动 **Human-Humanoid Tools**。构建 `.deb` 的步骤见
+[`desktop/README.md` 的 Linux package 章节](desktop/README.md#linux-package)；`npm run dev`
+属于开发启动方式，不是最终用户的安装方式。
 
-浏览器打开 `http://127.0.0.1:8009`。
+### 前端开发
+
+WebUI 与 Electron GUI 共用 `hhtools/web/frontend` 中同一套 React + TypeScript renderer；
+Electron 专属能力通过带类型的 host service 暴露，不复制两套 UI 组件。源码按类似 VS Code 的
+职责分层组织：`base/` 放生命周期基础设施，`platform/` 放宿主与事件边界，`workbench/` 负责
+组合可复用面板、工作流与服务。Tailwind CSS 提供 token 和工具类，项目维护的 shadcn/ui
+基础组件位于 `src/components/ui`。
+
+```bash
+cd hhtools/web/frontend
+npm install
+npm run typecheck
+npm test
+npm run build
+```
+
+生产构建写入 `hhtools/web/static`，FastAPI 与 Electron 原样复用这份产物。现有 Three.js/IK
+工作流运行时暂时通过有明确说明的兼容服务加载；新的 UI 状态与组件应放在 React workbench，
+不要继续增加直接 DOM 操作。
 
 Web 后台任务默认不限制并发。共享服务器或显存紧张时，可以显式启用 FIFO 调度：
 
