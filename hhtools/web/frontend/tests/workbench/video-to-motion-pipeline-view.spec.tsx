@@ -61,6 +61,12 @@ describe("VideoToMotionPipelineView", () => {
       "title",
       "Ready · official weights",
     );
+    expect(
+      screen.getByRole("button", {
+        name: "Environment",
+        description: "ready: Ready · official weights",
+      }),
+    ).toBeInTheDocument();
     expect(node("Generate")).toHaveClass("state-missing");
     expect(node("Motion Result")).toHaveClass("state-missing");
   });
