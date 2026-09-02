@@ -6,6 +6,11 @@ vi.mock("../../src/runtime/dataset-viz", () => ({}));
 
 import { Workbench } from "../../src/workbench/browser/workbench";
 import { WorkbenchServicesProvider } from "../../src/workbench/browser/workbench-service-context";
+import {
+  WorkbenchContributionLifecycle,
+  WorkbenchLifecyclePhase,
+} from "../../src/workbench/common/contribution";
+import { createLegacyRuntimeContribution } from "../../src/workbench/contrib/legacy-runtime/browser/legacy-runtime-contribution";
 import { createBrowserWorkbenchServices } from "../../src/workbench/services/browser/browser-workbench-services";
 import runtimeSource from "../../src/runtime/webui-runtime.ts?raw";
 
@@ -13,8 +18,10 @@ afterEach(() => cleanup());
 
 function renderWorkbench() {
   const services = createBrowserWorkbenchServices();
+  const lifecycle = new WorkbenchContributionLifecycle(services, [], vi.fn());
+  lifecycle.advanceTo(WorkbenchLifecyclePhase.Ready);
   return render(
-    <WorkbenchServicesProvider services={services}>
+    <WorkbenchServicesProvider services={services} lifecycle={lifecycle}>
       <Workbench />
     </WorkbenchServicesProvider>,
   );
@@ -22,7 +29,6 @@ function renderWorkbench() {
 
 describe("Workbench DOM contract", () => {
   it("mounts every runtime contribution before the compatibility service starts", () => {
-    renderWorkbench();
     const ids = [
       "three-canvas",
       "motion-drop-shared",
@@ -40,8 +46,30 @@ describe("Workbench DOM contract", () => {
       "dv-hist-canvas",
       "dv-scatter-canvas",
     ];
-    for (const id of ids)
-      expect(document.getElementById(id), id).not.toBeNull();
+    const services = createBrowserWorkbenchServices();
+    let missingAtStartup: string[] | undefined;
+    vi.spyOn(services.legacyRuntimeService, "start").mockImplementation(
+      async () => {
+        missingAtStartup = ids.filter(
+          (id) => document.getElementById(id) === null,
+        );
+      },
+    );
+    const lifecycle = new WorkbenchContributionLifecycle(
+      services,
+      [createLegacyRuntimeContribution(services.legacyRuntimeService)],
+      vi.fn(),
+    );
+    lifecycle.advanceTo(WorkbenchLifecyclePhase.Ready);
+
+    render(
+      <WorkbenchServicesProvider services={services} lifecycle={lifecycle}>
+        <Workbench />
+      </WorkbenchServicesProvider>,
+    );
+
+    expect(services.legacyRuntimeService.start).toHaveBeenCalledOnce();
+    expect(missingAtStartup).toEqual([]);
   });
 
   it("preserves every literal element id consumed by the existing runtime", () => {

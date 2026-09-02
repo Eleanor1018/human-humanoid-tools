@@ -96,7 +96,6 @@ export function Workbench() {
   const {
     gvhmrComponentService,
     hostService,
-    legacyRuntimeService: runtimeService,
     settingsService,
   } = useWorkbenchServices();
   const initial = useMemo(() => loadWorkspacePreferences(), []);
@@ -149,19 +148,6 @@ export function Workbench() {
     document.documentElement.dataset.theme = next;
     updateWorkspacePreferences({ theme: next });
   };
-  const showBoot = useCallback(
-    (message: string) => {
-      const element = document.getElementById("boot-error");
-      if (!element) return;
-      element.style.display = "block";
-      element.textContent = text(
-        `The interface could not initialize: ${message} (press F12 for Console)`,
-        `界面未能初始化：${message}（按 F12 查看 Console）`,
-      );
-    },
-    [text],
-  );
-
   const refreshSettings = useCallback(async () => {
     setSettingsLoading(true);
     setSettingsError(null);
@@ -247,7 +233,6 @@ export function Workbench() {
   useEffect(() => {
     document.documentElement.lang = locale;
     document.documentElement.dataset.theme = theme;
-    window.showBoot = showBoot;
     window.__hhUi = {
       setActivePanel,
       requestPanel: (panel) =>
@@ -289,28 +274,16 @@ export function Workbench() {
         });
       },
     );
-    // React must commit every compatibility id before the legacy module binds
-    // its listeners. Starting it from this effect guarantees that ordering.
-    void runtimeService.start().catch((cause) => {
-      console.error("hhtools renderer failed to initialize", cause);
-      showBoot(cause instanceof Error ? cause.message : String(cause));
-    });
-    const watchdog = window.setTimeout(() => {
-      if (!window.__hhtoolsReady)
-        showBoot("React workbench runtime did not finish initialization");
-    }, 4_000);
     void settingsService
       .getMotionLibrary()
       .then(setMotionLibrary)
       .catch(() => undefined);
     return () => {
-      window.clearTimeout(watchdog);
       panelSubscription.dispose();
       importSubscription.dispose();
       delete window.__hhUi;
-      delete window.showBoot;
     };
-  }, [locale, setActivePanel, showBoot, theme]);
+  }, [locale, setActivePanel, settingsService, text, theme]);
 
   const applicationChrome = {
     activePanel,

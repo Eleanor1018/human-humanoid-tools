@@ -18,6 +18,10 @@ import type {
 } from "../../src/runtime/types";
 import { WorkbenchServicesProvider } from "../../src/workbench/browser/workbench-service-context";
 import { useVideoBatch } from "../../src/workbench/browser/use-video-batch";
+import {
+  WorkbenchContributionLifecycle,
+  WorkbenchLifecyclePhase,
+} from "../../src/workbench/common/contribution";
 import type { IWorkbenchServices } from "../../src/workbench/services/common/workbench-services";
 import type {
   IJobService,
@@ -118,10 +122,12 @@ function wrapperFor(
     },
     dispose: vi.fn(),
   } as unknown as IWorkbenchServices;
+  const lifecycle = new WorkbenchContributionLifecycle(services, [], vi.fn());
+  lifecycle.advanceTo(WorkbenchLifecyclePhase.Ready);
 
   return function Wrapper({ children }: PropsWithChildren) {
     return (
-      <WorkbenchServicesProvider services={services}>
+      <WorkbenchServicesProvider services={services} lifecycle={lifecycle}>
         {children}
       </WorkbenchServicesProvider>
     );

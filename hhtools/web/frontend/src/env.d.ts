@@ -208,7 +208,6 @@ declare global {
       onRuntimeStateChanged: (listener: (state: unknown) => void) => () => void;
     };
     __hhtoolsReady?: boolean;
-    showBoot?: (message: string) => void;
     __hhPanelLayout?: {
       revealBoth: () => void;
       reset: () => void;

@@ -15,10 +15,12 @@ import { BrowserSettingsService } from "@/workbench/services/settings/browser/br
  * can grow into a richer registry only if the application actually needs one.
  */
 export function createBrowserWorkbenchServices(): IWorkbenchServices {
-  const lifecycle = new DisposableStore();
+  const ownedServices = new DisposableStore();
   const requestService = new BrowserRequestService();
-  const jobService = lifecycle.add(new BrowserJobService(requestService));
-  const legacyRuntimeService = lifecycle.add(new BrowserLegacyRuntimeService());
+  const jobService = ownedServices.add(new BrowserJobService(requestService));
+  const legacyRuntimeService = ownedServices.add(
+    new BrowserLegacyRuntimeService(),
+  );
 
   return {
     hostService: new BrowserHostService(),
@@ -27,6 +29,6 @@ export function createBrowserWorkbenchServices(): IWorkbenchServices {
     jobService,
     settingsService: new BrowserSettingsService(requestService),
     legacyRuntimeService,
-    dispose: () => lifecycle.dispose(),
+    dispose: () => ownedServices.dispose(),
   };
 }
