@@ -53,7 +53,8 @@ export function createBrowserWorkbenchServices(
     requestService,
     gvhmrComponentService: new BrowserGvhmrComponentService(),
     jobService,
-    // One adapter exposes two narrow contracts but remains owned exactly once.
+    // One concrete strangler serves lifecycle, presentation, and passive Stage
+    // source roles while the service graph still owns it exactly once.
     motionResultPresentationService: legacyRuntimeService,
     settingsService: new BrowserSettingsService(requestService),
     stageDisplayCommands,

@@ -86,22 +86,10 @@ describe("LegacyRuntimeService", () => {
     await expect(service.start()).resolves.toBeUndefined();
   });
 
-  it("joins readiness and forwards the passive H2R display subscription", async () => {
+  it("forwards the synchronous initial H2R display snapshot after readiness", async () => {
     const service = new BrowserLegacyRuntimeService();
     expectTypeOf(service).toMatchTypeOf<ILegacyStageDisplayStateSource>();
-    let publish:
-      | ((snapshot: LegacyH2rStageDisplaySnapshot) => void)
-      | undefined;
     const unsubscribe = vi.fn();
-    runtimeMocks.subscribeH2rStageDisplayState.mockImplementationOnce(
-      (listener: (snapshot: LegacyH2rStageDisplaySnapshot) => void) => {
-        publish = listener;
-        return unsubscribe;
-      },
-    );
-    const listener = vi.fn();
-
-    const subscription = await service.subscribeH2rStageDisplayState(listener);
     const current: LegacyH2rStageDisplaySnapshot = {
       ownsStage: true,
       empty: false,
@@ -123,7 +111,16 @@ describe("LegacyRuntimeService", () => {
         targetRobot: { available: true, visible: true, canToggle: true },
       },
     };
-    publish?.(current);
+    runtimeMocks.subscribeH2rStageDisplayState.mockImplementationOnce(
+      (listener: (snapshot: LegacyH2rStageDisplaySnapshot) => void) => {
+        // The real publisher sends its first complete snapshot synchronously.
+        listener(current);
+        return unsubscribe;
+      },
+    );
+    const listener = vi.fn();
+
+    const subscription = await service.subscribeH2rStageDisplayState(listener);
 
     expect(runtimeMocks.subscribeH2rStageDisplayState).toHaveBeenCalledOnce();
     expect(listener).toHaveBeenCalledWith(current);
@@ -167,7 +164,7 @@ describe("LegacyRuntimeService", () => {
     expect(disposeSecond).toHaveBeenCalledOnce();
   });
 
-  it("exposes both contracts through one owned browser adapter", () => {
+  it("exposes narrow runtime roles through one owned browser adapter", () => {
     const services = createBrowserWorkbenchServices(vi.fn());
 
     expect(services.motionResultPresentationService).toBe(
