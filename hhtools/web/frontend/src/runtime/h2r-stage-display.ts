@@ -47,6 +47,50 @@ export interface H2rStageDisplayFacts {
   >;
 }
 
+export interface H2rStagePhysicalVisibilityFacts {
+  readonly ownsStage: boolean;
+  readonly calibrationMode: boolean;
+  readonly bodyUsesSkin: boolean;
+  readonly requested: Readonly<Record<H2rStageLayerId, boolean>>;
+  readonly available: Readonly<Record<H2rStageLayerId, boolean>>;
+}
+
+/** Seven renderer groups implement six semantic layers because body has two backends. */
+export interface H2rStagePhysicalVisibility {
+  readonly sourceSkeleton: boolean;
+  readonly sourceBodyMesh: boolean;
+  readonly sourceBodySkin: boolean;
+  readonly sourceEnvironment: boolean;
+  readonly scaledSkeleton: boolean;
+  readonly scaledEnvironment: boolean;
+  readonly targetRobot: boolean;
+}
+
+/**
+ * Project logical visibility onto renderer groups without losing intent while
+ * R2R owns the shared canvas. The body backends remain mutually exclusive.
+ */
+export function projectH2rPhysicalVisibility(
+  facts: H2rStagePhysicalVisibilityFacts,
+): H2rStagePhysicalVisibility {
+  const canRender = (id: H2rStageLayerId): boolean =>
+    facts.ownsStage &&
+    facts.available[id] &&
+    facts.requested[id] &&
+    (id === "targetRobot" || !facts.calibrationMode);
+  const sourceBody = canRender("sourceBody");
+
+  return {
+    sourceSkeleton: canRender("sourceSkeleton"),
+    sourceBodyMesh: sourceBody && !facts.bodyUsesSkin,
+    sourceBodySkin: sourceBody && facts.bodyUsesSkin,
+    sourceEnvironment: canRender("sourceEnvironment"),
+    scaledSkeleton: canRender("scaledSkeleton"),
+    scaledEnvironment: canRender("scaledEnvironment"),
+    targetRobot: canRender("targetRobot"),
+  };
+}
+
 /**
  * Apply workflow policy to raw renderer facts without depending on the DOM or
  * Three.js. Calibration locks the five comparison layers while leaving the

@@ -73,7 +73,7 @@ describe("legacy runtime ownership boundaries", () => {
   it("publishes primitive visibility setters and batches comparison presets", () => {
     const bodySetter = runtimeSource.slice(
       runtimeSource.indexOf("function setBodyVisible"),
-      runtimeSource.indexOf("function bodyIsVisible"),
+      runtimeSource.indexOf("function bodyIsRequestedVisible"),
     );
     const viewSetter = runtimeSource.slice(
       runtimeSource.indexOf("function setViewVisible"),
@@ -85,8 +85,68 @@ describe("legacy runtime ownership boundaries", () => {
     );
 
     expect(bodySetter).toContain("markH2rStageDisplayChanged()");
+    expect(bodySetter).toContain("h2rRequestedVisibility.sourceBody");
+    expect(bodySetter).not.toContain(".group.visible =");
     expect(viewSetter).toContain("markH2rStageDisplayChanged()");
+    expect(viewSetter).toContain("h2rRequestedVisibility[layerId]");
+    expect(viewSetter).not.toContain(".group.visible =");
     expect(preset).toContain("withH2rStageDisplayBatch(() =>");
+  });
+
+  it("keeps all physical H2R group writes inside one projector", () => {
+    const projectorStart = runtimeSource.indexOf(
+      "function applyH2rPhysicalVisibility",
+    );
+    const projectorEnd = runtimeSource.indexOf(
+      "function setViewVisible",
+      projectorStart,
+    );
+    const assignments = [...runtimeSource.matchAll(
+      /\b(?:skel|mesh|skin|envView|scaledSkel|scaledEnv|robot)\.group\.visible\s*=/g,
+    )];
+
+    expect(projectorStart).toBeGreaterThanOrEqual(0);
+    expect(projectorEnd).toBeGreaterThan(projectorStart);
+    expect(assignments).toHaveLength(7);
+    expect(
+      assignments.every(
+        (match) => match.index >= projectorStart && match.index < projectorEnd,
+      ),
+    ).toBe(true);
+  });
+
+  it("snapshots and restores logical H2R visibility through semantic setters", () => {
+    const snapshot = runtimeSource.slice(
+      runtimeSource.indexOf("function _snapshotVis"),
+      runtimeSource.indexOf("function _setPlaybarVisible"),
+    );
+    const restore = runtimeSource.slice(
+      runtimeSource.indexOf("function _restoreVis"),
+      runtimeSource.indexOf("async function enterCalibrationMode"),
+    );
+
+    expect(snapshot).toContain("h2rRequestedVisibility.sourceSkeleton");
+    expect(snapshot).toContain("bodyIsRequestedVisible()");
+    expect(snapshot).not.toContain(".group.visible");
+    expect(restore).toContain("setViewVisible(");
+    expect(restore).toContain("setBodyVisible(");
+    expect(restore).not.toMatch(
+      /\b(?:skel|mesh|skin|envView|scaledSkel|scaledEnv|robot)\.group\.visible\s*=/,
+    );
+  });
+
+  it("reprojects resource-only changes before a display batch is published", () => {
+    const batch = runtimeSource.slice(
+      runtimeSource.indexOf("function withH2rStageDisplayBatch"),
+      runtimeSource.indexOf("export function subscribeH2rStageDisplayState"),
+    );
+    const operation = batch.indexOf("operation()");
+    const cleanup = batch.indexOf("finally");
+    const projection = batch.indexOf("applyH2rPhysicalVisibility()", cleanup);
+
+    expect(operation).toBeGreaterThanOrEqual(0);
+    expect(operation).toBeLessThan(cleanup);
+    expect(cleanup).toBeLessThan(projection);
   });
 
   it("publishes R2R ownership only around a complete H2R handoff", () => {
@@ -102,7 +162,7 @@ describe("legacy runtime ownership boundaries", () => {
 
     const snapshot = normalEnter.indexOf("_r2rMainSnap =");
     const relinquish = normalEnter.indexOf("h2rOwnsStage = false");
-    const hideH2rViews = normalEnter.indexOf("for (const v of ALL_VIEWS)");
+    const hideH2rViews = normalEnter.indexOf("applyH2rPhysicalVisibility()");
     const applyR2r = normalEnter.indexOf("r2rApplyStage()");
     const publishHandoff = normalEnter.indexOf("markH2rStageDisplayChanged()");
     expect(snapshot).toBeLessThan(relinquish);
@@ -113,12 +173,24 @@ describe("legacy runtime ownership boundaries", () => {
       leave.indexOf("h2rOwnsStage = true"),
     );
     expect(leave.indexOf("h2rOwnsStage = true")).toBeLessThan(
+      leave.indexOf("applyH2rPhysicalVisibility()"),
+    );
+    expect(leave.indexOf("applyH2rPhysicalVisibility()")).toBeLessThan(
+      leave.indexOf("if (player.active) player.refreshFrame()"),
+    );
+    expect(leave.indexOf("if (player.active) player.refreshFrame()")).toBeLessThan(
       leave.indexOf("markH2rStageDisplayChanged()"),
     );
     expect(
       [...runtimeSource.matchAll(/\bh2rOwnsStage\s*=\s*(true|false)/g)]
         .map((match) => match[1]),
     ).toEqual(["true", "false", "false", "true"]);
+
+    const snapshotContract = runtimeSource.slice(
+      runtimeSource.indexOf("interface R2rMainSnapshot"),
+      runtimeSource.indexOf("interface R2rRetargetRequest"),
+    );
+    expect(snapshotContract).not.toContain("vis:");
   });
 
   it("invalidates scaled previews when their H2R identity changes", () => {

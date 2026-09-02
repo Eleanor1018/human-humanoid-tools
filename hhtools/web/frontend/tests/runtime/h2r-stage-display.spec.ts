@@ -3,9 +3,11 @@ import { describe, expect, it, vi } from "vitest";
 import {
   H2R_STAGE_LAYER_IDS,
   H2rStageDisplayPublisher,
+  projectH2rPhysicalVisibility,
   projectH2rStageDisplaySnapshot,
   type H2rStageDisplayFacts,
   type H2rStageDisplaySnapshot,
+  type H2rStagePhysicalVisibilityFacts,
 } from "../../src/runtime/h2r-stage-display";
 
 function createMutableSnapshot() {
@@ -53,6 +55,104 @@ function createDisplayFacts(
     ...overrides,
   };
 }
+
+function layerFlags(value: boolean): Record<
+  (typeof H2R_STAGE_LAYER_IDS)[number],
+  boolean
+> {
+  return Object.fromEntries(
+    H2R_STAGE_LAYER_IDS.map((id) => [id, value]),
+  ) as Record<(typeof H2R_STAGE_LAYER_IDS)[number], boolean>;
+}
+
+function createPhysicalFacts(
+  overrides: Partial<H2rStagePhysicalVisibilityFacts> = {},
+): H2rStagePhysicalVisibilityFacts {
+  return {
+    ownsStage: true,
+    calibrationMode: false,
+    bodyUsesSkin: false,
+    requested: layerFlags(true),
+    available: layerFlags(true),
+    ...overrides,
+  };
+}
+
+describe("projectH2rPhysicalVisibility", () => {
+  it("keeps every H2R group hidden while R2R owns the Stage", () => {
+    const physical = projectH2rPhysicalVisibility(
+      createPhysicalFacts({ ownsStage: false }),
+    );
+
+    expect(Object.values(physical).every((visible) => !visible)).toBe(true);
+  });
+
+  it("applies the newest requested visibility only after ownership returns", () => {
+    const requested = layerFlags(false);
+    requested.sourceSkeleton = true;
+
+    expect(projectH2rPhysicalVisibility(createPhysicalFacts({
+      ownsStage: false,
+      requested,
+    })).sourceSkeleton).toBe(false);
+    expect(projectH2rPhysicalVisibility(createPhysicalFacts({
+      ownsStage: true,
+      requested,
+    })).sourceSkeleton).toBe(true);
+  });
+
+  it("keeps capsule and baked body renderers mutually exclusive", () => {
+    const mesh = projectH2rPhysicalVisibility(createPhysicalFacts({
+      bodyUsesSkin: false,
+    }));
+    const skin = projectH2rPhysicalVisibility(createPhysicalFacts({
+      bodyUsesSkin: true,
+    }));
+    const hidden = projectH2rPhysicalVisibility(createPhysicalFacts({
+      ownsStage: false,
+      bodyUsesSkin: true,
+    }));
+
+    expect([mesh.sourceBodyMesh, mesh.sourceBodySkin]).toEqual([true, false]);
+    expect([skin.sourceBodyMesh, skin.sourceBodySkin]).toEqual([false, true]);
+    expect([hidden.sourceBodyMesh, hidden.sourceBodySkin]).toEqual([false, false]);
+  });
+
+  it("locks comparison groups in calibration but leaves the target robot visible", () => {
+    const physical = projectH2rPhysicalVisibility(createPhysicalFacts({
+      calibrationMode: true,
+    }));
+
+    expect(physical).toEqual({
+      sourceSkeleton: false,
+      sourceBodyMesh: false,
+      sourceBodySkin: false,
+      sourceEnvironment: false,
+      scaledSkeleton: false,
+      scaledEnvironment: false,
+      targetRobot: true,
+    });
+  });
+
+  it("waits to expose a newly available layer until H2R reacquires Stage", () => {
+    const available = layerFlags(true);
+    available.scaledEnvironment = false;
+    expect(projectH2rPhysicalVisibility(createPhysicalFacts({
+      ownsStage: false,
+      available,
+    })).scaledEnvironment).toBe(false);
+
+    available.scaledEnvironment = true;
+    expect(projectH2rPhysicalVisibility(createPhysicalFacts({
+      ownsStage: false,
+      available,
+    })).scaledEnvironment).toBe(false);
+    expect(projectH2rPhysicalVisibility(createPhysicalFacts({
+      ownsStage: true,
+      available,
+    })).scaledEnvironment).toBe(true);
+  });
+});
 
 describe("projectH2rStageDisplaySnapshot", () => {
   it("separates availability, visibility, and calibration capability", () => {
