@@ -1,11 +1,20 @@
 import { cn } from "@/lib/utils";
-import type { WorkflowNodeState } from "@/runtime/types";
+
+/** Visual state only; workflow ownership remains with the calling feature. */
+export type PipelineNodeState =
+  | "missing"
+  | "validating"
+  | "ready"
+  | "running"
+  | "completed"
+  | "warning"
+  | "failed";
 
 export interface PipelineNode {
   id: string;
   label: string;
   detail: string;
-  state: WorkflowNodeState;
+  state: PipelineNodeState;
   activate(): void;
 }
 
@@ -15,7 +24,7 @@ interface PipelineNavProps {
   nodes: PipelineNode[];
 }
 
-/** Shared workbench pipeline navigation used by H2R, R2R, video, and analysis. */
+/** Shared presentational pipeline navigation with no feature or shell owner. */
 export function PipelineNav({ label, className, nodes }: PipelineNavProps) {
   return (
     <section className={cn("workflow-pipeline", className)} aria-label={label}>

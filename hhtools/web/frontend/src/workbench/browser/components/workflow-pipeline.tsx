@@ -1,5 +1,9 @@
 import { useMemo, useState } from "react";
 
+import {
+  PipelineNav,
+  type PipelineNode,
+} from "@/components/ui/pipeline-nav";
 import { useLocaleText } from "@/hooks/use-locale-text";
 import { useWindowEvent } from "@/hooks/use-window-event";
 import { windowEventBus } from "@/platform/events/browser/window-event-bus";
@@ -8,7 +12,6 @@ import type {
   WorkflowNodeStatus,
 } from "@/runtime/types";
 import type { WorkspaceLocale } from "@/workbench/common/workspace";
-import { PipelineNav, type PipelineNode } from "./pipeline-nav";
 
 const labels: Record<WorkflowId, Record<string, readonly [string, string]>> = {
   h2r: {

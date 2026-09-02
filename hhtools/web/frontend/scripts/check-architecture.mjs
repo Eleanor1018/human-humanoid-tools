@@ -18,7 +18,6 @@ const LEGACY_RUNTIME_TYPE_CONSUMERS = [
   "workbench/browser/components/job-drawer.tsx",
   "workbench/browser/components/motion-panel.tsx",
   "workbench/browser/components/motion-picker-dialog.tsx",
-  "workbench/browser/components/pipeline-nav.tsx",
   "workbench/browser/components/playback-bar.tsx",
   "workbench/browser/components/result-evaluation-panel.tsx",
   "workbench/browser/components/video-to-motion-pipeline.tsx",
