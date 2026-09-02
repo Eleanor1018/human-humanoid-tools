@@ -1,11 +1,16 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import { createBrowserWorkbenchServices } from "../../src/workbench/services/browser/browser-workbench-services";
+import { BrowserLegacyRuntimeService } from "../../src/workbench/services/runtime/browser/browser-legacy-runtime-service";
 import { StageModel } from "../../src/workbench/services/stage/common/stage-model";
 
 describe("browser workbench service graph", () => {
   it("owns one Stage model and releases it with the service graph", () => {
     const services = createBrowserWorkbenchServices(vi.fn());
+    expectTypeOf(services.stageModelService).toEqualTypeOf<StageModel>();
+    expectTypeOf(services.legacyRuntimeService).toEqualTypeOf<
+      BrowserLegacyRuntimeService
+    >();
     const disposeStage = vi.spyOn(services.stageModelService, "dispose");
 
     expect(services.stageModelService.state.display.empty).toBe(true);

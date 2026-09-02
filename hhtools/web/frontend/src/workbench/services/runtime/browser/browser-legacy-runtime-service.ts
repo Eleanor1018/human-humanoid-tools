@@ -1,11 +1,19 @@
+import { toDisposable, type IDisposable } from "@/base/common/disposable";
 import type { MotionPayload } from "@/domain/motion/common/motion";
 import type {
   IMotionResultPresentationService,
 } from "@/workbench/services/motion/common/motion-result-presentation-service";
+import type {
+  ILegacyStageDisplayStateSource,
+  LegacyH2rStageDisplaySnapshot,
+} from "@/workbench/services/stage/browser/legacy-stage-display-state-source";
 import type { ILegacyRuntimeService } from "../common/legacy-runtime-service";
 
 interface LoadedLegacyRuntime extends IMotionResultPresentationService {
   resetStageView(): void;
+  subscribeH2rStageDisplayState(
+    listener: (snapshot: LegacyH2rStageDisplaySnapshot) => void,
+  ): () => void;
 }
 
 /**
@@ -16,7 +24,10 @@ interface LoadedLegacyRuntime extends IMotionResultPresentationService {
  * code must depend on workbench services/events and add no document queries here.
  */
 export class BrowserLegacyRuntimeService
-  implements ILegacyRuntimeService, IMotionResultPresentationService
+  implements
+    ILegacyRuntimeService,
+    IMotionResultPresentationService,
+    ILegacyStageDisplayStateSource
 {
   #startPromise: Promise<void> | null = null;
   #runtime: LoadedLegacyRuntime | null = null;
@@ -47,6 +58,23 @@ export class BrowserLegacyRuntimeService
       throw new Error("Legacy runtime did not finish initialization");
     }
     this.#runtime.resetStageView();
+  }
+
+  /**
+   * Browser-only passive display source. Joining the shared startup promise
+   * keeps this method safe when a Restored contribution races another caller.
+   */
+  async subscribeH2rStageDisplayState(
+    listener: (snapshot: LegacyH2rStageDisplaySnapshot) => void,
+  ): Promise<IDisposable> {
+    await this.start();
+    if (!this.#runtime) {
+      throw new Error("Legacy runtime did not finish initialization");
+    }
+    // The loaded module is structurally checked against this browser port;
+    // semantic normalization remains the Stage adapter's single responsibility.
+    const unsubscribe = this.#runtime.subscribeH2rStageDisplayState(listener);
+    return toDisposable(unsubscribe);
   }
 
   dispose(): void {

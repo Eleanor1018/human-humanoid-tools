@@ -3,11 +3,13 @@ import { beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 const runtimeMocks = vi.hoisted(() => ({
   presentHumanMotion: vi.fn(),
   resetStageView: vi.fn(),
+  subscribeH2rStageDisplayState: vi.fn(),
 }));
 
 vi.mock("../../src/runtime/webui-runtime", () => ({
   presentHumanMotion: runtimeMocks.presentHumanMotion,
   resetStageView: runtimeMocks.resetStageView,
+  subscribeH2rStageDisplayState: runtimeMocks.subscribeH2rStageDisplayState,
 }));
 vi.mock("../../src/runtime/dataset-viz", () => ({}));
 
@@ -15,6 +17,10 @@ import type { MotionPayload } from "../../src/domain/motion/common/motion";
 import { createBrowserWorkbenchServices } from "../../src/workbench/services/browser/browser-workbench-services";
 import { BrowserLegacyRuntimeService } from "../../src/workbench/services/runtime/browser/browser-legacy-runtime-service";
 import type { ILegacyRuntimeService } from "../../src/workbench/services/runtime/common/legacy-runtime-service";
+import type {
+  ILegacyStageDisplayStateSource,
+  LegacyH2rStageDisplaySnapshot,
+} from "../../src/workbench/services/stage/browser/legacy-stage-display-state-source";
 
 const payload: MotionPayload = {
   name: "generated walk",
@@ -27,11 +33,16 @@ beforeEach(() => {
   runtimeMocks.presentHumanMotion.mockReset();
   runtimeMocks.presentHumanMotion.mockResolvedValue(undefined);
   runtimeMocks.resetStageView.mockReset();
+  runtimeMocks.subscribeH2rStageDisplayState.mockReset();
+  runtimeMocks.subscribeH2rStageDisplayState.mockReturnValue(vi.fn());
 });
 
 describe("LegacyRuntimeService", () => {
   it("keeps browser-only Stage capabilities out of the common lifecycle contract", () => {
     expectTypeOf<ILegacyRuntimeService>().not.toHaveProperty("resetStageView");
+    expectTypeOf<ILegacyRuntimeService>().not.toHaveProperty(
+      "subscribeH2rStageDisplayState",
+    );
   });
 
   it("shares one readiness promise across concurrent callers", async () => {
@@ -73,6 +84,87 @@ describe("LegacyRuntimeService", () => {
 
     expect(runtimeMocks.resetStageView).toHaveBeenCalledOnce();
     await expect(service.start()).resolves.toBeUndefined();
+  });
+
+  it("joins readiness and forwards the passive H2R display subscription", async () => {
+    const service = new BrowserLegacyRuntimeService();
+    expectTypeOf(service).toMatchTypeOf<ILegacyStageDisplayStateSource>();
+    let publish:
+      | ((snapshot: LegacyH2rStageDisplaySnapshot) => void)
+      | undefined;
+    const unsubscribe = vi.fn();
+    runtimeMocks.subscribeH2rStageDisplayState.mockImplementationOnce(
+      (listener: (snapshot: LegacyH2rStageDisplaySnapshot) => void) => {
+        publish = listener;
+        return unsubscribe;
+      },
+    );
+    const listener = vi.fn();
+
+    const subscription = await service.subscribeH2rStageDisplayState(listener);
+    const current: LegacyH2rStageDisplaySnapshot = {
+      ownsStage: true,
+      empty: false,
+      canResetView: true,
+      layers: {
+        sourceSkeleton: { available: true, visible: true, canToggle: true },
+        sourceBody: { available: true, visible: false, canToggle: true },
+        sourceEnvironment: {
+          available: false,
+          visible: false,
+          canToggle: false,
+        },
+        scaledSkeleton: { available: true, visible: false, canToggle: true },
+        scaledEnvironment: {
+          available: false,
+          visible: false,
+          canToggle: false,
+        },
+        targetRobot: { available: true, visible: true, canToggle: true },
+      },
+    };
+    publish?.(current);
+
+    expect(runtimeMocks.subscribeH2rStageDisplayState).toHaveBeenCalledOnce();
+    expect(listener).toHaveBeenCalledWith(current);
+    expect(listener.mock.calls[0]?.[0]).toBe(current);
+    subscription.dispose();
+    subscription.dispose();
+    expect(unsubscribe).toHaveBeenCalledOnce();
+  });
+
+  it("keeps readiness valid when display subscription setup fails", async () => {
+    const service = new BrowserLegacyRuntimeService();
+    const readiness = service.start();
+    await readiness;
+    const failure = new Error("display subscription failed");
+    runtimeMocks.subscribeH2rStageDisplayState.mockImplementationOnce(() => {
+      throw failure;
+    });
+
+    await expect(
+      service.subscribeH2rStageDisplayState(vi.fn()),
+    ).rejects.toBe(failure);
+    expect(service.start()).toBe(readiness);
+  });
+
+  it("owns each display listener with an independent disposable", async () => {
+    const service = new BrowserLegacyRuntimeService();
+    const disposeFirst = vi.fn();
+    const disposeSecond = vi.fn();
+    runtimeMocks.subscribeH2rStageDisplayState
+      .mockReturnValueOnce(disposeFirst)
+      .mockReturnValueOnce(disposeSecond);
+
+    const first = await service.subscribeH2rStageDisplayState(vi.fn());
+    const second = await service.subscribeH2rStageDisplayState(vi.fn());
+    first.dispose();
+    first.dispose();
+
+    expect(disposeFirst).toHaveBeenCalledOnce();
+    expect(disposeSecond).not.toHaveBeenCalled();
+    second.dispose();
+    expect(disposeSecond).toHaveBeenCalledOnce();
   });
 
   it("exposes both contracts through one owned browser adapter", () => {

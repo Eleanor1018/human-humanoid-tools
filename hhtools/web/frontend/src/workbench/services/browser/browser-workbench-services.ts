@@ -12,6 +12,12 @@ import { BrowserLegacyStagePlaybackCommands } from "@/workbench/services/stage/b
 import { BrowserLegacyStageStateAdapter } from "@/workbench/services/stage/browser/browser-legacy-stage-state-adapter";
 import { StageModel } from "@/workbench/services/stage/common/stage-model";
 
+/** Concrete browser-only handles needed by the composition root. */
+export interface BrowserWorkbenchServices extends IWorkbenchServices {
+  readonly stageModelService: StageModel;
+  readonly legacyRuntimeService: BrowserLegacyRuntimeService;
+}
+
 /**
  * Instantiate browser/Electron-renderer implementations and wire dependencies.
  *
@@ -21,7 +27,7 @@ import { StageModel } from "@/workbench/services/stage/common/stage-model";
  */
 export function createBrowserWorkbenchServices(
   reportError: (error: unknown) => void,
-): IWorkbenchServices {
+): BrowserWorkbenchServices {
   const ownedServices = new DisposableStore();
   const commandService = ownedServices.add(new CommandService());
   const requestService = new BrowserRequestService();
