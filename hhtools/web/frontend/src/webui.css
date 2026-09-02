@@ -2454,6 +2454,7 @@ button { font-family: inherit; cursor: pointer; }
 }
 
 .video-custom-checkpoint {
+  display: flex;
   align-items: stretch;
   flex-direction: column;
   gap: 4px;
@@ -2469,7 +2470,7 @@ button { font-family: inherit; cursor: pointer; }
 }
 
 .video-checkpoint-name {
-  color: var(--muted);
+  color: var(--ink-secondary);
   font-size: 12px;
   min-width: 0;
   overflow-wrap: anywhere;
@@ -2478,6 +2479,7 @@ button { font-family: inherit; cursor: pointer; }
 .video-checkpoint-hint {
   margin: 0;
 }
+.video-operation-status.error { color: var(--red); }
 .video-workflow-progress { margin-top: 12px; }
 .video-workflow-result-empty { margin: 0; }
 .motion-import-info { position: static; }
