@@ -2435,13 +2435,26 @@ function publishPlaybackState(extra: Partial<PlaybackUiState> = {}): void {
 function bodyUsesSkin(): boolean {
   return skin.ready;
 }
-function setBodyVisible(on: boolean): void {
-  if (state.calibrationMode && on) return;
-  h2rRequestedVisibility.sourceBody = Boolean(on);
+
+/**
+ * Commit one logical H2R layer intent, reconcile the legacy renderer, then
+ * request a batch-aware Stage snapshot publication.
+ *
+ * Internal workflows use semantic layer ids rather than the temporary HUD ids;
+ * the remaining DOM click adapters are now only boundary translators.
+ */
+function setH2rLayerVisible(layerId: H2rStageLayerId, on: boolean): void {
+  if (state.calibrationMode && layerId !== "targetRobot" && on) return;
+  h2rRequestedVisibility[layerId] = Boolean(on);
   applyH2rPhysicalVisibility();
   player.refreshFrame();
   markH2rStageDisplayChanged();
 }
+
+function setBodyVisible(on: boolean): void {
+  setH2rLayerVisible("sourceBody", on);
+}
+
 function bodyIsRequestedVisible(): boolean {
   return h2rRequestedVisibility.sourceBody;
 }
@@ -2580,25 +2593,6 @@ function motionHasEnvironment(payload: MotionPayload | null | undefined): boolea
   return false;
 }
 
-type ViewToggleButtonId =
-  | "tg-skeleton"
-  | "tg-mesh"
-  | "tg-env"
-  | "tg-scaled"
-  | "tg-scaled-env"
-  | "tg-robot";
-
-const H2R_LAYER_BY_TOGGLE_ID: Readonly<
-  Record<ViewToggleButtonId, H2rStageLayerId>
-> = {
-  "tg-skeleton": "sourceSkeleton",
-  "tg-mesh": "sourceBody",
-  "tg-env": "sourceEnvironment",
-  "tg-scaled": "scaledSkeleton",
-  "tg-scaled-env": "scaledEnvironment",
-  "tg-robot": "targetRobot",
-};
-
 function h2rLayerAvailability(): Record<H2rStageLayerId, boolean> {
   return {
     sourceSkeleton: skel.numFrames > 0,
@@ -2635,15 +2629,6 @@ function applyH2rPhysicalVisibility(): void {
   robot.group.visible = physical.targetRobot;
 }
 
-function setViewVisible(btnId: ViewToggleButtonId, on: boolean): void {
-  const layerId = H2R_LAYER_BY_TOGGLE_ID[btnId];
-  if (state.calibrationMode && layerId !== "targetRobot" && on) return;
-  h2rRequestedVisibility[layerId] = Boolean(on);
-  applyH2rPhysicalVisibility();
-  player.refreshFrame();
-  markH2rStageDisplayChanged();
-}
-
 function emitResultDiagnostics(
   workflow: WorkflowId,
   diagnostics: ResultDiagnostics | null,
@@ -2677,46 +2662,52 @@ function applyH2rComparisonPreset(preset: ComparisonPreset): void {
     const showTarget = preset === "target" || preset === "overlay";
     const showResult = preset === "result" || preset === "overlay";
 
-    setViewVisible("tg-skeleton", showSource && skel.numFrames > 0);
+    setH2rLayerVisible("sourceSkeleton", showSource && skel.numFrames > 0);
     // The opaque body is useful by itself, but hides the diagnostic overlays.
     setBodyVisible(preset === "source" && Boolean(state.motion));
-    setViewVisible(
-      "tg-env",
+    setH2rLayerVisible(
+      "sourceEnvironment",
       preset === "source" && motionHasEnvironment(state.motion),
     );
-    setViewVisible("tg-scaled", showTarget && scaledSkel.numFrames > 0);
-    setViewVisible(
-      "tg-scaled-env",
+    setH2rLayerVisible("scaledSkeleton", showTarget && scaledSkel.numFrames > 0);
+    setH2rLayerVisible(
+      "scaledEnvironment",
       (showTarget || showResult) &&
         (scaledEnv.numFrames > 0 || scaledEnv.group.children.length > 0),
     );
-    setViewVisible("tg-robot", showResult && Boolean(robot.trajectory));
+    setH2rLayerVisible("targetRobot", showResult && Boolean(robot.trajectory));
   });
   emitComparisonState("h2r");
 }
 
 document.getElementById("tg-skeleton").onclick = () =>
-  setViewVisible("tg-skeleton", !h2rRequestedVisibility.sourceSkeleton);
+  setH2rLayerVisible("sourceSkeleton", !h2rRequestedVisibility.sourceSkeleton);
 document.getElementById("tg-mesh").onclick = () =>
   setBodyVisible(!bodyIsRequestedVisible());
 document.getElementById("tg-env").onclick = (e) => {
   if ((e.currentTarget as HTMLButtonElement).disabled) return;
-  setViewVisible("tg-env", !h2rRequestedVisibility.sourceEnvironment);
+  setH2rLayerVisible(
+    "sourceEnvironment",
+    !h2rRequestedVisibility.sourceEnvironment,
+  );
 };
 document.getElementById("tg-scaled").onclick = (e) => {
   if ((e.currentTarget as HTMLButtonElement).disabled) return;
-  setViewVisible("tg-scaled", !h2rRequestedVisibility.scaledSkeleton);
+  setH2rLayerVisible(
+    "scaledSkeleton",
+    !h2rRequestedVisibility.scaledSkeleton,
+  );
 };
 document.getElementById("tg-scaled-env").onclick = (e) => {
   if ((e.currentTarget as HTMLButtonElement).disabled) return;
-  setViewVisible(
-    "tg-scaled-env",
+  setH2rLayerVisible(
+    "scaledEnvironment",
     !h2rRequestedVisibility.scaledEnvironment,
   );
 };
 document.getElementById("tg-robot").onclick = (e) => {
   if ((e.currentTarget as HTMLButtonElement).disabled) return;
-  setViewVisible("tg-robot", !h2rRequestedVisibility.targetRobot);
+  setH2rLayerVisible("targetRobot", !h2rRequestedVisibility.targetRobot);
 };
 
 /** Remove preview resources derived from the previous motion/robot pair. */
@@ -2724,8 +2715,8 @@ function clearH2rScaledPreview(): void {
   withH2rStageDisplayBatch(() => {
     scaledSkel.clear();
     scaledEnv.clear();
-    setViewVisible("tg-scaled", false);
-    setViewVisible("tg-scaled-env", false);
+    setH2rLayerVisible("scaledSkeleton", false);
+    setH2rLayerVisible("scaledEnvironment", false);
   });
 }
 
@@ -2763,8 +2754,8 @@ async function refreshScaledPreview(): Promise<void> {
       // (or the user explicitly toggles it on). Playing motion against a frozen
       // calibration / zero robot makes the overlay look collapsed inside the mesh.
       if (!state.robotTrajectory) {
-        setViewVisible("tg-scaled", false);
-        setViewVisible("tg-scaled-env", false);
+        setH2rLayerVisible("scaledSkeleton", false);
+        setH2rLayerVisible("scaledEnvironment", false);
       }
       if (player.active) player.refreshFrame();
     });
@@ -3466,9 +3457,9 @@ async function loadMotionPayload(payload: MotionPayload): Promise<void> {
   }
   withH2rStageDisplayBatch(() => {
     if (hasEnv) {
-      setViewVisible("tg-env", true);
+      setH2rLayerVisible("sourceEnvironment", true);
     } else {
-      setViewVisible("tg-env", false);
+      setH2rLayerVisible("sourceEnvironment", false);
     }
     // A fresh motion invalidates any previous retarget result.
     state.robotTrajectory = null;
@@ -3481,9 +3472,9 @@ async function loadMotionPayload(payload: MotionPayload): Promise<void> {
       payload.meta?.source_format === "parc_ms_pkl";
     const hasSkin = Boolean(payload.body_mesh?.available);
     const showSkeleton = isParcMs || !hasSkin;
-    setViewVisible("tg-skeleton", showSkeleton);
+    setH2rLayerVisible("sourceSkeleton", showSkeleton);
     setBodyVisible(!showSkeleton || hasSkin);
-    setViewVisible("tg-robot", false);
+    setH2rLayerVisible("targetRobot", false);
     player.ready(effectivePlaybackDuration(payload));
   });
   player.setPlaying(true);
@@ -3539,7 +3530,7 @@ async function loadRobotExportPreview(result: RobotExportPreviewResult): Promise
       // Robot loading reuses the legacy renderer. If it fails, keep the current
       // source scene intact and publish the target as hidden instead of claiming
       // that the previous target mesh is still rendered.
-      setViewVisible("tg-robot", false);
+      setH2rLayerVisible("targetRobot", false);
       throw error;
     }
   }
@@ -3555,26 +3546,26 @@ async function loadRobotExportPreview(result: RobotExportPreviewResult): Promise
     mesh.clear();
     skin.clear();
     envView.clear();
-    setViewVisible("tg-env", false);
+    setH2rLayerVisible("sourceEnvironment", false);
     state.robotTrajectory = result.trajectory;
     robot.setTrajectory(result.trajectory);
 
     scaledSkel.clear();
-    setViewVisible("tg-scaled", false);
+    setH2rLayerVisible("scaledSkeleton", false);
     if (result.scaled_scene) {
       scaledEnv.load(result.scaled_scene, result.preview_token, {
         duration: clipDur,
         objectGlbUrl: (o) => datasetSceneGlbUrl(result.preview_token, o),
       });
-      setViewVisible("tg-scaled-env", true);
+      setH2rLayerVisible("scaledEnvironment", true);
     } else {
       scaledEnv.clear();
-      setViewVisible("tg-scaled-env", false);
+      setH2rLayerVisible("scaledEnvironment", false);
     }
 
-    setViewVisible("tg-skeleton", false);
+    setH2rLayerVisible("sourceSkeleton", false);
     setBodyVisible(false);
-    setViewVisible("tg-robot", true);
+    setH2rLayerVisible("targetRobot", true);
     player.ready(robot.clipDuration || clipDur);
   });
 
@@ -4322,7 +4313,7 @@ async function applyRobot(
     // the renderer's failure state even though the caller will surface the error.
     withH2rStageDisplayBatch(() => {
       clearH2rScaledPreview();
-      setViewVisible("tg-robot", false);
+      setH2rLayerVisible("targetRobot", false);
     });
     throw error;
   }
@@ -4334,7 +4325,7 @@ async function applyRobot(
   updatePills();
   withH2rStageDisplayBatch(() => {
     clearH2rScaledPreview();
-    setViewVisible("tg-robot", true);
+    setH2rLayerVisible("targetRobot", true);
   });
   revealStage();
   // Await so state.calibration is fresh; refreshRetargetPanel itself loads the
@@ -4551,9 +4542,9 @@ async function deleteRobotSummary(summary: RobotSummary): Promise<void> {
       h2rRunState = "idle";
       withH2rStageDisplayBatch(() => {
         clearH2rScaledPreview();
-        // Keep the legacy toggle projection and the Stage snapshot in sync when
-        // the selected robot disappears from the local library.
-        setViewVisible("tg-robot", false);
+        // Keep the renderer projection and Stage snapshot in sync when the
+        // selected robot disappears from the local library.
+        setH2rLayerVisible("targetRobot", false);
       });
       document.getElementById("robot-meta-card").style.display = "none";
       document.getElementById("robot-pill").textContent = runtimeText("No robot loaded", "未加载机器人");
@@ -5602,12 +5593,12 @@ function _applyCalibSceneLayout(): void {
     clearResultDiagnostics("h2r");
     scaledSkel.clear();
     scaledEnv.clear();
-    setViewVisible("tg-skeleton", false);
+    setH2rLayerVisible("sourceSkeleton", false);
     setBodyVisible(false);
-    setViewVisible("tg-env", false);
-    setViewVisible("tg-scaled", false);
-    setViewVisible("tg-scaled-env", false);
-    setViewVisible("tg-robot", true);
+    setH2rLayerVisible("sourceEnvironment", false);
+    setH2rLayerVisible("scaledSkeleton", false);
+    setH2rLayerVisible("scaledEnvironment", false);
+    setH2rLayerVisible("targetRobot", true);
     robot.applyStatic();
     refSkel.group.visible = true;
     player.setPlaying(false);
@@ -5625,12 +5616,12 @@ function _restoreVis(snap: ViewVisibilitySnapshot | null): void {
   withH2rStageDisplayBatch(() => {
     refSkel.clear();
     refSkel.group.visible = false;
-    setViewVisible("tg-skeleton", snap.skel);
+    setH2rLayerVisible("sourceSkeleton", snap.skel);
     setBodyVisible(snap.body);
-    setViewVisible("tg-env", snap.env);
-    setViewVisible("tg-scaled", snap.scaled);
-    setViewVisible("tg-scaled-env", snap.scaledEnv);
-    setViewVisible("tg-robot", snap.robot);
+    setH2rLayerVisible("sourceEnvironment", snap.env);
+    setH2rLayerVisible("scaledSkeleton", snap.scaled);
+    setH2rLayerVisible("scaledEnvironment", snap.scaledEnv);
+    setH2rLayerVisible("targetRobot", snap.robot);
     _setPlaybarVisible(snap.playbar);
     player.t = snap.t;
     player.setPlaying(snap.playing);
@@ -6074,8 +6065,8 @@ document.getElementById("calib-save").onclick = async () => {
     player.setPlaying(false);
     robot.applyStatic();
     withH2rStageDisplayBatch(() => {
-      setViewVisible("tg-scaled", false);
-      setViewVisible("tg-scaled-env", false);
+      setH2rLayerVisible("scaledSkeleton", false);
+      setH2rLayerVisible("scaledEnvironment", false);
     });
     refreshRetargetPanel();
     renderCalibrationSaveSummary("calibration-save-summary", scope, response.path ?? null, savedQ);
@@ -6229,12 +6220,12 @@ document.getElementById("retarget-btn").onclick = async () => {
       }
       if (j.result.scaled_scene) {
         scaledEnv.load(j.result.scaled_scene, retargetMotionToken);
-        setViewVisible("tg-scaled-env", true);
+        setH2rLayerVisible("scaledEnvironment", true);
       }
-      setViewVisible("tg-skeleton", true);
+      setH2rLayerVisible("sourceSkeleton", true);
       setBodyVisible(true);
-      setViewVisible("tg-scaled", true);
-      setViewVisible("tg-robot", true);
+      setH2rLayerVisible("scaledSkeleton", true);
+      setH2rLayerVisible("targetRobot", true);
       applyH2rComparisonPreset(comparisonPresets.h2r);
     });
     emitResultDiagnostics("h2r", j.result.diagnostics ?? {

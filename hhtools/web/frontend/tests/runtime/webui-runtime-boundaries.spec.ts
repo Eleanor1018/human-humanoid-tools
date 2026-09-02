@@ -92,26 +92,38 @@ describe("legacy runtime ownership boundaries", () => {
   });
 
   it("publishes primitive visibility setters and batches comparison presets", () => {
+    const layerSetter = runtimeSource.slice(
+      runtimeSource.indexOf("function setH2rLayerVisible"),
+      runtimeSource.indexOf("function setBodyVisible"),
+    );
     const bodySetter = runtimeSource.slice(
       runtimeSource.indexOf("function setBodyVisible"),
       runtimeSource.indexOf("function bodyIsRequestedVisible"),
-    );
-    const viewSetter = runtimeSource.slice(
-      runtimeSource.indexOf("function setViewVisible"),
-      runtimeSource.indexOf("function emitResultDiagnostics"),
     );
     const preset = runtimeSource.slice(
       runtimeSource.indexOf("function applyH2rComparisonPreset"),
       runtimeSource.indexOf('document.getElementById("tg-skeleton")'),
     );
+    const requested = layerSetter.indexOf("h2rRequestedVisibility[layerId]");
+    const projection = layerSetter.indexOf("applyH2rPhysicalVisibility()");
+    const refresh = layerSetter.indexOf("player.refreshFrame()");
+    const publication = layerSetter.indexOf("markH2rStageDisplayChanged()");
 
-    expect(bodySetter).toContain("markH2rStageDisplayChanged()");
-    expect(bodySetter).toContain("h2rRequestedVisibility.sourceBody");
-    expect(bodySetter).not.toContain(".group.visible =");
-    expect(viewSetter).toContain("markH2rStageDisplayChanged()");
-    expect(viewSetter).toContain("h2rRequestedVisibility[layerId]");
-    expect(viewSetter).not.toContain(".group.visible =");
+    expect(layerSetter).toContain(
+      'state.calibrationMode && layerId !== "targetRobot" && on',
+    );
+    expect(layerSetter).toContain("markH2rStageDisplayChanged()");
+    expect(layerSetter).toContain("h2rRequestedVisibility[layerId]");
+    expect(layerSetter).not.toContain(".group.visible =");
+    expect(requested).toBeGreaterThanOrEqual(0);
+    expect(requested).toBeLessThan(projection);
+    expect(projection).toBeLessThan(refresh);
+    expect(refresh).toBeLessThan(publication);
+    expect(bodySetter).toContain(
+      'setH2rLayerVisible("sourceBody", on)',
+    );
     expect(preset).toContain("withH2rStageDisplayBatch(() =>");
+    expect(preset).not.toContain('"tg-');
   });
 
   it("keeps all physical H2R group writes inside one projector", () => {
@@ -119,7 +131,7 @@ describe("legacy runtime ownership boundaries", () => {
       "function applyH2rPhysicalVisibility",
     );
     const projectorEnd = runtimeSource.indexOf(
-      "function setViewVisible",
+      "function emitResultDiagnostics",
       projectorStart,
     );
     const assignments = [...runtimeSource.matchAll(
@@ -152,7 +164,7 @@ describe("legacy runtime ownership boundaries", () => {
     expect(snapshot).toContain("h2rRequestedVisibility.sourceSkeleton");
     expect(snapshot).toContain("bodyIsRequestedVisible()");
     expect(snapshot).not.toContain(".group.visible");
-    expect(restore).toContain("setViewVisible(");
+    expect(restore).toContain("setH2rLayerVisible(");
     expect(restore).toContain("setBodyVisible(");
     expect(restore).not.toMatch(
       /\b(?:skel|mesh|skin|envView|scaledSkel|scaledEnv|robot)\.group\.visible\s*=/,
@@ -172,6 +184,8 @@ describe("legacy runtime ownership boundaries", () => {
       /document\.getElementById\("(tg-(?:skeleton|mesh|env|scaled|scaled-env|robot))"\)/g;
     const commandPattern =
       /document\.getElementById\("(tg-(?:skeleton|mesh|env|scaled|scaled-env|robot))"\)\.onclick\s*=/g;
+    const literalPattern =
+      /"(tg-(?:skeleton|mesh|env|scaled|scaled-env|robot))"/g;
 
     const lookupIds = [...runtimeSource.matchAll(lookupPattern)].map(
       (match) => match[1],
@@ -179,9 +193,13 @@ describe("legacy runtime ownership boundaries", () => {
     const commandIds = [...runtimeSource.matchAll(commandPattern)].map(
       (match) => match[1],
     );
+    const literalIds = [...runtimeSource.matchAll(literalPattern)].map(
+      (match) => match[1],
+    );
 
     expect(lookupIds).toEqual(expectedIds);
     expect(commandIds).toEqual(expectedIds);
+    expect(literalIds).toEqual(expectedIds);
     expect(runtimeSource).not.toContain("syncEnvToggleButton");
     expect(runtimeSource).not.toContain("_setCalibViewTogglesDisabled");
     expect(runtimeSource).not.toContain("_restoreViewToggleButtons");
