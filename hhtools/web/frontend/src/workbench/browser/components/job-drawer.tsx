@@ -8,8 +8,8 @@ import {
 import { createPortal } from "react-dom";
 import { ChevronDown, ChevronUp, RefreshCw, X } from "lucide-react";
 
-import { useLocaleText } from "@/hooks/use-locale-text";
-import { useWindowEvent } from "@/hooks/use-window-event";
+import { useLocaleText } from "@/workbench/services/localization/browser/use-locale-text";
+import { useWindowEvent } from "@/platform/events/browser/use-window-event";
 import { cn } from "@/lib/utils";
 import { windowEventBus } from "@/platform/events/browser/window-event-bus";
 import type {

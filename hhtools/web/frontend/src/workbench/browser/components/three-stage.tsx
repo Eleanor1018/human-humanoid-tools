@@ -1,6 +1,6 @@
 import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
 
-import { useLocaleText } from "@/hooks/use-locale-text";
+import { useLocaleText } from "@/workbench/services/localization/browser/use-locale-text";
 import type { WorkspaceLocale } from "@/workbench/common/workspace";
 import { PlaybackBar } from "./playback-bar";
 

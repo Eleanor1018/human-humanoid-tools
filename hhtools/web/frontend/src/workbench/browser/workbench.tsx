@@ -24,7 +24,7 @@ import { WorkspaceSettingsDialog } from "./components/workspace-settings-dialog"
 import { usePanelLayout } from "./use-panel-layout";
 import { useVideoBatch } from "./use-video-batch";
 import { useWorkbenchServices } from "./workbench-service-context";
-import { useLocaleText } from "@/hooks/use-locale-text";
+import { useLocaleText } from "@/workbench/services/localization/browser/use-locale-text";
 import { windowEventBus } from "@/platform/events/browser/window-event-bus";
 import type {
   GvhmrRuntimeStatus,

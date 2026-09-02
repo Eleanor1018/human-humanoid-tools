@@ -1,4 +1,4 @@
-import { useLocaleText } from "@/hooks/use-locale-text";
+import { useLocaleText } from "@/workbench/services/localization/browser/use-locale-text";
 import { windowEventBus } from "@/platform/events/browser/window-event-bus";
 import type { WorkspaceLocale } from "@/workbench/common/workspace";
 import { VideoToMotionPipeline } from "./video-to-motion-pipeline";

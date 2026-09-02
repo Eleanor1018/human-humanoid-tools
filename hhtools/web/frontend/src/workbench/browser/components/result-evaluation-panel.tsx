@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 
-import { useLocaleText } from "@/hooks/use-locale-text";
-import { useWindowEvent } from "@/hooks/use-window-event";
+import { useLocaleText } from "@/workbench/services/localization/browser/use-locale-text";
+import { useWindowEvent } from "@/platform/events/browser/use-window-event";
 import { windowEventBus } from "@/platform/events/browser/window-event-bus";
 import type {
   ComparisonPreset,

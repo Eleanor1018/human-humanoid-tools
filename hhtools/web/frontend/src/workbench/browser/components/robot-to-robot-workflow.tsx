@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import { useLocaleText } from "@/hooks/use-locale-text";
+import { useLocaleText } from "@/workbench/services/localization/browser/use-locale-text";
 import type {
   WorkspaceLocale,
   WorkspacePanelId,

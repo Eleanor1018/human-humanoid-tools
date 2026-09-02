@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import { useWindowEvent } from "@/hooks/use-window-event";
+import { useWindowEvent } from "@/platform/events/browser/use-window-event";
 import { windowEventBus } from "@/platform/events/browser/window-event-bus";
 import type { PlaybackAction, PlaybackUiState } from "@/runtime/types";
 import { cn } from "@/lib/utils";

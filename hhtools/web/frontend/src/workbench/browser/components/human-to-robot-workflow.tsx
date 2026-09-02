@@ -8,7 +8,7 @@ import type {
   WorkspaceLocale,
   WorkspacePanelId,
 } from "@/workbench/common/workspace";
-import { useLocaleText } from "@/hooks/use-locale-text";
+import { useLocaleText } from "@/workbench/services/localization/browser/use-locale-text";
 
 /**
  * Declarative H2R inspector. React owns composition and local dialogs; stable

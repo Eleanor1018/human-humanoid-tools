@@ -5,7 +5,7 @@ import {
   type HHToolsWindowEventName,
 } from "@/platform/events/browser/window-event-bus";
 
-/** Subscribe once while always invoking the latest React callback. */
+/** React adapter that subscribes once while invoking the latest callback. */
 export function useWindowEvent<K extends HHToolsWindowEventName>(
   type: K,
   listener: (event: WindowEventMap[K]) => void,
