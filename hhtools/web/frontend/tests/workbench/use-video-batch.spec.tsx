@@ -3,6 +3,10 @@ import type { PropsWithChildren } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type {
+  LibraryEntry,
+  MotionPayload,
+} from "../../src/domain/motion/common/motion";
+import type {
   IRequestService,
   JsonRequestOptions,
   UploadPart,
@@ -12,8 +16,6 @@ import type {
   GvhmrRuntimeStatus,
   HhAppBridge,
   JobStartResponse,
-  LibraryEntry,
-  MotionPayload,
   UploadFile,
 } from "../../src/runtime/types";
 import { WorkbenchServicesProvider } from "../../src/workbench/browser/workbench-service-context";

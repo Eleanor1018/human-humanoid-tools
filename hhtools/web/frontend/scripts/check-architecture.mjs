@@ -12,12 +12,10 @@ import ts from "typescript";
  */
 const LEGACY_RUNTIME_TYPE_CONSUMERS = [
   "env.d.ts",
-  "workbench/browser/components/batch-workflow.tsx",
   "workbench/browser/components/calibration-editor-controls.tsx",
   "workbench/browser/components/data-analysis-pipeline.tsx",
   "workbench/browser/components/job-drawer.tsx",
   "workbench/browser/components/motion-panel.tsx",
-  "workbench/browser/components/motion-picker-dialog.tsx",
   "workbench/browser/components/playback-bar.tsx",
   "workbench/browser/components/result-evaluation-panel.tsx",
   "workbench/browser/components/workflow-pipeline.tsx",

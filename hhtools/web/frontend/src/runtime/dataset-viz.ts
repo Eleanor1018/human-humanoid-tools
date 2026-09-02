@@ -3,6 +3,7 @@
 // Keep new UI state in React; this file remains focused on the existing plotting
 // and analysis orchestration until that domain receives a dedicated service.
 
+import type { LibraryEntry } from '@/domain/motion/common/motion'
 import type {
   DataAnalysisKind,
   DataAnalysisStage,
@@ -12,7 +13,6 @@ import type {
   DatasetUploadSummary,
   HhAppBridge,
   JobResult,
-  LibraryEntry,
   UploadFile,
 } from './types'
 import type { HHToolsElementForId, HHToolsKnownId } from '../env'

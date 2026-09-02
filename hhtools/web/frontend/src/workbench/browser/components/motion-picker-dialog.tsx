@@ -5,7 +5,7 @@ import type {
   LibraryAssetKind,
   LibraryEntry,
   MotionCategory,
-} from "@/runtime/types";
+} from "@/domain/motion/common/motion";
 import type { WorkspaceLocale } from "@/workbench/common/workspace";
 import { cn } from "@/lib/utils";
 

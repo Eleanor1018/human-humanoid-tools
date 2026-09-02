@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
+import type { MotionCategory } from "@/domain/motion/common/motion";
 import { useLocaleText } from "@/workbench/services/localization/browser/use-locale-text";
-import type { MotionCategory } from "@/runtime/types";
 import type {
   WorkspaceLocale,
   WorkspacePanelId,

@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type {
+  LibraryEntry,
+  MotionPayload,
+} from "@/domain/motion/common/motion";
+import type {
   GvhmrRuntimeStatus,
   HhAppBridge,
   JobStartResponse,
-  LibraryEntry,
-  MotionPayload,
   UploadFile,
 } from "@/runtime/types";
 import type { WorkspaceLocale } from "@/workbench/common/workspace";
