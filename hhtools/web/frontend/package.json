@@ -5,10 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
-    "build": "tsc --noEmit && vite build",
+    "build": "npm run check:architecture && tsc --noEmit && vite build",
+    "check:architecture": "node scripts/check-architecture.mjs",
     "typecheck": "tsc --noEmit",
     "typecheck:test": "tsc --noEmit -p tsconfig.test.json",
-    "test": "npm run typecheck:test && vitest run"
+    "test:architecture": "node --test scripts/check-architecture.test.mjs",
+    "test": "npm run typecheck:test && npm run test:architecture && npm run check:architecture && vitest run"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.23",
