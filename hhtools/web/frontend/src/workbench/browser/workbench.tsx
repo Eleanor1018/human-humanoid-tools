@@ -43,12 +43,13 @@ import {
   updateWorkspacePreferences,
 } from "@/runtime/workspace-preferences";
 import { cn } from "@/lib/utils";
+import { WorkbenchCommandIds } from "@/workbench/common/command-ids";
 import type { GvhmrOptionalComponentState } from "@/workbench/services/gvhmr/common/gvhmr-component-service";
 
-// Command-palette imports resolve to stable compatibility elements. Keeping
-// this map in the shell prevents individual menus from knowing panel markup.
+// Unmigrated command-palette imports still resolve to compatibility elements.
+// Migrated features such as V2M register commands instead of entering this map.
 const importTargets: Record<
-  Exclude<ImportCommandTarget, "job-spec">,
+  Exclude<ImportCommandTarget, "job-spec" | "video-file">,
   {
     panel: WorkspacePanelId;
     selector: string;
@@ -65,7 +66,6 @@ const importTargets: Record<
     selector: "#motion-pick-folder",
     motionProfile: "mimic",
   },
-  "video-file": { panel: "video-to-motion", selector: "#video-pick-file" },
   "robot-urdf": { panel: "robot-assets", selector: "#robot-pick-urdf" },
   "robot-mesh-folder": {
     panel: "robot-assets",
@@ -98,6 +98,7 @@ export function Workbench({ panelContributions }: WorkbenchProps) {
   // sees their stable interfaces. Remaining window bridges below are explicit
   // migration seams, not members of the new service graph.
   const {
+    commandService,
     gvhmrComponentService,
     hostService,
     settingsService,
@@ -255,6 +256,23 @@ export function Workbench({ panelContributions }: WorkbenchProps) {
           );
           return;
         }
+        if (event.detail.target === "video-file") {
+          // The contributed V2M view stays mounted and owns this command.
+          // Select the panel first, then invoke intent without knowing its DOM.
+          setActivePanel("video-to-motion");
+          void commandService
+            .executeCommand(WorkbenchCommandIds.pickVideoToMotionSource)
+            .catch(() =>
+              window.__hhApp?.toast(
+                text(
+                  "The import entry point is not ready yet. Try again shortly.",
+                  "导入入口尚未准备完成，请稍后重试",
+                ),
+                true,
+              ),
+            );
+          return;
+        }
         const target = importTargets[event.detail.target];
         if (target.motionProfile)
           windowEventBus.emit(
@@ -287,7 +305,7 @@ export function Workbench({ panelContributions }: WorkbenchProps) {
       importSubscription.dispose();
       delete window.__hhUi;
     };
-  }, [locale, setActivePanel, settingsService, text, theme]);
+  }, [commandService, locale, setActivePanel, settingsService, text, theme]);
 
   const applicationChrome = {
     activePanel,

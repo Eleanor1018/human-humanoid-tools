@@ -1,4 +1,10 @@
-import { cleanup, render } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../src/runtime/webui-runtime", () => ({}));
@@ -11,21 +17,51 @@ import {
   WorkbenchLifecyclePhase,
 } from "../../src/workbench/common/contribution";
 import { createLegacyRuntimeContribution } from "../../src/workbench/contrib/legacy-runtime/browser/legacy-runtime-contribution";
-import { videoToMotionPanelContribution } from "../../src/workbench/contrib/video-to-motion/browser/video-to-motion-contribution";
+import { WorkbenchCommandIds } from "../../src/workbench/common/command-ids";
+import { createVideoToMotionPanelContribution } from "../../src/workbench/contrib/video-to-motion/browser/video-to-motion-contribution";
 import { createBrowserWorkbenchServices } from "../../src/workbench/services/browser/browser-workbench-services";
 import runtimeSource from "../../src/runtime/webui-runtime.ts?raw";
 
 afterEach(() => cleanup());
 
+function mockWorkbenchGetRequests(
+  services: ReturnType<typeof createBrowserWorkbenchServices>,
+) {
+  return vi
+    .spyOn(services.requestService, "get")
+    .mockImplementation(async <T,>(url: string): Promise<T> => {
+      if (url === "/api/video-to-motion/status") {
+        return { ready: true, missing: [] } as T;
+      }
+      if (url === "/api/settings/motion-library") {
+        return {
+          root: "/tmp/motions",
+          default_root: "/tmp/motions",
+          editable: true,
+        } as T;
+      }
+      throw new Error(`Unexpected test GET: ${url}`);
+    });
+}
+
 function renderWorkbench() {
   const services = createBrowserWorkbenchServices();
+  mockWorkbenchGetRequests(services);
   const lifecycle = new WorkbenchContributionLifecycle(services, [], vi.fn());
   lifecycle.advanceTo(WorkbenchLifecyclePhase.Ready);
-  return render(
+  const panelContribution = createVideoToMotionPanelContribution({
+    commandService: services.commandService,
+    requestService: services.requestService,
+    jobService: services.jobService,
+    presentationService: services.motionResultPresentationService,
+    reportError: vi.fn(),
+  });
+  const view = render(
     <WorkbenchServicesProvider services={services} lifecycle={lifecycle}>
-      <Workbench panelContributions={[videoToMotionPanelContribution]} />
+      <Workbench panelContributions={[panelContribution]} />
     </WorkbenchServicesProvider>,
   );
+  return { ...view, services };
 }
 
 describe("Workbench DOM contract", () => {
@@ -33,7 +69,6 @@ describe("Workbench DOM contract", () => {
     const ids = [
       "three-canvas",
       "motion-drop-shared",
-      "video-pick-file",
       "robot-pick-urdf",
       "h2r-robot-select",
       "retarget-btn",
@@ -48,6 +83,7 @@ describe("Workbench DOM contract", () => {
       "dv-scatter-canvas",
     ];
     const services = createBrowserWorkbenchServices();
+    mockWorkbenchGetRequests(services);
     let missingAtStartup: string[] | undefined;
     vi.spyOn(services.legacyRuntimeService, "start").mockImplementation(
       async () => {
@@ -62,10 +98,17 @@ describe("Workbench DOM contract", () => {
       vi.fn(),
     );
     lifecycle.advanceTo(WorkbenchLifecyclePhase.Ready);
+    const panelContribution = createVideoToMotionPanelContribution({
+      commandService: services.commandService,
+      requestService: services.requestService,
+      jobService: services.jobService,
+      presentationService: services.motionResultPresentationService,
+      reportError: vi.fn(),
+    });
 
     render(
       <WorkbenchServicesProvider services={services} lifecycle={lifecycle}>
-        <Workbench panelContributions={[videoToMotionPanelContribution]} />
+        <Workbench panelContributions={[panelContribution]} />
       </WorkbenchServicesProvider>,
     );
 
@@ -82,5 +125,35 @@ describe("Workbench DOM contract", () => {
       (id) => document.getElementById(id) === null,
     );
     expect(missingIds).toEqual([]);
+  });
+
+  it("routes video imports through the contributed command without DOM lookup", async () => {
+    const { services } = renderWorkbench();
+    const videoInput = await screen.findByLabelText("Select a video file");
+    const inputClick = vi.spyOn(videoInput, "click");
+    const executeCommand = vi.spyOn(
+      services.commandService,
+      "executeCommand",
+    );
+    const panel = document.querySelector(
+      '[data-panel="video-to-motion"]',
+    );
+    const querySelector = vi.spyOn(document, "querySelector");
+
+    fireEvent(
+      window,
+      new CustomEvent("hhtools:import-command", {
+        detail: { target: "video-file" },
+      }),
+    );
+
+    await waitFor(() => {
+      expect(panel).toHaveClass("active");
+      expect(executeCommand).toHaveBeenCalledWith(
+        WorkbenchCommandIds.pickVideoToMotionSource,
+      );
+      expect(inputClick).toHaveBeenCalledOnce();
+    });
+    expect(querySelector).not.toHaveBeenCalled();
   });
 });

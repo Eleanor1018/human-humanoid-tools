@@ -70,13 +70,6 @@ export const LEGACY_IMPORT_ALLOWLIST = [
     target: "workbench/common/workspace.ts",
     reason: "Legacy runtime modules consume the extracted workspace identity contract until they are removed.",
   })),
-  {
-    rule: "legacy-imports-workbench",
-    source: "runtime/webui-runtime.ts",
-    target:
-      "workbench/contrib/video-to-motion/common/video-to-motion-state.ts",
-    reason: "The legacy V2M controller emits the feature-owned state until its React replacement lands.",
-  },
 ];
 
 /**

@@ -16,7 +16,6 @@ import type {
   UploadFile,
   WorkflowStateDetail,
 } from "./runtime/types";
-import type { VideoToMotionStateDetail } from "./workbench/contrib/video-to-motion/common/video-to-motion-state";
 import type {
   GvhmrOptionalComponentState,
   GvhmrSetupResult,
@@ -238,7 +237,6 @@ declare global {
     "hhtools:playback-command": CustomEvent<PlaybackCommandDetail>;
     "hhtools:playback-state": CustomEvent<Partial<PlaybackUiState>>;
     "hhtools:result-diagnostics": CustomEvent<ResultDiagnosticsDetail>;
-    "hhtools:video-to-motion-state": CustomEvent<VideoToMotionStateDetail>;
     "hhtools:workflow-state": CustomEvent<WorkflowStateDetail>;
   }
 }

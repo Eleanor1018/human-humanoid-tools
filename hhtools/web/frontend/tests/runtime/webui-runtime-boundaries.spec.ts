@@ -4,11 +4,17 @@ import runtimeSource from "../../src/runtime/webui-runtime.ts?raw";
 
 describe("legacy runtime ownership boundaries", () => {
   it("lets the React-owned V2M batch dropzone handle its own files", () => {
-    const stageDropzone = runtimeSource.slice(
-      runtimeSource.indexOf("initGvhmrWorkspace();"),
-      runtimeSource.indexOf('document.getElementById("add-to-basket")'),
+    const start = runtimeSource.indexOf(
+      'setupDropzone(\n  document.getElementById("stage")',
     );
+    const end = runtimeSource.indexOf(
+      'document.getElementById("add-to-basket")',
+      start,
+    );
+    const stageDropzone = runtimeSource.slice(start, end);
 
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
     expect(stageDropzone).toContain('target.closest("#v2m-batch-drop")');
   });
 
@@ -28,11 +34,5 @@ describe("legacy runtime ownership boundaries", () => {
     expect(refresh).toBeGreaterThan(load);
     expect(basket).toBeGreaterThan(refresh);
     expect(facade).toContain("{ silent: true }");
-
-    const legacyFlow = runtimeSource.slice(
-      runtimeSource.indexOf("async function runGvhmrVideoToMotion"),
-      runtimeSource.indexOf("function initGvhmrWorkspace"),
-    );
-    expect(legacyFlow).toContain("await presentHumanMotion(payload)");
   });
 });

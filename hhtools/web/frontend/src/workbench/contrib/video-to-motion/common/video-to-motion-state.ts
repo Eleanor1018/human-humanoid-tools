@@ -16,20 +16,3 @@ export interface VideoToMotionResultSummary {
   duration: number | null;
   framerate: number | null;
 }
-
-/**
- * Renderer-safe state shared during the legacy-to-React migration.
- * Selected File objects remain private to whichever controller owns the flow.
- */
-export interface VideoToMotionStateDetail {
-  videoName: string | null;
-  weightSource: GvhmrWeightSource;
-  checkpointName: string | null;
-  runtimeState: "checking" | "ready" | "unavailable";
-  runtimeMessage: string;
-  environmentConfirmed: boolean;
-  stage: VideoToMotionStage;
-  progress: number;
-  message: string;
-  result: VideoToMotionResultSummary | null;
-}
