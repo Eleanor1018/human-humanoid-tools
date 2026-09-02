@@ -3,7 +3,7 @@ import { windowEventBus } from "@/platform/events/browser/window-event-bus";
 import type { WorkspaceLocale } from "@/workbench/common/workspace";
 import { VideoToMotionPipeline } from "./video-to-motion-pipeline";
 
-/** Declarative workflow shell; upload/inference transport remains in the runtime service. */
+/** Declarative feature view; upload/inference transport remains in the runtime service. */
 export function VideoToMotionPanel({ locale }: { locale: WorkspaceLocale }) {
   const text = useLocaleText(locale);
   return (

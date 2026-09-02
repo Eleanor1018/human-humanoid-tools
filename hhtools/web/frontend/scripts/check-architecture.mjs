@@ -20,7 +20,7 @@ const LEGACY_RUNTIME_TYPE_CONSUMERS = [
   "workbench/browser/components/motion-picker-dialog.tsx",
   "workbench/browser/components/playback-bar.tsx",
   "workbench/browser/components/result-evaluation-panel.tsx",
-  "workbench/browser/components/video-to-motion-pipeline.tsx",
+  "workbench/contrib/video-to-motion/browser/video-to-motion-pipeline.tsx",
   "workbench/browser/components/workflow-pipeline.tsx",
   "workbench/browser/components/workspace-settings-dialog.tsx",
   "workbench/browser/use-video-batch.ts",

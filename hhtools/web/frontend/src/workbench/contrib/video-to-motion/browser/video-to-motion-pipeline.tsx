@@ -23,6 +23,7 @@ const initialState: VideoToMotionStateDetail = {
   result: null,
 };
 
+/** Read-only React projection of the state still emitted by the migration runtime. */
 export function VideoToMotionPipeline({ locale }: { locale: WorkspaceLocale }) {
   const text = useLocaleText(locale);
   const [state, setState] = useState(initialState);

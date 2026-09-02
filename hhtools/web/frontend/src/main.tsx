@@ -8,6 +8,7 @@ import {
   WorkbenchLifecyclePhase,
 } from "@/workbench/common/contribution";
 import { createLegacyRuntimeContribution } from "@/workbench/contrib/legacy-runtime/browser/legacy-runtime-contribution";
+import { videoToMotionPanelContribution } from "@/workbench/contrib/video-to-motion/browser/video-to-motion-contribution";
 import { createBrowserWorkbenchServices } from "@/workbench/services/browser/browser-workbench-services";
 import "./styles/tailwind.css";
 import "./webui.css";
@@ -38,6 +39,7 @@ const contributionLifecycle = new WorkbenchContributionLifecycle(
   [createLegacyRuntimeContribution(services.legacyRuntimeService)],
   reportWorkbenchError,
 );
+const panelContributions = [videoToMotionPanelContribution] as const;
 contributionLifecycle.advanceTo(WorkbenchLifecyclePhase.Ready);
 createRoot(root).render(
   <WorkbenchServicesProvider
@@ -45,7 +47,7 @@ createRoot(root).render(
     lifecycle={contributionLifecycle}
   >
     <TooltipProvider>
-      <Workbench />
+      <Workbench panelContributions={panelContributions} />
     </TooltipProvider>
   </WorkbenchServicesProvider>,
 );

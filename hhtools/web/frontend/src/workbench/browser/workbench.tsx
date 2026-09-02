@@ -18,7 +18,6 @@ import { RobotAssetsPanel } from "./components/robot-assets-panel";
 import { RobotToRobotWorkflow } from "./components/robot-to-robot-workflow";
 import { SidebarNavigation } from "./components/sidebar-navigation";
 import { ThreeStage } from "./components/three-stage";
-import { VideoToMotionPanel } from "./components/video-to-motion-panel";
 import { WorkspaceDrawerHandle } from "./components/workspace-drawer-handle";
 import { WorkspaceSettingsDialog } from "./components/workspace-settings-dialog";
 import { usePanelLayout } from "./use-panel-layout";
@@ -33,6 +32,7 @@ import type {
   JobAdmissionSnapshot,
   MotionLibrarySettingsSnapshot,
 } from "@/runtime/types";
+import type { WorkbenchPanelContribution } from "@/workbench/common/panel-contribution";
 import type {
   WorkspaceLocale,
   WorkspacePanelId,
@@ -89,7 +89,11 @@ const importTargets: Record<
  *
  * Both FastAPI WebUI and Electron instantiate this exact component tree.
  */
-export function Workbench() {
+interface WorkbenchProps {
+  panelContributions: readonly WorkbenchPanelContribution[];
+}
+
+export function Workbench({ panelContributions }: WorkbenchProps) {
   // These concrete implementations are assembled in main.tsx; the shell only
   // sees their stable interfaces. Remaining window bridges below are explicit
   // migration seams, not members of the new service graph.
@@ -395,15 +399,18 @@ export function Workbench() {
             {/* Inactive workflows stay mounted during the migration. The
                 compatibility runtime retains listeners and element references,
                 so unmounting here would break the next panel switch. */}
-            <section
-              className={cn(
-                "panel",
-                activePanel === "video-to-motion" && "active",
-              )}
-              data-panel="video-to-motion"
-            >
-              <VideoToMotionPanel locale={locale} />
-            </section>
+            {panelContributions.map(({ id, component: Panel }) => (
+              <section
+                key={id}
+                className={cn(
+                  "panel",
+                  activePanel === id && "active",
+                )}
+                data-panel={id}
+              >
+                <Panel locale={locale} requestPanel={setActivePanel} />
+              </section>
+            ))}
             <section
               className={cn(
                 "panel",

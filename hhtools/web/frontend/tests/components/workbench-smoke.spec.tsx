@@ -11,6 +11,7 @@ import {
   WorkbenchLifecyclePhase,
 } from "../../src/workbench/common/contribution";
 import { createLegacyRuntimeContribution } from "../../src/workbench/contrib/legacy-runtime/browser/legacy-runtime-contribution";
+import { videoToMotionPanelContribution } from "../../src/workbench/contrib/video-to-motion/browser/video-to-motion-contribution";
 import { createBrowserWorkbenchServices } from "../../src/workbench/services/browser/browser-workbench-services";
 import runtimeSource from "../../src/runtime/webui-runtime.ts?raw";
 
@@ -22,7 +23,7 @@ function renderWorkbench() {
   lifecycle.advanceTo(WorkbenchLifecyclePhase.Ready);
   return render(
     <WorkbenchServicesProvider services={services} lifecycle={lifecycle}>
-      <Workbench />
+      <Workbench panelContributions={[videoToMotionPanelContribution]} />
     </WorkbenchServicesProvider>,
   );
 }
@@ -64,7 +65,7 @@ describe("Workbench DOM contract", () => {
 
     render(
       <WorkbenchServicesProvider services={services} lifecycle={lifecycle}>
-        <Workbench />
+        <Workbench panelContributions={[videoToMotionPanelContribution]} />
       </WorkbenchServicesProvider>,
     );
 
