@@ -29,8 +29,20 @@ export class Emitter<T> implements IDisposable {
 
   fire(event: T): void {
     if (this.#disposed) return;
+    const errors: unknown[] = [];
     for (const subscription of [...this.#listeners]) {
-      subscription.listener(event);
+      try {
+        subscription.listener(event);
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    // An observer cannot prevent its siblings from seeing the same snapshot.
+    // Report failures only after delivery so the producer may handle them at
+    // its own service or contribution boundary.
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) {
+      throw new AggregateError(errors, "Event listeners failed");
     }
   }
 

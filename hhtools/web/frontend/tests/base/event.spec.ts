@@ -53,6 +53,39 @@ describe("Emitter", () => {
     expect(calls).toBe(1);
   });
 
+  it("delivers to sibling listeners before reporting one failure", () => {
+    const emitter = new Emitter<number>();
+    const failure = new Error("broken observer");
+    const received: number[] = [];
+    emitter.event(() => {
+      throw failure;
+    });
+    emitter.event((value) => received.push(value));
+
+    expect(() => emitter.fire(42)).toThrow(failure);
+    expect(received).toEqual([42]);
+  });
+
+  it("aggregates multiple listener failures after completing delivery", () => {
+    const emitter = new Emitter<void>();
+    const failures = [new Error("first"), new Error("second")];
+    for (const failure of failures) {
+      emitter.event(() => {
+        throw failure;
+      });
+    }
+
+    let reported: unknown;
+    try {
+      emitter.fire();
+    } catch (error) {
+      reported = error;
+    }
+
+    expect(reported).toBeInstanceOf(AggregateError);
+    expect((reported as AggregateError).errors).toEqual(failures);
+  });
+
   it("stops existing and future listeners after disposal", () => {
     const emitter = new Emitter<number>();
     const received: number[] = [];
