@@ -182,6 +182,12 @@ import {
   robotLibraryIcon,
 } from "./robot-library-catalog";
 import { sortRobotLibrarySummaries } from "./robot-library-order";
+import {
+  H2rStageDisplayPublisher,
+  projectH2rStageDisplaySnapshot,
+  type H2rStageDisplayListener,
+  type H2rStageDisplaySnapshot,
+} from "./h2r-stage-display";
 import type {
   JobConfigResponse,
   JobListResponse,
@@ -2424,6 +2430,7 @@ function setBodyVisible(on: boolean): void {
     mesh.group.visible = on;
   }
   player.refreshFrame();
+  markH2rStageDisplayChanged();
 }
 function bodyIsVisible(): boolean {
   return skin.group.visible || mesh.group.visible;
@@ -2584,6 +2591,7 @@ function setViewVisible(view: PlaybackView, btnId: ViewToggleButtonId, on: boole
   document.getElementById(btnId).classList.toggle("on", on);
   if (btnId === "tg-env") syncEnvToggleButton();
   player.refreshFrame();
+  markH2rStageDisplayChanged();
 }
 
 function emitResultDiagnostics(
@@ -2611,28 +2619,32 @@ function emitComparisonState(workflow: WorkflowId): void {
 
 /** Apply a repeatable H2R visibility preset without changing any trajectory data. */
 function applyH2rComparisonPreset(preset: ComparisonPreset): void {
-  comparisonPresets.h2r = preset;
-  const showSource = preset === "source" || preset === "overlay";
-  const showTarget = preset === "target" || preset === "overlay";
-  const showResult = preset === "result" || preset === "overlay";
+  // One comparison choice changes all six layers. Publish only the final
+  // arrangement so Workbench cannot observe a half-applied preset.
+  withH2rStageDisplayBatch(() => {
+    comparisonPresets.h2r = preset;
+    const showSource = preset === "source" || preset === "overlay";
+    const showTarget = preset === "target" || preset === "overlay";
+    const showResult = preset === "result" || preset === "overlay";
 
-  setViewVisible(skel, "tg-skeleton", showSource && skel.numFrames > 0);
-  // The opaque body is useful by itself, but hides the diagnostic overlays.
-  setBodyVisible(preset === "source" && Boolean(state.motion));
-  setViewVisible(
-    envView,
-    "tg-env",
-    preset === "source" && motionHasEnvironment(state.motion),
-  );
-  setViewVisible(scaledSkel, "tg-scaled", showTarget && scaledSkel.numFrames > 0);
-  setViewVisible(
-    scaledEnv,
-    "tg-scaled-env",
-    (showTarget || showResult) && (
-      scaledEnv.numFrames > 0 || scaledEnv.group.children.length > 0
-    ),
-  );
-  setViewVisible(robot, "tg-robot", showResult && Boolean(robot.trajectory));
+    setViewVisible(skel, "tg-skeleton", showSource && skel.numFrames > 0);
+    // The opaque body is useful by itself, but hides the diagnostic overlays.
+    setBodyVisible(preset === "source" && Boolean(state.motion));
+    setViewVisible(
+      envView,
+      "tg-env",
+      preset === "source" && motionHasEnvironment(state.motion),
+    );
+    setViewVisible(scaledSkel, "tg-scaled", showTarget && scaledSkel.numFrames > 0);
+    setViewVisible(
+      scaledEnv,
+      "tg-scaled-env",
+      (showTarget || showResult) && (
+        scaledEnv.numFrames > 0 || scaledEnv.group.children.length > 0
+      ),
+    );
+    setViewVisible(robot, "tg-robot", showResult && Boolean(robot.trajectory));
+  });
   emitComparisonState("h2r");
 }
 
@@ -2656,47 +2668,65 @@ document.getElementById("tg-robot").onclick = (e) => {
   setViewVisible(robot, "tg-robot", !robot.group.visible);
 };
 
+/** Remove preview resources derived from the previous motion/robot pair. */
+function clearH2rScaledPreview(): void {
+  withH2rStageDisplayBatch(() => {
+    scaledSkel.clear();
+    scaledEnv.clear();
+    document.getElementById("tg-scaled").disabled = true;
+    document.getElementById("tg-scaled-env").disabled = true;
+    setViewVisible(scaledSkel, "tg-scaled", false);
+    setViewVisible(scaledEnv, "tg-scaled-env", false);
+  });
+}
+
 async function refreshScaledPreview(): Promise<void> {
   const btnSkel = document.getElementById("tg-scaled");
   const btnEnv = document.getElementById("tg-scaled-env");
   if (!state.motion || !state.robot || !state.calibration) {
-    scaledSkel.clear();
-    scaledEnv.clear();
-    btnSkel.disabled = true;
-    btnEnv.disabled = true;
-    setViewVisible(scaledSkel, "tg-scaled", false);
-    setViewVisible(scaledEnv, "tg-scaled-env", false);
+    clearH2rScaledPreview();
     return;
   }
+  const motionToken = state.motion.token;
+  const robotName = state.robot.name;
+  const reference = state.reference;
+  const inputsAreCurrent = (): boolean =>
+    state.motion?.token === motionToken &&
+    state.robot?.name === robotName &&
+    state.reference === reference &&
+    state.calibration;
   try {
     const data = await API.post("/api/scaled_preview", {
-      robot: state.robot.name,
-      motion_token: state.motion.token,
-      reference: state.reference,
+      robot: robotName,
+      motion_token: motionToken,
+      reference,
     });
+    // A newer selection owns the renderer now; an old response must not
+    // replace its scaled resources or publish a stale Stage snapshot.
+    if (!inputsAreCurrent()) return;
     const preview = data.preview ?? data;
-    scaledSkel.load(preview);
-    btnSkel.disabled = false;
-    if (data.scaled_scene) {
-      scaledEnv.load(data.scaled_scene, state.motion.token);
-      btnEnv.disabled = false;
-    } else {
-      scaledEnv.clear();
-      btnEnv.disabled = true;
-    }
-    // Preload yellow overlay data but keep it hidden until a retarget completes
-    // (or the user explicitly toggles it on).  Playing motion against a frozen
-    // calibration / zero robot makes the overlay look collapsed inside the mesh.
-    if (!state.robotTrajectory) {
-      setViewVisible(scaledSkel, "tg-scaled", false);
-      setViewVisible(scaledEnv, "tg-scaled-env", false);
-    }
-    if (player.active) player.refreshFrame();
+    withH2rStageDisplayBatch(() => {
+      scaledSkel.load(preview);
+      btnSkel.disabled = false;
+      if (data.scaled_scene) {
+        scaledEnv.load(data.scaled_scene, motionToken);
+        btnEnv.disabled = false;
+      } else {
+        scaledEnv.clear();
+        btnEnv.disabled = true;
+      }
+      // Preload yellow overlay data but keep it hidden until a retarget completes
+      // (or the user explicitly toggles it on). Playing motion against a frozen
+      // calibration / zero robot makes the overlay look collapsed inside the mesh.
+      if (!state.robotTrajectory) {
+        setViewVisible(scaledSkel, "tg-scaled", false);
+        setViewVisible(scaledEnv, "tg-scaled-env", false);
+      }
+      if (player.active) player.refreshFrame();
+    });
   } catch (e) {
-    scaledSkel.clear();
-    scaledEnv.clear();
-    btnSkel.disabled = true;
-    btnEnv.disabled = true;
+    if (!inputsAreCurrent()) return;
+    clearH2rScaledPreview();
     console.warn("scaled preview", errorMessage(e));
   }
 }
@@ -2729,6 +2759,78 @@ const state: AppState = {
   robotTrajectory: null,
   robotPanelLocked: false,
 };
+
+// H2R and R2R still share one legacy Three.js canvas. This flag is the narrow
+// migration boundary that prevents H2R display state from claiming the Stage
+// while the isolated R2R workspace temporarily owns that renderer.
+let h2rOwnsStage = true;
+
+/**
+ * Read one complete H2R display projection from renderer-owned state.
+ *
+ * Availability comes from loaded resources, visibility from Three.js groups,
+ * and interaction capability from the active workflow mode. Keeping those
+ * meanings separate prevents a hidden resource from being mistaken for an
+ * unavailable one when React later renders the Stage controls.
+ */
+function collectH2rStageDisplaySnapshot(): H2rStageDisplaySnapshot {
+  return projectH2rStageDisplaySnapshot({
+    ownsStage: h2rOwnsStage,
+    calibrationMode: state.calibrationMode,
+    hasMotion: state.motion !== null,
+    hasRobot: state.robot !== null,
+    layers: {
+      sourceSkeleton: {
+        available: skel.numFrames > 0,
+        visible: skel.group.visible,
+      },
+      sourceBody: {
+        available: mesh.ready || skin.ready,
+        visible: bodyIsVisible(),
+      },
+      sourceEnvironment: {
+        available: motionHasEnvironment(state.motion),
+        visible: envView.group.visible,
+      },
+      scaledSkeleton: {
+        available: scaledSkel.numFrames > 0,
+        visible: scaledSkel.group.visible,
+      },
+      scaledEnvironment: {
+        available:
+          scaledEnv.numFrames > 0 || scaledEnv.group.children.length > 0,
+        visible: scaledEnv.group.visible,
+      },
+      targetRobot: {
+        available: state.robot !== null && robot.links.length > 0,
+        visible: robot.group.visible,
+      },
+    },
+  });
+}
+
+const h2rStageDisplayPublisher = new H2rStageDisplayPublisher(
+  collectH2rStageDisplaySnapshot,
+  (error) => console.error("H2R Stage display projection failed", error),
+);
+
+function markH2rStageDisplayChanged(): void {
+  h2rStageDisplayPublisher.markChanged();
+}
+
+function withH2rStageDisplayBatch(operation: () => void): void {
+  h2rStageDisplayPublisher.runBatch(operation);
+}
+
+/**
+ * Passive legacy-local source consumed by the browser facade at Restored.
+ * Subscribing here never starts the runtime and installs no global DOM event.
+ */
+export function subscribeH2rStageDisplayState(
+  listener: H2rStageDisplayListener,
+): () => void {
+  return h2rStageDisplayPublisher.subscribe(listener);
+}
 
 interface CalibrationEditorUiState {
   query: string;
@@ -3209,7 +3311,21 @@ async function onReferenceChange(newRef: string): Promise<void> {
   const wasCalibrating = state.calibrationMode;
   const savedQ = wasCalibrating ? { ...state.calibQ } : null;
   if (wasCalibrating) await exitCalibrationMode();
-  state.reference = newRef;
+  // Scale parameters and every retarget result belong to one exact
+  // motion/robot/reference tuple. Invalidate them before querying calibration
+  // for the new reference so an old preview can never masquerade as current.
+  withH2rStageDisplayBatch(() => {
+    state.reference = newRef;
+    state.calibration = false;
+    state.robotTrajectory = null;
+    state.exportToken = null;
+    robot.trajectory = null;
+    if (state.robot) robot.applyStatic();
+    h2rRunState = "idle";
+    clearResultDiagnostics("h2r");
+    clearH2rScaledPreview();
+  });
+  document.getElementById("rt-export-card").style.display = "none";
   syncRefSelect();
   if (wasCalibrating && state.robot && state.motion) {
     await enterCalibrationMode(savedQ);
@@ -3288,12 +3404,8 @@ async function loadMotionPayload(payload: MotionPayload): Promise<void> {
   mesh.load(payload);
   envView.load(payload);
   const hasEnv = motionHasEnvironment(payload);
-  if (hasEnv) {
-    setViewVisible(envView, "tg-env", true);
-  } else {
+  if (!hasEnv) {
     envView.clear();
-    envView.group.visible = false;
-    syncEnvToggleButton();
   }
   await skin.load(payload.body_mesh);
   // Terrain/objects clips default to the interaction-mesh backend (matches Viser
@@ -3304,20 +3416,29 @@ async function loadMotionPayload(payload: MotionPayload): Promise<void> {
     if (rb) rb.value = payload.suggested_backend;
     if (bb) bb.value = payload.suggested_backend;
   }
-  // A fresh motion invalidates any previous retarget result.
-  state.robotTrajectory = null;
-  robot.trajectory = null;
-  if (state.robot) robot.applyStatic();
-  // parc_ms / skeletal-only: default skeleton lines (capsules collapse when FK rest is wrong).
-  const isParcMs =
-    payload.meta?.dataset === "parc_ms" ||
-    payload.meta?.source_format === "parc_ms_pkl";
-  const hasSkin = Boolean(payload.body_mesh?.available);
-  const showSkeleton = isParcMs || !hasSkin;
-  setViewVisible(skel, "tg-skeleton", showSkeleton);
-  setBodyVisible(!showSkeleton || hasSkin);
-  setViewVisible(robot, "tg-robot", false);
-  player.ready(effectivePlaybackDuration(payload));
+  withH2rStageDisplayBatch(() => {
+    if (hasEnv) {
+      setViewVisible(envView, "tg-env", true);
+    } else {
+      envView.group.visible = false;
+      syncEnvToggleButton();
+    }
+    // A fresh motion invalidates any previous retarget result.
+    state.robotTrajectory = null;
+    robot.trajectory = null;
+    clearH2rScaledPreview();
+    if (state.robot) robot.applyStatic();
+    // parc_ms / skeletal-only: default skeleton lines (capsules collapse when FK rest is wrong).
+    const isParcMs =
+      payload.meta?.dataset === "parc_ms" ||
+      payload.meta?.source_format === "parc_ms_pkl";
+    const hasSkin = Boolean(payload.body_mesh?.available);
+    const showSkeleton = isParcMs || !hasSkin;
+    setViewVisible(skel, "tg-skeleton", showSkeleton);
+    setBodyVisible(!showSkeleton || hasSkin);
+    setViewVisible(robot, "tg-robot", false);
+    player.ready(effectivePlaybackDuration(payload));
+  });
   player.setPlaying(true);
   renderMotionDetails(payload);
   updatePills();
@@ -3357,52 +3478,66 @@ async function loadRobotExportPreview(result: RobotExportPreviewResult): Promise
     return;
   }
 
-  state.motion = null;
-  state.libraryEntry = null;
-  state.exportToken = null;
-  clearResultDiagnostics("h2r");
-  skel.clear();
-  mesh.clear();
-  skin.clear();
-  envView.clear();
-  envView.group.visible = false;
-
   const robotName = result.robot;
-  if (!state.robot || state.robot.name !== robotName) {
+  let selectedRobot = state.robot;
+  if (!selectedRobot || selectedRobot.name !== robotName) {
+    // A transport failure has not touched the renderer and therefore leaves
+    // the current Stage intact. Only a failure after `robot.load` begins needs
+    // a compensating visibility commit.
     const robotData = await API.post("/api/robot/select", { name: robotName });
-    state.robot = robotData;
-    await robot.load(robotData);
+    try {
+      await robot.load(robotData);
+      selectedRobot = robotData;
+    } catch (error) {
+      // Robot loading reuses the legacy renderer. If it fails, keep the current
+      // source scene intact and publish the target as hidden instead of claiming
+      // that the previous target mesh is still rendered.
+      setViewVisible(robot, "tg-robot", false);
+      throw error;
+    }
   }
 
-  state.robotTrajectory = result.trajectory;
-  robot.setTrajectory(result.trajectory);
-
-  scaledSkel.clear();
-  scaledSkel.group.visible = false;
   const clipDur = Math.max(0.1, (result.num_frames - 1) / (result.framerate || 30));
-  if (result.scaled_scene) {
-    scaledEnv.load(result.scaled_scene, result.preview_token, {
-      duration: clipDur,
-      objectGlbUrl: (o) => datasetSceneGlbUrl(result.preview_token, o),
-    });
-    document.getElementById("tg-scaled-env").disabled = false;
-    setViewVisible(scaledEnv, "tg-scaled-env", true);
-  } else {
-    scaledEnv.clear();
-    scaledEnv.group.visible = false;
-    syncEnvToggleButton();
-  }
+  withH2rStageDisplayBatch(() => {
+    state.motion = null;
+    state.libraryEntry = null;
+    state.robot = selectedRobot;
+    state.exportToken = null;
+    clearResultDiagnostics("h2r");
+    skel.clear();
+    mesh.clear();
+    skin.clear();
+    envView.clear();
+    envView.group.visible = false;
+    state.robotTrajectory = result.trajectory;
+    robot.setTrajectory(result.trajectory);
 
-  setViewVisible(skel, "tg-skeleton", false);
-  setBodyVisible(false);
-  setViewVisible(mesh, "tg-mesh", false);
-  setViewVisible(scaledSkel, "tg-scaled", false);
-  document.getElementById("tg-scaled").disabled = true;
-  document.getElementById("tg-robot").disabled = false;
-  setViewVisible(robot, "tg-robot", true);
+    scaledSkel.clear();
+    scaledSkel.group.visible = false;
+    if (result.scaled_scene) {
+      scaledEnv.load(result.scaled_scene, result.preview_token, {
+        duration: clipDur,
+        objectGlbUrl: (o) => datasetSceneGlbUrl(result.preview_token, o),
+      });
+      document.getElementById("tg-scaled-env").disabled = false;
+      setViewVisible(scaledEnv, "tg-scaled-env", true);
+    } else {
+      scaledEnv.clear();
+      scaledEnv.group.visible = false;
+      syncEnvToggleButton();
+    }
+
+    setViewVisible(skel, "tg-skeleton", false);
+    setBodyVisible(false);
+    setViewVisible(mesh, "tg-mesh", false);
+    setViewVisible(scaledSkel, "tg-scaled", false);
+    document.getElementById("tg-scaled").disabled = true;
+    document.getElementById("tg-robot").disabled = false;
+    setViewVisible(robot, "tg-robot", true);
+    player.ready(robot.clipDuration || clipDur);
+  });
 
   document.getElementById("motion-meta-card").style.display = "none";
-  player.ready(robot.clipDuration || clipDur);
   player.setPlaying(true);
   robot.group.getWorldPosition(_camFocus);
   orbit.target.copy(_camFocus);
@@ -4139,16 +4274,29 @@ async function applyRobot(
   document.getElementById("rt-export-card").style.display = "none";
   populateH2rRobotSelect(robotData.name);
   populateBatchRobotSelect(robotData.name);
-  await robot.load(robotData);
+  try {
+    await robot.load(robotData);
+  } catch (error) {
+    // The selected pair has already invalidated its derived result. Reflect
+    // the renderer's failure state even though the caller will surface the error.
+    withH2rStageDisplayBatch(() => {
+      clearH2rScaledPreview();
+      setViewVisible(robot, "tg-robot", false);
+    });
+    throw error;
+  }
   document.getElementById("robot-meta-card").style.display = "block";
   renderRobotDetails(robotData);
   renderRobotLibrary();
   document.getElementById("batch-robot").textContent = robotData.display_name;
   renderBasket();
   updatePills();
-  const tgRobot = document.getElementById("tg-robot");
-  tgRobot.disabled = false;
-  setViewVisible(robot, "tg-robot", true);
+  withH2rStageDisplayBatch(() => {
+    clearH2rScaledPreview();
+    const tgRobot = document.getElementById("tg-robot");
+    tgRobot.disabled = false;
+    setViewVisible(robot, "tg-robot", true);
+  });
   revealStage();
   // Await so state.calibration is fresh; refreshRetargetPanel itself loads the
   // scaled skeleton/scene when a calibration already exists (no retarget needed).
@@ -4362,7 +4510,12 @@ async function deleteRobotSummary(summary: RobotSummary): Promise<void> {
       state.robotTrajectory = null;
       clearResultDiagnostics("h2r");
       h2rRunState = "idle";
-      robot.group.visible = false;
+      withH2rStageDisplayBatch(() => {
+        clearH2rScaledPreview();
+        // Keep the legacy toggle projection and the Stage snapshot in sync when
+        // the selected robot disappears from the local library.
+        setViewVisible(robot, "tg-robot", false);
+      });
       document.getElementById("robot-meta-card").style.display = "none";
       document.getElementById("robot-pill").textContent = runtimeText("No robot loaded", "未加载机器人");
       document.getElementById("batch-robot").textContent = runtimeText("Not loaded", "未加载");
@@ -5422,39 +5575,50 @@ function updateR2rCalibBanner(): void {
 }
 
 function _applyCalibSceneLayout(): void {
-  state.robotTrajectory = null;
-  robot.trajectory = null;
-  clearResultDiagnostics("h2r");
-  scaledSkel.clear();
-  scaledEnv.clear();
-  setViewVisible(skel, "tg-skeleton", false);
-  setBodyVisible(false);
-  setViewVisible(envView, "tg-env", false);
-  setViewVisible(scaledSkel, "tg-scaled", false);
-  setViewVisible(scaledEnv, "tg-scaled-env", false);
-  setViewVisible(robot, "tg-robot", true);
-  robot.applyStatic();
-  refSkel.group.visible = true;
-  player.setPlaying(false);
-  _setPlaybarVisible(false);
-  _setCalibViewTogglesDisabled(true);
+  // Calibration changes both resource availability and all layer toggles.
+  // Commit that layout as one display state instead of six transient states.
+  withH2rStageDisplayBatch(() => {
+    state.robotTrajectory = null;
+    robot.trajectory = null;
+    clearResultDiagnostics("h2r");
+    scaledSkel.clear();
+    scaledEnv.clear();
+    setViewVisible(skel, "tg-skeleton", false);
+    setBodyVisible(false);
+    setViewVisible(envView, "tg-env", false);
+    setViewVisible(scaledSkel, "tg-scaled", false);
+    setViewVisible(scaledEnv, "tg-scaled-env", false);
+    setViewVisible(robot, "tg-robot", true);
+    robot.applyStatic();
+    refSkel.group.visible = true;
+    player.setPlaying(false);
+    _setPlaybarVisible(false);
+    _setCalibViewTogglesDisabled(true);
+  });
 }
 
 function _restoreVis(snap: ViewVisibilitySnapshot | null): void {
-  if (!snap) return;
-  refSkel.clear();
-  refSkel.group.visible = false;
-  setViewVisible(skel, "tg-skeleton", snap.skel);
-  setBodyVisible(snap.body);
-  setViewVisible(envView, "tg-env", snap.env);
-  setViewVisible(scaledSkel, "tg-scaled", snap.scaled);
-  setViewVisible(scaledEnv, "tg-scaled-env", snap.scaledEnv);
-  setViewVisible(robot, "tg-robot", snap.robot);
-  _setPlaybarVisible(snap.playbar);
-  _restoreViewToggleButtons();
-  player.t = snap.t;
-  player.setPlaying(snap.playing);
-  player.refreshFrame();
+  if (!snap) {
+    // `calibrationMode` may still have changed even when no prior layout was
+    // captured, so capability observers must be refreshed.
+    markH2rStageDisplayChanged();
+    return;
+  }
+  withH2rStageDisplayBatch(() => {
+    refSkel.clear();
+    refSkel.group.visible = false;
+    setViewVisible(skel, "tg-skeleton", snap.skel);
+    setBodyVisible(snap.body);
+    setViewVisible(envView, "tg-env", snap.env);
+    setViewVisible(scaledSkel, "tg-scaled", snap.scaled);
+    setViewVisible(scaledEnv, "tg-scaled-env", snap.scaledEnv);
+    setViewVisible(robot, "tg-robot", snap.robot);
+    _setPlaybarVisible(snap.playbar);
+    _restoreViewToggleButtons();
+    player.t = snap.t;
+    player.setPlaying(snap.playing);
+    player.refreshFrame();
+  });
 }
 
 async function enterCalibrationMode(
@@ -5892,8 +6056,10 @@ document.getElementById("calib-save").onclick = async () => {
     // trajectory; do not resume motion playback with the yellow overlay yet.
     player.setPlaying(false);
     robot.applyStatic();
-    setViewVisible(scaledSkel, "tg-scaled", false);
-    setViewVisible(scaledEnv, "tg-scaled-env", false);
+    withH2rStageDisplayBatch(() => {
+      setViewVisible(scaledSkel, "tg-scaled", false);
+      setViewVisible(scaledEnv, "tg-scaled-env", false);
+    });
     refreshRetargetPanel();
     renderCalibrationSaveSummary("calibration-save-summary", scope, response.path ?? null, savedQ);
     updateH2rCalibrationValidation();
@@ -5944,6 +6110,9 @@ function setRetargetProgress(
 document.getElementById("retarget-btn").onclick = async () => {
   if (!state.motion || !state.robot) return;
   const retargetRobotName = state.robot.name;
+  const retargetMotionToken = state.motion.token;
+  const retargetMotionFps = state.motion.framerate;
+  const retargetReference = state.reference;
   const prog = document.getElementById("rt-progress");
   const bar = prog.querySelector<HTMLElement>(".bar");
   const status = document.getElementById("rt-status");
@@ -5966,6 +6135,21 @@ document.getElementById("retarget-btn").onclick = async () => {
   clearResultDiagnostics("h2r");
   setRobotPanelLocked(true);
   publishH2rWorkflowState();
+  const discardStaleResult = (): boolean => {
+    const inputsAreCurrent =
+      state.robot?.name === retargetRobotName &&
+      state.motion?.token === retargetMotionToken &&
+      state.reference === retargetReference;
+    if (inputsAreCurrent) return false;
+    prog.classList.remove("indet");
+    status.textContent = "";
+    h2rRunState = "idle";
+    toast(runtimeText(
+      "Retarget completed, but its motion, robot, or reference changed while it was running. The stale result was discarded; run Retarget again.",
+      "Retarget 已完成，但过程中动作、机器人或参考姿态发生了变化。旧结果已丢弃，请重新执行 Retarget。",
+    ), true);
+    return true;
+  };
   try {
     const retargetFps = parseOptionalFps(document.getElementById("rt-retarget-fps"));
     const body: {
@@ -5977,8 +6161,8 @@ document.getElementById("retarget-btn").onclick = async () => {
       retarget_fps?: number;
     } = {
       robot: retargetRobotName,
-      motion_token: state.motion.token,
-      reference: state.reference,
+      motion_token: retargetMotionToken,
+      reference: retargetReference,
       backend: document.getElementById("rt-backend").value,
       foot_clamp_anti_penetration: false,
     };
@@ -5994,20 +6178,10 @@ document.getElementById("retarget-btn").onclick = async () => {
         : runtimeText("Retargeting…", "正在 retarget…"));
       renderSpinnerStatus(status, msg);
     });
-    if (state.robot?.name !== retargetRobotName) {
-      prog.classList.remove("indet");
-      status.textContent = "";
-      h2rRunState = "failed";
-      toast(runtimeText(
-        "Retarget completed, but the robot changed while it was running. The result was discarded; run Retarget again.",
-        "Retarget 已完成，但过程中机器人已变更，结果已丢弃。请重新执行 Retarget。",
-      ), true);
-      return;
-    }
+    if (discardStaleResult()) return;
     prog.classList.remove("indet");
     bar.style.width = "100%";
-    if (state.robot) state.robot.ik_prewarmed = true;
-    const srcFps = j.result.motion_source_fps ?? state.motion?.framerate;
+    const srcFps = j.result.motion_source_fps ?? retargetMotionFps;
     const rtFps = j.result.retarget_fps ?? j.result.source_fps;
     const effectiveRtFps = rtFps ?? 30;
     status.textContent = runtimeText(
@@ -6020,31 +6194,35 @@ document.getElementById("retarget-btn").onclick = async () => {
           ? `（动作原始 ${srcFps.toFixed(1)} fps）`
           : ""),
     );
-    state.robotTrajectory = j.result.trajectory;
-    robot.setTrajectory(j.result.trajectory);
-    // Always restart the shared timeline at t=0.  Previously we only called
-    // ``ready`` when inactive, so an in-progress source scrub kept ``t`` near
-    // the end — the first "play" of the retarget was already finishing, and
-    // the first loop wrap looked like a mysterious global jump.
-    player.ready(robot.clipDuration);
-    player.refreshFrame();
-    document.getElementById("tg-robot").disabled = false;
-    if (j.result.scaled_preview) {
-      scaledSkel.load(j.result.scaled_preview);
-      document.getElementById("tg-scaled").disabled = false;
-    } else {
+    if (!j.result.scaled_preview) {
       await refreshScaledPreview();
     }
-    if (j.result.scaled_scene) {
-      scaledEnv.load(j.result.scaled_scene, state.motion.token);
-      document.getElementById("tg-scaled-env").disabled = false;
-      setViewVisible(scaledEnv, "tg-scaled-env", true);
-    }
-    setViewVisible(skel, "tg-skeleton", true);
-    setBodyVisible(true);
-    setViewVisible(scaledSkel, "tg-scaled", true);
-    setViewVisible(robot, "tg-robot", true);
-    applyH2rComparisonPreset(comparisonPresets.h2r);
+    if (discardStaleResult()) return;
+    withH2rStageDisplayBatch(() => {
+      if (state.robot) state.robot.ik_prewarmed = true;
+      state.robotTrajectory = j.result.trajectory;
+      robot.setTrajectory(j.result.trajectory);
+      // Always restart the shared timeline at t=0. Previously we only called
+      // `ready` when inactive, so a source scrub could leave the first result
+      // playback already near its end.
+      player.ready(robot.clipDuration);
+      player.refreshFrame();
+      document.getElementById("tg-robot").disabled = false;
+      if (j.result.scaled_preview) {
+        scaledSkel.load(j.result.scaled_preview);
+        document.getElementById("tg-scaled").disabled = false;
+      }
+      if (j.result.scaled_scene) {
+        scaledEnv.load(j.result.scaled_scene, retargetMotionToken);
+        document.getElementById("tg-scaled-env").disabled = false;
+        setViewVisible(scaledEnv, "tg-scaled-env", true);
+      }
+      setViewVisible(skel, "tg-skeleton", true);
+      setBodyVisible(true);
+      setViewVisible(scaledSkel, "tg-scaled", true);
+      setViewVisible(robot, "tg-robot", true);
+      applyH2rComparisonPreset(comparisonPresets.h2r);
+    });
     emitResultDiagnostics("h2r", j.result.diagnostics ?? {
       schema_version: 1,
       available: false,
@@ -6072,7 +6250,7 @@ document.getElementById("retarget-btn").onclick = async () => {
       `Blank = ${eff.toFixed(0)} fps (Retarget result)`,
       `留空 = ${eff.toFixed(0)} fps（Retarget 结果）`,
     );
-    const clipSrc = j.result.motion_source_fps ?? state.motion?.framerate;
+    const clipSrc = j.result.motion_source_fps ?? retargetMotionFps;
     const exportHint = document.createDocumentFragment();
     exportHint.append(
       document.createTextNode(runtimeText("Current cache: ", "当前缓存：")),
@@ -7682,8 +7860,13 @@ window.addEventListener("hhtools:comparison-command", (event) => {
  * playback cursor are snapshotted here and restored by `r2rLeavePanel`.
  */
 function r2rEnterPanel(): void {
-  if (r2r.active) { r2rApplyStage(); return; }
-  r2r.active = true;
+  if (r2r.active) {
+    h2rOwnsStage = false;
+    r2rApplyStage();
+    markH2rStageDisplayChanged();
+    return;
+  }
+  // Capture the untouched H2R renderer before transferring canvas ownership.
   _r2rMainSnap = {
     vis: ALL_VIEWS.map((v) => v.group.visible),
     refSkel: refSkel.group.visible,
@@ -7695,6 +7878,8 @@ function r2rEnterPanel(): void {
       resetVisible: !document.getElementById("view-reset-btn")?.classList.contains("hidden"),
     },
   };
+  r2r.active = true;
+  h2rOwnsStage = false;
   for (const v of ALL_VIEWS) {
     if (v !== r2rSrc && v !== r2rTgt) v.group.visible = false;
   }
@@ -7702,6 +7887,7 @@ function r2rEnterPanel(): void {
   document.getElementById("view-hud")?.classList.add("hidden");
   document.getElementById("view-hud-r2r")?.classList.remove("hidden");
   r2rApplyStage();
+  markH2rStageDisplayChanged();
   void r2rUpdateRetargetBtn();
 }
 
@@ -7731,6 +7917,10 @@ function r2rLeavePanel(): void {
   document.getElementById("view-hud-r2r")?.classList.add("hidden");
   document.getElementById("view-hud")?.classList.remove("hidden");
   _restoreViewToggleButtons();
+  // Re-open H2R capabilities only after its complete renderer snapshot, HUD,
+  // and toggle projections have been restored.
+  h2rOwnsStage = true;
+  markH2rStageDisplayChanged();
 }
 
 // Hook panel switching so the R2R stage is shown/hidden with its tab.
