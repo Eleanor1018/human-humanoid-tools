@@ -294,6 +294,7 @@ async function loadGvhmrComponent(): Promise<void> {
   if (!window.hhtoolsDesktop || gvhmrLoading.value || gvhmrSetupRunning.value) return
   gvhmrLoading.value = true
   gvhmrError.value = null
+  gvhmrRuntime.value = null
   try {
     const components = await window.hhtoolsDesktop.getOptionalComponents()
     gvhmrComponent.value = components.gvhmr
@@ -919,11 +920,30 @@ onBeforeUnmount(() => {
                     <option value="official">
                       {{ workspaceText('Official GVHMR', 'GVHMR 官方环境') }}
                     </option>
+                    <option value="custom">
+                      {{ workspaceText('Custom checkpoint (best effort)', '自定义 checkpoint（不保证兼容）') }}
+                    </option>
                   </select>
                 </label>
                 <button id="gvhmr-confirm-environment" type="button" class="btn secondary small">
                   {{ workspaceText('Confirm', '确认环境') }}
                 </button>
+              </div>
+              <div id="gvhmr-custom-checkpoint" class="video-custom-checkpoint" style="display:none">
+                <div class="video-checkpoint-control">
+                  <button id="gvhmr-pick-checkpoint" type="button" class="btn secondary small">
+                    {{ workspaceText('Choose checkpoint', '选择 checkpoint') }}
+                  </button>
+                  <span id="gvhmr-checkpoint-name" class="video-checkpoint-name">
+                    {{ workspaceText('No checkpoint selected', '尚未选择 checkpoint') }}
+                  </span>
+                </div>
+                <p class="hint video-checkpoint-hint">
+                  {{ workspaceText(
+                    'Custom checkpoints are passed through as selected. Compatibility is not guaranteed.',
+                    '自定义 checkpoint 会按所选文件直接传入，不保证兼容性。',
+                  ) }}
+                </p>
               </div>
             </div>
           </details>
@@ -948,6 +968,9 @@ onBeforeUnmount(() => {
               <span>{{ workspaceText('4. Motion result', '4. 动作结果') }}</span>
             </summary>
             <div class="video-workflow-step-body">
+              <button id="gvhmr-import-result" type="button" class="btn secondary small">
+                {{ workspaceText('Import existing GVHMR result (.pt)', '导入已有 GVHMR 结果 (.pt)') }}
+              </button>
               <div id="gvhmr-result-card" style="display:none">
                 <div class="meta-row"><span class="k">{{ workspaceText('Motion', '动作') }}</span><span class="v" id="gvhmr-result-name">—</span></div>
                 <div class="meta-row"><span class="k">{{ workspaceText('Frames', '帧数') }}</span><span class="v" id="gvhmr-result-frames">—</span></div>

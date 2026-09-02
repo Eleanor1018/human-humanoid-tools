@@ -81,6 +81,27 @@ is admission control rather than a process-wide GPU concurrency guarantee.
 | **Robot → Robot** | Source robot + trajectory → target URDF → calibrate → retarget / batch ZIP |
 | **Dataset analysis** | Drop a folder → analyze → explore tags & scatter → export subset |
 
+### GVHMR interoperability
+
+Install and run [GVHMR](https://github.com/zju3dv/GVHMR) separately using its upstream instructions.
+hhtools does not provide a second GVHMR Debian package and does not bundle its source, checkpoints,
+or licensed body models. Drag the generated `hmr4d_results.pt` into **Motion** (or select it with the
+file picker) to preview it, register it in the Motion Library, and use it as the source of a
+**Motion → Robot** workflow.
+The conversion still needs a locally licensed SMPL-family model; if it is not in an existing
+hhtools search path, point `HHTOOLS_BODY_MODELS` at that model directory.
+
+For a terminal-only workflow, convert a GVHMR output directory to hhtools' unified Motion format:
+
+```bash
+hhtools import run --dataset gvhmr --root /path/to/gvhmr/output --out /path/to/motions
+```
+
+The existing manual Docker bridge is still available for an already prepared runtime through
+`HHTOOLS_GVHMR_ROOT`, `HHTOOLS_GVHMR_IMAGE`, `HHTOOLS_GVHMR_BODY_MODELS`, and the optional
+`HHTOOLS_GVHMR_TIMEOUT_SECONDS`. These settings only connect hhtools to external resources; they do
+not install or download GVHMR.
+
 Robot tuning: edit [`configs/robots/unitree_g1/`](configs/robots/unitree_g1/) or uploaded `~/.config/hhtools/robots/<name>/robot.yaml`; run `hhtools robot validate <name>`. Details in [framework.md](framework.md).
 
 ### CLI (batch / no Web UI)

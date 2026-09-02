@@ -30,13 +30,19 @@ def _to_numpy(x: Any) -> np.ndarray:
 
 
 def _load_hmr4d(path: Path) -> SmplMotionParams:
-    import torch  # noqa: F401 -- ensure torch is imported before unpickling
+    import torch
 
     from hhtools.bodymodels.compat import patch_chumpy_compat
     from hhtools.bodymodels.paths import find_body_model
 
     patch_chumpy_compat()
-    data = __import__("torch").load(str(path), map_location="cpu", weights_only=False)
+    # Imported ``.pt`` files are an untrusted boundary. The expected GVHMR
+    # document is a plain dict of tensors, so PyTorch's restricted loader
+    # preserves the supported format without allowing arbitrary pickle globals
+    # to execute in the desktop process.
+    data = torch.load(str(path), map_location="cpu", weights_only=True)
+    if not isinstance(data, dict):
+        raise ValueError(f"{path} is not a tensor dictionary")
     block = data.get("smpl_params_global")
     if block is None:
         raise ValueError(

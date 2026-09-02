@@ -3847,8 +3847,11 @@ function inferLibraryFolderLabel(files: UploadFile[]): string | undefined {
   return undefined;
 }
 
-async function ingestMotionFiles(files: UploadFile[], profile = "mimic"): Promise<void> {
-  if (!files || !files.length) return;
+async function ingestMotionFiles(
+  files: UploadFile[],
+  profile = "mimic",
+): Promise<MotionPayload | null> {
+  if (!files || !files.length) return null;
   const libraryFolderLabel = inferLibraryFolderLabel(files);
   showLoading(runtimeText(
     `Linking and parsing… (${files.length} files)`,
@@ -3892,8 +3895,10 @@ async function ingestMotionFiles(files: UploadFile[], profile = "mimic"): Promis
         `已${modeHint.zh}到资源库：${payload.linked_folder || folder_label}，已加载首条 clip`,
       ));
     }
+    return payload;
   } catch (e) {
     toast(errorMessage(e), true);
+    return null;
   } finally {
     hideLoading();
   }
@@ -3904,7 +3909,9 @@ function initMotionImportZone(): void {
   if (dropzone) {
     setupDropzone(
       dropzone,
-      (files, profile) => ingestMotionFiles(files, profile),
+      async (files, profile) => {
+        await ingestMotionFiles(files, profile);
+      },
       () => dropzone.dataset.profile || "mimic",
     );
   }
@@ -3922,8 +3929,6 @@ initMotionImportZone();
 const GVHMR_VIDEO_ACCEPT =
   "video/mp4,video/quicktime,video/x-matroska,video/x-msvideo,video/webm,.m4v";
 const GVHMR_VIDEO_EXTENSIONS = new Set([".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v"]);
-const GVHMR_CHECKPOINT_ACCEPT = ".ckpt,.pt,.pth";
-const GVHMR_CHECKPOINT_EXTENSIONS = new Set([".ckpt", ".pt", ".pth"]);
 
 interface GvhmrWorkspaceState {
   file: UploadFile | null;
@@ -3968,7 +3973,7 @@ function gvhmrRuntimeMessage(): string {
   if (gvhmrWorkspace.runtimeState === "ready") {
     if (gvhmrWorkspace.weightSource === "custom") {
       return gvhmrWorkspace.checkpoint?.name
-        ? gvhmrText("Ready · custom weights", "已就绪 · 自定义权重")
+        ? gvhmrText("Ready · custom weights (best effort)", "已就绪 · 自定义权重（不保证兼容）")
         : gvhmrText("Ready · select custom weights", "已就绪 · 请选择自定义权重");
     }
     return gvhmrText("Ready · official weights", "已就绪 · 官方权重");
@@ -3995,9 +4000,12 @@ function gvhmrPublicState(): VideoToMotionStateDetail {
 
 function renderGvhmrWorkspace(): void {
   const isBusy = gvhmrWorkspace.stage === "uploading" || gvhmrWorkspace.stage === "running";
+  const hasSelectedWeights = gvhmrWorkspace.weightSource === "official"
+    || Boolean(gvhmrWorkspace.checkpoint);
   const canRun = Boolean(gvhmrWorkspace.file)
     && gvhmrWorkspace.runtimeState === "ready"
     && gvhmrWorkspace.environmentConfirmed
+    && hasSelectedWeights
     && !isBusy;
   const runtimeMessage = gvhmrRuntimeMessage();
 
@@ -4044,6 +4052,7 @@ function renderGvhmrWorkspace(): void {
   if (confirmEnvironment) {
     confirmEnvironment.disabled = gvhmrWorkspace.runtimeState !== "ready"
       || !gvhmrWorkspace.file
+      || !hasSelectedWeights
       || gvhmrWorkspace.environmentConfirmed
       || isBusy;
     confirmEnvironment.textContent = gvhmrWorkspace.environmentConfirmed
@@ -4074,6 +4083,8 @@ function renderGvhmrWorkspace(): void {
       ? gvhmrText("Generating…", "生成中……")
       : gvhmrText("Start GVHMR", "开始 GVHMR 推理");
   }
+  const importResult = document.getElementById("gvhmr-import-result") as HTMLButtonElement | null;
+  if (importResult) importResult.disabled = isBusy;
   const disabledReason = document.getElementById("gvhmr-disabled-reason");
   if (disabledReason) {
     let reason = "";
@@ -4083,13 +4094,13 @@ function renderGvhmrWorkspace(): void {
       reason = runtimeMessage;
     } else if (!gvhmrWorkspace.file) {
       reason = gvhmrText("Select a video first.", "请先选择视频。");
-    } else if (!gvhmrWorkspace.environmentConfirmed) {
-      reason = gvhmrText("Confirm the runtime environment.", "请确认运行环境。");
     } else if (gvhmrWorkspace.weightSource === "custom" && !gvhmrWorkspace.checkpoint) {
       reason = gvhmrText(
-        "Import a compatible custom checkpoint or switch back to official weights.",
-        "请导入兼容的自定义权重，或切回官方权重。",
+        "Select a custom checkpoint or switch back to official weights.",
+        "请选择自定义 checkpoint，或切回官方权重。",
       );
+    } else if (!gvhmrWorkspace.environmentConfirmed) {
+      reason = gvhmrText("Confirm the runtime environment.", "请确认运行环境。");
     }
     disabledReason.textContent = reason;
     disabledReason.style.display = reason && !isBusy ? "block" : "none";
@@ -4139,16 +4150,9 @@ function selectGvhmrCheckpoint(files: UploadFile[]): void {
     return;
   }
   const file = files[0];
-  const suffix = file.name.slice(file.name.lastIndexOf(".")).toLowerCase();
-  if (!GVHMR_CHECKPOINT_EXTENSIONS.has(suffix)) {
-    toast(gvhmrText(
-      "Custom GVHMR weights must be a CKPT, PT, or PTH file.",
-      "自定义 GVHMR 权重必须是 CKPT、PT 或 PTH 文件。",
-    ), true);
-    return;
-  }
   gvhmrWorkspace.checkpoint = file;
   gvhmrWorkspace.weightSource = "custom";
+  gvhmrWorkspace.environmentConfirmed = false;
   gvhmrWorkspace.stage = "idle";
   gvhmrWorkspace.progress = 0;
   gvhmrWorkspace.message = "";
@@ -4223,6 +4227,53 @@ function gvhmrFocalLength(): number | undefined {
   return value;
 }
 
+function gvhmrResultSummary(payload: MotionPayload): VideoToMotionResultSummary {
+  return {
+    name: payload.name,
+    frames: payload.playback_frames ?? payload.num_frames_total ?? payload.positions.length ?? null,
+    duration: payload.playback_duration ?? payload.duration ?? null,
+    framerate: payload.framerate ?? payload.sample_rate ?? null,
+  };
+}
+
+async function importExistingGvhmrResult(): Promise<void> {
+  const files = await pickFiles({ accept: ".pt" });
+  if (!files.length) return;
+  if (files.length !== 1) {
+    toast(gvhmrText("Select one GVHMR result at a time.", "每次只能选择一个 GVHMR 结果。"), true);
+    return;
+  }
+
+  gvhmrWorkspace.stage = "uploading";
+  gvhmrWorkspace.progress = 0;
+  gvhmrWorkspace.message = gvhmrText(
+    `Importing ${files[0].name}…`,
+    `正在导入 ${files[0].name}……`,
+  );
+  gvhmrWorkspace.result = null;
+  renderGvhmrWorkspace();
+
+  const payload = await ingestMotionFiles(files, "mimic");
+  if (!payload) {
+    gvhmrWorkspace.stage = "failed";
+    gvhmrWorkspace.message = gvhmrText(
+      "GVHMR result import failed.",
+      "GVHMR 结果导入失败。",
+    );
+    renderGvhmrWorkspace();
+    return;
+  }
+
+  gvhmrWorkspace.stage = "completed";
+  gvhmrWorkspace.progress = 1;
+  gvhmrWorkspace.message = gvhmrText(
+    "Existing GVHMR result imported.",
+    "已有 GVHMR 结果已导入。",
+  );
+  gvhmrWorkspace.result = gvhmrResultSummary(payload);
+  renderGvhmrWorkspace();
+}
+
 async function runGvhmrVideoToMotion(): Promise<void> {
   const file = gvhmrWorkspace.file;
   if (!file || gvhmrWorkspace.runtimeState !== "ready" || !gvhmrWorkspace.environmentConfirmed) {
@@ -4231,8 +4282,8 @@ async function runGvhmrVideoToMotion(): Promise<void> {
   }
   if (gvhmrWorkspace.weightSource === "custom" && !gvhmrWorkspace.checkpoint) {
     toast(gvhmrText(
-      "Import a compatible custom checkpoint or switch back to official weights.",
-      "请导入兼容的自定义权重，或切回官方权重。",
+      "Select a custom checkpoint or switch back to official weights.",
+      "请选择自定义 checkpoint，或切回官方权重。",
     ), true);
     renderGvhmrWorkspace();
     return;
@@ -4294,12 +4345,7 @@ async function runGvhmrVideoToMotion(): Promise<void> {
     gvhmrWorkspace.stage = "completed";
     gvhmrWorkspace.progress = 1;
     gvhmrWorkspace.message = gvhmrText("Motion generated successfully.", "视频动作生成完成。");
-    gvhmrWorkspace.result = {
-      name: payload.name,
-      frames: payload.playback_frames ?? payload.num_frames_total ?? payload.positions.length ?? null,
-      duration: payload.playback_duration ?? payload.duration ?? null,
-      framerate: payload.framerate ?? payload.sample_rate ?? null,
-    };
+    gvhmrWorkspace.result = gvhmrResultSummary(payload);
     renderGvhmrWorkspace();
     toast(gvhmrText(
       `GVHMR motion generated and loaded: ${payload.name}`,
@@ -4321,6 +4367,7 @@ function initGvhmrWorkspace(): void {
   const weightSource = document.getElementById("gvhmr-weight-source") as HTMLSelectElement | null;
   const confirmEnvironment = document.getElementById("gvhmr-confirm-environment") as HTMLButtonElement | null;
   const pickCheckpoint = document.getElementById("gvhmr-pick-checkpoint") as HTMLButtonElement | null;
+  const importResult = document.getElementById("gvhmr-import-result") as HTMLButtonElement | null;
   const dropzone = document.getElementById("video-drop-shared");
   if (!pickButton || !runButton || !weightSource || !confirmEnvironment || !dropzone) return;
 
@@ -4328,8 +4375,9 @@ function initGvhmrWorkspace(): void {
     selectGvhmrVideo(await pickFiles({ accept: GVHMR_VIDEO_ACCEPT }));
   };
   runButton.onclick = () => void runGvhmrVideoToMotion();
+  if (importResult) importResult.onclick = () => void importExistingGvhmrResult();
   weightSource.onchange = () => {
-    gvhmrWorkspace.weightSource = "official";
+    gvhmrWorkspace.weightSource = weightSource.value === "custom" ? "custom" : "official";
     gvhmrWorkspace.environmentConfirmed = false;
     gvhmrWorkspace.stage = "idle";
     gvhmrWorkspace.progress = 0;
@@ -4339,13 +4387,15 @@ function initGvhmrWorkspace(): void {
   };
   confirmEnvironment.onclick = () => {
     if (!gvhmrWorkspace.file || gvhmrWorkspace.runtimeState !== "ready") return;
-    gvhmrWorkspace.weightSource = "official";
+    if (gvhmrWorkspace.weightSource === "custom" && !gvhmrWorkspace.checkpoint) return;
     gvhmrWorkspace.environmentConfirmed = true;
     renderGvhmrWorkspace();
   };
   if (pickCheckpoint) {
     pickCheckpoint.onclick = async () => {
-      selectGvhmrCheckpoint(await pickFiles({ accept: GVHMR_CHECKPOINT_ACCEPT }));
+      // Custom checkpoints are an explicit best-effort escape hatch. Do not
+      // guess compatibility from a filename suffix; the runtime owns loading.
+      selectGvhmrCheckpoint(await pickFiles());
     };
   }
   setupDropzone(dropzone, (files) => selectGvhmrVideo(files));
@@ -4355,7 +4405,9 @@ function initGvhmrWorkspace(): void {
 }
 
 initGvhmrWorkspace();
-setupDropzone(document.getElementById("stage"), (files) => ingestMotionFiles(files, "mimic"));
+setupDropzone(document.getElementById("stage"), (files) => {
+  void ingestMotionFiles(files, "mimic");
+});
 
 document.getElementById("add-to-basket").onclick = () => {
   if (state.libraryEntry) {

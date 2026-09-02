@@ -78,6 +78,26 @@ Electron：降低并发不会中断正在运行的任务，提高上限会立即
 | **Robot → Robot** | 源机器人 + 轨迹 → 目标 URDF → 标定 → 单条/批量导出 |
 | **数据集可视化分析** | 拖入文件夹 → 分析 → 标签/散点探索 → 导出子集 |
 
+### GVHMR 接口
+
+请按照 [GVHMR 上游说明](https://github.com/zju3dv/GVHMR)自行安装和运行。hhtools 不提供第二个
+GVHMR Debian 安装包，也不捆绑 GVHMR 源码、checkpoint 或需要单独授权的人体模型。将 GVHMR
+生成的 `hmr4d_results.pt` 拖入 **Motion**（或用文件选择器打开），即可预览、登记到动作资源库，
+并作为 **Motion → Robot** 的源动作继续重映射。
+转换时仍需要本地已授权的 SMPL 系人体模型；如果它不在 hhtools 默认搜索路径中，
+请用 `HHTOOLS_BODY_MODELS` 指向该模型目录。
+
+纯命令行用户也可直接将 GVHMR 输出目录转成 hhtools 统一 Motion 格式：
+
+```bash
+hhtools import run --dataset gvhmr --root /path/to/gvhmr/output --out /path/to/motions
+```
+
+已经自行准备好 Docker 运行环境的用户仍可使用现有手动接口：设置
+`HHTOOLS_GVHMR_ROOT`、`HHTOOLS_GVHMR_IMAGE`、`HHTOOLS_GVHMR_BODY_MODELS`，并可选设置
+`HHTOOLS_GVHMR_TIMEOUT_SECONDS`。这些变量只负责把 hhtools 连接到外部资源，不会安装或下载
+GVHMR。
+
 参数调优：改 [`configs/robots/unitree_g1/`](configs/robots/unitree_g1/) 或 `~/.config/hhtools/robots/<名称>/robot.yaml`，运行 `hhtools robot validate <名称>`。原理见 [framework.md](framework.md)。
 
 ### CLI（批量 / 不走 Web）

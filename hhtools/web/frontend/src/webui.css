@@ -2453,6 +2453,13 @@ button { font-family: inherit; cursor: pointer; }
   min-width: 86px;
 }
 
+.video-custom-checkpoint {
+  align-items: stretch;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 10px;
+}
+
 .video-checkpoint-control {
   align-items: center;
   display: flex;
@@ -2469,7 +2476,7 @@ button { font-family: inherit; cursor: pointer; }
 }
 
 .video-checkpoint-hint {
-  margin: 0 0 12px;
+  margin: 0;
 }
 .video-workflow-progress { margin-top: 12px; }
 .video-workflow-result-empty { margin: 0; }

@@ -143,14 +143,14 @@ def sniff_npy_dataset(path: Path) -> str:
 
 
 def sniff_pt_dataset(path: Path) -> str:
-    """Classify HMR4D-style ``.pt`` / ``.pth`` checkpoints."""
+    """Classify HMR4D-style ``.pt`` / ``.pth`` results without unsafe unpickling."""
     hint = path_dataset_hint(path)
     if hint in {"gvhmr", "kungfu_athlete"}:
         return hint
     try:
         import torch
 
-        data = torch.load(str(path), map_location="cpu", weights_only=False)
+        data = torch.load(str(path), map_location="cpu", weights_only=True)
         if isinstance(data, dict) and "smpl_params_global" in data:
             return hint or "gvhmr"
     except Exception:

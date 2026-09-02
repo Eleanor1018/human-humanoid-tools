@@ -87,4 +87,31 @@ describe('VideoToMotionPipeline', () => {
     expect(wrapper.findAll('.state-completed')).toHaveLength(2)
     expect(wrapper.findAll('.state-ready')).toHaveLength(1)
   })
+
+  it('identifies a confirmed custom checkpoint as best effort', async () => {
+    const wrapper = mount(VideoToMotionPipeline, { props: { locale: 'en' } })
+    wrappers.push(wrapper)
+
+    window.dispatchEvent(new CustomEvent('hhtools:video-to-motion-state', {
+      detail: {
+        videoName: 'run.mp4',
+        weightSource: 'custom',
+        checkpointName: 'research-weights.anything',
+        runtimeState: 'ready',
+        runtimeMessage: 'Ready · custom weights (best effort)',
+        environmentConfirmed: true,
+        stage: 'idle',
+        progress: 0,
+        message: '',
+        result: null,
+      },
+    }))
+    await nextTick()
+
+    const environment = wrapper.findAll('.workflow-node-button')[1]
+    expect(environment?.attributes('title')).toBe(
+      'Custom: research-weights.anything (best effort)',
+    )
+    expect(environment?.classes()).toContain('state-completed')
+  })
 })
