@@ -26,8 +26,8 @@ import { useVideoBatch } from "./use-video-batch";
 import { useWorkbenchServices } from "./workbench-service-context";
 import { useLocaleText } from "@/hooks/use-locale-text";
 import { windowEventBus } from "@/platform/events/browser/window-event-bus";
+import type { GvhmrOptionalComponentState } from "@/platform/host/common/gvhmr-component";
 import type {
-  GvhmrOptionalComponentState,
   GvhmrRuntimeStatus,
   ImportCommandTarget,
   JobAdmissionSettings,

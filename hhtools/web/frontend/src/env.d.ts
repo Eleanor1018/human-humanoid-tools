@@ -16,8 +16,8 @@ import type {
   UploadFile,
   VideoToMotionStateDetail,
   WorkflowStateDetail,
-  GvhmrOptionalComponentState,
 } from "./runtime/types";
+import type { GvhmrOptionalComponentState } from "./platform/host/common/gvhmr-component";
 import type { GuidedTour } from "./runtime/tutorial";
 
 // These id unions are an explicit compile-time contract between declarative

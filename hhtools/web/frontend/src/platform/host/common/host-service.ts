@@ -1,4 +1,4 @@
-import type { GvhmrOptionalComponentState } from "@/runtime/types";
+import type { GvhmrOptionalComponentState } from "./gvhmr-component";
 
 export type HostKind = "web" | "desktop";
 

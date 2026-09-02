@@ -2,7 +2,7 @@ import type {
   HostKind,
   IHostService,
 } from "@/platform/host/common/host-service";
-import type { GvhmrOptionalComponentState } from "@/runtime/types";
+import type { GvhmrOptionalComponentState } from "@/platform/host/common/gvhmr-component";
 
 /** One host adapter keeps the React renderer identical in browser and Electron.
  * Electron-only operations remain behind the preload's narrow typed API.

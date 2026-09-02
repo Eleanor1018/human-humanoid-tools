@@ -13,8 +13,6 @@ import ts from "typescript";
 const LEGACY_RUNTIME_TYPE_CONSUMERS = [
   "env.d.ts",
   "hooks/use-locale-text.ts",
-  "platform/host/browser/browser-host-service.ts",
-  "platform/host/common/host-service.ts",
   "workbench/browser/components/about-dialog.tsx",
   "workbench/browser/components/application-chrome.tsx",
   "workbench/browser/components/batch-workflow.tsx",

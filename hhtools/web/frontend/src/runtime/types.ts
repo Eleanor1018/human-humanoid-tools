@@ -703,14 +703,6 @@ export interface MotionLibrarySettingsSnapshot {
   source?: string | null
 }
 
-export interface GvhmrOptionalComponentState {
-  requested: boolean
-  configured: boolean
-  root?: string
-  guideUrl: string
-  estimatedAdditionalBytes: number
-}
-
 /** Base GVHMR paths; capability fields augment this shape near the API map below. */
 export interface GvhmrRuntimeStatus {
   ready: boolean

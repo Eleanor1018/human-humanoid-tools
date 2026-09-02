@@ -8,8 +8,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import type { GvhmrOptionalComponentState } from "@/platform/host/common/gvhmr-component";
 import type {
-  GvhmrOptionalComponentState,
   GvhmrRuntimeStatus,
   JobAdmissionSettings,
   JobAdmissionSnapshot,
