@@ -249,9 +249,9 @@ import type {
   WorkflowId,
 } from "./types";
 
-// Synchronous legacy Views share one stateless disposal policy. Their Groups
-// remain stable scene anchors, while every replaced child GPU resource is
-// terminally released before the View drops its aliases.
+// Legacy Views share one stateless disposal policy. Their Groups remain stable
+// scene anchors, while every replaced child GPU resource is terminally
+// released before the View drops its aliases.
 const threeResourceDisposer = new ThreeResourceDisposer();
 
 type ProgressCallback = (fraction: number | null, loaded: number, total: number) => void;
@@ -273,6 +273,22 @@ type UploadFilesXhrResponse<Url extends string> =
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Dispose an async result that no longer has a synchronous caller to receive a
+ * cleanup error. Current-generation clear() paths still propagate aggregate
+ * disposal failures; stale loader completions can only report and terminate.
+ */
+function disposeDetachedThreeObject(
+  object: THREE.Object3D,
+  context: string,
+): void {
+  try {
+    threeResourceDisposer.disposeObject3DResources(object);
+  } catch (error) {
+    console.warn(context, errorMessage(error));
+  }
 }
 
 interface OrbitSettingsSnapshot {
@@ -818,7 +834,17 @@ const scaledEnvGroup = new THREE.Group();
 world.add(scaledEnvGroup);
 
 // Triangulated heightfield mesh (matches Viser TerrainHeightfieldRenderer).
-function buildTerrainMesh(t: TerrainPayload | null | undefined): THREE.Mesh | null {
+function buildTerrainMesh(
+  t: TerrainPayload | null | undefined,
+  materialParameters: THREE.MeshStandardMaterialParameters = {
+    // flatShading keeps stair risers looking like sharp steps instead of
+    // smooth-shaded ramps; the user reported stairs rendering as slopes.
+    color: 0x9a9aa0,
+    roughness: 0.95,
+    side: THREE.DoubleSide,
+    flatShading: true,
+  },
+): THREE.Mesh | null {
   if (!t?.vertices?.length || !t?.faces?.length) return null;
   const pos = new Float32Array(t.vertices.length * 3);
   for (let i = 0; i < t.vertices.length; i++) {
@@ -832,11 +858,7 @@ function buildTerrainMesh(t: TerrainPayload | null | undefined): THREE.Mesh | nu
   geo.computeVertexNormals();
   return new THREE.Mesh(
     geo,
-    // flatShading keeps stair risers looking like sharp steps instead of
-    // smooth-shaded ramps; the user reported stairs rendering as slopes.
-    new THREE.MeshStandardMaterial({
-      color: 0x9a9aa0, roughness: 0.95, side: THREE.DoubleSide, flatShading: true,
-    })
+    new THREE.MeshStandardMaterial(materialParameters),
   );
 }
 
@@ -1564,29 +1586,49 @@ class EnvView {
   objectTraj: SceneObjectPayload[] = [];
   joints: SceneObjectPayload[] | null = null;
   clipDuration = 1;
+  private _loadGeneration = 0;
 
   constructor() {
     this.group = env; // reuse the existing env group (child of world)
   }
   clear(): void {
-    while (this.group.children.length) this.group.remove(this.group.children[0]);
-    this.objectMeshes = [];
-    this.objectTraj = [];
-    this.joints = null;
+    // GLTFLoader has no ownership-safe cancellation handle. Invalidating its
+    // generation makes every escaped completion terminally stale instead.
+    this._loadGeneration += 1;
+    try {
+      threeResourceDisposer.disposeObject3DChildren(this.group);
+    } finally {
+      try {
+        this.group.clear();
+      } finally {
+        this.objectMeshes = [];
+        this.objectTraj = [];
+        this.joints = null;
+        this.clipDuration = 1;
+      }
+    }
   }
   load(motion: MotionPayload): void {
     this.clear();
+    const generation = this._loadGeneration;
     this.clipDuration = effectivePlaybackDuration(motion);
     if (motion.terrain) {
       const m = buildTerrainMesh(motion.terrain);
       if (m) this.group.add(m);
     }
-    (motion.objects || []).forEach((o, i) => this._buildObject(o, i, motion.token));
+    (motion.objects || []).forEach((o, i) => {
+      this._buildObject(o, i, motion.token, generation);
+    });
     // Mark as animatable so the shared player drives setFrame each tick.
     this.joints = this.objectTraj.length ? this.objectTraj : null;
     this.setFrame(0);
   }
-  private _buildObject(o: SceneObjectPayload, i: number, token: string): void {
+  private _buildObject(
+    o: SceneObjectPayload,
+    i: number,
+    token: string,
+    generation: number,
+  ): void {
     const c = o.color ? (o.color[0] << 16) | (o.color[1] << 8) | o.color[2] : 0xff9f0a;
     const box = new THREE.Mesh(
       new THREE.BoxGeometry(o.extents[0], o.extents[1], o.extents[2]),
@@ -1603,11 +1645,20 @@ class EnvView {
         `/api/object_glb?token=${token}&index=${i}`,
         (gltf) => {
           const real = gltf.scene;
+          if (
+            this._loadGeneration !== generation ||
+            this.objectMeshes[i] !== box
+          ) {
+            disposeDetachedThreeObject(real, "stale environment GLTF cleanup failed");
+            return;
+          }
           // GLB from /api/object_glb is already centred + scaled on the server.
-          box.geometry.dispose();
-          box.visible = false;
+          real.position.copy(box.position);
+          real.quaternion.copy(box.quaternion);
           this.group.add(real);
           this.objectMeshes[i] = real;
+          this.group.remove(box);
+          disposeDetachedThreeObject(box, "environment placeholder cleanup failed");
         },
         undefined,
         () => {} // keep box on failure
@@ -1639,16 +1690,28 @@ class ScaledEnvView {
   motionToken: string | null | undefined = null;
   clipDuration = 1;
   private _objectGlbUrl: ((object: SceneObjectPayload, index: number) => string | null) | null = null;
+  private _loadGeneration = 0;
 
   constructor(group: THREE.Group = scaledEnvGroup) {
     this.group = group;
     this.group.visible = false;
   }
   clear(): void {
-    while (this.group.children.length) this.group.remove(this.group.children[0]);
-    this.objectMeshes = [];
-    this.objectTraj = [];
-    this.joints = null;
+    this._loadGeneration += 1;
+    try {
+      threeResourceDisposer.disposeObject3DChildren(this.group);
+    } finally {
+      try {
+        this.group.clear();
+      } finally {
+        this.objectMeshes = [];
+        this.objectTraj = [];
+        this.joints = null;
+        this.motionToken = null;
+        this._objectGlbUrl = null;
+        this.clipDuration = 1;
+      }
+    }
   }
   load(
     scene: ScenePayload | null | undefined,
@@ -1660,24 +1723,25 @@ class ScaledEnvView {
   ): void {
     this.clear();
     if (!scene) return;
+    const generation = this._loadGeneration;
     this.motionToken = motionToken;
     this._objectGlbUrl = opts.objectGlbUrl || null;
     this.clipDuration = Math.max(0.1, opts.duration ?? state.motion?.duration ?? 1);
     if (scene.terrain) {
-      const m = buildTerrainMesh(scene.terrain);
-      if (m) {
-        m.material = new THREE.MeshStandardMaterial({
+      const m = buildTerrainMesh(
+        scene.terrain,
+        {
           color: 0x5c7a9e, roughness: 0.9, side: THREE.DoubleSide, flatShading: true,
           transparent: true, opacity: 0.92,
-        });
-        this.group.add(m);
-      }
+        },
+      );
+      if (m) this.group.add(m);
     }
-    (scene.objects || []).forEach((o, i) => this._buildObject(o, i));
+    (scene.objects || []).forEach((o, i) => this._buildObject(o, i, generation));
     this.joints = this.objectTraj.length ? this.objectTraj : null;
     this.setFrame(0);
   }
-  private _buildObject(o: SceneObjectPayload, i: number): void {
+  private _buildObject(o: SceneObjectPayload, i: number, generation: number): void {
     const c = o.color ? (o.color[0] << 16) | (o.color[1] << 8) | o.color[2] : 0x6a9fd4;
     const box = new THREE.Mesh(
       new THREE.BoxGeometry(o.extents[0], o.extents[1], o.extents[2]),
@@ -1703,10 +1767,19 @@ class ScaledEnvView {
         glbUrl,
         (gltf) => {
           const real = gltf.scene;
-          box.geometry.dispose();
-          box.visible = false;
+          if (
+            this._loadGeneration !== generation ||
+            this.objectMeshes[i] !== box
+          ) {
+            disposeDetachedThreeObject(real, "stale scaled-environment GLTF cleanup failed");
+            return;
+          }
+          real.position.copy(box.position);
+          real.quaternion.copy(box.quaternion);
           this.group.add(real);
           this.objectMeshes[i] = real;
+          this.group.remove(box);
+          disposeDetachedThreeObject(box, "scaled-environment placeholder cleanup failed");
         },
         undefined,
         () => {}

@@ -4,6 +4,121 @@ import runtimeSource from "../../src/runtime/webui-runtime.ts?raw";
 import commandRegistrySource from "../../src/runtime/command-registry.ts?raw";
 
 describe("legacy runtime ownership boundaries", () => {
+  it("invalidates async environment loads and disposes stale GLTF scenes", () => {
+    const terrainBuilder = runtimeSource.slice(
+      runtimeSource.indexOf("function buildTerrainMesh"),
+      runtimeSource.indexOf("// Ground grid"),
+    );
+    expect(terrainBuilder).toContain(
+      "materialParameters: THREE.MeshStandardMaterialParameters",
+    );
+    expect(terrainBuilder).toContain(
+      "new THREE.MeshStandardMaterial(materialParameters)",
+    );
+
+    const detachedDisposal = runtimeSource.slice(
+      runtimeSource.indexOf("function disposeDetachedThreeObject"),
+      runtimeSource.indexOf("interface OrbitSettingsSnapshot"),
+    );
+    expect(detachedDisposal).toContain(
+      "threeResourceDisposer.disposeObject3DResources(object)",
+    );
+    expect(detachedDisposal).toContain("console.warn(context, errorMessage(error))");
+
+    const environmentViews = [
+      {
+        className: "EnvView",
+        endMarker: "class ScaledEnvView",
+        invocation: "this._buildObject(o, i, motion.token, generation)",
+        staleContext: "stale environment GLTF cleanup failed",
+        placeholderContext: "environment placeholder cleanup failed",
+        clearedAliases: [
+          "this.objectMeshes = []",
+          "this.objectTraj = []",
+          "this.joints = null",
+          "this.clipDuration = 1",
+        ],
+      },
+      {
+        className: "ScaledEnvView",
+        endMarker: "// =================================================================  BODY MESH",
+        invocation: "this._buildObject(o, i, generation)",
+        staleContext: "stale scaled-environment GLTF cleanup failed",
+        placeholderContext: "scaled-environment placeholder cleanup failed",
+        clearedAliases: [
+          "this.objectMeshes = []",
+          "this.objectTraj = []",
+          "this.joints = null",
+          "this.motionToken = null",
+          "this._objectGlbUrl = null",
+          "this.clipDuration = 1",
+        ],
+      },
+    ] as const;
+
+    for (const view of environmentViews) {
+      const classStart = runtimeSource.indexOf(`class ${view.className}`);
+      const classEnd = runtimeSource.indexOf(view.endMarker, classStart);
+      const classSource = runtimeSource.slice(classStart, classEnd);
+      expect(classStart, `${view.className} start`).toBeGreaterThanOrEqual(0);
+      expect(classEnd, `${view.className} end`).toBeGreaterThan(classStart);
+      expect(classSource).toContain("private _loadGeneration = 0");
+      if (view.className === "ScaledEnvView") {
+        expect(classSource).toContain("const m = buildTerrainMesh(");
+        expect(classSource).toContain("color: 0x5c7a9e");
+        expect(classSource).not.toContain("m.material =");
+      }
+
+      const clearStart = classSource.indexOf("clear(): void {");
+      const loadStart = classSource.indexOf("\n  load(", clearStart);
+      const clearSource = classSource.slice(clearStart, loadStart);
+      expect(clearSource).toContain("this._loadGeneration += 1");
+      expect(clearSource).toContain(
+        "threeResourceDisposer.disposeObject3DChildren(this.group)",
+      );
+      expect(clearSource).toContain("finally {");
+      expect(clearSource).toContain("this.group.clear()");
+      for (const alias of view.clearedAliases) {
+        expect(clearSource, `${view.className}: ${alias}`).toContain(alias);
+      }
+      expect(clearSource).not.toContain("while (this.group.children.length)");
+
+      const buildStart = classSource.indexOf("private _buildObject", loadStart);
+      const loadSource = classSource.slice(loadStart, buildStart);
+      const buildSource = classSource.slice(buildStart);
+      expect(loadSource).toContain("const generation = this._loadGeneration");
+      expect(loadSource).toContain(view.invocation);
+      expect(buildSource).toContain("generation: number");
+
+      const staleCheck = buildSource.indexOf(
+        "this._loadGeneration !== generation",
+      );
+      const identityCheck = buildSource.indexOf(
+        "this.objectMeshes[i] !== box",
+        staleCheck,
+      );
+      const staleDispose = buildSource.indexOf(view.staleContext, identityCheck);
+      const staleReturn = buildSource.indexOf("return;", staleDispose);
+      const attach = buildSource.indexOf("this.group.add(real)", staleReturn);
+      const publish = buildSource.indexOf("this.objectMeshes[i] = real", attach);
+      const detachPlaceholder = buildSource.indexOf("this.group.remove(box)", publish);
+      const disposePlaceholder = buildSource.indexOf(
+        view.placeholderContext,
+        detachPlaceholder,
+      );
+      expect(staleCheck, `${view.className} generation guard`).toBeGreaterThanOrEqual(0);
+      expect(identityCheck, `${view.className} placeholder guard`).toBeGreaterThan(staleCheck);
+      expect(staleDispose, `${view.className} stale disposal`).toBeGreaterThan(identityCheck);
+      expect(staleReturn, `${view.className} stale return`).toBeGreaterThan(staleDispose);
+      expect(attach, `${view.className} attach`).toBeGreaterThan(staleReturn);
+      expect(publish, `${view.className} publish`).toBeGreaterThan(attach);
+      expect(detachPlaceholder, `${view.className} placeholder detach`).toBeGreaterThan(publish);
+      expect(disposePlaceholder, `${view.className} placeholder disposal`).toBeGreaterThan(
+        detachPlaceholder,
+      );
+    }
+  });
+
   it("terminally disposes synchronous Stage View children before clearing aliases", () => {
     expect(runtimeSource).toContain(
       'import { ThreeResourceDisposer } from "@/platform/graphics/common/three-resource-disposer"',
