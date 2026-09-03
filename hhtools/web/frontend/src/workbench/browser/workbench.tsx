@@ -349,7 +349,6 @@ export function Workbench({ panelContributions }: WorkbenchProps) {
           hostService.isDesktop ? "electron-host" : "web-host",
           layout.state.sidebarHidden && "sidebar-hidden",
           layout.state.inspectorHidden && "inspector-hidden",
-          activePanel === "batch" && "batch-stage-active",
         )}
         style={layout.style}
       >
@@ -410,6 +409,7 @@ export function Workbench({ panelContributions }: WorkbenchProps) {
           stageLayerCommands={stageLayerCommands}
           stageModelService={stageModelService}
           stagePlaybackCommands={stagePlaybackCommands}
+          batchActive={activePanel === "batch"}
           batchWorkspace={
             <BatchStage
               active={activePanel === "batch"}

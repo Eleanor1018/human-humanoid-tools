@@ -21,6 +21,7 @@ export function ThreeStage({
   stageLayerCommands,
   stageModelService,
   stagePlaybackCommands,
+  batchActive = false,
   batchWorkspace,
 }: {
   locale: WorkspaceLocale;
@@ -28,6 +29,8 @@ export function ThreeStage({
   stageLayerCommands: IStageLayerCommands;
   stageModelService: IStageModelService;
   stagePlaybackCommands: IStagePlaybackCommands;
+  /** Batch replaces the visible Stage surface while preserving WebGL state. */
+  batchActive?: boolean;
   batchWorkspace?: ReactNode;
 }) {
   const text = useLocaleText(locale);
@@ -48,7 +51,10 @@ export function ThreeStage({
     />
   );
   return (
-    <main id="stage">
+    <main
+      id="stage"
+      data-batch-active={batchActive ? "true" : undefined}
+    >
       <canvas id="three-canvas" />
       <svg
         id="calib-mapping-overlay"

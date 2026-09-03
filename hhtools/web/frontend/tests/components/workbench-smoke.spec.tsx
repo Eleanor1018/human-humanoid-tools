@@ -73,6 +73,30 @@ function renderWorkbench(
 }
 
 describe("Workbench DOM contract", () => {
+  it("isolates React-owned Batch state from legacy Stage classes", () => {
+    renderWorkbench();
+    const batchNavigation = document.querySelector<HTMLButtonElement>(
+      '.nav-item[data-panel="batch"]',
+    );
+    const motionNavigation = document.querySelector<HTMLButtonElement>(
+      '.nav-item[data-panel="motion"]',
+    );
+    const stage = document.getElementById("stage")!;
+    stage.classList.add("calib-pickable");
+
+    expect(batchNavigation).not.toBeNull();
+    expect(motionNavigation).not.toBeNull();
+    fireEvent.click(batchNavigation!);
+    expect(document.getElementById("stage")).toBe(stage);
+    expect(stage).toHaveAttribute("data-batch-active", "true");
+    expect(stage).toHaveClass("calib-pickable");
+
+    fireEvent.click(motionNavigation!);
+    expect(document.getElementById("stage")).toBe(stage);
+    expect(stage).not.toHaveAttribute("data-batch-active");
+    expect(stage).toHaveClass("calib-pickable");
+  });
+
   it("routes user navigation through the shared panel request boundary", () => {
     const requestedPanels: string[] = [];
     const onPanelRequest = (event: Event) => {

@@ -3133,14 +3133,14 @@ body:has(#app.workspace-shell) #calib-banner { top: 52px; }
    Batch is a list-building task, so it replaces the visual stage without
    unmounting Three.js.  Keeping the canvas sized and alive avoids rebuilding
    WebGL state whenever the user moves between Batch and preview workflows. */
-#stage.batch-stage-active > #three-canvas,
-#stage.batch-stage-active > .stage-top-tools,
-#stage.batch-stage-active > .stage-empty,
-#stage.batch-stage-active > .stage-overlay,
-#stage.batch-stage-active > .calib-mapping-overlay,
-#stage.batch-stage-active > .calib-landmark-labels,
-#stage.batch-stage-active > .calib-hud,
-#stage.batch-stage-active > .calib-hover-hint {
+#stage[data-batch-active="true"] > #three-canvas,
+#stage[data-batch-active="true"] > .stage-top-tools,
+#stage[data-batch-active="true"] > .stage-empty,
+#stage[data-batch-active="true"] > .stage-overlay,
+#stage[data-batch-active="true"] > .calib-mapping-overlay,
+#stage[data-batch-active="true"] > .calib-landmark-labels,
+#stage[data-batch-active="true"] > .calib-hud,
+#stage[data-batch-active="true"] > .calib-hover-hint {
   visibility: hidden;
   pointer-events: none;
 }
