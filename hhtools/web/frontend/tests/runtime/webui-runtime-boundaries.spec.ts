@@ -10,6 +10,39 @@ describe("legacy runtime ownership boundaries", () => {
     );
   });
 
+  it("frames Reset against the renderer that owns the shared Stage", () => {
+    const fallback = runtimeSource.slice(
+      runtimeSource.indexOf("function getViewFocus"),
+      runtimeSource.indexOf("function resetDefaultView"),
+    );
+    const activeRobots = runtimeSource.slice(
+      runtimeSource.indexOf("function activeRobotFocusGroups"),
+      runtimeSource.indexOf("/** Frame robot", runtimeSource.indexOf("function activeRobotFocusGroups")),
+    );
+    const focus = runtimeSource.slice(
+      runtimeSource.indexOf("function focusRobotView"),
+      runtimeSource.indexOf("/** Orbit distance limits", runtimeSource.indexOf("function focusRobotView")),
+    );
+
+    expect(fallback).toContain("h2rOwnsStage");
+    expect(fallback).toContain("skin.group.visible && skin.ready");
+    for (const group of [
+      "r2rSrc.group",
+      "r2rTgt.group",
+      "r2rSrcSkel.group",
+      "r2rTgtSkel.group",
+      "r2rSrcEnvGroup",
+      "r2rTgtEnvGroup",
+    ]) {
+      expect(fallback).toContain(`${group}.visible`);
+    }
+    expect(activeRobots).toContain("if (h2rOwnsStage) return [robot.group]");
+    expect(activeRobots).toContain("r2r.calibrating");
+    expect(activeRobots).toContain("[r2rSrc.group, r2rTgt.group]");
+    expect(focus).toContain("const focusGroups = activeRobotFocusGroups()");
+    expect(focus).toContain("refSkel.group.visible");
+  });
+
   it("leaves both Stage layer HUD wrappers to React", () => {
     expect(runtimeSource).not.toContain('getElementById("view-hud")');
     expect(runtimeSource).not.toContain('getElementById("view-hud-r2r")');

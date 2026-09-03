@@ -857,14 +857,37 @@ orbit.addEventListener("start", () => { _orbitManualUntil = performance.now() + 
 orbit.addEventListener("end", () => { _orbitManualUntil = performance.now() + 2800; });
 
 function getViewFocus(out = new THREE.Vector3()): THREE.Vector3 {
-  const candidates: Array<THREE.Object3D | null> = [
-    robot.links?.length ? robot.group : null,
-    scaledSkel.joints ? scaledSkel.group : null,
-    skel.joints ? skel.group : null,
-    mesh.ready ? mesh.group : null,
-    env.children.length ? env : null,
-    scaledEnvGroup.children.length ? scaledEnvGroup : null,
-  ];
+  // Fallback framing must follow the renderer that owns the shared canvas.
+  // Only visible resources participate; otherwise Reset could center an H2R
+  // object that is physically hidden behind an active R2R workflow.
+  const candidates: Array<THREE.Object3D | null> = h2rOwnsStage
+    ? [
+        robot.group.visible && robot.links?.length ? robot.group : null,
+        scaledSkel.group.visible && scaledSkel.joints ? scaledSkel.group : null,
+        skel.group.visible && skel.joints ? skel.group : null,
+        mesh.group.visible && mesh.ready ? mesh.group : null,
+        skin.group.visible && skin.ready ? skin.group : null,
+        env.visible && env.children.length ? env : null,
+        scaledEnvGroup.visible && scaledEnvGroup.children.length
+          ? scaledEnvGroup
+          : null,
+      ]
+    : [
+        r2rSrc.group.visible && r2rSrc.links?.length ? r2rSrc.group : null,
+        r2rTgt.group.visible && r2rTgt.links?.length ? r2rTgt.group : null,
+        r2rSrcSkel.group.visible && r2rSrcSkel.joints
+          ? r2rSrcSkel.group
+          : null,
+        r2rTgtSkel.group.visible && r2rTgtSkel.joints
+          ? r2rTgtSkel.group
+          : null,
+        r2rSrcEnvGroup.visible && r2rSrcEnvGroup.children.length
+          ? r2rSrcEnvGroup
+          : null,
+        r2rTgtEnvGroup.visible && r2rTgtEnvGroup.children.length
+          ? r2rTgtEnvGroup
+          : null,
+      ];
   let has = false;
   for (const g of candidates) {
     if (!g) continue;
@@ -876,7 +899,6 @@ function getViewFocus(out = new THREE.Vector3()): THREE.Vector3 {
     } else {
       _viewFocusBox.union(_viewFocusTmp);
     }
-    if (g === robot.group) break;
   }
   if (!has) {
     out.copy(_defaultCamTarget);
@@ -899,9 +921,19 @@ function calibRobotGroup(): THREE.Group {
   return r2r.calibrating ? r2rTgt.group : robot.group;
 }
 
+/** Robot meshes that belong to the renderer currently shown on the Stage. */
+function activeRobotFocusGroups(): THREE.Group[] {
+  if (h2rOwnsStage) return [robot.group];
+  // Calibration isolates the target robot; the regular comparison view may
+  // show source and target together, so Reset frames both visible meshes.
+  return r2r.calibrating
+    ? [r2rTgt.group]
+    : [r2rSrc.group, r2rTgt.group];
+}
+
 /** Frame robot (+ reference skeleton during calibration) with sane orbit limits. */
 function focusRobotView({ resetOffset = false }: { resetOffset?: boolean } = {}): void {
-  const focusGroups = [calibRobotGroup()];
+  const focusGroups = activeRobotFocusGroups();
   if ((state.calibrationMode || r2r.calibrating) && refSkel.group.visible) {
     focusGroups.push(refSkel.group);
   }
