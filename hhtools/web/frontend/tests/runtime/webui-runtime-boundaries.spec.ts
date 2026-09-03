@@ -40,15 +40,22 @@ describe("legacy runtime ownership boundaries", () => {
       "clearExternalRoots",
       "clearPointerPlacement",
       "isCurrent",
+      "owns",
       "positionTags",
       "publishExternalRoot",
+      "referenceDiagnostics",
+      "referenceFacts",
+      "refreshReferenceLabels",
       "reserve",
       "setAngleUnit",
+      "setReferenceDisplayOptions",
+      "setReferenceVisible",
       "setSelected",
       "start",
       "stop",
       "updateHudValue",
       "updateJointWorld",
+      "updateReferenceOverlay",
     ]);
     expect(runtimeSource).not.toMatch(/\bcalibManip\._/);
     expect(runtimeSource).not.toMatch(/\bcalibManip\.stop\(\s*\)/);
@@ -56,13 +63,20 @@ describe("legacy runtime ownership boundaries", () => {
       /stopCalibrationManipulatorSession\(\s*["'](?:h2r|r2r)["']\s*\)/,
     );
 
+    const reserveAdapter = runtimeSource.slice(
+      runtimeSource.indexOf("function reserveCalibrationManipulatorSession"),
+      runtimeSource.indexOf("function startReservedCalibrationManipulatorSession"),
+    );
+    expect(reserveAdapter.indexOf("const reservation = calibManip.reserve("))
+      .toBeLessThan(reserveAdapter.indexOf("setCalibrationManipulatorAlias(workflow, session)"));
+
     const startAdapter = runtimeSource.slice(
-      runtimeSource.indexOf("function startCalibrationManipulatorSession"),
+      runtimeSource.indexOf("function startReservedCalibrationManipulatorSession"),
       runtimeSource.indexOf("function stopCalibrationManipulatorSession"),
     );
-    expect(startAdapter.indexOf("calibManip.reserve(workflow"))
-      .toBeLessThan(startAdapter.indexOf("setCalibrationManipulatorAlias(workflow, session)"));
-    expect(startAdapter.indexOf("setCalibrationManipulatorAlias(workflow, session)"))
+    expect(startAdapter.indexOf("calibrationManipulatorAlias(workflow) !== session"))
+      .toBeLessThan(startAdapter.indexOf("calibManip.start(session, createContext)"));
+    expect(startAdapter.indexOf("!calibManip.owns(session)"))
       .toBeLessThan(startAdapter.indexOf("calibManip.start(session, createContext)"));
 
     const stopAdapter = runtimeSource.slice(
@@ -87,6 +101,16 @@ describe("legacy runtime ownership boundaries", () => {
     expect(manipulatorSource).not.toContain(
       "this._state(owned).orbitEnabledBaseline = orbit.enabled",
     );
+    expectTokensInOrder(manipulatorSource.slice(
+      manipulatorSource.indexOf("reserve("),
+      manipulatorSource.indexOf("start("),
+    ), [
+      "this._referenceView.prepare(referenceSetup)",
+      "this._sessions.reserve(workflow",
+    ]);
+    expect(runtimeSource).toContain("reference: ReferenceSkeletonResource | null");
+    expect(manipulatorSource).toContain("referenceVisible: false");
+    expect(manipulatorSource).toContain("this._referenceView.dispose(reference)");
   });
 
   it("composes extracted inert Stage Views explicitly", () => {
@@ -116,7 +140,9 @@ describe("legacy runtime ownership boundaries", () => {
     ]) {
       expect(referenceSkeletonViewSource).toContain(injectedDependency);
     }
-    expect(runtimeSource.match(/world\.add\(refSkel\.group\)/g)).toHaveLength(1);
+    expect(runtimeSource.match(/world\.add\(referenceSkeletonView\.group\)/g))
+      .toHaveLength(1);
+    expect(runtimeSource).not.toMatch(/\brefSkel\b/);
     expect(runtimeSource.match(/world\.add\((?:robot|r2rSrc|r2rTgt)\.group\)/g))
       .toHaveLength(3);
   });
@@ -169,7 +195,7 @@ describe("legacy runtime ownership boundaries", () => {
       'calibrationSessionIsCurrent("h2r", result.manipulatorSession)',
       "robot.applyCalibPose(",
       'calibrationSessionIsCurrent("h2r", result.manipulatorSession)',
-      "refSkel.updateOverlay(robot)",
+      "calibManip.updateReferenceOverlay(result.manipulatorSession)",
       'calibrationSessionIsCurrent("h2r", result.manipulatorSession)',
       "calibManip.updateJointWorld(",
       'calibrationSessionIsCurrent("h2r", result.manipulatorSession)',
@@ -178,11 +204,11 @@ describe("legacy runtime ownership boundaries", () => {
     ]);
     for (const effect of [
       "robot.applyCalibPose(",
-      "refSkel.updateOverlay(robot)",
+      "calibManip.updateReferenceOverlay(result.manipulatorSession)",
       "calibManip.updateJointWorld(",
       "updateH2rCalibrationValidation()",
-      "applyCalibOrbitLimits({ snapCamera: true })",
-      "focusRobotView({ resetOffset: true })",
+      "applyCalibOrbitLimits({",
+      "focusRobotView({",
     ]) {
       const effectAt = h2rPreview.indexOf(effect);
       expect(effectAt, `H2R FK boundary: ${effect}`).toBeGreaterThanOrEqual(0);
@@ -238,7 +264,7 @@ describe("legacy runtime ownership boundaries", () => {
       'calibrationSessionIsCurrent("r2r", result.manipulatorSession)',
       "r2rTgt.applyCalibPose(",
       'calibrationSessionIsCurrent("r2r", result.manipulatorSession)',
-      "refSkel.updateOverlay(r2rTgt)",
+      "calibManip.updateReferenceOverlay(result.manipulatorSession)",
       'calibrationSessionIsCurrent("r2r", result.manipulatorSession)',
       "calibManip.updateJointWorld(",
       'calibrationSessionIsCurrent("r2r", result.manipulatorSession)',
@@ -247,11 +273,11 @@ describe("legacy runtime ownership boundaries", () => {
     ]);
     for (const effect of [
       "r2rTgt.applyCalibPose(",
-      "refSkel.updateOverlay(r2rTgt)",
+      "calibManip.updateReferenceOverlay(result.manipulatorSession)",
       "calibManip.updateJointWorld(",
       "updateR2rCalibrationValidation()",
-      "applyCalibOrbitLimits({ snapCamera: true })",
-      "focusRobotView({ resetOffset: true })",
+      "applyCalibOrbitLimits({",
+      "focusRobotView({",
     ]) {
       const effectAt = r2rPreview.indexOf(effect);
       expect(effectAt, `R2R FK boundary: ${effect}`).toBeGreaterThanOrEqual(0);
@@ -278,7 +304,7 @@ describe("legacy runtime ownership boundaries", () => {
       "calibrationManipulatorAlias(calibrationWorkflow) === manipulatorSession",
       "calibManip.positionTags(manipulatorSession)",
       "calibrationSessionIsCurrent(calibrationWorkflow, manipulatorSession)",
-      "refSkel.updateOverlay(",
+      "calibManip.updateReferenceOverlay(manipulatorSession)",
     ]);
 
     const r2rEntry = runtimeSource.slice(
@@ -347,17 +373,42 @@ describe("legacy runtime ownership boundaries", () => {
       runtimeSource.indexOf("function updateCalibRestoreButton"),
     );
     const beginAttempt = entry.indexOf("h2rCalibrationBootstrapAttempts.begin({");
-    const firstSessionMutation = entry.indexOf("state.calibRestore = _snapshotVis()");
+    expect(entry.indexOf("calibrationPresentationEpoch += 1"))
+      .toBeLessThan(beginAttempt);
     const request = entry.indexOf('await API.post("/api/calibration/session"');
     const awaitGuard = entry.indexOf('if (!isCurrent()) return "stale"', request);
     const referenceValidation = entry.indexOf("if (!session.reference)", awaitGuard);
-    const firstResponseMutation = entry.indexOf("state.calibLimits =", referenceValidation);
+    const reservation = entry.indexOf("reserveCalibrationManipulatorSession(", referenceValidation);
+    const firstSessionMutation = entry.indexOf("state.calibRestore = _snapshotVis()", reservation);
+    const firstResponseMutation = entry.indexOf("state.calibLimits =", reservation);
     expect(beginAttempt).toBeGreaterThanOrEqual(0);
-    expect(firstSessionMutation).toBeGreaterThan(beginAttempt);
-    expect(request).toBeGreaterThan(firstSessionMutation);
+    expect(request).toBeGreaterThan(beginAttempt);
     expect(awaitGuard).toBeGreaterThan(request);
     expect(referenceValidation).toBeGreaterThan(awaitGuard);
-    expect(firstResponseMutation).toBeGreaterThan(referenceValidation);
+    expect(reservation).toBeGreaterThan(referenceValidation);
+    expect(firstSessionMutation).toBeGreaterThan(reservation);
+    expect(firstResponseMutation).toBeGreaterThan(reservation);
+    for (const candidateMutation of [
+      "h2rCalibrationFkPreview.start()",
+      "state.calibrationMode = true",
+      "state.calibLimits = limits",
+      "orbit.zoomSpeed = 0.022",
+      "robot.groundOffset =",
+      "updateCalibBanner(",
+      "_applyCalibSceneLayout()",
+      "updateCalibRestoreButton()",
+    ]) {
+      expect(
+        entry.indexOf(candidateMutation),
+        `H2R mutation after reservation: ${candidateMutation}`,
+      ).toBeGreaterThan(reservation);
+    }
+    expectTokensInOrder(entry, [
+      "reserveCalibrationManipulatorSession(",
+      "startReservedCalibrationManipulatorSession(",
+      "projectCalibrationReferenceStageVisibility()",
+      "applyCalibOrbitLimits({ expectedSession: manipulatorSession })",
+    ]);
     expect(entry).toContain("robot: attempt.identity.robotName");
     expect(entry).toContain("reference: attempt.identity.reference");
     expect(entry).toContain("motion_token: attempt.identity.motionToken");
@@ -402,12 +453,16 @@ describe("legacy runtime ownership boundaries", () => {
     expect(entry).toContain(
       "let manipulatorSession: CalibrationManipulatorSession | null = null",
     );
-    expect(entry).toContain(
+    expect(entry).not.toContain(
       '?? activeCalibrationManipulatorSession("h2r")',
+    );
+    expect(entry).toContain(
+      "rollbackH2rCalibrationBootstrap(attempt, error, manipulatorSession)",
     );
     expect(entry).toContain(
       'stopCalibrationManipulatorSession("h2r", manipulatorSession)',
     );
+    expect(entry).toContain("if (!manipulatorSession) {");
     expect(entry).toContain("if (!buildCalibSliders(");
     expect(entry).toContain("const manipulatorIsCurrent = (): boolean");
     expect(entry).toContain(
@@ -436,6 +491,9 @@ describe("legacy runtime ownership boundaries", () => {
       .toBeLessThan(exit.indexOf("h2rCalibrationFkPreview.stop()"));
     expect(exit.indexOf("h2rCalibrationStatusAttempts.invalidate()"))
       .toBeLessThan(exit.indexOf("state.calibrationMode = false"));
+    expect(exit.indexOf("if (finishIfSuperseded()) return", exit.indexOf(
+      "calibManip.stop(manipulatorSession)",
+    ))).toBeGreaterThan(exit.indexOf("calibManip.stop(manipulatorSession)"));
     const viewLoss = runtimeSource.slice(
       runtimeSource.indexOf("function clearH2rRobotAfterViewLoss"),
       runtimeSource.indexOf("async function refreshScaledPreview"),
@@ -495,8 +553,92 @@ describe("legacy runtime ownership boundaries", () => {
     expect(runtimeSource).toContain("function buildCalibSliders(");
     expect(runtimeSource).not.toContain("async function buildCalibSliders(");
     expect(runtimeSource).not.toContain("await buildCalibSliders(");
-    expect(runtimeSource).toContain("function exitCalibrationMode(): void");
+    expect(runtimeSource).toContain("function exitCalibrationMode(");
     expect(runtimeSource).not.toContain("await exitCalibrationMode()");
+  });
+
+  it("makes calibration save continuations exact and neutral to a reserved successor", () => {
+    const h2rSave = runtimeSource.slice(
+      runtimeSource.indexOf('document.getElementById("calib-save").onclick'),
+      runtimeSource.indexOf("type CompletedJob"),
+    );
+    expectTokensInOrder(h2rSave, [
+      'activeCalibrationManipulatorSession("h2r")',
+      "calibManip.referenceFacts(manipulatorSession)",
+      'await API.post("/api/calibration/save"',
+      'calibrationSessionIsCurrent("h2r", manipulatorSession)',
+      "finalizationEpoch = calibrationPresentationEpoch + 1",
+      "exitCalibrationMode(manipulatorSession)",
+      "const finalizationIsCurrent",
+      "renderCalibrationSaveSummary(",
+    ]);
+    expect(h2rSave).not.toContain(
+      'if (activeCalibrationManipulatorSession("h2r")) return',
+    );
+    expectTokensInOrder(h2rSave.slice(h2rSave.lastIndexOf("} catch (e) {")), [
+      "manipulatorSession",
+      'calibrationSessionIsCurrent("h2r", manipulatorSession)',
+      "responseAccepted",
+      "calibrationPresentationEpoch === finalizationEpoch",
+      "h2rCalibrationManipulatorSession === null",
+      "r2rCalibrationManipulatorSession === null",
+      "toast(errorMessage(e), true)",
+    ]);
+    for (const boundary of [
+      'document.getElementById("calib-card")',
+      'card.style.display = "none"',
+      "player.setPlaying(false)",
+      "robot.applyStatic()",
+      "withH2rStageDisplayBatch(",
+      "refreshRetargetPanel()",
+      "renderCalibrationSaveSummary(",
+      "updateH2rCalibrationValidation()",
+      "publishH2rWorkflowState()",
+      "syncBatchRefHint()",
+      "toast(runtimeText(",
+    ]) {
+      const boundaryAt = h2rSave.indexOf(boundary);
+      expect(boundaryAt, `H2R save boundary: ${boundary}`).toBeGreaterThanOrEqual(0);
+      expect(h2rSave.indexOf("if (!finalizationIsCurrent()) return", boundaryAt))
+        .toBeGreaterThan(boundaryAt);
+    }
+
+    const r2rSave = runtimeSource.slice(
+      runtimeSource.indexOf("async function r2rSaveCalib"),
+      runtimeSource.indexOf("// --------------------------------------------------------------- trajectory IO"),
+    );
+    expectTokensInOrder(r2rSave, [
+      'activeCalibrationManipulatorSession("r2r")',
+      "calibManip.referenceFacts(manipulatorSession)",
+      'await API.post("/api/r2r/calibration/save"',
+      'calibrationSessionIsCurrent("r2r", manipulatorSession)',
+      "finalizationEpoch = calibrationPresentationEpoch + 1",
+      "r2rExitCalib({ expectedSession: manipulatorSession })",
+      "const finalizationIsCurrent",
+      "renderCalibrationSaveSummary(",
+    ]);
+    expect(r2rSave).not.toContain(
+      'if (activeCalibrationManipulatorSession("r2r")) return',
+    );
+    expectTokensInOrder(r2rSave.slice(r2rSave.lastIndexOf("} catch (e) {")), [
+      "manipulatorSession",
+      'calibrationSessionIsCurrent("r2r", manipulatorSession)',
+      "responseAccepted",
+      "calibrationPresentationEpoch === finalizationEpoch",
+      "h2rCalibrationManipulatorSession === null",
+      "r2rCalibrationManipulatorSession === null",
+      "toast(errorMessage(e), true)",
+    ]);
+    for (const boundary of [
+      "renderCalibrationSaveSummary(",
+      "toast(runtimeText(",
+      "await r2rUpdateRetargetBtn()",
+    ]) {
+      const boundaryAt = r2rSave.indexOf(boundary);
+      expect(boundaryAt, `R2R save boundary: ${boundary}`).toBeGreaterThanOrEqual(0);
+      expect(r2rSave.indexOf("if (!finalizationIsCurrent()) return", boundaryAt))
+        .toBeGreaterThan(boundaryAt);
+    }
   });
 
   it("terminalizes R2R calibration status and bootstrap under one pair identity", () => {
@@ -594,6 +736,8 @@ describe("legacy runtime ownership boundaries", () => {
     const firstBegin = entry.indexOf(
       "beginR2rCalibrationBootstrapAttempt(capturedIdentity)",
     );
+    expect(entry.indexOf("calibrationPresentationEpoch += 1"))
+      .toBeLessThan(firstBegin);
     const sessionAwait = entry.indexOf(
       'await API.post("/api/r2r/calibration/session"',
       firstBegin,
@@ -623,12 +767,17 @@ describe("legacy runtime ownership boundaries", () => {
       "const targetLoadAttempt = startRobotViewLoad(r2rTgt, targetPayload)",
       wildcardBegin,
     );
+    const reservation = entry.indexOf(
+      "reserveCalibrationManipulatorSession(",
+      wildcardBegin,
+    );
+    const reservationWorkflow = entry.indexOf('"r2r"', reservation);
     const actualGeneration = entry.indexOf(
       "targetLoadGeneration = targetLoadAttempt.generation",
       targetLoadStart,
     );
     const postStartGuard = entry.indexOf(
-      'if (!isCurrent()) return "stale"',
+      'if (!manipulatorOwnsLease()) return "stale"',
       actualGeneration,
     );
     const exactBegin = entry.indexOf(
@@ -640,6 +789,10 @@ describe("legacy runtime ownership boundaries", () => {
       exactBegin,
     );
     expect(wildcardBegin).toBeGreaterThan(selectGuard);
+    expect(reservation).toBeGreaterThan(wildcardBegin);
+    expect(reservationWorkflow).toBeGreaterThan(reservation);
+    expect(reservationWorkflow).toBeLessThan(targetLoadStart);
+    expect(targetLoadStart).toBeGreaterThan(reservation);
     expect(targetLoadStart).toBeGreaterThan(wildcardBegin);
     expect(actualGeneration).toBeGreaterThan(targetLoadStart);
     expect(postStartGuard).toBeGreaterThan(actualGeneration);
@@ -668,26 +821,50 @@ describe("legacy runtime ownership boundaries", () => {
       'switchInspectorPanel("r2r")',
       "r2rEnterPanel()",
       "r2rCalibrationFkPreview.start()",
-      "applyCalibOrbitLimits()",
+      "applyCalibOrbitLimits({",
       "updateR2rCalibBanner()",
       'classList.remove("hidden")',
       "r2rSetCalChip(",
       "publishR2rWorkflowState()",
-      "refSkel.load(reference)",
-      "refSkel.configureMappings(",
       'editor.style.display = "block"',
+      "startReservedCalibrationManipulatorSession(",
       "r2rApplyStage()",
-      "startCalibrationManipulatorSession(",
       "applyCalibrationVisualization(",
       "editor.scrollIntoView(",
-      "r2rFocus(r2rTgt)",
+      "focusRobotView({",
       "toast(auto",
     ];
     for (const effect of guardedEffects) {
       const effectAt = entry.indexOf(effect);
-      const guardAt = entry.indexOf('if (!isCurrent()) return "stale"', effectAt);
+      const tail = entry.slice(effectAt + effect.length);
+      const relativeGuard = tail.search(
+        /if \(!manipulator(?:OwnsLease|IsCurrent)\(\)\) return "stale"/,
+      );
       expect(effectAt, `bootstrap effect: ${effect}`).toBeGreaterThanOrEqual(0);
-      expect(guardAt, `bootstrap guard: ${effect}`).toBeGreaterThan(effectAt);
+      expect(relativeGuard, `bootstrap guard: ${effect}`).toBeGreaterThanOrEqual(0);
+    }
+    expectTokensInOrder(entry, [
+      "reserveCalibrationManipulatorSession(",
+      "payload: reference",
+      "ikMap: targetPayload.ik_map ?? {}",
+      "const targetLoadAttempt = startRobotViewLoad(r2rTgt, targetPayload)",
+      "startReservedCalibrationManipulatorSession(",
+      "r2rApplyStage()",
+      "applyCalibOrbitLimits({ expectedSession: manipulatorSession })",
+    ]);
+    for (const candidateMutation of [
+      "const targetLoadAttempt = startRobotViewLoad(r2rTgt, targetPayload)",
+      "r2rCalibrationFkPreview.stop()",
+      'switchInspectorPanel("r2r")',
+      "r2r.calibrating = true",
+      "r2r.calibLimits = limits",
+      "r2rTgt.groundOffset =",
+      'editor.style.display = "block"',
+    ]) {
+      expect(
+        entry.indexOf(candidateMutation),
+        `R2R mutation after reservation: ${candidateMutation}`,
+      ).toBeGreaterThan(reservation);
     }
     expect(entry).toContain("if (!r2rBuildSliders(");
     expect(entry).toContain("manipulatorSession,");
@@ -744,7 +921,6 @@ describe("legacy runtime ownership boundaries", () => {
     expect(rollback).not.toContain("clearR2rTargetAfterViewLoss(");
     expect(rollback).not.toContain("setR2rRobotStatus(");
     for (const guardedCleanup of [
-      "reference visibility cleanup failed",
       "result diagnostics cleanup failed",
       "export card cleanup failed",
       "target status cleanup failed",
@@ -764,6 +940,9 @@ describe("legacy runtime ownership boundaries", () => {
       .toBeLessThan(exit.indexOf("r2rCalibrationFkPreview.stop()"));
     expect(exit.indexOf("r2r.calibrating = false"))
       .toBeLessThan(exit.indexOf("r2rCalibrationFkPreview.stop()"));
+    expect(exit.indexOf("if (superseded()) return", exit.indexOf(
+      "calibManip.stop(manipulatorSession)",
+    ))).toBeGreaterThan(exit.indexOf("calibManip.stop(manipulatorSession)"));
     const leave = runtimeSource.slice(
       runtimeSource.indexOf("function r2rLeavePanel"),
       runtimeSource.indexOf("function r2rSetCalChip"),
@@ -1077,48 +1256,40 @@ describe("legacy runtime ownership boundaries", () => {
       }
     }
 
-    const referenceClearStart = referenceSkeletonViewSource.indexOf("clear(): void {");
-    const referenceClearEnd = referenceSkeletonViewSource.indexOf(
-      "\n  load(",
-      referenceClearStart,
+    const referenceInstall = referenceSkeletonViewSource.slice(
+      referenceSkeletonViewSource.indexOf("  install({"),
+      referenceSkeletonViewSource.indexOf("  /** Exact, idempotent terminal cleanup"),
     );
-    const referenceClearSource = referenceSkeletonViewSource.slice(
-      referenceClearStart,
-      referenceClearEnd,
+    const referenceDispose = referenceSkeletonViewSource.slice(
+      referenceSkeletonViewSource.indexOf("  dispose(resource:"),
+      referenceSkeletonViewSource.indexOf("  /** Project shared visibility"),
     );
-    expect(referenceClearStart).toBeGreaterThanOrEqual(0);
-    expect(referenceClearEnd).toBeGreaterThan(referenceClearStart);
-    expect(referenceClearSource).toContain(
-      "this.#resourceDisposer.disposeObject3DChildren(this.group",
-    );
-    for (const ownedResource of [
-      "...this.spheres.map((sphere) => sphere.geometry)",
-      "...(this.lineGeom ? [this.lineGeom] : [])",
-      "...this.spheres.map((sphere) => sphere.material)",
-      "...(this.lines ? [this.lines.material] : [])",
-      "...(this.mappedMaterial ? [this.mappedMaterial] : [])",
-      "...(this.contextMaterial ? [this.contextMaterial] : [])",
-    ]) {
-      expect(referenceClearSource).toContain(ownedResource);
-    }
-    expectTokensInOrder(referenceClearSource, [
-      "finally {",
-      "this.group.clear()",
-      "this.labelRoot.replaceChildren()",
-      "this.lineRoot.replaceChildren()",
-      "this.spheres = []",
-      "this.parents = []",
-      "this.boneNames = []",
-      "this.canonicalNames = []",
-      "this.referenceQuaternions = []",
-      "this.exclude = new Set()",
-      "this.mappings = []",
-      "this.lineGeom = null",
-      "this.lines = null",
-      "this.mappedMaterial = null",
-      "this.contextMaterial = null",
-      "this.group.visible = false",
+    expect(referenceInstall).toContain("installReentrantSessionResource({");
+    expectTokensInOrder(referenceInstall, [
+      "published = true",
+      "mark(resource!)",
+      "this.group.add(record!.root)",
+      "this.#labelRoot.appendChild(record!.labelLayer)",
+      "this.#lineRoot.appendChild(record!.lineLayer)",
     ]);
+    expectTokensInOrder(referenceDispose, [
+      "this.#records.delete(resource)",
+      "record.disposed = true",
+      "this.group.remove(record.root)",
+      "record.labelLayer.remove()",
+      "record.lineLayer.remove()",
+      "this.#resourceDisposer.disposeObject3DResources(",
+      "record.root.clear()",
+    ]);
+    expect(referenceSkeletonViewSource).not.toContain("this.group.clear()");
+    expect(referenceSkeletonViewSource).not.toContain("replaceChildren(");
+    for (const removedBroadApi of [
+      "clear(): void",
+      "load(ref:",
+      "configureMappings(",
+    ]) {
+      expect(referenceSkeletonViewSource).not.toContain(removedBroadApi);
+    }
   });
 
   it("terminally disposes every calibration limit-gizmo GPU resource", () => {
@@ -1458,8 +1629,9 @@ describe("legacy runtime ownership boundaries", () => {
     expect(activeRobots).toContain("if (h2rOwnsStage) return [robot.group]");
     expect(activeRobots).toContain("r2r.calibrating");
     expect(activeRobots).toContain("[r2rSrc.group, r2rTgt.group]");
-    expect(focus).toContain("const focusGroups = activeRobotFocusGroups()");
-    expect(focus).toContain("refSkel.group.visible");
+    expect(focus).toContain(": activeRobotFocusGroups()");
+    expect(focus).toContain("calibManip.referenceFacts(session)");
+    expect(focus).toContain("focusGroups.push(reference.object)");
   });
 
   it("leaves both Stage layer HUD wrappers to React", () => {
@@ -1793,9 +1965,7 @@ describe("legacy runtime ownership boundaries", () => {
     expect(apply).toContain(
       "r2rTgt.group.visible = facts.targetRobotAvailable",
     );
-    expect(apply).toContain(
-      "refSkel.group.visible = facts.referenceAvailable",
-    );
+    expect(apply).toContain("projectCalibrationReferenceStageVisibility()");
     expect(apply).toContain("if (!surface.empty)");
     expect(apply.match(/markH2rStageDisplayChanged\(\)/g)).toHaveLength(3);
   });
@@ -1842,6 +2012,7 @@ describe("legacy runtime ownership boundaries", () => {
     );
     expect(snapshotContract).not.toContain("vis:");
     expect(snapshotContract).not.toContain("resetVisible");
+    expect(snapshotContract).not.toContain("refSkel");
   });
 
   it("invalidates scaled previews when their H2R identity changes", () => {
@@ -1947,7 +2118,7 @@ describe("legacy runtime ownership boundaries", () => {
         start: "const targetLoadAttempt = startRobotViewLoad(r2rTgt, targetPayload)",
         load: "targetLoadResult = await targetLoadAttempt.completion",
         staleCheck: 'targetLoadResult === "stale"',
-        generationCheck: "!isCurrent()",
+        generationCheck: "!manipulatorOwnsLease()",
         commit: "r2rTgt.groundOffset =",
       },
       {

@@ -204,6 +204,12 @@ import {
   ikMapTargetLink,
   normalizedSemanticName,
   ReferenceSkeletonView,
+  type PreparedReferenceSkeleton,
+  type ReferenceSkeletonDiagnosticsSnapshot,
+  type ReferenceSkeletonDisplayOptions,
+  type ReferenceSkeletonFacts,
+  type ReferenceSkeletonResource,
+  type ReferenceSkeletonSetup,
 } from "./stage/reference-skeleton-view";
 import { RobotView } from "./stage/robot-view";
 import type {
@@ -877,8 +883,6 @@ const clock = new THREE.Clock();
 const _camFocus = new THREE.Vector3();
 const _defaultCamTarget = new THREE.Vector3(0, 0.9, 0);
 const _defaultCamOffset = new THREE.Vector3(2.6, 1.0, 3.2);
-const _viewFocusBox = new THREE.Box3();
-const _viewFocusTmp = new THREE.Box3();
 let _orbitManualUntil = 0;
 orbit.addEventListener("start", () => { _orbitManualUntil = performance.now() + 2800; });
 orbit.addEventListener("end", () => { _orbitManualUntil = performance.now() + 2800; });
@@ -915,23 +919,25 @@ function getViewFocus(out = new THREE.Vector3()): THREE.Vector3 {
           ? r2rTgtEnvGroup
           : null,
       ];
+  const focusBox = new THREE.Box3();
+  const candidateBox = new THREE.Box3();
   let has = false;
   for (const g of candidates) {
     if (!g) continue;
-    _viewFocusTmp.setFromObject(g);
-    if (_viewFocusTmp.isEmpty()) continue;
+    candidateBox.setFromObject(g);
+    if (candidateBox.isEmpty()) continue;
     if (!has) {
-      _viewFocusBox.copy(_viewFocusTmp);
+      focusBox.copy(candidateBox);
       has = true;
     } else {
-      _viewFocusBox.union(_viewFocusTmp);
+      focusBox.union(candidateBox);
     }
   }
   if (!has) {
     out.copy(_defaultCamTarget);
     return out;
   }
-  _viewFocusBox.getCenter(out);
+  focusBox.getCenter(out);
   return out;
 }
 
@@ -944,10 +950,6 @@ export function resetStageView(): void {
   resetDefaultView();
 }
 
-function calibRobotGroup(): THREE.Group {
-  return r2r.calibrating ? r2rTgt.group : robot.group;
-}
-
 /** Robot meshes that belong to the renderer currently shown on the Stage. */
 function activeRobotFocusGroups(): THREE.Group[] {
   if (h2rOwnsStage) return [robot.group];
@@ -958,71 +960,133 @@ function activeRobotFocusGroups(): THREE.Group[] {
     : [r2rSrc.group, r2rTgt.group];
 }
 
-/** Frame robot (+ reference skeleton during calibration) with sane orbit limits. */
-function focusRobotView({ resetOffset = false }: { resetOffset?: boolean } = {}): void {
-  const focusGroups = activeRobotFocusGroups();
-  if ((state.calibrationMode || r2r.calibrating) && refSkel.group.visible) {
-    focusGroups.push(refSkel.group);
+interface CalibrationFocusOptions {
+  readonly resetOffset?: boolean;
+  readonly snapCamera?: boolean;
+  /** `undefined` captures current; explicit null excludes calibration state. */
+  readonly expectedSession?: CalibrationManipulatorSession | null;
+}
+
+/** Frame robot (+ exact reference generation) without publishing mixed bounds. */
+function focusRobotView({
+  resetOffset = false,
+  expectedSession,
+}: CalibrationFocusOptions = {}): void {
+  const session = expectedSession === undefined
+    ? calibManip.currentSession
+    : expectedSession;
+  const sessionIsCurrent = (): boolean => (
+    session
+      ? calibrationSessionIsCurrent(session.value.owner, session)
+      : calibManip.currentSession === null
+  );
+  if (!sessionIsCurrent()) return;
+  const focusGroups = session
+    ? [session.value.owner === "r2r" ? r2rTgt.group : robot.group]
+    : activeRobotFocusGroups();
+  const reference = session ? calibManip.referenceFacts(session) : null;
+  if (reference?.visible) {
+    focusGroups.push(reference.object);
   }
+  const focusBox = new THREE.Box3();
+  const candidateBox = new THREE.Box3();
+  const focus = new THREE.Vector3();
   let has = false;
   for (const g of focusGroups) {
     if (!g?.visible) continue;
-    _viewFocusTmp.setFromObject(g);
-    if (_viewFocusTmp.isEmpty()) continue;
+    candidateBox.setFromObject(g);
+    if (!sessionIsCurrent()) return;
+    if (candidateBox.isEmpty()) continue;
     if (!has) {
-      _viewFocusBox.copy(_viewFocusTmp);
+      focusBox.copy(candidateBox);
       has = true;
     } else {
-      _viewFocusBox.union(_viewFocusTmp);
+      focusBox.union(candidateBox);
     }
   }
   if (!has) {
-    getViewFocus(_camFocus);
-    orbit.target.copy(_camFocus);
-    if (resetOffset) camera.position.copy(_camFocus).add(_defaultCamOffset);
+    getViewFocus(focus);
+    if (!sessionIsCurrent()) return;
+    orbit.target.copy(focus);
+    if (!sessionIsCurrent()) return;
+    if (resetOffset) camera.position.copy(focus).add(_defaultCamOffset);
+    if (!sessionIsCurrent()) return;
     orbit.update();
+    if (!sessionIsCurrent()) return;
     _orbitManualUntil = performance.now() + 2800;
     return;
   }
-  _viewFocusBox.getCenter(_camFocus);
-  orbit.target.copy(_camFocus);
+  focusBox.getCenter(focus);
+  if (!sessionIsCurrent()) return;
+  orbit.target.copy(focus);
+  if (!sessionIsCurrent()) return;
   if (resetOffset) {
-    const size = _viewFocusBox.getSize(new THREE.Vector3());
+    const size = focusBox.getSize(new THREE.Vector3());
     const span = Math.max(0.55, size.length());
     const dist = Math.max(1.35, span * 0.9);
-    camera.position.copy(_camFocus).add(
+    camera.position.copy(focus).add(
       new THREE.Vector3(dist * 0.58, dist * 0.44, dist * 0.68),
     );
+    if (!sessionIsCurrent()) return;
   }
   orbit.update();
+  if (!sessionIsCurrent()) return;
   _orbitManualUntil = performance.now() + 2800;
 }
 
 /** Orbit distance limits scaled to the visible robot (calibration zoom range). */
-function calibOrbitDistanceLimits(): { minDistance: number; maxDistance: number } {
+function calibOrbitDistanceLimits(
+  session: CalibrationManipulatorSession | null,
+): { minDistance: number; maxDistance: number } | null {
+  const sessionIsCurrent = (): boolean => (
+    session
+      ? calibrationSessionIsCurrent(session.value.owner, session)
+      : calibManip.currentSession === null
+  );
+  if (!sessionIsCurrent()) return null;
+  const focusBox = new THREE.Box3();
+  const candidateBox = new THREE.Box3();
   let has = false;
-  for (const g of [calibRobotGroup(), refSkel.group.visible ? refSkel.group : null]) {
+  const reference = session ? calibManip.referenceFacts(session) : null;
+  const robotGroup = session?.value.owner === "r2r" ? r2rTgt.group : robot.group;
+  for (const g of [robotGroup, reference?.visible ? reference.object : null]) {
     if (!g) continue;
-    _viewFocusTmp.setFromObject(g);
-    if (_viewFocusTmp.isEmpty()) continue;
+    candidateBox.setFromObject(g);
+    if (!sessionIsCurrent()) return null;
+    if (candidateBox.isEmpty()) continue;
     if (!has) {
-      _viewFocusBox.copy(_viewFocusTmp);
+      focusBox.copy(candidateBox);
       has = true;
     } else {
-      _viewFocusBox.union(_viewFocusTmp);
+      focusBox.union(candidateBox);
     }
   }
-  const span = has ? Math.max(0.75, _viewFocusBox.getSize(new THREE.Vector3()).length()) : 1.6;
+  if (!sessionIsCurrent()) return null;
+  const span = has ? Math.max(0.75, focusBox.getSize(new THREE.Vector3()).length()) : 1.6;
   return {
     minDistance: Math.max(0.28, span * 0.12),
     maxDistance: Math.max(span * 6, 18),
   };
 }
 
-function applyCalibOrbitLimits({ snapCamera = false }: { snapCamera?: boolean } = {}): void {
-  const lim = calibOrbitDistanceLimits();
+function applyCalibOrbitLimits({
+  snapCamera = false,
+  expectedSession,
+}: CalibrationFocusOptions = {}): void {
+  const session = expectedSession === undefined
+    ? calibManip.currentSession
+    : expectedSession;
+  const sessionIsCurrent = (): boolean => (
+    session
+      ? calibrationSessionIsCurrent(session.value.owner, session)
+      : calibManip.currentSession === null
+  );
+  const lim = calibOrbitDistanceLimits(session);
+  if (!lim || !sessionIsCurrent()) return;
   orbit.minDistance = lim.minDistance;
+  if (!sessionIsCurrent()) return;
   orbit.maxDistance = lim.maxDistance;
+  if (!sessionIsCurrent()) return;
   if (!snapCamera) return;
   const dist = camera.position.distanceTo(orbit.target);
   if (dist < lim.minDistance || dist > lim.maxDistance) {
@@ -1030,7 +1094,9 @@ function applyCalibOrbitLimits({ snapCamera = false }: { snapCamera?: boolean } 
     if (dir.lengthSq() < 1e-8) dir.set(0.58, 0.44, 0.68);
     dir.normalize().multiplyScalar(Math.min(lim.maxDistance, Math.max(lim.minDistance, dist)));
     camera.position.copy(orbit.target).add(dir);
+    if (!sessionIsCurrent()) return;
     orbit.update();
+    if (!sessionIsCurrent()) return;
   }
 }
 
@@ -1079,7 +1145,7 @@ function animate(): void {
   ) {
     calibManip.positionTags(manipulatorSession);
     if (calibrationSessionIsCurrent(calibrationWorkflow, manipulatorSession)) {
-      refSkel.updateOverlay(calibrationWorkflow === "r2r" ? r2rTgt : robot);
+      calibManip.updateReferenceOverlay(manipulatorSession);
     }
   }
   orbit.update();
@@ -1770,7 +1836,7 @@ const comparisonPresets: Record<WorkflowId, ComparisonPreset> = {
   ...initialWorkspacePreferences.comparisonPresets,
 };
 const skel = new SkeletonView();
-const refSkel = new ReferenceSkeletonView({
+const referenceSkeletonView = new ReferenceSkeletonView({
   labelRoot: document.getElementById("calib-landmark-labels")!,
   lineRoot: document.querySelector<SVGSVGElement>("#calib-mapping-overlay")!,
   camera,
@@ -1781,7 +1847,7 @@ const mesh = new CapsuleMeshView();
 const skin = new BakedMeshView({ resourceDisposer: threeResourceDisposer });
 // Extracted Views are inert until the compatibility composition root assigns
 // their stable scene owner. A future Stage kernel can compose the same View.
-world.add(refSkel.group);
+world.add(referenceSkeletonView.group);
 world.add(skin.group);
 const scaledSkel = new ScaledSkeletonView();
 const envView = new EnvView();
@@ -2207,8 +2273,6 @@ function clearH2rRobotAfterViewLoss(context: string): void {
       () => _restoreVis(calibrationRestore),
     );
   }
-  runBestEffortCleanup(`${context}: reference cleanup failed`, () => refSkel.clear());
-  refSkel.group.visible = false;
   robot.trajectory = null;
   runBestEffortCleanup(`${context}: Stage cleanup failed`, () => {
     withH2rStageDisplayBatch(() => {
@@ -2433,6 +2497,18 @@ const calibrationEditorUi: Record<WorkflowId, CalibrationEditorUiState> = {
   h2r: createCalibrationEditorUiState(),
   r2r: createCalibrationEditorUiState(),
 };
+
+function calibrationReferenceDisplayOptions(
+  workflow: WorkflowId,
+): ReferenceSkeletonDisplayOptions {
+  const ui = calibrationEditorUi[workflow];
+  return {
+    mappedOnly: ui.mappedOnly,
+    labels: ui.labels,
+    mappingLines: ui.mappingLines,
+    sourceOpacity: ui.sourceOpacity,
+  };
+}
 
 type WorkflowRunState = "idle" | "running" | "completed" | "failed";
 
@@ -2710,7 +2786,7 @@ function updateH2rCalibrationValidation(): void {
       `Current edit: ${changed} non-zero joints`,
       `当前编辑：${changed} 个非零关节`,
     )],
-    ...calibrationDiagnosticRows(robot),
+    ...calibrationDiagnosticRows("h2r"),
   ]);
 }
 
@@ -3462,12 +3538,14 @@ window.addEventListener("hhtools:workspace-locale-change", () => {
   publishPlaybackState();
   updateCalibRestoreButton();
   if (state.calibrationMode) {
-    refSkel.configureMappings(state.robot?.ik_map ?? {});
+    const session = activeCalibrationManipulatorSession("h2r");
+    if (session) calibManip.refreshReferenceLabels(session);
     syncCalibrationNumberInputs("h2r");
     emitCalibrationEditorState("h2r");
   }
   if (r2r.calibrating) {
-    refSkel.configureMappings(r2r.targetPayload?.ik_map ?? {});
+    const session = activeCalibrationManipulatorSession("r2r");
+    if (session) calibManip.refreshReferenceLabels(session);
     syncCalibrationNumberInputs("r2r");
     emitCalibrationEditorState("r2r");
   }
@@ -4448,6 +4526,9 @@ interface CalibrationSessionListener {
 
 interface CalibrationManipulatorSessionState {
   context: CalibrationContext | null;
+  readonly referencePrepared: PreparedReferenceSkeleton;
+  reference: ReferenceSkeletonResource | null;
+  referenceVisible: boolean;
   readonly jointMeta: Record<string, CalibrationJointMeta>;
   readonly linkToJoint: Record<string, string>;
   readonly jointToLink: Record<string, string>;
@@ -4470,6 +4551,8 @@ interface CalibrationManipulatorSessionState {
 interface CalibrationSurfaceProjection {
   readonly session: CalibrationManipulatorSession | null;
   readonly context: CalibrationContext | null;
+  readonly reference: ReferenceSkeletonResource | null;
+  readonly referenceVisible: boolean;
   readonly selectedJoint: string | null;
   readonly selectedLink: string | null;
   readonly hoveredLink: string | null;
@@ -4549,6 +4632,7 @@ class CalibManipulator {
   readonly stage: HTMLElement;
   readonly raycaster = new THREE.Raycaster();
   readonly pointer = new THREE.Vector2();
+  private readonly _referenceView: ReferenceSkeletonView;
   private readonly _gestureOwner = new LatestPointerGestureOwner<CalibrationPointerGesture>();
   private readonly _pointerCaptureGate = new ReentrantHostMutationGate();
   private _orbitProjection = orbit.enabled;
@@ -4561,14 +4645,17 @@ class CalibManipulator {
     canvasEl,
     hudEl,
     stageEl,
+    referenceView,
   }: {
     canvasEl: HTMLCanvasElement;
     hudEl: HTMLElement;
     stageEl: HTMLElement;
+    referenceView: ReferenceSkeletonView;
   }) {
     this.canvas = canvasEl;
     this.hud = hudEl;
     this.stage = stageEl;
+    this._referenceView = referenceView;
     this._sessions = new LatestSessionLifecycle({
       cleanup: (session, authority) => this._cleanupSession(session, authority),
     });
@@ -4583,13 +4670,19 @@ class CalibManipulator {
     return Boolean(session && this._sessions.isActive(session));
   }
 
+  owns(session: CalibrationManipulatorSession | null): boolean {
+    return Boolean(session && this._sessions.isCurrent(session));
+  }
+
   reserve(
     workflow: WorkflowId,
     limitsList: RobotJointLimit[],
     angleUnit: CalibrationAngleUnit,
+    referenceSetup: ReferenceSkeletonSetup,
   ): CalibrationManipulatorReservation {
     // Parse limits before ownership changes. A malformed candidate therefore
     // cannot retire the currently usable session.
+    const referencePrepared = this._referenceView.prepare(referenceSetup);
     const jointMeta: Record<string, CalibrationJointMeta> = {};
     const linkToJoint: Record<string, string> = {};
     const jointToLink: Record<string, string> = {};
@@ -4610,6 +4703,11 @@ class CalibManipulator {
     }
     return this._sessions.reserve(workflow, {
       context: null,
+      referencePrepared,
+      reference: null,
+      // Installation is intentionally hidden. The composition adapter projects
+      // visibility only after the exact workflow owns the shared Stage.
+      referenceVisible: false,
       jointMeta,
       linkToJoint,
       jointToLink,
@@ -4646,6 +4744,8 @@ class CalibManipulator {
       const context = createContext(owned);
       if (!authority.isCurrent()) return;
       this._state(owned).context = context;
+      if (!this._installReference(owned, authority)) return;
+      if (!authority.isCurrent()) return;
       this._initLimitGizmo(owned, authority);
       if (!authority.isCurrent()) return;
       this._buildTags(owned, authority);
@@ -4660,10 +4760,118 @@ class CalibManipulator {
     return this._sessions.stop(session) === "stopped";
   }
 
+  referenceFacts(
+    session: CalibrationManipulatorSession,
+  ): ReferenceSkeletonFacts | null {
+    if (!this.isCurrent(session)) return null;
+    const reference = this._state(session).reference;
+    return reference ? this._referenceView.facts(reference) : null;
+  }
+
+  setReferenceVisible(
+    session: CalibrationManipulatorSession,
+    visible: boolean,
+  ): boolean {
+    if (!this.isCurrent(session)) return false;
+    const state = this._state(session);
+    state.referenceVisible = visible;
+    this._reconcileSharedSurface();
+    return this.isCurrent(session) && state.referenceVisible === visible;
+  }
+
+  setReferenceDisplayOptions(
+    session: CalibrationManipulatorSession,
+    options: ReferenceSkeletonDisplayOptions,
+  ): boolean {
+    if (!this.isCurrent(session)) return false;
+    const state = this._state(session);
+    const reference = state.reference;
+    if (!reference) return false;
+    const authority = {
+      isCurrent: () => this.isCurrent(session) && state.reference === reference,
+    };
+    const updated = this._referenceView.setDisplayOptions(
+      reference,
+      options,
+      authority,
+    );
+    if (authority.isCurrent()) this._reconcileSharedSurface();
+    return updated && authority.isCurrent();
+  }
+
+  refreshReferenceLabels(session: CalibrationManipulatorSession): boolean {
+    if (!this.isCurrent(session)) return false;
+    const state = this._state(session);
+    const reference = state.reference;
+    if (!reference) return false;
+    const authority = {
+      isCurrent: () => this.isCurrent(session) && state.reference === reference,
+    };
+    return this._referenceView.refreshLabels(reference, authority)
+      && authority.isCurrent();
+  }
+
+  updateReferenceOverlay(session: CalibrationManipulatorSession): boolean {
+    if (!this.isCurrent(session)) return false;
+    const state = this._state(session);
+    const reference = state.reference;
+    const context = state.context;
+    if (!reference || !context) return false;
+    const authority = {
+      isCurrent: () => (
+        this.isCurrent(session)
+        && state.reference === reference
+        && state.context === context
+      ),
+    };
+    return this._referenceView.updateOverlay(
+      reference,
+      context.robotView,
+      authority,
+    ) && authority.isCurrent();
+  }
+
+  referenceDiagnostics(
+    session: CalibrationManipulatorSession,
+  ): ReferenceSkeletonDiagnosticsSnapshot | null {
+    if (!this.isCurrent(session)) return null;
+    const state = this._state(session);
+    const reference = state.reference;
+    const context = state.context;
+    if (!reference || !context) return null;
+    const authority = {
+      isCurrent: () => (
+        this.isCurrent(session)
+        && state.reference === reference
+        && state.context === context
+      ),
+    };
+    return this._referenceView.diagnostics(
+      reference,
+      context.robotView,
+      authority,
+    );
+  }
+
   private _state(
     session: CalibrationManipulatorSession,
   ): CalibrationManipulatorSessionState {
     return session.value.value;
+  }
+
+  /** Install the reference as one child resource of the exact outer lease. */
+  private _installReference(
+    session: CalibrationManipulatorSession,
+    authority: SessionSetupAuthority,
+  ): boolean {
+    const state = this._state(session);
+    return this._referenceView.install({
+      prepared: state.referencePrepared,
+      authority,
+      // The view invokes this before its first Three/DOM attachment, so stop()
+      // can always discover and release a late-committing candidate.
+      mark: (reference) => { state.reference = reference; },
+    }) === "installed";
   }
 
   private _initLimitGizmo(
@@ -5024,6 +5232,8 @@ class CalibManipulator {
       return {
         session: null,
         context: null,
+        reference: null,
+        referenceVisible: false,
         selectedJoint: null,
         selectedLink: null,
         hoveredLink: null,
@@ -5041,6 +5251,8 @@ class CalibManipulator {
     return {
       session,
       context: state.context,
+      reference: state.reference,
+      referenceVisible: state.referenceVisible,
       selectedJoint: state.selected,
       selectedLink: state.selected ? state.jointToLink[state.selected] ?? null : null,
       hoveredLink: state.hoveredLink,
@@ -5057,6 +5269,8 @@ class CalibManipulator {
     return (
       left.session === right.session
       && left.context === right.context
+      && left.reference === right.reference
+      && left.referenceVisible === right.referenceVisible
       && left.selectedJoint === right.selectedJoint
       && left.selectedLink === right.selectedLink
       && left.hoveredLink === right.hoveredLink
@@ -5104,6 +5318,13 @@ class CalibManipulator {
         }));
         if (!isStable()) continue;
       }
+
+      capture(() => this._referenceView.project(
+        projection.reference,
+        projection.referenceVisible,
+        { isCurrent: isStable },
+      ));
+      if (!isStable()) continue;
 
       capture(() => this.hud.classList.toggle("hidden", !projection.session));
       if (!isStable()) continue;
@@ -5166,6 +5387,9 @@ class CalibManipulator {
     // A reentrant successor can only publish into a different record.
     const context = state.context;
     state.context = null;
+    const reference = state.reference;
+    state.reference = null;
+    state.referenceVisible = false;
     const listeners = state.listeners.splice(0);
     const hudRoot = state.hudRoot;
     state.hudRoot = null;
@@ -5201,6 +5425,7 @@ class CalibManipulator {
         () => authority.isHandoffCurrent(),
       ));
     }
+    if (reference) capture(() => this._referenceView.dispose(reference));
     for (const registration of listeners) {
       capture(() => registration.target.removeEventListener(
         registration.type,
@@ -6496,6 +6721,7 @@ const calibManip = new CalibManipulator({
   canvasEl: document.getElementById("three-canvas"),
   hudEl: document.getElementById("calib-hud"),
   stageEl: document.getElementById("stage"),
+  referenceView: referenceSkeletonView,
 });
 
 // Workflow aliases are published before start() crosses its first host
@@ -6503,6 +6729,10 @@ const calibManip = new CalibManipulator({
 // ownership from mutable global calibration booleans.
 let h2rCalibrationManipulatorSession: CalibrationManipulatorSession | null = null;
 let r2rCalibrationManipulatorSession: CalibrationManipulatorSession | null = null;
+// Save finalization outlives its retired manipulator lease. A small shared
+// epoch lets either workflow's synchronous bootstrap revoke remaining UI writes
+// even before that bootstrap receives and reserves its next exact lease.
+let calibrationPresentationEpoch = 0;
 
 function calibrationManipulatorAlias(
   workflow: WorkflowId,
@@ -6529,6 +6759,16 @@ function activeCalibrationManipulatorSession(
     : null;
 }
 
+/** Derive reference visibility from exact ownership, never a panel snapshot. */
+function projectCalibrationReferenceStageVisibility(): void {
+  const session = calibManip.currentSession;
+  if (!session) return;
+  const visible = session.value.owner === "h2r"
+    ? h2rOwnsStage && state.calibrationMode
+    : r2r.active && r2r.calibrating;
+  calibManip.setReferenceVisible(session, visible);
+}
+
 /** Guard both the lifecycle generation and its workflow-scoped public alias. */
 function calibrationSessionIsCurrent(
   workflow: WorkflowId,
@@ -6541,13 +6781,18 @@ function calibrationSessionIsCurrent(
   );
 }
 
-function startCalibrationManipulatorSession(
+function reserveCalibrationManipulatorSession(
   workflow: WorkflowId,
   limits: RobotJointLimit[],
-  createContext: (session: CalibrationManipulatorSession) => CalibrationContext,
+  referenceSetup: ReferenceSkeletonSetup,
   angleUnit: CalibrationAngleUnit,
-): CalibrationManipulatorSession | null {
-  const reservation = calibManip.reserve(workflow, limits, angleUnit);
+): CalibrationManipulatorSession {
+  const reservation = calibManip.reserve(
+    workflow,
+    limits,
+    angleUnit,
+    referenceSetup,
+  );
   if (reservation.kind === "busy") {
     throw new Error(
       `Calibration manipulator is owned by the ${reservation.owner} workflow`,
@@ -6555,8 +6800,21 @@ function startCalibrationManipulatorSession(
   }
   const session = reservation.session;
   setCalibrationManipulatorAlias(workflow, session);
+  return session;
+}
+
+function startReservedCalibrationManipulatorSession(
+  workflow: WorkflowId,
+  session: CalibrationManipulatorSession,
+  createContext: (session: CalibrationManipulatorSession) => CalibrationContext,
+): boolean {
+  if (
+    session.value.owner !== workflow
+    || calibrationManipulatorAlias(workflow) !== session
+    || !calibManip.owns(session)
+  ) return false;
   try {
-    if (calibManip.start(session, createContext)) return session;
+    if (calibManip.start(session, createContext)) return true;
   } catch (error) {
     if (calibrationManipulatorAlias(workflow) === session) {
       setCalibrationManipulatorAlias(workflow, null);
@@ -6566,7 +6824,7 @@ function startCalibrationManipulatorSession(
   if (calibrationManipulatorAlias(workflow) === session) {
     setCalibrationManipulatorAlias(workflow, null);
   }
-  return null;
+  return false;
 }
 
 function stopCalibrationManipulatorSession(
@@ -6679,7 +6937,6 @@ function _applyCalibSceneLayout(): void {
     setH2rLayerVisible("scaledEnvironment", false);
     setH2rLayerVisible("targetRobot", true);
     robot.applyStatic();
-    refSkel.group.visible = true;
     player.setPlaying(false);
     _setPlaybarVisible(false);
   });
@@ -6693,8 +6950,6 @@ function _restoreVis(snap: ViewVisibilitySnapshot | null): void {
     return;
   }
   withH2rStageDisplayBatch(() => {
-    refSkel.clear();
-    refSkel.group.visible = false;
     setH2rLayerVisible("sourceSkeleton", snap.skel);
     setBodyVisible(snap.body);
     setH2rLayerVisible("sourceEnvironment", snap.env);
@@ -6806,8 +7061,6 @@ function rollbackH2rCalibrationBootstrap(
     if (visibilitySnapshot) {
       _restoreVis(visibilitySnapshot);
     } else {
-      refSkel.clear();
-      refSkel.group.visible = false;
       markH2rStageDisplayChanged();
     }
   })) return false;
@@ -6841,6 +7094,7 @@ async function enterCalibrationMode(
   const activeMotion = state.motion;
   const reference = state.reference;
   if (!activeRobot || !reference) return "failed";
+  calibrationPresentationEpoch += 1;
 
   h2rCalibrationStatusAttempts.invalidate();
   const attempt = h2rCalibrationBootstrapAttempts.begin({
@@ -6855,11 +7109,6 @@ async function enterCalibrationMode(
   const requestedInitialQ = initialQ && typeof initialQ === "object"
     ? { ...initialQ }
     : null;
-  const enteringFresh = (
-    !state.calibrationMode
-    && state.calibRestore === null
-    && state.calibOrbitSaved === null
-  );
   const isCurrent = (): boolean =>
     h2rCalibrationBootstrapAttempts.isCurrent(attempt);
   // Only a lease acquired by this attempt belongs in its finally cleanup.
@@ -6867,51 +7116,15 @@ async function enterCalibrationMode(
   // attempt that has not reserved its replacement yet.
   let manipulatorSession: CalibrationManipulatorSession | null = null;
   let manipulatorCommitted = false;
+  const manipulatorOwnsLease = (): boolean => Boolean(
+    isCurrent()
+    && manipulatorSession
+    && manipulatorSession.value.owner === "h2r"
+    && h2rCalibrationManipulatorSession === manipulatorSession
+    && calibManip.owns(manipulatorSession)
+  );
 
   try {
-    if (enteringFresh) {
-      state.calibRestore = _snapshotVis();
-      state.calibOrbitSaved = {
-        minDistance: orbit.minDistance,
-        maxDistance: orbit.maxDistance,
-        zoomSpeed: orbit.zoomSpeed,
-      };
-    }
-    if (!isCurrent()) return "stale";
-
-    // Each bootstrap attempt owns a fresh FK publication generation, while the
-    // original visibility/orbit snapshots span all same-session re-entries.
-    h2rCalibrationFkPreview.start();
-    if (!isCurrent()) return "stale";
-    state.calibrationMode = true;
-    state.calibNeedsCameraFocus = true;
-
-    const calCard = document.getElementById("calib-card");
-    if (!calCard) throw new Error("Calibration card is unavailable");
-    calCard.style.display = "block";
-    const retargetButton = document.getElementById("retarget-btn") as HTMLButtonElement | null;
-    if (retargetButton) retargetButton.disabled = true;
-    setCalChip(runtimeText("Calibrating…", "标定中…"), "warn");
-    if (!isCurrent()) return "stale";
-
-    orbit.zoomSpeed = 0.022;
-    applyCalibOrbitLimits();
-    if (!isCurrent()) return "stale";
-    updateCalibBanner(reference);
-    if (!isCurrent()) return "stale";
-    document.getElementById("calib-banner")?.classList.remove("hidden");
-    _applyCalibSceneLayout();
-    if (!isCurrent()) return "stale";
-    publishH2rWorkflowState();
-    if (!isCurrent()) return "stale";
-    toast(runtimeText(
-      "Calibration mode started. Align the robot to the blue reference skeleton.",
-      "已进入标定模式：请对齐蓝色参考骨架",
-    ));
-    if (!isCurrent()) return "stale";
-    if (player.active) player.seek(0);
-    if (!isCurrent()) return "stale";
-
     const session = await API.post("/api/calibration/session", {
       robot: attempt.identity.robotName,
       reference: attempt.identity.reference,
@@ -6923,42 +7136,101 @@ async function enterCalibrationMode(
       "标定会话未返回参考姿态",
     ));
 
-    state.calibLimits = session.joint_limits || [];
-    robot.groundOffset = session.ground_offset_z ?? robot.groundOffset;
-    refSkel.load(session.reference);
-    if (!isCurrent()) return "stale";
-    refSkel.configureMappings(attempt.identity.robot.ik_map ?? {});
-    if (!isCurrent()) return "stale";
-    if (session.reference_name) updateCalibBanner(session.reference_name);
-    if (!isCurrent()) return "stale";
-    _applyCalibSceneLayout();
-    if (!isCurrent()) return "stale";
-
+    const limits = session.joint_limits || [];
     const q = requestedInitialQ ?? { ...(session.joint_q || {}) };
+    // Preparation, busy detection, and exact lease publication happen before
+    // candidate globals or Stage resources change. A rejected response leaves
+    // the still-active predecessor and its presentation untouched.
+    manipulatorSession = reserveCalibrationManipulatorSession(
+      "h2r",
+      limits,
+      {
+        payload: session.reference,
+        ikMap: attempt.identity.robot.ik_map ?? {},
+        display: calibrationReferenceDisplayOptions("h2r"),
+      },
+      calibrationEditorUi.h2r.unit,
+    );
+    if (!manipulatorOwnsLease()) return "stale";
+
+    const enteringFresh = (
+      !state.calibrationMode
+      && state.calibRestore === null
+      && state.calibOrbitSaved === null
+    );
+    if (enteringFresh) {
+      state.calibRestore = _snapshotVis();
+      state.calibOrbitSaved = {
+        minDistance: orbit.minDistance,
+        maxDistance: orbit.maxDistance,
+        zoomSpeed: orbit.zoomSpeed,
+      };
+    }
+    if (!manipulatorOwnsLease()) return "stale";
+
+    // Each bootstrap attempt owns a fresh FK publication generation, while the
+    // original visibility/orbit snapshots span all same-session re-entries.
+    h2rCalibrationFkPreview.start();
+    if (!manipulatorOwnsLease()) return "stale";
+    state.calibrationMode = true;
+    state.calibNeedsCameraFocus = true;
+    state.calibLimits = limits;
     state.calibHasSaved = !!session.has_saved_calibration;
     state.calibBaselineQ = state.calibHasSaved ? { ...q } : null;
     state.calibDraftQ = { ...q };
+    state.calibQ = { ...q };
     calibrationEditorUi.h2r.comparison = "current";
+
+    const calCard = document.getElementById("calib-card");
+    if (!manipulatorOwnsLease()) return "stale";
+    if (!calCard) throw new Error("Calibration card is unavailable");
+    calCard.style.display = "block";
+    if (!manipulatorOwnsLease()) return "stale";
+    const retargetButton = document.getElementById("retarget-btn") as HTMLButtonElement | null;
+    if (!manipulatorOwnsLease()) return "stale";
+    if (retargetButton) retargetButton.disabled = true;
+    if (!manipulatorOwnsLease()) return "stale";
+    setCalChip(runtimeText("Calibrating…", "标定中…"), "warn");
+    if (!manipulatorOwnsLease()) return "stale";
+
+    orbit.zoomSpeed = 0.022;
+    if (!manipulatorOwnsLease()) return "stale";
+    robot.groundOffset = session.ground_offset_z ?? robot.groundOffset;
+    if (!manipulatorOwnsLease()) return "stale";
+    updateCalibBanner(session.reference_name || reference);
+    if (!manipulatorOwnsLease()) return "stale";
+    const banner = document.getElementById("calib-banner");
+    if (!manipulatorOwnsLease()) return "stale";
+    banner?.classList.remove("hidden");
+    if (!manipulatorOwnsLease()) return "stale";
+    _applyCalibSceneLayout();
+    if (!manipulatorOwnsLease()) return "stale";
+    publishH2rWorkflowState();
+    if (!manipulatorOwnsLease()) return "stale";
+    if (player.active) player.seek(0);
+    if (!manipulatorOwnsLease()) return "stale";
     updateCalibRestoreButton();
-    if (!isCurrent()) return "stale";
-    manipulatorSession = startCalibrationManipulatorSession(
+    if (!manipulatorOwnsLease()) return "stale";
+    if (!startReservedCalibrationManipulatorSession(
       "h2r",
-      state.calibLimits,
+      manipulatorSession,
       h2rCalibrationContext,
-      calibrationEditorUi.h2r.unit,
-    );
-    if (!manipulatorSession) return "stale";
+    )) return "stale";
     const manipulatorIsCurrent = (): boolean => Boolean(
       isCurrent()
       && manipulatorSession
       && calibrationSessionIsCurrent("h2r", manipulatorSession)
     );
     if (!manipulatorIsCurrent()) return "stale";
+    projectCalibrationReferenceStageVisibility();
+    if (!manipulatorIsCurrent()) return "stale";
+    applyCalibOrbitLimits({ expectedSession: manipulatorSession });
+    if (!manipulatorIsCurrent()) return "stale";
     if (!buildCalibSliders(
       manipulatorSession,
       q,
-      state.calibLimits,
-      isCurrent,
+      limits,
+      manipulatorIsCurrent,
     )) return "stale";
     if (!manipulatorIsCurrent()) return "stale";
     applyCalibrationVisualization("h2r", manipulatorSession);
@@ -6969,14 +7241,30 @@ async function enterCalibrationMode(
     if (!manipulatorIsCurrent()) return "stale";
     calCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
     if (!manipulatorIsCurrent()) return "stale";
+    toast(runtimeText(
+      "Calibration mode started. Align the robot to the blue reference skeleton.",
+      "已进入标定模式：请对齐蓝色参考骨架",
+    ));
+    if (!manipulatorIsCurrent()) return "stale";
     const entered = h2rCalibrationBootstrapAttempts.finish(attempt);
     if (entered) manipulatorCommitted = true;
     return entered ? "entered" : "stale";
   } catch (error) {
     if (!isCurrent()) return "stale";
-    const rollbackSession = manipulatorSession
-      ?? activeCalibrationManipulatorSession("h2r");
-    return rollbackH2rCalibrationBootstrap(attempt, error, rollbackSession)
+    if (!manipulatorSession) {
+      // Network, validation, prepare, and cross-workflow busy failures precede
+      // ownership transfer, so there is no candidate state to roll back.
+      runBestEffortCleanup(
+        "calibration bootstrap: error notification failed",
+        () => toast(errorMessage(error), true),
+      );
+      return h2rCalibrationBootstrapAttempts.finish(attempt)
+        ? "failed"
+        : "stale";
+    }
+    // Roll back only this attempt's exact reservation. A host callback may
+    // already have installed successor C while B was unwinding.
+    return rollbackH2rCalibrationBootstrap(attempt, error, manipulatorSession)
       ? "failed"
       : "stale";
   } finally {
@@ -7001,19 +7289,28 @@ function updateCalibRestoreButton(): void {
     );
 }
 
-function exitCalibrationMode(): void {
+function exitCalibrationMode(
+  expectedSession?: CalibrationManipulatorSession,
+): void {
+  // Exact callers (notably a save continuation) become stale-neutral before
+  // invalidating attempts or mutating canonical workflow state.
+  if (
+    expectedSession
+    && !calibrationSessionIsCurrent("h2r", expectedSession)
+  ) return;
+  calibrationPresentationEpoch += 1;
   h2rCalibrationBootstrapAttempts.invalidate();
   h2rCalibrationStatusAttempts.invalidate();
-  const manipulatorSession = h2rCalibrationManipulatorSession;
-  h2rCalibrationManipulatorSession = null;
+  const manipulatorSession = expectedSession ?? h2rCalibrationManipulatorSession;
+  if (h2rCalibrationManipulatorSession === manipulatorSession) {
+    h2rCalibrationManipulatorSession = null;
+  }
   const orbitSnapshot = state.calibOrbitSaved;
   const visibilitySnapshot = state.calibRestore;
 
   // Canonical state is terminal before the first fallible cleanup boundary.
   state.calibrationMode = false;
   state.calibNeedsCameraFocus = false;
-  state.calibOrbitSaved = null;
-  state.calibRestore = null;
   state.calibSliderRows = {};
   state.calibLimits = null;
   state.calibBaselineQ = null;
@@ -7029,22 +7326,45 @@ function exitCalibrationMode(): void {
       appendCalibrationCleanupError(errors, error);
     }
   };
+  const finishIfSuperseded = (): boolean => {
+    const successor = h2rCalibrationManipulatorSession;
+    if (!successor || successor === manipulatorSession) return false;
+    // A reserved successor is already the workflow authority even before its
+    // setup becomes active. Never let retiring A mutate C's shared surface.
+    if (errors.length > 0) {
+      throw new AggregateError(errors, "H2R calibration exit cleanup failed");
+    }
+    return true;
+  };
   cleanup(() => h2rCalibrationFkPreview.stop());
+  if (finishIfSuperseded()) return;
   if (orbitSnapshot) cleanup(() => {
     orbit.minDistance = orbitSnapshot.minDistance;
     orbit.maxDistance = orbitSnapshot.maxDistance;
     orbit.zoomSpeed = orbitSnapshot.zoomSpeed ?? orbit.zoomSpeed;
   });
+  if (finishIfSuperseded()) return;
   if (manipulatorSession) cleanup(() => calibManip.stop(manipulatorSession));
+  if (finishIfSuperseded()) return;
   cleanup(() => robot.setOpacity(1));
+  if (finishIfSuperseded()) return;
   cleanup(() => document.getElementById("calib-banner")?.classList.add("hidden"));
+  if (finishIfSuperseded()) return;
   cleanup(() => _restoreVis(visibilitySnapshot));
+  if (finishIfSuperseded()) return;
   cleanup(() => {
     if (robot.trajectory) robot.setFrame(0);
     else robot.applyStatic();
   });
+  if (finishIfSuperseded()) return;
   cleanup(() => publishH2rWorkflowState());
+  if (finishIfSuperseded()) return;
   cleanup(() => emitCalibrationEditorState("h2r"));
+  if (finishIfSuperseded()) return;
+  // Preserve the root snapshots while cleanup can reenter successor C. C then
+  // inherits the true pre-calibration baseline instead of a half-restored view.
+  state.calibOrbitSaved = null;
+  state.calibRestore = null;
   if (errors.length > 0) {
     throw new AggregateError(errors, "H2R calibration exit cleanup failed");
   }
@@ -7278,7 +7598,7 @@ const h2rCalibrationFkPreview = new CoalescedAsyncFrameTask<
     if (!calibrationSessionIsCurrent("h2r", result.manipulatorSession)) return;
     robot.applyCalibPose(response.link_transforms, response.ground_offset_z);
     if (!calibrationSessionIsCurrent("h2r", result.manipulatorSession)) return;
-    refSkel.updateOverlay(robot);
+    calibManip.updateReferenceOverlay(result.manipulatorSession);
     if (!calibrationSessionIsCurrent("h2r", result.manipulatorSession)) return;
     calibManip.updateJointWorld(result.manipulatorSession, response.joint_world);
     if (!calibrationSessionIsCurrent("h2r", result.manipulatorSession)) return;
@@ -7286,9 +7606,15 @@ const h2rCalibrationFkPreview = new CoalescedAsyncFrameTask<
     if (!calibrationSessionIsCurrent("h2r", result.manipulatorSession)) return;
     if (state.calibNeedsCameraFocus) {
       state.calibNeedsCameraFocus = false;
-      applyCalibOrbitLimits({ snapCamera: true });
+      applyCalibOrbitLimits({
+        snapCamera: true,
+        expectedSession: result.manipulatorSession,
+      });
       if (!calibrationSessionIsCurrent("h2r", result.manipulatorSession)) return;
-      focusRobotView({ resetOffset: true });
+      focusRobotView({
+        resetOffset: true,
+        expectedSession: result.manipulatorSession,
+      });
       if (!calibrationSessionIsCurrent("h2r", result.manipulatorSession)) return;
     }
   },
@@ -7469,8 +7795,15 @@ document.getElementById("calib-cancel").onclick = async () => {
 
 document.getElementById("calib-save").onclick = async () => {
   if (!state.robot) return;
+  let manipulatorSession: CalibrationManipulatorSession | null = null;
+  let responseAccepted = false;
+  let finalizationEpoch: number | null = null;
   try {
+    manipulatorSession = activeCalibrationManipulatorSession("h2r");
+    if (!manipulatorSession) return;
     const savedQ = { ...state.calibQ };
+    const mappedLandmarks = calibManip.referenceFacts(manipulatorSession)
+      ?.mappedLandmarks ?? 0;
     const scope = `${state.robot.display_name} + ${referenceLabel(state.reference)}`;
     const response = await API.post("/api/calibration/save", {
       robot: state.robot.name,
@@ -7478,30 +7811,79 @@ document.getElementById("calib-save").onclick = async () => {
       joint_q: savedQ,
       motion_token: state.motion?.token || null,
     });
+    if (!calibrationSessionIsCurrent("h2r", manipulatorSession)) return;
+    responseAccepted = true;
     state.calibBaselineQ = { ...savedQ };
     state.calibHasSaved = true;
-    exitCalibrationMode();
-    document.getElementById("calib-card").style.display = "none";
+    // Exact exit increments synchronously before its first host boundary. Claim
+    // that generation up front so a no-successor cleanup throw remains visible.
+    finalizationEpoch = calibrationPresentationEpoch + 1;
+    exitCalibrationMode(manipulatorSession);
+    const finalizationIsCurrent = (): boolean => (
+      calibrationPresentationEpoch === finalizationEpoch
+      && h2rCalibrationManipulatorSession === null
+      && r2rCalibrationManipulatorSession === null
+    );
+    // Cleanup or any later host callback can synchronously start C. Recheck
+    // both its pre-reservation epoch and its raw reserved/active alias after
+    // every boundary before retired A publishes another shared mutation.
+    if (!finalizationIsCurrent()) return;
+    const card = document.getElementById("calib-card");
+    if (!finalizationIsCurrent()) return;
+    if (card) card.style.display = "none";
+    if (!finalizationIsCurrent()) return;
     state.calibration = true;
     // Robot still holds the last calibration FK pose until retarget supplies a
     // trajectory; do not resume motion playback with the yellow overlay yet.
     player.setPlaying(false);
+    if (!finalizationIsCurrent()) return;
     robot.applyStatic();
+    if (!finalizationIsCurrent()) return;
     withH2rStageDisplayBatch(() => {
       setH2rLayerVisible("scaledSkeleton", false);
       setH2rLayerVisible("scaledEnvironment", false);
     });
-    refreshRetargetPanel();
-    renderCalibrationSaveSummary("calibration-save-summary", scope, response.path ?? null, savedQ);
+    if (!finalizationIsCurrent()) return;
+    void refreshRetargetPanel();
+    if (!finalizationIsCurrent()) return;
+    renderCalibrationSaveSummary(
+      "calibration-save-summary",
+      scope,
+      response.path ?? null,
+      savedQ,
+      mappedLandmarks,
+    );
+    if (!finalizationIsCurrent()) return;
     updateH2rCalibrationValidation();
+    if (!finalizationIsCurrent()) return;
     publishH2rWorkflowState();
+    if (!finalizationIsCurrent()) return;
     void syncBatchRefHint();
+    if (!finalizationIsCurrent()) return;
     const changed = Object.values(savedQ).filter((value) => Math.abs(value) > 1e-4).length;
+    if (!finalizationIsCurrent()) return;
     toast(runtimeText(
       `Calibration saved: ${changed} non-zero joints. Run Retarget before playing the preview.`,
       `标定已保存：${changed} 个非零关节 — 请点击 Retarget 后再播放预览`,
     ));
-  } catch (e) { toast(errorMessage(e), true); }
+    if (!finalizationIsCurrent()) return;
+  } catch (e) {
+    // A rejected request from retired A is silent. Cleanup errors are still
+    // reportable after A's accepted response only when no successor exists.
+    if (
+      manipulatorSession
+      && (
+        calibrationSessionIsCurrent("h2r", manipulatorSession)
+        || (
+          responseAccepted
+          && finalizationEpoch !== null
+          && calibrationPresentationEpoch === finalizationEpoch
+          && h2rCalibrationManipulatorSession === null
+          && r2rCalibrationManipulatorSession === null
+        )
+      )
+    ) toast(errorMessage(e), true);
+  }
 };
 
 type CompletedJob<Result> = Omit<JobResponse, "status" | "result"> & {
@@ -8570,7 +8952,6 @@ interface R2rState {
 }
 
 interface R2rMainSnapshot {
-  refSkel: boolean;
   player: {
     t: number;
     duration: number;
@@ -8799,12 +9180,14 @@ function calibrationRobotView(workflow: WorkflowId): RobotView {
 function emitCalibrationEditorState(workflow: WorkflowId): void {
   const rows = Object.values(calibrationRows(workflow));
   const ui = calibrationEditorUi[workflow];
+  const session = activeCalibrationManipulatorSession(workflow);
+  const reference = session ? calibManip.referenceFacts(session) : null;
   const detail: CalibrationEditorStateDetail = {
     workflow,
     active: calibrationActive(workflow),
     totalJoints: rows.length,
     visibleJoints: rows.filter((row) => !row.row.hidden).length,
-    mappedLandmarks: refSkel.mappings.length,
+    mappedLandmarks: reference?.mappedLandmarks ?? 0,
     canUseSaved: calibrationCanUseSaved(workflow),
     ...ui,
   };
@@ -8849,17 +9232,15 @@ function applyCalibrationVisualization(
   );
   if (!sessionIsCurrent()) return;
   const ui = calibrationEditorUi[workflow];
-  refSkel.setDisplayOptions({
-    mappedOnly: ui.mappedOnly,
-    labels: ui.labels,
-    mappingLines: ui.mappingLines,
-    sourceOpacity: ui.sourceOpacity,
-  });
+  calibManip.setReferenceDisplayOptions(
+    session,
+    calibrationReferenceDisplayOptions(workflow),
+  );
   if (!sessionIsCurrent()) return;
   const robotView = calibrationRobotView(workflow);
   robotView.setOpacity(ui.robotOpacity);
   if (!sessionIsCurrent()) return;
-  refSkel.updateOverlay(robotView);
+  calibManip.updateReferenceOverlay(session);
   if (!sessionIsCurrent()) return;
   emitCalibrationEditorState(workflow);
 }
@@ -8984,16 +9365,16 @@ function renderCalibrationSaveSummary(
   scope: string,
   path: string | null,
   q: Record<string, number>,
+  mappedLandmarks: number,
 ): void {
   const element = document.getElementById(elementId);
   if (!element) return;
   const changed = Object.values(q).filter((value) => Math.abs(value) > 1e-4).length;
-  const mapped = refSkel.mappings.length;
   element.textContent = [
     runtimeText(`Saved: ${scope}`, `已保存：${scope}`),
     runtimeText(
-      `${changed} non-zero joints, ${mapped} mapped effectors`,
-      `${changed} 个非零关节，${mapped} 个映射效应器`,
+      `${changed} non-zero joints, ${mappedLandmarks} mapped effectors`,
+      `${changed} 个非零关节，${mappedLandmarks} 个映射效应器`,
     ),
     path ? runtimeText(`File: ${path}`, `文件：${path}`) : "",
   ].filter(Boolean).join(" · ");
@@ -9001,9 +9382,11 @@ function renderCalibrationSaveSummary(
 }
 
 function calibrationDiagnosticRows(
-  robotView: RobotView,
+  workflow: WorkflowId,
 ): Array<readonly [ValidationTone, string]> {
-  const diagnostics = refSkel.alignmentDiagnostics(robotView);
+  const session = activeCalibrationManipulatorSession(workflow);
+  const snapshot = session ? calibManip.referenceDiagnostics(session) : null;
+  const diagnostics = snapshot?.alignment ?? [];
   if (diagnostics.length === 0) return [];
 
   const mean = (values: number[]): number => (
@@ -9057,7 +9440,7 @@ function calibrationDiagnosticRows(
     )]);
   }
 
-  const heading = refSkel.headingResidualDeg(robotView);
+  const heading = snapshot?.headingResidualDeg ?? null;
   if (heading != null) {
     rows.push([heading <= 15 ? "ok" : "warn", runtimeText(
       `Torso heading difference: ${heading.toFixed(1)}°`,
@@ -9250,7 +9633,7 @@ function updateR2rCalibrationValidation(): void {
         `${nearLimit.length} joints are near their URDF limits`,
         `${nearLimit.length} 个关节接近 URDF 限位`,
       )],
-    ...calibrationDiagnosticRows(r2rTgt),
+    ...calibrationDiagnosticRows("r2r"),
   ]);
 }
 const r2rVis: Record<R2rVisibilityKey, boolean> = {
@@ -9344,6 +9727,8 @@ function r2rLoadTgtScene(
 
 /** Read the same R2R resource facts used by rendering and presentation. */
 function collectR2rStageSurfaceFacts(): R2rStageSurfaceFacts {
+  const session = activeCalibrationManipulatorSession("r2r");
+  const reference = session ? calibManip.referenceFacts(session) : null;
   return {
     calibrating: r2r.calibrating,
     // A trajectory cannot render without robot geometry. Read the group so a
@@ -9356,7 +9741,7 @@ function collectR2rStageSurfaceFacts(): R2rStageSurfaceFacts {
       r2rSrcEnv.numFrames > 0 || Boolean(r2r.scaledScene?.terrain),
     targetEnvironmentAvailable:
       r2rTgtEnv.numFrames > 0 || Boolean(r2r.tgtScaledScene?.terrain),
-    referenceAvailable: refSkel.spheres.length > 0,
+    referenceAvailable: reference?.available ?? false,
   };
 }
 
@@ -9383,6 +9768,7 @@ function r2rApplyStage(
     r2rTgtSkel.group.visible = false;
     r2rSrcEnv.group.visible = false;
     r2rTgtEnv.group.visible = false;
+    projectCalibrationReferenceStageVisibility();
     if (publishStageDisplay) markH2rStageDisplayChanged();
     return;
   }
@@ -9397,14 +9783,14 @@ function r2rApplyStage(
     r2rTgtSkel.group.visible = false;
     r2rTgtEnv.group.visible = false;
     r2rTgt.group.visible = facts.targetRobotAvailable;
-    refSkel.group.visible = facts.referenceAvailable;
+    projectCalibrationReferenceStageVisibility();
     player.active = false;
     _setPlaybarVisible(false);
     player.setPlaying(false);
     if (publishStageDisplay) markH2rStageDisplayChanged();
     return;
   }
-  refSkel.group.visible = false;
+  projectCalibrationReferenceStageVisibility();
   const facts = collectR2rStageSurfaceFacts();
   const surface = projectR2rStageSurface(facts);
   const hasSrc = facts.sourceRobotAvailable;
@@ -9484,7 +9870,6 @@ function r2rEnterPanel(): void {
   // H2R visibility stays live in `h2rRequestedVisibility`, so it is projected
   // from the newest intent on return instead of restored from a stale snapshot.
   _r2rMainSnap = {
-    refSkel: refSkel.group.visible,
     player: {
       t: player.t,
       duration: player.duration,
@@ -9519,19 +9904,17 @@ function r2rLeavePanel(): void {
   const s = _r2rMainSnap;
   _r2rMainSnap = null;
   if (s) {
-    refSkel.group.visible = s.refSkel;
     player.t = s.player.t;
     player.duration = s.player.duration;
     player.active = s.player.active;
     player.setPlaying(false);
     _setPlaybarVisible(s.player.playbarVisible);
-  } else {
-    refSkel.group.visible = false;
   }
   // Re-open H2R capabilities only after its renderer snapshot has been
   // restored. React derives HUD ownership from the final publication.
   h2rOwnsStage = true;
   applyH2rPhysicalVisibility();
+  projectCalibrationReferenceStageVisibility();
   if (player.active) player.refreshFrame();
   markH2rStageDisplayChanged();
 }
@@ -9739,8 +10122,6 @@ function clearR2rCalibrationAfterViewLoss(context: string): void {
       else r2rTgt.applyStatic();
     });
   }
-  runBestEffortCleanup(`${context}: reference cleanup failed`, () => refSkel.clear());
-  refSkel.group.visible = false;
   const editor = document.getElementById("r2r-calib-edit");
   if (editor) editor.style.display = "none";
   document.getElementById("calib-banner")?.classList.add("hidden");
@@ -9991,7 +10372,7 @@ const r2rCalibrationFkPreview = new CoalescedAsyncFrameTask<
     if (!calibrationSessionIsCurrent("r2r", result.manipulatorSession)) return;
     r2rTgt.applyCalibPose(response.link_transforms, response.ground_offset_z);
     if (!calibrationSessionIsCurrent("r2r", result.manipulatorSession)) return;
-    refSkel.updateOverlay(r2rTgt);
+    calibManip.updateReferenceOverlay(result.manipulatorSession);
     if (!calibrationSessionIsCurrent("r2r", result.manipulatorSession)) return;
     calibManip.updateJointWorld(result.manipulatorSession, response.joint_world);
     if (!calibrationSessionIsCurrent("r2r", result.manipulatorSession)) return;
@@ -9999,9 +10380,15 @@ const r2rCalibrationFkPreview = new CoalescedAsyncFrameTask<
     if (!calibrationSessionIsCurrent("r2r", result.manipulatorSession)) return;
     if (r2r.calibNeedsCameraFocus) {
       r2r.calibNeedsCameraFocus = false;
-      applyCalibOrbitLimits({ snapCamera: true });
+      applyCalibOrbitLimits({
+        snapCamera: true,
+        expectedSession: result.manipulatorSession,
+      });
       if (!calibrationSessionIsCurrent("r2r", result.manipulatorSession)) return;
-      focusRobotView({ resetOffset: true });
+      focusRobotView({
+        resetOffset: true,
+        expectedSession: result.manipulatorSession,
+      });
       if (!calibrationSessionIsCurrent("r2r", result.manipulatorSession)) return;
     }
   },
@@ -10286,10 +10673,6 @@ function rollbackR2rCalibrationBootstrap(
   }
   if (calibrationResourcesOwned) {
     if (!cleanup("R2R calibration bootstrap: target opacity restore failed", () => r2rTgt.setOpacity(1))) return false;
-    if (!cleanup("R2R calibration bootstrap: reference cleanup failed", () => refSkel.clear())) return false;
-    if (!cleanup("R2R calibration bootstrap: reference visibility cleanup failed", () => {
-      refSkel.group.visible = false;
-    })) return false;
     if (!cleanup("R2R calibration bootstrap: target ground offset restore failed", () => {
       r2rTgt.groundOffset = targetGroundOffset;
     })) return false;
@@ -10407,6 +10790,7 @@ async function r2rStartCalib(
   if (r2r.calibrating && activeCalibrationManipulatorSession("r2r")) {
     return "entered";
   }
+  calibrationPresentationEpoch += 1;
   r2rCalibrationStatusAttempts.invalidate();
   const capturedIdentity = captureR2rCalibrationIdentity();
   if (!capturedIdentity) {
@@ -10435,17 +10819,15 @@ async function r2rStartCalib(
       || r2rTgt.isLoadGenerationCurrent(targetLoadGeneration)
     )
   );
+  const manipulatorOwnsLease = (): boolean => Boolean(
+    isCurrent()
+    && manipulatorSession
+    && manipulatorSession.value.owner === "r2r"
+    && r2rCalibrationManipulatorSession === manipulatorSession
+    && calibManip.owns(manipulatorSession)
+  );
 
   try {
-    // A replacement attempt owns FK publication as soon as it starts, even
-    // while its session and renderer are still pending.
-    r2rCalibrationFkPreview.stop();
-    if (!isCurrent()) return "stale";
-    if (!auto) {
-      toast(runtimeText("Preparing calibration…", "准备标定…"));
-      if (!isCurrent()) return "stale";
-    }
-
     const session = await API.post("/api/r2r/calibration/session", {
       target: attempt.identity.targetName,
       source: attempt.identity.sourceName,
@@ -10475,20 +10857,47 @@ async function r2rStartCalib(
       resolvedTargetPayload: targetPayload,
       targetViewGeneration: null,
     });
+    if (!isCurrent()) return "stale";
+
+    const limits = session.joint_limits ?? session.limits ?? [];
+    const initialQ = { ...(session.joint_q || {}) };
+    // Reject malformed references and cross-workflow contention before the
+    // target renderer, panel, calibration globals, or shared Stage are touched.
+    manipulatorSession = reserveCalibrationManipulatorSession(
+      "r2r",
+      limits,
+      {
+        payload: reference,
+        ikMap: targetPayload.ik_map ?? {},
+        display: calibrationReferenceDisplayOptions("r2r"),
+      },
+      calibrationEditorUi.r2r.unit,
+    );
+    if (!manipulatorOwnsLease()) return "stale";
+
+    // A replacement attempt owns FK publication only after its exact
+    // manipulator reservation has made rollback discoverable.
+    r2rCalibrationFkPreview.stop();
+    if (!manipulatorOwnsLease()) return "stale";
+    if (!auto) {
+      toast(runtimeText("Preparing calibration…", "准备标定…"));
+      if (!manipulatorOwnsLease()) return "stale";
+    }
+
     const targetLoadAttempt = startRobotViewLoad(r2rTgt, targetPayload);
     targetLoadGeneration = targetLoadAttempt.generation;
-    if (!isCurrent()) return "stale";
+    if (!manipulatorOwnsLease()) return "stale";
     attempt = beginR2rCalibrationBootstrapAttempt({
       ...attempt.identity,
       targetViewGeneration: targetLoadGeneration,
     });
-    if (!isCurrent()) return "stale";
+    if (!manipulatorOwnsLease()) return "stale";
 
     let targetLoadResult: AsyncStageViewLoadResult;
     try {
       targetLoadResult = await targetLoadAttempt.completion;
     } catch (error) {
-      if (!isCurrent()) return "stale";
+      if (!manipulatorOwnsLease()) return "stale";
       const rolledBack = rollbackR2rCalibrationBootstrap(
         attempt,
         error,
@@ -10499,7 +10908,7 @@ async function r2rStartCalib(
       );
       return rolledBack ? "failed" : "stale";
     }
-    if (targetLoadResult === "stale" || !isCurrent()) return "stale";
+    if (targetLoadResult === "stale" || !manipulatorOwnsLease()) return "stale";
     if (!r2rCalibrationResourcesOwned) {
       r2rCalibrationRestoreGroundOffset = r2rTgt.groundOffset;
     }
@@ -10511,13 +10920,13 @@ async function r2rStartCalib(
 
     // Enter calibration only after the target renderer generation commits.
     r2r.targetPayload = targetPayload;
-    if (!isCurrent()) return "stale";
+    if (!manipulatorOwnsLease()) return "stale";
     switchInspectorPanel("r2r");
-    if (!isCurrent()) return "stale";
+    if (!manipulatorOwnsLease()) return "stale";
     if (!r2r.active) r2rEnterPanel();
-    if (!isCurrent()) return "stale";
+    if (!manipulatorOwnsLease()) return "stale";
     r2rCalibrationFkPreview.start();
-    if (!isCurrent()) return "stale";
+    if (!manipulatorOwnsLease()) return "stale";
 
     const enteringFresh = !r2r.calibrating && r2r.calibOrbitSaved === null;
     if (enteringFresh) {
@@ -10532,63 +10941,65 @@ async function r2rStartCalib(
     r2rCalibrationStatusAttempts.invalidate();
     r2r.calibrating = true;
     r2r.calibNeedsCameraFocus = true;
-    orbit.zoomSpeed = 0.022;
-    applyCalibOrbitLimits();
-    if (!isCurrent()) return "stale";
-    updateR2rCalibBanner();
-    if (!isCurrent()) return "stale";
-    document.getElementById("calib-banner")?.classList.remove("hidden");
-    if (!isCurrent()) return "stale";
-    r2rSetCalChip(runtimeText("Calibrating…", "标定中…"), "warn");
-    if (!isCurrent()) return "stale";
-    const retargetButton = document.getElementById("r2r-retarget-btn") as HTMLButtonElement | null;
-    if (retargetButton) retargetButton.disabled = true;
-    if (!isCurrent()) return "stale";
-    publishR2rWorkflowState();
-    if (!isCurrent()) return "stale";
-
-    r2r.calibLimits = session.joint_limits ?? session.limits ?? [];
-    r2rTgt.groundOffset = session.ground_offset_z ?? r2rTgt.groundOffset;
-    refSkel.load(reference);
-    if (!isCurrent()) return "stale";
-    refSkel.configureMappings(targetPayload.ik_map ?? {});
-    if (!isCurrent()) return "stale";
-    const initialQ = { ...(session.joint_q || {}) };
+    r2r.calibLimits = limits;
+    r2r.calibQ = { ...initialQ };
     r2r.calibHasSaved = !!session.has_saved_calibration;
     r2r.calibBaselineQ = r2r.calibHasSaved ? { ...initialQ } : null;
     r2r.calibDraftQ = { ...initialQ };
     calibrationEditorUi.r2r.comparison = "current";
+    orbit.zoomSpeed = 0.022;
+    if (!manipulatorOwnsLease()) return "stale";
+    r2rTgt.groundOffset = session.ground_offset_z ?? r2rTgt.groundOffset;
+    if (!manipulatorOwnsLease()) return "stale";
+    updateR2rCalibBanner();
+    if (!manipulatorOwnsLease()) return "stale";
+    const banner = document.getElementById("calib-banner");
+    if (!manipulatorOwnsLease()) return "stale";
+    banner?.classList.remove("hidden");
+    if (!manipulatorOwnsLease()) return "stale";
+    r2rSetCalChip(runtimeText("Calibrating…", "标定中…"), "warn");
+    if (!manipulatorOwnsLease()) return "stale";
+    const retargetButton = document.getElementById("r2r-retarget-btn") as HTMLButtonElement | null;
+    if (!manipulatorOwnsLease()) return "stale";
+    if (retargetButton) retargetButton.disabled = true;
+    if (!manipulatorOwnsLease()) return "stale";
+    publishR2rWorkflowState();
+    if (!manipulatorOwnsLease()) return "stale";
     const editor = document.getElementById("r2r-calib-edit");
+    if (!manipulatorOwnsLease()) return "stale";
     if (!editor) throw new Error("R2R calibration editor is unavailable");
     editor.style.display = "block";
-    if (!isCurrent()) return "stale";
-    r2rApplyStage();
-    if (!isCurrent()) return "stale";
-    manipulatorSession = startCalibrationManipulatorSession(
+    if (!manipulatorOwnsLease()) return "stale";
+    if (!startReservedCalibrationManipulatorSession(
       "r2r",
-      r2r.calibLimits,
+      manipulatorSession,
       r2rCalibCtx,
-      calibrationEditorUi.r2r.unit,
-    );
-    if (!manipulatorSession) return "stale";
+    )) return "stale";
     const manipulatorIsCurrent = (): boolean => Boolean(
       isCurrent()
       && manipulatorSession
       && calibrationSessionIsCurrent("r2r", manipulatorSession)
     );
     if (!manipulatorIsCurrent()) return "stale";
+    r2rApplyStage();
+    if (!manipulatorIsCurrent()) return "stale";
+    applyCalibOrbitLimits({ expectedSession: manipulatorSession });
+    if (!manipulatorIsCurrent()) return "stale";
     if (!r2rBuildSliders(
       manipulatorSession,
       initialQ,
-      r2r.calibLimits,
-      isCurrent,
+      limits,
+      manipulatorIsCurrent,
     )) return "stale";
     if (!manipulatorIsCurrent()) return "stale";
     applyCalibrationVisualization("r2r", manipulatorSession);
     if (!manipulatorIsCurrent()) return "stale";
     editor.scrollIntoView({ behavior: "smooth", block: "nearest" });
     if (!manipulatorIsCurrent()) return "stale";
-    r2rFocus(r2rTgt);
+    focusRobotView({
+      resetOffset: true,
+      expectedSession: manipulatorSession,
+    });
     if (!manipulatorIsCurrent()) return "stale";
     toast(auto
       ? runtimeText(
@@ -10605,6 +11016,17 @@ async function r2rStartCalib(
     return entered ? "entered" : "stale";
   } catch (error) {
     if (!isCurrent()) return "stale";
+    if (!manipulatorSession) {
+      // Session/reference validation and busy failures happen before any local
+      // renderer or workflow publication, so the predecessor needs no rollback.
+      runBestEffortCleanup(
+        "R2R calibration bootstrap: error notification failed",
+        () => toast(errorMessage(error), true),
+      );
+      return finishR2rCalibrationBootstrapAttempt(attempt)
+        ? "failed"
+        : "stale";
+    }
     return rollbackR2rCalibrationBootstrap(
       attempt,
       error,
@@ -10624,12 +11046,26 @@ async function r2rStartCalib(
   }
 }
 
+interface R2rCalibrationExitOptions extends R2rStageApplyOptions {
+  readonly expectedSession?: CalibrationManipulatorSession;
+}
+
 function r2rExitCalib(
-  { publishStageDisplay = true }: R2rStageApplyOptions = {},
+  {
+    publishStageDisplay = true,
+    expectedSession,
+  }: R2rCalibrationExitOptions = {},
 ): void {
+  if (
+    expectedSession
+    && !calibrationSessionIsCurrent("r2r", expectedSession)
+  ) return;
+  calibrationPresentationEpoch += 1;
   invalidateR2rCalibrationAttempts();
-  const manipulatorSession = r2rCalibrationManipulatorSession;
-  r2rCalibrationManipulatorSession = null;
+  const manipulatorSession = expectedSession ?? r2rCalibrationManipulatorSession;
+  if (r2rCalibrationManipulatorSession === manipulatorSession) {
+    r2rCalibrationManipulatorSession = null;
+  }
   const orbitSnapshot = r2r.calibOrbitSaved;
   const targetGroundOffset = r2rCalibrationRestoreGroundOffset;
   r2r.calibrating = false;
@@ -10641,17 +11077,23 @@ function r2rExitCalib(
   r2r.calibDraftQ = null;
   r2r.calibHasSaved = false;
   calibrationEditorUi.r2r.comparison = "current";
+  const superseded = (): boolean => {
+    const successor = r2rCalibrationManipulatorSession;
+    return Boolean(successor && successor !== manipulatorSession);
+  };
 
   runBestEffortCleanup(
     "R2R calibration exit: FK owner cleanup failed",
     () => r2rCalibrationFkPreview.stop(),
   );
+  if (superseded()) return;
   if (orbitSnapshot) {
     runBestEffortCleanup("R2R calibration exit: orbit restore failed", () => {
       orbit.minDistance = orbitSnapshot.minDistance;
       orbit.maxDistance = orbitSnapshot.maxDistance;
       orbit.zoomSpeed = orbitSnapshot.zoomSpeed;
     });
+    if (superseded()) return;
   }
   runBestEffortCleanup(
     "R2R calibration exit: manipulator cleanup failed",
@@ -10659,33 +11101,36 @@ function r2rExitCalib(
       if (manipulatorSession) calibManip.stop(manipulatorSession);
     },
   );
+  if (superseded()) return;
   runBestEffortCleanup("R2R calibration exit: target opacity restore failed", () => r2rTgt.setOpacity(1));
+  if (superseded()) return;
   if (targetGroundOffset !== null) {
     runBestEffortCleanup("R2R calibration exit: target ground offset restore failed", () => {
       r2rTgt.groundOffset = targetGroundOffset;
     });
+    if (superseded()) return;
     runBestEffortCleanup("R2R calibration exit: target pose restore failed", () => {
       if (r2rTgt.trajectory) r2rTgt.setFrame(0);
       else r2rTgt.applyStatic();
     });
+    if (superseded()) return;
   }
   runBestEffortCleanup("R2R calibration exit: editor cleanup failed", () => {
     const editor = document.getElementById("r2r-calib-edit");
     if (editor) editor.style.display = "none";
     document.getElementById("calib-banner")?.classList.add("hidden");
   });
-  runBestEffortCleanup("R2R calibration exit: reference cleanup failed", () => {
-    refSkel.clear();
-    refSkel.group.visible = false;
-  });
+  if (superseded()) return;
   runBestEffortCleanup(
     "R2R calibration exit: Stage restore failed",
     () => r2rApplyStage({ publishStageDisplay }),
   );
+  if (superseded()) return;
   runBestEffortCleanup("R2R calibration exit: workflow publication failed", () => {
     publishR2rWorkflowState();
     emitCalibrationEditorState("r2r");
   });
+  if (superseded()) return;
   r2r.calibOrbitSaved = null;
   r2rCalibrationResourcesOwned = false;
   r2rCalibrationRestoreGroundOffset = null;
@@ -10725,26 +11170,60 @@ async function r2rMaybeAutoCalib(): Promise<void> {
 }
 
 async function r2rSaveCalib(): Promise<void> {
+  let manipulatorSession: CalibrationManipulatorSession | null = null;
+  let responseAccepted = false;
+  let finalizationEpoch: number | null = null;
   try {
+    manipulatorSession = activeCalibrationManipulatorSession("r2r");
+    if (!manipulatorSession) return;
     const savedQ = { ...r2r.calibQ };
+    const mappedLandmarks = calibManip.referenceFacts(manipulatorSession)
+      ?.mappedLandmarks ?? 0;
     const scope = `${r2r.targetPayload?.display_name || r2r.targetName} + ${r2r.sourcePayload?.display_name || r2r.sourceName}`;
     const response = await API.post("/api/r2r/calibration/save", {
       target: r2r.targetName,
       source: r2r.sourceName,
       joint_q: savedQ,
     });
+    if (!calibrationSessionIsCurrent("r2r", manipulatorSession)) return;
+    responseAccepted = true;
     r2r.calibBaselineQ = { ...savedQ };
     r2r.calibHasSaved = true;
-    r2rExitCalib();
+    finalizationEpoch = calibrationPresentationEpoch + 1;
+    r2rExitCalib({ expectedSession: manipulatorSession });
+    const finalizationIsCurrent = (): boolean => (
+      calibrationPresentationEpoch === finalizationEpoch
+      && h2rCalibrationManipulatorSession === null
+      && r2rCalibrationManipulatorSession === null
+    );
+    if (!finalizationIsCurrent()) return;
     renderCalibrationSaveSummary(
       "r2r-calibration-save-summary",
       scope,
       response.path ?? null,
       savedQ,
+      mappedLandmarks,
     );
+    if (!finalizationIsCurrent()) return;
     toast(runtimeText("R2R calibration saved", "R2R 标定已保存"));
+    if (!finalizationIsCurrent()) return;
     await r2rUpdateRetargetBtn();
-  } catch (e) { toast(errorMessage(e), true); }
+    if (!finalizationIsCurrent()) return;
+  } catch (e) {
+    if (
+      manipulatorSession
+      && (
+        calibrationSessionIsCurrent("r2r", manipulatorSession)
+        || (
+          responseAccepted
+          && finalizationEpoch !== null
+          && calibrationPresentationEpoch === finalizationEpoch
+          && h2rCalibrationManipulatorSession === null
+          && r2rCalibrationManipulatorSession === null
+        )
+      )
+    ) toast(errorMessage(e), true);
+  }
 }
 
 // --------------------------------------------------------------- trajectory IO
