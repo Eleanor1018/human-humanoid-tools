@@ -2,8 +2,20 @@ import { describe, expect, it } from "vitest";
 
 import runtimeSource from "../../src/runtime/webui-runtime.ts?raw";
 import commandRegistrySource from "../../src/runtime/command-registry.ts?raw";
+import robotViewSource from "../../src/runtime/stage/robot-view.ts?raw";
 
 describe("legacy runtime ownership boundaries", () => {
+  it("composes the extracted inert Robot Views explicitly", () => {
+    expect(runtimeSource).toContain(
+      'import { RobotView } from "./stage/robot-view"',
+    );
+    expect(runtimeSource).not.toContain("class RobotView");
+    expect(robotViewSource).toContain("export class RobotView");
+    expect(robotViewSource).not.toContain("world.add(");
+    expect(runtimeSource.match(/world\.add\((?:robot|r2rSrc|r2rTgt)\.group\)/g))
+      .toHaveLength(3);
+  });
+
   it("invalidates async environment loads and disposes stale GLTF scenes", () => {
     const terrainBuilder = runtimeSource.slice(
       runtimeSource.indexOf("function buildTerrainMesh"),
@@ -130,7 +142,7 @@ describe("legacy runtime ownership boundaries", () => {
     const synchronousViews = [
       {
         className: "SkeletonView",
-        nextClassName: "ReferenceSkeletonView",
+        endMarker: "class ReferenceSkeletonView",
         inventory: [
           "...this.spheres.map((sphere) => sphere.geometry)",
           "...(this.lineGeom ? [this.lineGeom] : [])",
@@ -150,7 +162,7 @@ describe("legacy runtime ownership boundaries", () => {
       },
       {
         className: "ReferenceSkeletonView",
-        nextClassName: "EnvView",
+        endMarker: "class EnvView",
         inventory: [
           "...this.spheres.map((sphere) => sphere.geometry)",
           "...(this.lineGeom ? [this.lineGeom] : [])",
@@ -181,7 +193,7 @@ describe("legacy runtime ownership boundaries", () => {
       },
       {
         className: "CapsuleMeshView",
-        nextClassName: "ScaledSkeletonView",
+        endMarker: "class ScaledSkeletonView",
         inventory: [
           "geometries: this.mesh ? [this.mesh.geometry] : []",
           "materials: this.mesh ? [this.mesh.material] : []",
@@ -199,7 +211,7 @@ describe("legacy runtime ownership boundaries", () => {
       },
       {
         className: "ScaledSkeletonView",
-        nextClassName: "RobotView",
+        endMarker: "// Scaled-environment interpolation",
         inventory: [
           "...this.spheres.map((sphere) => sphere.geometry)",
           "...(this.lineGeom ? [this.lineGeom] : [])",
@@ -220,16 +232,13 @@ describe("legacy runtime ownership boundaries", () => {
 
     for (const {
       className,
-      nextClassName,
+      endMarker,
       inventory,
       cleanup,
       aliasReleases,
     } of synchronousViews) {
       const classStart = runtimeSource.indexOf(`class ${className}`);
-      const classEnd = runtimeSource.indexOf(
-        `class ${nextClassName}`,
-        classStart,
-      );
+      const classEnd = runtimeSource.indexOf(endMarker, classStart);
       const classSource = runtimeSource.slice(classStart, classEnd);
       const clearStart = classSource.indexOf("clear(): void {");
       const clearEnd = classSource.indexOf("\n  load(", clearStart);
@@ -721,10 +730,18 @@ describe("legacy runtime ownership boundaries", () => {
       referenceChange,
       motionLoad,
       robotLoad,
-      robotDelete,
     ]) {
       expect(identityCommit).toContain("clearH2rScaledPreview()");
     }
+    expect(robotDelete).toContain(
+      'clearH2rRobotAfterViewLoss("deleted robot")',
+    );
+    const robotLossCleanup = runtimeSource.slice(
+      runtimeSource.indexOf("function clearH2rRobotAfterViewLoss"),
+      runtimeSource.indexOf("async function refreshScaledPreview"),
+    );
+    expect(robotLossCleanup).toContain("scaledSkel.clear()");
+    expect(robotLossCleanup).toContain("scaledEnv.clear()");
   });
 
   it("commits async retarget results only after the final identity guard", () => {
@@ -742,5 +759,265 @@ describe("legacy runtime ownership boundaries", () => {
     expect(retarget.slice(finalGuard, trajectoryCommit)).toContain(
       "withH2rStageDisplayBatch(() =>",
     );
+  });
+
+  it("does not publish RobotView caller state after a stale load", () => {
+    const callerSlices = [
+      {
+        name: "H2R export preview",
+        source: runtimeSource.slice(
+          runtimeSource.indexOf("async function loadRobotExportPreview"),
+          runtimeSource.indexOf("async function previewRobotClip"),
+        ),
+        start: "const attempt = startRobotViewLoad(robot, robotData)",
+        load: "const loadResult = await attempt.completion",
+        staleCheck: 'loadResult === "stale"',
+        generationCheck:
+          "!robot.isLoadGenerationCurrent(attempt.generation)",
+        commit: "state.robot = selectedRobot",
+      },
+      {
+        name: "H2R robot selection",
+        source: runtimeSource.slice(
+          runtimeSource.indexOf("async function applyRobot"),
+          runtimeSource.indexOf("async function refreshRobotList"),
+        ),
+        start: "const attempt = startRobotViewLoad(robot, robotData)",
+        load: "const loadResult = await attempt.completion",
+        staleCheck: 'loadResult === "stale"',
+        generationCheck:
+          "!robot.isLoadGenerationCurrent(attempt.generation)",
+        commit: "state.robot = robotData",
+      },
+      {
+        name: "R2R source selection",
+        source: runtimeSource.slice(
+          runtimeSource.indexOf("async function r2rLoadSourceRobot"),
+          runtimeSource.indexOf("async function r2rLoadTargetRobot"),
+        ),
+        start: "const attempt = startRobotViewLoad(r2rSrc, sourcePayload)",
+        load: "loadResult = await attempt.completion",
+        staleCheck: 'loadResult === "stale"',
+        generationCheck:
+          "!r2rSrc.isLoadGenerationCurrent(attempt.generation)",
+        commit: "r2r.sourcePayload = sourcePayload",
+      },
+      {
+        name: "R2R calibration target",
+        source: runtimeSource.slice(
+          runtimeSource.indexOf("async function r2rStartCalib"),
+          runtimeSource.indexOf("function r2rExitCalib"),
+        ),
+        start: "const attempt = startRobotViewLoad(r2rTgt, targetPayload)",
+        load: "targetLoadResult = await attempt.completion",
+        staleCheck: 'targetLoadResult === "stale"',
+        generationCheck:
+          "!r2rTgt.isLoadGenerationCurrent(attempt.generation)",
+        commit: "r2rTgt.groundOffset =",
+      },
+      {
+        name: "R2R automatic source",
+        source: runtimeSource.slice(
+          runtimeSource.indexOf("async function r2rEnsureSourceLoaded"),
+          runtimeSource.indexOf("async function r2rUploadTraj"),
+        ),
+        start: "const attempt = startRobotViewLoad(r2rSrc, sourcePayload)",
+        load: "loadResult = await attempt.completion",
+        staleCheck: 'loadResult === "stale"',
+        generationCheck:
+          "!r2rSrc.isLoadGenerationCurrent(attempt.generation)",
+        commit: "r2r.sourcePayload = sourcePayload",
+      },
+      {
+        name: "R2R source trajectory",
+        source: runtimeSource.slice(
+          runtimeSource.indexOf("async function r2rApplySourceTrajectoryResult"),
+          runtimeSource.indexOf("async function loadR2rLibraryEntry"),
+        ),
+        start: "const attempt = startRobotViewLoad(r2rSrc, sourcePayload)",
+        load: "loadResult = await attempt.completion",
+        staleCheck: 'loadResult === "stale"',
+        generationCheck:
+          "!r2rSrc.isLoadGenerationCurrent(attempt.generation)",
+        commit: "r2rSrc.setTrajectory(data.trajectory)",
+      },
+      {
+        name: "R2R retarget result",
+        source: runtimeSource.slice(
+          runtimeSource.indexOf("async function r2rRunRetarget"),
+          runtimeSource.indexOf("// --------------------------------------------------------------- batch"),
+        ),
+        start: "const attempt = startRobotViewLoad(r2rTgt, targetPayload)",
+        load: "targetLoadResult = await attempt.completion",
+        staleCheck: 'targetLoadResult === "stale"',
+        generationCheck:
+          "!r2rTgt.isLoadGenerationCurrent(attempt.generation)",
+        commit: "r2rTgt.setTrajectory(j.result.trajectory)",
+      },
+    ] as const;
+
+    for (const caller of callerSlices) {
+      const start = caller.source.indexOf(caller.start);
+      const load = caller.source.indexOf(caller.load, start);
+      const staleCheck = caller.source.indexOf(caller.staleCheck, load);
+      const generationCheck = caller.source.indexOf(
+        caller.generationCheck,
+        staleCheck,
+      );
+      const commit = caller.source.indexOf(caller.commit, generationCheck);
+      expect(start, `${caller.name}: start`).toBeGreaterThanOrEqual(0);
+      expect(load, `${caller.name}: load`).toBeGreaterThan(start);
+      expect(staleCheck, `${caller.name}: stale check`).toBeGreaterThan(load);
+      expect(
+        generationCheck,
+        `${caller.name}: generation check`,
+      ).toBeGreaterThan(staleCheck);
+      expect(commit, `${caller.name}: commit`).toBeGreaterThan(generationCheck);
+    }
+
+    const exportPreview = callerSlices[0].source;
+    expect(exportPreview).toContain("robot.links.length > 0");
+    expect(exportPreview).toContain("robot.group.children.length > 0");
+    const deletion = runtimeSource.slice(
+      runtimeSource.indexOf("async function deleteRobotSummary"),
+      runtimeSource.indexOf("const robotSearchInput"),
+    );
+    expect(deletion).toContain(
+      'runBestEffortCleanup("deleted robot: resource cleanup failed", () => robot.clear())',
+    );
+    expect(deletion).toContain('clearH2rRobotAfterViewLoss("deleted robot")');
+  });
+
+  it("withdraws logical workflow capabilities after current RobotView failures", () => {
+    const h2rCleanup = runtimeSource.slice(
+      runtimeSource.indexOf("function clearH2rRobotAfterViewLoss"),
+      runtimeSource.indexOf("async function refreshScaledPreview"),
+    );
+    for (const reset of [
+      "state.robot = null",
+      "state.robotTrajectory = null",
+      "state.exportToken = null",
+      "state.exportSrcFps = null",
+      "state.exportHasScene = false",
+      "state.calibration = false",
+      'h2rRunState = "idle"',
+      'setH2rLayerVisible("targetRobot", false)',
+      'clearResultDiagnostics("h2r")',
+      "publishH2rWorkflowState()",
+    ]) {
+      expect(h2rCleanup, `H2R cleanup: ${reset}`).toContain(reset);
+    }
+    expect(h2rCleanup).toContain("calibManip.stop()");
+    expect(h2rCleanup).toContain("_restoreVis(calibrationRestore)");
+    expect(h2rCleanup).not.toContain("robot.clear()");
+
+    const r2rCleanup = runtimeSource.slice(
+      runtimeSource.indexOf("function clearR2rCalibrationAfterViewLoss"),
+      runtimeSource.indexOf("async function r2rLoadSourceRobot"),
+    );
+    for (const reset of [
+      "r2r.sourceName = null",
+      "r2r.sourcePayload = null",
+      "r2r.sourceToken = null",
+      "r2r.sourceStem = null",
+      "r2r.targetName = null",
+      "r2r.targetPayload = null",
+      "r2r.calibrated = false",
+      "r2r.exportToken = null",
+      "r2r.exportHasScene = false",
+      "r2r.resultStem = null",
+      "r2r.scaledScene = null",
+      "r2r.tgtScaledScene = null",
+      "r2rSrcSkel.clear()",
+      "r2rSrcEnv.clear()",
+      "r2rTgtSkel.clear()",
+      "r2rTgtEnv.clear()",
+    ]) {
+      expect(r2rCleanup, `R2R cleanup: ${reset}`).toContain(reset);
+    }
+    // Preserve the visible selection so the user can retry, while canonical
+    // source/target names remain null until a renderer generation commits.
+    expect(r2rCleanup).not.toContain('select.value = ""');
+    expect(r2rCleanup).not.toContain("r2rSrc.clear()");
+    expect(r2rCleanup).not.toContain("r2rTgt.clear()");
+
+    const currentFailureCallers = [
+      {
+        name: "H2R export preview",
+        source: runtimeSource.slice(
+          runtimeSource.indexOf("async function loadRobotExportPreview"),
+          runtimeSource.indexOf("async function previewRobotClip"),
+        ),
+        generationGuard:
+          'if (!robot.isLoadGenerationCurrent(attempt.generation)) return "stale"',
+        cleanup: 'clearH2rRobotAfterViewLoss("export preview robot load")',
+      },
+      {
+        name: "H2R robot selection",
+        source: runtimeSource.slice(
+          runtimeSource.indexOf("async function applyRobot"),
+          runtimeSource.indexOf("async function refreshRobotList"),
+        ),
+        generationGuard:
+          'if (!robot.isLoadGenerationCurrent(attempt.generation)) return "stale"',
+        cleanup: 'clearH2rRobotAfterViewLoss("selected robot load")',
+      },
+      {
+        name: "R2R source selection",
+        source: runtimeSource.slice(
+          runtimeSource.indexOf("async function r2rLoadSourceRobot"),
+          runtimeSource.indexOf("async function r2rLoadTargetRobot"),
+        ),
+        generationGuard:
+          "if (!r2rSrc.isLoadGenerationCurrent(attempt.generation)) return",
+        cleanup: 'clearR2rSourceAfterViewLoss("selected R2R source load")',
+      },
+      {
+        name: "R2R calibration target",
+        source: runtimeSource.slice(
+          runtimeSource.indexOf("async function r2rStartCalib"),
+          runtimeSource.indexOf("function r2rExitCalib"),
+        ),
+        generationGuard:
+          "if (!r2rTgt.isLoadGenerationCurrent(attempt.generation)) return",
+        cleanup: 'clearR2rTargetAfterViewLoss("R2R calibration target load")',
+      },
+      {
+        name: "R2R automatic source",
+        source: runtimeSource.slice(
+          runtimeSource.indexOf("async function r2rEnsureSourceLoaded"),
+          runtimeSource.indexOf("async function r2rUploadTraj"),
+        ),
+        generationGuard:
+          "if (!r2rSrc.isLoadGenerationCurrent(attempt.generation)) return false",
+        cleanup: 'clearR2rSourceAfterViewLoss("automatic R2R source load")',
+      },
+      {
+        name: "R2R trajectory source",
+        source: runtimeSource.slice(
+          runtimeSource.indexOf("async function r2rApplySourceTrajectoryResult"),
+          runtimeSource.indexOf("async function loadR2rLibraryEntry"),
+        ),
+        generationGuard:
+          'if (!r2rSrc.isLoadGenerationCurrent(attempt.generation)) return "stale"',
+        cleanup: 'clearR2rSourceAfterViewLoss("R2R trajectory source load")',
+      },
+      {
+        name: "R2R retarget target",
+        source: runtimeSource.slice(
+          runtimeSource.indexOf("async function r2rRunRetarget"),
+          runtimeSource.indexOf("// --------------------------------------------------------------- batch"),
+        ),
+        generationGuard:
+          "if (!r2rTgt.isLoadGenerationCurrent(attempt.generation)) return",
+        cleanup: 'clearR2rTargetAfterViewLoss("R2R result target load")',
+      },
+    ] as const;
+    for (const caller of currentFailureCallers) {
+      const guard = caller.source.indexOf(caller.generationGuard);
+      const cleanup = caller.source.indexOf(caller.cleanup, guard);
+      expect(guard, `${caller.name}: generation guard`).toBeGreaterThanOrEqual(0);
+      expect(cleanup, `${caller.name}: failure cleanup`).toBeGreaterThan(guard);
+    }
   });
 });

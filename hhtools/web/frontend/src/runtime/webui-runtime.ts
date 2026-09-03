@@ -99,26 +99,6 @@ function renderValidationSummary(
   );
 }
 
-/** Playback timeline when long clips are downsampled for the browser payload. */
-function effectivePlaybackDuration(payload: PlaybackPayload | null | undefined): number {
-  if (payload == null) return 1;
-  if (payload.playback_duration != null && Number.isFinite(payload.playback_duration)) {
-    return Math.max(0.1, payload.playback_duration);
-  }
-  const nPlay = payload.playback_frames
-    ?? payload.positions?.length
-    ?? payload.frames?.length
-    ?? payload.num_frames_total;
-  const nTotal = payload.num_frames_total ?? nPlay ?? 1;
-  const fps = payload.framerate || payload.sample_rate || 30;
-  // Always span the FULL clip duration — downsampled frames are interpolated
-  // across it, so never shorten the timeline to the downsampled frame count
-  // (that made long, heavily-downsampled clips play several times too fast).
-  const d = payload.duration;
-  if (d != null && d > 0) return Math.max(0.1, d);
-  return Math.max(0.1, (nTotal - 1) / fps);
-}
-
 function isPlaybackPreview(payload: PlaybackPayload | null | undefined): boolean {
   if (!payload) return false;
   const nPlay = payload.playback_frames
@@ -127,29 +107,6 @@ function isPlaybackPreview(payload: PlaybackPayload | null | undefined): boolean
     ?? 0;
   const nTotal = payload.num_frames_total ?? nPlay;
   return nTotal > nPlay && nPlay > 0;
-}
-
-/**
- * Downsampled clips spread sparse keys across the full timeline; linear blend
- * between distant source keys can turn a LAFAN direction change into a slide.
- */
-function resolvePlaybackFrame(
-  frameIndices: number[] | null | undefined,
-  fi: number,
-  max: number,
-): { ia: number; ib: number; t: number } {
-  const f0 = Math.min(max, Math.floor(fi));
-  const t = fi - f0;
-  if (t <= 1e-5 || f0 >= max) return { ia: f0, ib: f0, t: 0 };
-  const ib = f0 + 1;
-  const gap = frameIndices && frameIndices.length > ib
-    ? frameIndices[ib] - frameIndices[f0]
-    : 1;
-  if (gap > 1) {
-    const pick = t >= 0.5 ? ib : f0;
-    return { ia: pick, ib: pick, t: 0 };
-  }
-  return { ia: f0, ib, t };
 }
 
 function updateRetargetFpsPlaceholder() {
@@ -211,6 +168,11 @@ import type {
 import { ThreeResourceDisposer } from "@/platform/graphics/common/three-resource-disposer";
 import type { AsyncStageViewLoadResult } from "./stage/async-stage-view-load-result";
 import { BakedMeshView } from "./stage/baked-mesh-view";
+import {
+  effectivePlaybackDuration,
+  resolvePlaybackFrame,
+} from "./stage/playback-timing";
+import { RobotView } from "./stage/robot-view";
 import type {
   ApiClient,
   ApiGetResponse,
@@ -230,7 +192,6 @@ import type {
   JobResult,
   JobStartResponse,
   JointWorldPayload,
-  Matrix4Data,
   PlaybackUiState,
   PlaybackPayload,
   PlaybackView,
@@ -2123,341 +2084,8 @@ class ScaledSkeletonView {
   }
 }
 
-// =================================================================  ROBOT
-const _robotLinkDelta = new THREE.Matrix4();
-const _robotMeshMat = new THREE.Matrix4();
-const _robotLinkMat = new THREE.Matrix4();
-const _robotWorldLinkMat = new THREE.Matrix4();
+// Scaled-environment interpolation reuses one scratch quaternion per frame.
 const _robotRootQuatB = new THREE.Quaternion();
-const _robotMatB = new THREE.Matrix4();
-const _robotPosA = new THREE.Vector3();
-const _robotPosB = new THREE.Vector3();
-const _robotQuatA = new THREE.Quaternion();
-const _robotQuatB2 = new THREE.Quaternion();
-const _robotScaleA = new THREE.Vector3();
-const _robotScaleB = new THREE.Vector3();
-
-interface RobotLinkMeshEntry {
-  mesh: THREE.Mesh;
-  baked: THREE.Matrix4;
-}
-
-class RobotView {
-  readonly group: THREE.Group;
-  linkMeshes: Record<string, RobotLinkMeshEntry[]> = {};
-  meshToLink: Record<string, string> = {};
-  zeroInv: Record<string, THREE.Matrix4> = {};
-  zero: Record<string, Matrix4Data> = {};
-  currentLinkTransforms: Record<string, Matrix4Data> = {};
-  links: string[] = [];
-  trajectory: RobotTrajectoryPayload | null = null;
-  frameIndices: number[] | null | undefined = null;
-  groundOffset = 0;
-  clipDuration = 1;
-  readonly heavy = true;
-
-  constructor() {
-    this.group = new THREE.Group();
-    world.add(this.group);
-    this.group.visible = false;
-  }
-  clear(): void {
-    while (this.group.children.length) this.group.remove(this.group.children[0]);
-    this.linkMeshes = {};
-    this.meshToLink = {};
-    this.zeroInv = {};
-    this.currentLinkTransforms = {};
-    this.trajectory = null;
-  }
-  setVisible(v: boolean): void {
-    this.group.visible = v;
-  }
-  // No trajectory yet: drop the robot on the ground at its zero/T-pose.
-  applyStatic(): void {
-    this.group.position.set(0, 0, this.groundOffset);
-    this.group.quaternion.identity();
-    for (const link of this.links) {
-      const entry = this.linkMeshes[link];
-      if (!entry) continue;
-      for (const { mesh, baked } of entry) mesh.matrix.copy(baked);
-    }
-    this.currentLinkTransforms = this.zero;
-    this.group.updateMatrixWorld(true);
-  }
-  async load(robot: RobotPayload): Promise<void> {
-    this.clear();
-    this.links = robot.links;
-    this.meshToLink = robot.mesh_to_link || {};
-    this.zero = robot.link_transforms_zero;
-    this.currentLinkTransforms = this.zero;
-    this.groundOffset = robot.ground_offset_z || 0;
-    for (const link of this.links) {
-      const m = mat4(this.zero[link]);
-      this.zeroInv[link] = m.clone().invert();
-    }
-    if (!robot.glb_base64) {
-      // fall back to link-frame skeleton
-      this._buildLinkSkeleton();
-      this.applyStatic();
-      return;
-    }
-    const bytes = Uint8Array.from(atob(robot.glb_base64), (c) => c.charCodeAt(0));
-    const loader = new GLTFLoader();
-    await new Promise<void>((resolve) => {
-      loader.parse(bytes.buffer as ArrayBuffer, "", (gltf) => {
-        gltf.scene.updateMatrixWorld(true);
-        const meshes: THREE.Mesh[] = [];
-        gltf.scene.traverse((node) => {
-          const candidate = node as THREE.Mesh;
-          if (candidate.isMesh) meshes.push(candidate);
-        });
-        for (const mesh of meshes) {
-          const link = this._linkForNode(mesh);
-          if (!link) continue;
-          mesh.userData.hhtoolsLink = link;
-          const baked = mesh.matrixWorld.clone();
-          mesh.matrixAutoUpdate = false;
-          // trimesh→GLB exports frequently omit vertex normals; without them
-          // any lit material renders pure black.  Compute them once here.
-          const g = mesh.geometry;
-          if (g && !g.getAttribute("normal")) {
-            g.computeVertexNormals();
-          }
-          applyRobotMaterial(mesh);
-          this.group.add(mesh);
-          mesh.matrix.copy(baked);
-          mesh.updateMatrixWorld(true);
-          (this.linkMeshes[link] ||= []).push({ mesh, baked });
-        }
-        this.group.updateMatrixWorld(true);
-        resolve();
-      }, () => { this._buildLinkSkeleton(); resolve(); });
-    });
-    this.applyStatic();
-  }
-  private _normPickKey(s: unknown): string {
-    return String(s ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
-  }
-  private _meshBasename(name: unknown): string {
-    const base = String(name || "").split(/[/\\]/).pop();
-    return (base ?? "").replace(/\.[^.]+$/, "");
-  }
-  _linkForNode(node: THREE.Object3D): string | null {
-    const names = this.links;
-    let cur: THREE.Object3D | null = node;
-    while (cur) {
-      const tagged = cur.userData?.hhtoolsLink;
-      if (tagged) return tagged;
-      const raw = cur.name || "";
-      if (this.meshToLink[raw]) return this.meshToLink[raw];
-      const base = this._meshBasename(raw);
-      if (this.meshToLink[base]) return this.meshToLink[base];
-      const cn = this._normPickKey(raw);
-      for (const l of names) {
-        if (this._normPickKey(l) === cn && cn) return l;
-      }
-      const sn = this._normPickKey(base);
-      if (sn) {
-        for (const l of names) {
-          const ln = this._normPickKey(l);
-          const lc = ln.endsWith("link") ? ln.slice(0, -4) : ln;
-          if (lc === sn || ln === sn) return l;
-        }
-      }
-      cur = cur.parent;
-    }
-    return null;
-  }
-  private _buildLinkSkeleton(): void {
-    const geo = new THREE.SphereGeometry(0.02, 8, 8);
-    const matl = new THREE.MeshStandardMaterial({ color: 0xb8bdc6 });
-    for (const link of this.links) {
-      const s = new THREE.Mesh(geo, matl);
-      s.matrixAutoUpdate = false;
-      s.matrix.copy(mat4(this.zero[link]));
-      this.group.add(s);
-      (this.linkMeshes[link] ||= []).push({ mesh: s, baked: mat4(this.zero[link]) });
-    }
-  }
-  setTrajectory(traj: RobotTrajectoryPayload): void {
-    this.trajectory = traj;
-    this.frameIndices = traj.frame_indices;
-    this.clipDuration = effectivePlaybackDuration(traj);
-    // IK root + mesh_z_lift (align mesh sole to yellow overlay foot when present).
-    this.setFrame(0);
-  }
-  get numFrames(): number {
-    return this.trajectory ? this.trajectory.frames.length : 0;
-  }
-  setFrame(f: number): void {
-    this.setFrameFrac(f);
-  }
-  setFrameFrac(fi: number): void {
-    if (!this.trajectory) return;
-    const max = this.trajectory.frames.length - 1;
-    const { ia, ib, t } = resolvePlaybackFrame(this.frameIndices, fi, max);
-    const frame = this.trajectory.frames[ia];
-    if (!frame) return;
-    const nxtFrame = t > 1e-5 && ia !== ib ? this.trajectory.frames[ib] : null;
-    const root = frame.root;
-    const liftA = frame.mesh_z_lift || 0;
-    const liftB = nxtFrame?.mesh_z_lift ?? liftA;
-    const meshLift = liftA + (liftB - liftA) * t;
-    if (root) {
-      if (t > 1e-5 && ia !== ib) {
-        const nxt = this.trajectory.frames[ib]?.root;
-        if (nxt) {
-          this.group.position.set(
-            root[0] + (nxt[0] - root[0]) * t,
-            root[1] + (nxt[1] - root[1]) * t,
-            root[2] + (nxt[2] - root[2]) * t + meshLift,
-          );
-          this.group.quaternion.set(root[3], root[4], root[5], root[6]);
-          _robotRootQuatB.set(nxt[3], nxt[4], nxt[5], nxt[6]);
-          this.group.quaternion.slerp(_robotRootQuatB, t);
-        } else {
-          this.group.position.set(root[0], root[1], root[2] + meshLift);
-          this.group.quaternion.set(root[3], root[4], root[5], root[6]);
-        }
-      } else {
-        this.group.position.set(root[0], root[1], root[2] + meshLift);
-        this.group.quaternion.set(root[3], root[4], root[5], root[6]);
-      }
-    }
-    this._applyLinkTransforms(frame.links, nxtFrame ? nxtFrame.links : null, t);
-  }
-  /** Pose link meshes from FK (calibration preview) or trajectory frame. */
-  private _applyLinkTransforms(
-    linkTransforms: Record<string, Matrix4Data>,
-    nextTransforms: Record<string, Matrix4Data> | null = null,
-    t = 0,
-  ): void {
-    this.currentLinkTransforms = linkTransforms;
-    const lerp = nextTransforms != null && t > 1e-5;
-    for (const link of this.links) {
-      const entry = this.linkMeshes[link];
-      if (!entry || !linkTransforms[link]) continue;
-      mat4Into(linkTransforms[link], _robotLinkMat);
-      if (lerp && nextTransforms[link]) {
-        mat4Into(nextTransforms[link], _robotMatB);
-        _robotLinkMat.decompose(_robotPosA, _robotQuatA, _robotScaleA);
-        _robotMatB.decompose(_robotPosB, _robotQuatB2, _robotScaleB);
-        _robotPosA.lerp(_robotPosB, t);
-        _robotQuatA.slerp(_robotQuatB2, t);
-        _robotLinkMat.compose(_robotPosA, _robotQuatA, _robotScaleA);
-      }
-      _robotLinkDelta.copy(_robotLinkMat).multiply(this.zeroInv[link]);
-      for (const { mesh, baked } of entry) {
-        _robotMeshMat.copy(_robotLinkDelta).multiply(baked);
-        mesh.matrix.copy(_robotMeshMat);
-      }
-    }
-    this.group.updateMatrixWorld(true);
-  }
-  /** Static calibration pose on the ground (no floating-base trajectory yet). */
-  applyCalibPose(
-    linkTransforms: Record<string, Matrix4Data>,
-    groundZ?: number | null,
-  ): void {
-    const z = groundZ != null && Number.isFinite(groundZ) ? groundZ : this.groundOffset;
-    this.group.position.set(0, 0, z);
-    this.group.quaternion.identity();
-    this._applyLinkTransforms(linkTransforms);
-  }
-
-  getLinkWorldPosition(link: string, out: THREE.Vector3): boolean {
-    const transform = this.currentLinkTransforms[link] ?? this.zero[link];
-    if (!transform) return false;
-    mat4Into(transform, _robotLinkMat);
-    this.group.updateMatrixWorld(true);
-    _robotWorldLinkMat.copy(this.group.matrixWorld).multiply(_robotLinkMat);
-    out.setFromMatrixPosition(_robotWorldLinkMat);
-    return true;
-  }
-
-  getLinkWorldQuaternion(link: string, out: THREE.Quaternion): boolean {
-    const transform = this.currentLinkTransforms[link] ?? this.zero[link];
-    if (!transform) return false;
-    mat4Into(transform, _robotLinkMat);
-    this.group.updateMatrixWorld(true);
-    _robotWorldLinkMat.copy(this.group.matrixWorld).multiply(_robotLinkMat);
-    _robotWorldLinkMat.decompose(_robotPosA, out, _robotScaleA);
-    return true;
-  }
-
-  setOpacity(value: number): void {
-    const opacity = Math.min(1, Math.max(0.1, value));
-    this.group.traverse((node) => {
-      const mesh = node as THREE.Mesh;
-      if (!mesh.isMesh) return;
-      const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-      for (const material of materials) {
-        if (!(material instanceof THREE.MeshStandardMaterial)) continue;
-        material.opacity = opacity;
-        material.transparent = opacity < 0.999;
-        material.depthWrite = opacity >= 0.55;
-        material.needsUpdate = true;
-      }
-    });
-  }
-
-  /** Calibration pick/hover: tint link meshes (hover = soft blue, selected = accent). */
-  setCalibHighlights({
-    hover = null,
-    selected = null,
-  }: { hover?: string | null; selected?: string | null } = {}): void {
-    const BASE = { color: 0xc8ccd4, emissive: 0x6b7280, emissiveIntensity: 0.55 };
-    const HOVER = { color: 0xd6e4ff, emissive: 0x3b82f6, emissiveIntensity: 0.92 };
-    const SELECT = { color: 0xbfdbfe, emissive: 0x1d4ed8, emissiveIntensity: 1.15 };
-    for (const [link, entries] of Object.entries(this.linkMeshes)) {
-      let pal = BASE;
-      if (selected && link === selected) pal = SELECT;
-      else if (hover && link === hover) pal = HOVER;
-      for (const { mesh } of entries) {
-        const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-        for (const m of mats) {
-          if (!(m instanceof THREE.MeshStandardMaterial)) continue;
-          m.color.setHex(pal.color);
-          m.emissive.setHex(pal.emissive);
-          m.emissiveIntensity = pal.emissiveIntensity;
-        }
-      }
-    }
-  }
-}
-
-function applyRobotMaterial(mesh: THREE.Mesh): void {
-  // Light brushed-metal look. A bright emissive floor guarantees the robot is
-  // clearly visible even if a mesh still ends up without usable normals.
-  const make = () => new THREE.MeshStandardMaterial({
-    color: 0xc8ccd4,
-    emissive: 0x6b7280,
-    emissiveIntensity: 0.55,
-    roughness: 0.6,
-    metalness: 0.15,
-    side: THREE.DoubleSide,
-    vertexColors: false,
-  });
-  if (Array.isArray(mesh.material)) {
-    mesh.material = mesh.material.map(() => make());
-  } else {
-    mesh.material = make();
-  }
-}
-
-function mat4Into(flat: Matrix4Data, out: THREE.Matrix4): THREE.Matrix4 {
-  // backend sends row-major flattened 4x4; three.js wants column-major.
-  return out.set(
-    flat[0], flat[1], flat[2], flat[3],
-    flat[4], flat[5], flat[6], flat[7],
-    flat[8], flat[9], flat[10], flat[11],
-    flat[12], flat[13], flat[14], flat[15]
-  );
-}
-
-function mat4(flat: Matrix4Data): THREE.Matrix4 {
-  return mat4Into(flat, new THREE.Matrix4());
-}
 
 // =================================================================  PLAYER
 const initialWorkspacePreferences = loadWorkspacePreferences();
@@ -2474,7 +2102,8 @@ world.add(skin.group);
 const scaledSkel = new ScaledSkeletonView();
 const envView = new EnvView();
 const scaledEnv = new ScaledEnvView();
-const robot = new RobotView();
+const robot = new RobotView({ resourceDisposer: threeResourceDisposer });
+world.add(robot.group);
 const ALL_VIEWS: PlaybackView[] = [skel, mesh, skin, scaledSkel, envView, scaledEnv, robot];
 let playbarVisible = false;
 
@@ -2803,6 +2432,118 @@ function clearH2rScaledPreview(): void {
     scaledEnv.clear();
     setH2rLayerVisible("scaledSkeleton", false);
     setH2rLayerVisible("scaledEnvironment", false);
+  });
+}
+
+/** Run one renderer/UI cleanup without letting it block canonical state reset. */
+function runBestEffortCleanup(context: string, cleanup: () => void): void {
+  try {
+    cleanup();
+  } catch (error) {
+    console.warn(context, errorMessage(error));
+  }
+}
+
+interface RobotViewLoadAttempt {
+  readonly completion: Promise<AsyncStageViewLoadResult>;
+  readonly generation: number;
+}
+
+/** Capture the View generation synchronously before awaiting its completion. */
+function startRobotViewLoad(
+  view: RobotView,
+  payload: RobotPayload,
+): RobotViewLoadAttempt {
+  const completion = view.load(payload);
+  return { completion, generation: view.loadGeneration };
+}
+
+/**
+ * Remove the H2R robot capability after its current RobotView generation fails.
+ *
+ * RobotView has already invalidated the previous generation at this point, so
+ * keeping the old payload would advertise a renderer capability that no longer
+ * exists. Canonical aliases are reset independently of best-effort GPU/UI
+ * cleanup. This function deliberately does not clear RobotView again: a load
+ * failure already did so, while deletion performs its own explicit clear.
+ */
+function clearH2rRobotAfterViewLoss(context: string): void {
+  const calibrationRestore = state.calibRestore;
+
+  // If calibration teardown stopped part-way through, restore orbit ownership
+  // before releasing its saved snapshot.
+  if (state.calibOrbitSaved) {
+    const saved = state.calibOrbitSaved;
+    runBestEffortCleanup(`${context}: calibration orbit restore failed`, () => {
+      orbit.minDistance = saved.minDistance;
+      orbit.maxDistance = saved.maxDistance;
+      orbit.zoomSpeed = saved.zoomSpeed;
+    });
+  }
+
+  state.robot = null;
+  state.robotTrajectory = null;
+  state.exportToken = null;
+  state.exportSrcFps = null;
+  state.exportHasScene = false;
+  state.calibration = false;
+  state.calibrationMode = false;
+  state.calibNeedsCameraFocus = false;
+  state.calibOrbitSaved = null;
+  state.calibRestore = null;
+  state.calibLimits = null;
+  state.calibQ = {};
+  state.calibSliderRows = {};
+  state.calibBaselineQ = null;
+  state.calibDraftQ = null;
+  state.calibHasSaved = false;
+  calibrationEditorUi.h2r.comparison = "current";
+  h2rRunState = "idle";
+
+  runBestEffortCleanup(`${context}: calibration manipulator cleanup failed`, () => calibManip.stop());
+  if (calibrationRestore) {
+    runBestEffortCleanup(
+      `${context}: calibration visibility restore failed`,
+      () => _restoreVis(calibrationRestore),
+    );
+  }
+  runBestEffortCleanup(`${context}: reference cleanup failed`, () => refSkel.clear());
+  refSkel.group.visible = false;
+  robot.trajectory = null;
+  runBestEffortCleanup(`${context}: Stage cleanup failed`, () => {
+    withH2rStageDisplayBatch(() => {
+      runBestEffortCleanup(`${context}: scaled skeleton cleanup failed`, () => scaledSkel.clear());
+      runBestEffortCleanup(`${context}: scaled environment cleanup failed`, () => scaledEnv.clear());
+      setH2rLayerVisible("scaledSkeleton", false);
+      setH2rLayerVisible("scaledEnvironment", false);
+      setH2rLayerVisible("targetRobot", false);
+    });
+  });
+  runBestEffortCleanup(
+    `${context}: result diagnostics cleanup failed`,
+    () => clearResultDiagnostics("h2r"),
+  );
+
+  document.getElementById("calib-banner")?.classList.add("hidden");
+  const robotMetaCard = document.getElementById("robot-meta-card");
+  if (robotMetaCard) robotMetaCard.style.display = "none";
+  const exportCard = document.getElementById("rt-export-card");
+  if (exportCard) exportCard.style.display = "none";
+  const batchRobot = document.getElementById("batch-robot");
+  if (batchRobot) batchRobot.textContent = runtimeText("Not loaded", "未加载");
+
+  runBestEffortCleanup(`${context}: robot UI refresh failed`, () => {
+    updatePills();
+    syncRefSelect();
+    populateH2rRobotSelect();
+    populateBatchRobotSelect();
+    renderRobotLibrary();
+    renderBasket();
+    publishH2rWorkflowState();
+    emitCalibrationEditorState("h2r");
+  });
+  void refreshRetargetPanel().catch((error) => {
+    console.warn(`${context}: retarget UI refresh failed`, errorMessage(error));
   });
 }
 
@@ -3607,30 +3348,39 @@ function datasetSceneGlbUrl(token: string | null | undefined, o: SceneObjectPayl
   return `/api/dataset/scene_glb?token=${encodeURIComponent(token)}&mesh=${encodeURIComponent(mesh)}`;
 }
 
-async function loadRobotExportPreview(result: RobotExportPreviewResult): Promise<void> {
+async function loadRobotExportPreview(
+  result: RobotExportPreviewResult,
+): Promise<AsyncStageViewLoadResult> {
   if (state.calibrationMode) {
     toast(runtimeText(
       "Robot trajectories cannot be previewed in calibration mode",
       "标定模式下无法预览机器人轨迹",
     ), true);
-    return;
+    return "stale";
   }
 
   const robotName = result.robot;
   let selectedRobot = state.robot;
-  if (!selectedRobot || selectedRobot.name !== robotName) {
+  const selectedRobotResourcesAvailable =
+    selectedRobot?.name === robotName
+    && robot.links.length > 0
+    && robot.group.children.length > 0;
+  if (!selectedRobotResourcesAvailable) {
     // A transport failure has not touched the renderer and therefore leaves
     // the current Stage intact. Only a failure after `robot.load` begins needs
     // a compensating visibility commit.
     const robotData = await API.post("/api/robot/select", { name: robotName });
+    const attempt = startRobotViewLoad(robot, robotData);
     try {
-      await robot.load(robotData);
+      const loadResult = await attempt.completion;
+      if (
+        loadResult === "stale"
+        || !robot.isLoadGenerationCurrent(attempt.generation)
+      ) return "stale";
       selectedRobot = robotData;
     } catch (error) {
-      // Robot loading reuses the legacy renderer. If it fails, keep the current
-      // source scene intact and publish the target as hidden instead of claiming
-      // that the previous target mesh is still rendered.
-      setH2rLayerVisible("targetRobot", false);
+      if (!robot.isLoadGenerationCurrent(attempt.generation)) return "stale";
+      clearH2rRobotAfterViewLoss("export preview robot load");
       throw error;
     }
   }
@@ -3680,6 +3430,7 @@ async function loadRobotExportPreview(result: RobotExportPreviewResult): Promise
     `Playing robot mesh: ${result.name}`,
     `机器人 mesh 播放：${result.name}`,
   ));
+  return "committed";
 }
 
 async function previewRobotClip(
@@ -4399,14 +4150,28 @@ interface ApplyRobotOptions {
 async function applyRobot(
   robotData: RobotPayload,
   { stayOnCurrentPanel = false }: ApplyRobotOptions = {},
-): Promise<void> {
+): Promise<AsyncStageViewLoadResult> {
   if (state.robotPanelLocked) {
     toast(runtimeText(
       "Retargeting is running. Wait for it to finish before switching robots.",
       "Retarget 进行中，请等待完成后再切换机器人",
     ), true);
-    return;
+    return "stale";
   }
+  const attempt = startRobotViewLoad(robot, robotData);
+  try {
+    const loadResult = await attempt.completion;
+    if (
+      loadResult === "stale"
+      || !robot.isLoadGenerationCurrent(attempt.generation)
+    ) return "stale";
+  } catch (error) {
+    if (!robot.isLoadGenerationCurrent(attempt.generation)) return "stale";
+    clearH2rRobotAfterViewLoss("selected robot load");
+    throw error;
+  }
+  // RobotView's generation is the renderer commit point. Derived workflow and
+  // UI state must not be published for an attempt superseded while parsing.
   state.robot = robotData;
   state.exportToken = null;
   state.robotTrajectory = null;
@@ -4416,17 +4181,6 @@ async function applyRobot(
   document.getElementById("rt-export-card").style.display = "none";
   populateH2rRobotSelect(robotData.name);
   populateBatchRobotSelect(robotData.name);
-  try {
-    await robot.load(robotData);
-  } catch (error) {
-    // The selected pair has already invalidated its derived result. Reflect
-    // the renderer's failure state even though the caller will surface the error.
-    withH2rStageDisplayBatch(() => {
-      clearH2rScaledPreview();
-      setH2rLayerVisible("targetRobot", false);
-    });
-    throw error;
-  }
   document.getElementById("robot-meta-card").style.display = "block";
   renderRobotDetails(robotData);
   renderRobotLibrary();
@@ -4447,7 +4201,7 @@ async function applyRobot(
       `Robot loaded in calibration pose: ${robotData.display_name}`,
       `机器人已加载（标定姿态）：${robotData.display_name}`,
     ));
-    return;
+    return "committed";
   }
   if (stayOnCurrentPanel) await refreshRetargetPanel();
   else await routeAfterRobotLoad();
@@ -4462,6 +4216,7 @@ async function applyRobot(
         `机器人已加载：${robotData.display_name} — 请先加载动作`,
       ),
   );
+  return "committed";
 }
 
 async function refreshRobotList(): Promise<void> {
@@ -4645,22 +4400,8 @@ async function deleteRobotSummary(summary: RobotSummary): Promise<void> {
   try {
     await API.delete(`/api/robot/${encodeURIComponent(summary.name)}`);
     if (state.robot?.name === summary.name) {
-      state.robot = null;
-      state.exportToken = null;
-      state.robotTrajectory = null;
-      clearResultDiagnostics("h2r");
-      h2rRunState = "idle";
-      withH2rStageDisplayBatch(() => {
-        clearH2rScaledPreview();
-        // Keep the renderer projection and Stage snapshot in sync when the
-        // selected robot disappears from the local library.
-        setH2rLayerVisible("targetRobot", false);
-      });
-      document.getElementById("robot-meta-card").style.display = "none";
-      document.getElementById("robot-pill").textContent = runtimeText("No robot loaded", "未加载机器人");
-      document.getElementById("batch-robot").textContent = runtimeText("Not loaded", "未加载");
-      renderBasket();
-      refreshRetargetPanel();
+      runBestEffortCleanup("deleted robot: resource cleanup failed", () => robot.clear());
+      clearH2rRobotAfterViewLoss("deleted robot");
     }
     await refreshRobotList();
     toast(runtimeText(
@@ -4762,7 +4503,8 @@ async function tryUploadRobot(): Promise<void> {
   ));
   try {
     const robotData = await API.upload("/api/robot/upload", files, { name });
-    await applyRobot(robotData);
+    const loadResult = await applyRobot(robotData);
+    if (loadResult === "stale") return;
     // The backend persists the imported preset; refreshing exposes it through
     // the same Robot Library used for the bundled G1 and X2 models.
     await refreshRobotList();
@@ -7287,8 +7029,10 @@ interface R2rBatchRequest {
   t_end?: number;
 }
 
-const r2rSrc = new RobotView();
-const r2rTgt = new RobotView();
+const r2rSrc = new RobotView({ resourceDisposer: threeResourceDisposer });
+world.add(r2rSrc.group);
+const r2rTgt = new RobotView({ resourceDisposer: threeResourceDisposer });
+world.add(r2rTgt.group);
 const r2rSrcSkel = new ScaledSkeletonView(0x60a5fa);
 const r2rTgtSkel = new ScaledSkeletonView(0xffb020);
 const r2rSrcEnvGroup = new THREE.Group();
@@ -8163,6 +7907,131 @@ function syncR2rRobotSelects(kind: "source" | "target", name: string): void {
   }
 }
 
+/** Invalidate calibration aliases even when interactive teardown reports a warning. */
+function clearR2rCalibrationAfterViewLoss(context: string): void {
+  if (r2r.calibOrbitSaved) {
+    const saved = r2r.calibOrbitSaved;
+    runBestEffortCleanup(`${context}: calibration orbit restore failed`, () => {
+      orbit.minDistance = saved.minDistance;
+      orbit.maxDistance = saved.maxDistance;
+      orbit.zoomSpeed = saved.zoomSpeed;
+    });
+  }
+  r2r.calibrating = false;
+  r2r.calibrated = false;
+  r2r.calibQ = {};
+  r2r.calibBaselineQ = null;
+  r2r.calibDraftQ = null;
+  r2r.calibHasSaved = false;
+  r2r.calibLimits = [];
+  r2r.calibRows = {};
+  r2r.calibNeedsCameraFocus = false;
+  r2r.calibOrbitSaved = null;
+  calibrationEditorUi.r2r.comparison = "current";
+  runBestEffortCleanup(`${context}: calibration manipulator cleanup failed`, () => calibManip.stop());
+  runBestEffortCleanup(`${context}: target opacity restore failed`, () => r2rTgt.setOpacity(1));
+  runBestEffortCleanup(`${context}: reference cleanup failed`, () => refSkel.clear());
+  refSkel.group.visible = false;
+  const editor = document.getElementById("r2r-calib-edit");
+  if (editor) editor.style.display = "none";
+  document.getElementById("calib-banner")?.classList.add("hidden");
+}
+
+/** Clear every result derived from the current R2R source/target pair. */
+function clearR2rDerivedTargetAfterViewLoss(
+  context: string,
+  {
+    targetViewAlreadyEmpty = false,
+  }: { targetViewAlreadyEmpty?: boolean } = {},
+): void {
+  r2r.exportToken = null;
+  r2r.exportHasScene = false;
+  r2r.resultStem = null;
+  r2r.tgtScaledScene = null;
+  r2rRunState = "idle";
+
+  if (!targetViewAlreadyEmpty) {
+    r2rTgt.trajectory = null;
+    r2rTgt.frameIndices = null;
+    r2rTgt.clipDuration = 1;
+    runBestEffortCleanup(`${context}: target pose reset failed`, () => r2rTgt.applyStatic());
+  }
+  runBestEffortCleanup(`${context}: target skeleton cleanup failed`, () => r2rTgtSkel.clear());
+  runBestEffortCleanup(`${context}: target environment cleanup failed`, () => r2rTgtEnv.clear());
+  r2rVis.tgtRobot = false;
+  r2rVis.tgtSkel = false;
+  r2rVis.tgtEnv = false;
+  runBestEffortCleanup(
+    `${context}: result diagnostics cleanup failed`,
+    () => clearResultDiagnostics("r2r"),
+  );
+  const exportCard = document.getElementById("r2r-export-card");
+  if (exportCard) exportCard.style.display = "none";
+  for (const id of ["r2r-tg-tgt-robot", "r2r-tg-tgt-skel", "r2r-tg-tgt-env"]) {
+    const button = document.getElementById(id) as HTMLButtonElement | null;
+    if (button) button.disabled = true;
+  }
+}
+
+/** Terminal compensation for a current-generation R2R source load failure. */
+function clearR2rSourceAfterViewLoss(context: string): void {
+  r2r.sourceName = null;
+  r2r.sourcePayload = null;
+  r2r.sourceToken = null;
+  r2r.sourceStem = null;
+  r2r.hasScene = false;
+  r2r.scaledScene = null;
+  r2rTrajectoryState = "idle";
+  clearR2rCalibrationAfterViewLoss(context);
+
+  runBestEffortCleanup(`${context}: source skeleton cleanup failed`, () => r2rSrcSkel.clear());
+  runBestEffortCleanup(`${context}: source environment cleanup failed`, () => r2rSrcEnv.clear());
+  r2rVis.srcRobot = false;
+  r2rVis.srcSkel = false;
+  r2rVis.srcEnv = false;
+  clearR2rDerivedTargetAfterViewLoss(context);
+
+  setR2rRobotStatus("source", runtimeText("Source robot: not loaded", "源机器人：未加载"));
+  const trajectory = document.getElementById("r2r-trajectory-value");
+  if (trajectory) trajectory.textContent = runtimeText("Not loaded", "未加载");
+  for (const id of ["r2r-tg-src-robot", "r2r-tg-src-skel", "r2r-tg-src-env"]) {
+    const button = document.getElementById(id) as HTMLButtonElement | null;
+    if (button) button.disabled = true;
+  }
+  runBestEffortCleanup(`${context}: Stage projection failed`, () => r2rApplyStage());
+  runBestEffortCleanup(`${context}: workflow publication failed`, () => {
+    publishR2rWorkflowState();
+    r2rRenderBasket();
+    emitCalibrationEditorState("r2r");
+  });
+  r2rSetCalChip("—", "");
+  const calibrationButton = document.getElementById("r2r-calib-btn") as HTMLButtonElement | null;
+  if (calibrationButton) calibrationButton.disabled = true;
+  const retargetButton = document.getElementById("r2r-retarget-btn") as HTMLButtonElement | null;
+  if (retargetButton) retargetButton.disabled = true;
+}
+
+/** Terminal compensation for a current-generation R2R target load failure. */
+function clearR2rTargetAfterViewLoss(context: string): void {
+  r2r.targetName = null;
+  r2r.targetPayload = null;
+  clearR2rCalibrationAfterViewLoss(context);
+  clearR2rDerivedTargetAfterViewLoss(context, { targetViewAlreadyEmpty: true });
+
+  setR2rRobotStatus("target", runtimeText("Target robot: not loaded", "目标机器人：未加载"));
+  runBestEffortCleanup(`${context}: Stage projection failed`, () => r2rApplyStage());
+  runBestEffortCleanup(`${context}: workflow publication failed`, () => {
+    publishR2rWorkflowState();
+    r2rRenderBasket();
+    emitCalibrationEditorState("r2r");
+  });
+  r2rSetCalChip("—", "");
+  const calibrationButton = document.getElementById("r2r-calib-btn") as HTMLButtonElement | null;
+  if (calibrationButton) calibrationButton.disabled = true;
+  const retargetButton = document.getElementById("r2r-retarget-btn") as HTMLButtonElement | null;
+  if (retargetButton) retargetButton.disabled = true;
+}
+
 async function r2rLoadSourceRobot(
   name: string,
   { activateWorkspace = true }: { activateWorkspace?: boolean } = {},
@@ -8171,6 +8040,19 @@ async function r2rLoadSourceRobot(
   toast(runtimeText("Loading source robot…", "加载源机器人…"));
   try {
     const sourcePayload = await API.post("/api/robot/select", { name });
+    const attempt = startRobotViewLoad(r2rSrc, sourcePayload);
+    let loadResult: AsyncStageViewLoadResult;
+    try {
+      loadResult = await attempt.completion;
+    } catch (error) {
+      if (!r2rSrc.isLoadGenerationCurrent(attempt.generation)) return;
+      clearR2rSourceAfterViewLoss("selected R2R source load");
+      throw error;
+    }
+    if (
+      loadResult === "stale"
+      || !r2rSrc.isLoadGenerationCurrent(attempt.generation)
+    ) return;
     if (r2r.sourceName !== name) {
       r2r.sourceToken = null;
       r2r.sourceStem = null;
@@ -8184,7 +8066,6 @@ async function r2rLoadSourceRobot(
     r2r.exportToken = null;
     r2rRunState = "idle";
     clearResultDiagnostics("r2r");
-    await r2rSrc.load(sourcePayload);
     syncR2rRobotSelects("source", name);
     if (activateWorkspace) {
       switchInspectorPanel("r2r");
@@ -8429,10 +8310,36 @@ async function r2rStartCalib(
       source: r2r.sourceName,
     });
   } catch (e) { toast(errorMessage(e), true); return; }
-  if (!r2r.targetPayload) {
-    try { r2r.targetPayload = await API.post("/api/robot/select", { name: r2r.targetName }); }
+  let targetPayload = r2r.targetPayload;
+  if (!targetPayload) {
+    try { targetPayload = await API.post("/api/robot/select", { name: r2r.targetName }); }
     catch (e) { toast(errorMessage(e), true); return; }
   }
+  const reference = session.reference ?? session.reference_pose;
+  if (!targetPayload || !reference) {
+    toast(runtimeText(
+      "The calibration session is missing the target robot or reference pose",
+      "标定会话缺少目标机器人或参考姿态",
+    ), true);
+    return;
+  }
+  const attempt = startRobotViewLoad(r2rTgt, targetPayload);
+  let targetLoadResult: AsyncStageViewLoadResult;
+  try {
+    targetLoadResult = await attempt.completion;
+  } catch (error) {
+    if (!r2rTgt.isLoadGenerationCurrent(attempt.generation)) return;
+    clearR2rTargetAfterViewLoss("R2R calibration target load");
+    toast(errorMessage(error), true);
+    return;
+  }
+  if (
+    targetLoadResult === "stale"
+    || !r2rTgt.isLoadGenerationCurrent(attempt.generation)
+  ) return;
+
+  // Enter calibration only after the target renderer generation commits.
+  r2r.targetPayload = targetPayload;
   switchInspectorPanel("r2r");
   if (!r2r.active) r2rEnterPanel();
   r2r.calibrating = true;
@@ -8450,18 +8357,7 @@ async function r2rStartCalib(
   document.getElementById("r2r-retarget-btn").disabled = true;
   publishR2rWorkflowState();
 
-  const targetPayload = r2r.targetPayload;
-  const reference = session.reference ?? session.reference_pose;
-  if (!targetPayload || !reference) {
-    toast(runtimeText(
-      "The calibration session is missing the target robot or reference pose",
-      "标定会话缺少目标机器人或参考姿态",
-    ), true);
-    r2rExitCalib();
-    return;
-  }
   r2r.calibLimits = session.joint_limits ?? session.limits ?? [];
-  await r2rTgt.load(targetPayload);
   r2rTgt.groundOffset = session.ground_offset_z ?? r2rTgt.groundOffset;
   refSkel.load(reference);
   refSkel.configureMappings(targetPayload.ik_map ?? {});
@@ -8559,10 +8455,22 @@ async function r2rEnsureSourceLoaded(): Promise<boolean> {
   toast(runtimeText("Loading source robot automatically…", "自动加载源机器人…"));
   try {
     const sourcePayload = await API.post("/api/robot/select", { name });
+    const attempt = startRobotViewLoad(r2rSrc, sourcePayload);
+    let loadResult: AsyncStageViewLoadResult;
+    try {
+      loadResult = await attempt.completion;
+    } catch (error) {
+      if (!r2rSrc.isLoadGenerationCurrent(attempt.generation)) return false;
+      clearR2rSourceAfterViewLoss("automatic R2R source load");
+      throw error;
+    }
+    if (
+      loadResult === "stale"
+      || !r2rSrc.isLoadGenerationCurrent(attempt.generation)
+    ) return false;
     r2r.sourcePayload = sourcePayload;
     r2r.sourceName = name;
     r2r.calibrated = false;
-    await r2rSrc.load(sourcePayload);
     setR2rRobotStatus("source", runtimeText(
       `Source robot: ${sourcePayload.display_name}`,
       `源机器人：${sourcePayload.display_name}`,
@@ -8627,7 +8535,12 @@ async function r2rUploadTraj(
       st.textContent = sub;
     }, { uploadFrac: 0.18 });
     const fallbackStem = (files[0].name || "source").replace(/\.[^.]+$/, "");
-    await r2rApplySourceTrajectoryResult(data, sourcePayload, fallbackStem);
+    const loadResult = await r2rApplySourceTrajectoryResult(
+      data,
+      sourcePayload,
+      fallbackStem,
+    );
+    if (loadResult === "stale") return;
     toast(runtimeText(
       `Uploaded ${data.num_frames} frames; playing the source trajectory`,
       `上传成功：${data.num_frames} 帧，正在播放源机器人轨迹`,
@@ -8645,18 +8558,31 @@ async function r2rApplySourceTrajectoryResult(
   data: R2rSourceTrajectoryResult,
   sourcePayload: RobotPayload,
   fallbackStem: string,
-): Promise<void> {
+): Promise<AsyncStageViewLoadResult> {
   const status = document.getElementById("r2r-traj-status");
   const progress = document.getElementById("r2r-traj-progress");
   const bar = progress?.querySelector<HTMLElement>(".bar");
   const sourceStem = data.name || fallbackStem || "source";
+
+  const attempt = startRobotViewLoad(r2rSrc, sourcePayload);
+  let loadResult: AsyncStageViewLoadResult;
+  try {
+    loadResult = await attempt.completion;
+  } catch (error) {
+    if (!r2rSrc.isLoadGenerationCurrent(attempt.generation)) return "stale";
+    clearR2rSourceAfterViewLoss("R2R trajectory source load");
+    throw error;
+  }
+  if (
+    loadResult === "stale"
+    || !r2rSrc.isLoadGenerationCurrent(attempt.generation)
+  ) return "stale";
 
   r2r.sourceToken = data.token;
   r2rTrajectoryState = "idle";
   r2r.sourceStem = sourceStem;
   r2r.hasScene = !!data.has_scene;
   if (data.suggested_backend) r2rApplySuggestedBackend(data.suggested_backend);
-  await r2rSrc.load(sourcePayload);
   r2rSrc.setTrajectory(data.trajectory);
   if (data.skeleton_preview) {
     r2rSrcSkel.load(data.skeleton_preview);
@@ -8689,6 +8615,7 @@ async function r2rApplySourceTrajectoryResult(
   if (bar) bar.style.width = "100%";
   publishR2rWorkflowState();
   await r2rUpdateRetargetBtn();
+  return "committed";
 }
 
 /** Load an existing robot trajectory through the R2R-only backend boundary. */
@@ -8732,7 +8659,12 @@ async function loadR2rLibraryEntry(entry: LibraryEntry): Promise<void> {
       if (status) status.textContent = sub;
     });
     const fallbackStem = entry.stem || entry.sequence_id || "source";
-    await r2rApplySourceTrajectoryResult(data, sourcePayload, fallbackStem);
+    const loadResult = await r2rApplySourceTrajectoryResult(
+      data,
+      sourcePayload,
+      fallbackStem,
+    );
+    if (loadResult === "stale") return;
     toast(runtimeText(
       `Loaded robot trajectory: ${data.name || fallbackStem}`,
       `机器人轨迹已加载：${data.name || fallbackStem}`,
@@ -8827,14 +8759,28 @@ async function r2rRunRetarget(): Promise<void> {
       setRetargetProgress(prog, bar, jp);
       renderSpinnerStatus(status, jp.message || runtimeText("Retargeting…", "正在 retarget…"));
     });
+    let targetPayload = r2r.targetPayload;
+    if (!targetPayload) {
+      targetPayload = await API.post("/api/robot/select", { name: r2r.targetName });
+    }
+    if (!targetPayload) throw new Error("Target robot payload is missing");
+    const attempt = startRobotViewLoad(r2rTgt, targetPayload);
+    let targetLoadResult: AsyncStageViewLoadResult;
+    try {
+      targetLoadResult = await attempt.completion;
+    } catch (error) {
+      if (!r2rTgt.isLoadGenerationCurrent(attempt.generation)) return;
+      clearR2rTargetAfterViewLoss("R2R result target load");
+      toast(errorMessage(error), true);
+      return;
+    }
+    if (
+      targetLoadResult === "stale"
+      || !r2rTgt.isLoadGenerationCurrent(attempt.generation)
+    ) return;
+    r2r.targetPayload = targetPayload;
     prog.classList.remove("indet");
     bar.style.width = "100%";
-    if (!r2r.targetPayload) {
-      r2r.targetPayload = await API.post("/api/robot/select", { name: r2r.targetName });
-    }
-    const targetPayload = r2r.targetPayload;
-    if (!targetPayload) throw new Error("Target robot payload is missing");
-    await r2rTgt.load(targetPayload);
     r2rTgt.setTrajectory(j.result.trajectory);
     if (j.result.scaled_preview) {
       r2rTgtSkel.load(j.result.scaled_preview);
