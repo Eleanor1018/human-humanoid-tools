@@ -7,15 +7,18 @@ import { BrowserGvhmrComponentService } from "@/workbench/services/gvhmr/browser
 import { BrowserJobService } from "@/workbench/services/jobs/browser/browser-job-service";
 import { BrowserLegacyRuntimeService } from "@/workbench/services/runtime/browser/browser-legacy-runtime-service";
 import { BrowserSettingsService } from "@/workbench/services/settings/browser/browser-settings-service";
-import { BrowserLegacyStageDisplayCommands } from "@/workbench/services/stage/browser/browser-legacy-stage-display-commands";
+import { BrowserLegacyStageView } from "@/workbench/services/stage/browser/browser-legacy-stage-view";
 import { BrowserLegacyStageLayerCommands } from "@/workbench/services/stage/browser/browser-legacy-stage-layer-commands";
 import { BrowserLegacyStagePlaybackCommands } from "@/workbench/services/stage/browser/browser-legacy-stage-playback-commands";
 import { BrowserLegacyStageStateAdapter } from "@/workbench/services/stage/browser/browser-legacy-stage-state-adapter";
+import { BrowserStageViewService } from "@/workbench/services/stage/browser/browser-stage-view-service";
 import { StageModel } from "@/workbench/services/stage/common/stage-model";
 
 /** Concrete browser-only handles needed by the composition root. */
 export interface BrowserWorkbenchServices extends IWorkbenchServices {
   readonly stageModelService: StageModel;
+  /** Composition-only owner used to attach the eventual React Stage View. */
+  readonly stageViewService: BrowserStageViewService;
   readonly legacyRuntimeService: BrowserLegacyRuntimeService;
 }
 
@@ -39,14 +42,17 @@ export function createBrowserWorkbenchServices(
   const legacyRuntimeService = ownedServices.add(
     new BrowserLegacyRuntimeService(),
   );
+  const stageViewService = ownedServices.add(
+    new BrowserStageViewService(reportError),
+  );
+  const legacyStageView = new BrowserLegacyStageView(legacyRuntimeService);
+  // This is the explicit migration seam. A later atomic renderer-ownership
+  // commit will detach this adapter and let ThreeStage attach its own View.
+  ownedServices.add(stageViewService.attachView(legacyStageView));
   // This migration adapter is deliberately registered after both endpoints.
   // Reverse disposal removes its window listener before either endpoint dies.
   ownedServices.add(new BrowserLegacyStageStateAdapter(stageModelService));
   const stagePlaybackCommands = new BrowserLegacyStagePlaybackCommands();
-  const stageDisplayCommands = new BrowserLegacyStageDisplayCommands(
-    legacyRuntimeService,
-    reportError,
-  );
   const stageLayerCommands = new BrowserLegacyStageLayerCommands(
     legacyRuntimeService,
     reportError,
@@ -62,9 +68,10 @@ export function createBrowserWorkbenchServices(
     // source roles while the service graph still owns it exactly once.
     motionResultPresentationService: legacyRuntimeService,
     settingsService: new BrowserSettingsService(requestService),
-    stageDisplayCommands,
+    stageDisplayCommands: stageViewService,
     stageLayerCommands,
     stageModelService,
+    stageViewService,
     stagePlaybackCommands,
     legacyRuntimeService,
     dispose: () => ownedServices.dispose(),
