@@ -90,6 +90,21 @@ export class LatestAsyncResultOwner<Identity, Value> {
     return this.#pendingPresentation === commit;
   }
 
+  /**
+   * Withdraw one exact, unpresented receipt without revoking its domain result.
+   *
+   * This differs from `markPresented`: callers use it when a newer domain
+   * result deliberately replaces what the shared surface should show, even
+   * though the older result remains a valid feature-local capability.
+   */
+  withdrawPresentation(
+    commit: CommittedAsyncResult<Identity, Value>,
+  ): boolean {
+    if (this.#pendingPresentation !== commit) return false;
+    this.#pendingPresentation = null;
+    return true;
+  }
+
   /** Consume only the exact result that was successfully projected. */
   markPresented(commit: CommittedAsyncResult<Identity, Value>): boolean {
     if (this.#pendingPresentation !== commit) return false;

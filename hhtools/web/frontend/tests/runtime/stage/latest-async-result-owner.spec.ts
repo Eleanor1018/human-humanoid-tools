@@ -75,6 +75,30 @@ describe("LatestAsyncResultOwner", () => {
     expect(owner.pendingPresentation).toBeNull();
   });
 
+  it("withdraws only presentation while preserving the domain result", () => {
+    const owner = new LatestAsyncResultOwner<Identity, ResultValue>(() => true);
+    const attempt = owner.begin({ name: "A" });
+    const committed = owner.commit(attempt, { token: "A" })!;
+
+    expect(owner.withdrawPresentation(committed)).toBe(true);
+    expect(owner.withdrawPresentation(committed)).toBe(false);
+    expect(owner.isCommitted(committed)).toBe(false);
+    expect(owner.isLatestResult(committed)).toBe(true);
+    expect(owner.pendingPresentation).toBeNull();
+  });
+
+  it("does not let a stale withdrawal consume its successor", () => {
+    const owner = new LatestAsyncResultOwner<Identity, ResultValue>(() => true);
+    const firstAttempt = owner.begin({ name: "A" });
+    const first = owner.commit(firstAttempt, { token: "A" })!;
+    const secondAttempt = owner.begin({ name: "B" });
+    const second = owner.commit(secondAttempt, { token: "B" })!;
+
+    expect(owner.withdrawPresentation(first)).toBe(false);
+    expect(owner.pendingPresentation).toBe(second);
+    expect(owner.withdrawPresentation(second)).toBe(true);
+  });
+
   it("revokes a presented result as soon as its successor begins", () => {
     const owner = new LatestAsyncResultOwner<Identity, ResultValue>(() => true);
     const firstAttempt = owner.begin({ name: "A" });
