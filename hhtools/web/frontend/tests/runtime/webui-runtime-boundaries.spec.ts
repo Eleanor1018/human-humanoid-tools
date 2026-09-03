@@ -199,7 +199,7 @@ describe("legacy runtime ownership boundaries", () => {
       },
       {
         className: "ScaledSkeletonView",
-        nextClassName: "BakedMeshView",
+        nextClassName: "RobotView",
         inventory: [
           "...this.spheres.map((sphere) => sphere.geometry)",
           "...(this.lineGeom ? [this.lineGeom] : [])",
@@ -356,15 +356,77 @@ describe("legacy runtime ownership boundaries", () => {
     const end = runtimeSource.indexOf("function datasetSceneGlbUrl", start);
     const facade = runtimeSource.slice(start, end);
     const load = facade.indexOf("await loadMotionPayload(payload)");
+    const staleGuard = facade.indexOf(
+      'if (loadResult === "stale") return "superseded"',
+    );
     const refresh = facade.indexOf("await refreshLibrary()");
     const basket = facade.indexOf("addToBasket([payload.library_entry]");
 
     expect(start).toBeGreaterThanOrEqual(0);
     expect(end).toBeGreaterThan(start);
     expect(load).toBeGreaterThanOrEqual(0);
-    expect(refresh).toBeGreaterThan(load);
+    expect(staleGuard).toBeGreaterThan(load);
+    expect(refresh).toBeGreaterThan(staleGuard);
     expect(basket).toBeGreaterThan(refresh);
     expect(facade).toContain("{ silent: true }");
+    expect(facade).toContain('return "presented"');
+  });
+
+  it("stops every motion-load caller after a stale baked-mesh generation", () => {
+    const motionLoad = runtimeSource.slice(
+      runtimeSource.indexOf("async function loadMotionPayload"),
+      runtimeSource.indexOf("export async function presentHumanMotion"),
+    );
+    const bakedLoad = motionLoad.indexOf(
+      "const skinLoadResult = await skin.load(payload.body_mesh)",
+    );
+    const bakedGuard = motionLoad.indexOf(
+      'if (skinLoadResult === "stale") return "stale"',
+      bakedLoad,
+    );
+    const backendPublication = motionLoad.indexOf("payload.suggested_backend");
+    const calibrationStart = motionLoad.indexOf(
+      "if (state.calibrationMode)",
+    );
+    const calibrationSkinClear = motionLoad.indexOf(
+      "skin.clear()",
+      calibrationStart,
+    );
+    const calibrationReturn = motionLoad.indexOf(
+      'return "committed"',
+      calibrationSkinClear,
+    );
+    expect(calibrationStart).toBeGreaterThanOrEqual(0);
+    expect(calibrationSkinClear).toBeGreaterThan(calibrationStart);
+    expect(calibrationReturn).toBeGreaterThan(calibrationSkinClear);
+    expect(calibrationReturn).toBeLessThan(bakedLoad);
+    expect(bakedLoad).toBeGreaterThanOrEqual(0);
+    expect(bakedGuard).toBeGreaterThan(bakedLoad);
+    expect(backendPublication).toBeGreaterThan(bakedGuard);
+
+    const libraryLoad = runtimeSource.slice(
+      runtimeSource.indexOf("async function loadLibraryEntryRequest"),
+      runtimeSource.indexOf("async function loadLibraryEntry(",
+        runtimeSource.indexOf("async function loadLibraryEntryRequest")),
+    );
+    expect(libraryLoad).toContain(
+      'if (loadResult === "stale") return "stale"',
+    );
+
+    const ingest = runtimeSource.slice(
+      runtimeSource.indexOf("async function ingestMotionFiles"),
+      runtimeSource.indexOf("function initMotionImportZone"),
+    );
+    const ingestGuard = ingest.indexOf(
+      'if (loadResult === "stale") return null',
+    );
+    expect(ingestGuard).toBeGreaterThanOrEqual(0);
+    expect(ingest.indexOf("await refreshLibrary()", ingestGuard)).toBeGreaterThan(
+      ingestGuard,
+    );
+    expect(ingest.indexOf("addToBasket(", ingestGuard)).toBeGreaterThan(
+      ingestGuard,
+    );
   });
 
   it("exposes H2R display state through a passive local subscription", () => {

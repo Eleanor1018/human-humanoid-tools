@@ -19,6 +19,7 @@ import type {
   JobStatusResponse,
   WaitForJobOptions,
 } from "../../src/workbench/services/jobs/common/job-service";
+import type { MotionPresentationResult } from "../../src/workbench/services/motion/common/motion-result-presentation-service";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -95,10 +96,11 @@ class FakeJobService implements VideoToMotionJobPort {
 
 class FakePresentationService implements VideoToMotionPresentationPort {
   readonly calls: MotionPayload[] = [];
-  presentHandler: (payload: MotionPayload) => Promise<void> = async () =>
-    undefined;
+  presentHandler: (
+    payload: MotionPayload,
+  ) => Promise<MotionPresentationResult> = async () => "presented";
 
-  presentHumanMotion(payload: MotionPayload): Promise<void> {
+  presentHumanMotion(payload: MotionPayload): Promise<MotionPresentationResult> {
     this.calls.push(payload);
     return this.presentHandler(payload);
   }
@@ -473,7 +475,7 @@ describe("VideoToMotionController", () => {
 
     const upload = deferred<{ job_id: string }>();
     const completed = deferred<MotionPayload>();
-    const presented = deferred<void>();
+    const presented = deferred<MotionPresentationResult>();
     harness.requestService.uploadHandler = () => upload.promise;
     harness.jobService.waitHandler = () => completed.promise;
     harness.presentationService.presentHandler = () => presented.promise;
@@ -553,7 +555,7 @@ describe("VideoToMotionController", () => {
       "Video-to-motion is not ready to run",
     );
     expect(harness.requestService.uploadCalls).toHaveLength(1);
-    presented.resolve();
+    presented.resolve("presented");
 
     await expect(run).resolves.toBe(payload);
     expect(harness.controller.state).toMatchObject({
@@ -685,10 +687,35 @@ describe("VideoToMotionController", () => {
     expect(harness.controller.canRun).toBe(true);
   });
 
+  it("returns to idle without publishing a superseded presentation", async () => {
+    const harness = createHarness();
+    await prepareReadyController(harness);
+    const payload = motionResult("superseded motion");
+    harness.requestService.uploadHandler = async () => ({ job_id: "job-42" });
+    harness.jobService.waitHandler = async () => payload;
+    harness.presentationService.presentHandler = async () => "superseded";
+
+    await expect(harness.controller.run()).rejects.toMatchObject({
+      name: "AbortError",
+    });
+
+    expect(harness.presentationService.calls).toEqual([payload]);
+    expect(harness.controller.state).toMatchObject({
+      operation: null,
+      stage: "idle",
+      progress: 0,
+      progressDetail: null,
+      error: null,
+      result: null,
+    });
+    expect(harness.controller.busy).toBe(false);
+    expect(harness.controller.canRun).toBe(true);
+  });
+
   it("does not publish completion after disposal during presentation", async () => {
     const harness = createHarness();
     await prepareReadyController(harness);
-    const presented = deferred<void>();
+    const presented = deferred<MotionPresentationResult>();
     harness.requestService.uploadHandler = async () => ({ job_id: "job-42" });
     harness.jobService.waitHandler = async () => motionResult();
     harness.presentationService.presentHandler = () => presented.promise;
@@ -698,7 +725,7 @@ describe("VideoToMotionController", () => {
       expect(harness.presentationService.calls).toHaveLength(1),
     );
     harness.controller.dispose();
-    presented.resolve();
+    presented.resolve("presented");
 
     await expect(run).rejects.toMatchObject({ name: "AbortError" });
     expect(harness.controller.state.stage).toBe("running");

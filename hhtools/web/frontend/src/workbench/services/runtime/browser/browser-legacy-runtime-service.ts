@@ -2,6 +2,7 @@ import { toDisposable, type IDisposable } from "@/base/common/disposable";
 import type { MotionPayload } from "@/domain/motion/common/motion";
 import type {
   IMotionResultPresentationService,
+  MotionPresentationResult,
 } from "@/workbench/services/motion/common/motion-result-presentation-service";
 import type {
   ILegacyStageDisplayStateSource,
@@ -41,14 +42,16 @@ export class BrowserLegacyRuntimeService
     return this.#startPromise;
   }
 
-  async presentHumanMotion(payload: MotionPayload): Promise<void> {
+  async presentHumanMotion(
+    payload: MotionPayload,
+  ): Promise<MotionPresentationResult> {
     // Presentation can race the Restored contribution. Joining start() makes
     // readiness explicit instead of relying on registration order or timing.
     await this.start();
     if (!this.#runtime) {
       throw new Error("Legacy runtime did not finish initialization");
     }
-    await this.#runtime.presentHumanMotion(payload);
+    return this.#runtime.presentHumanMotion(payload);
   }
 
   /** Browser-only migration capability; intentionally absent from the common

@@ -200,7 +200,6 @@ import type {
   JobListResponse,
 } from "@/domain/jobs/job";
 import type {
-  BodyMeshPayload,
   LibraryEntry,
   MotionCategory,
   MotionPayload,
@@ -210,6 +209,8 @@ import type {
   Vec3,
 } from "@/domain/motion/common/motion";
 import { ThreeResourceDisposer } from "@/platform/graphics/common/three-resource-disposer";
+import type { AsyncStageViewLoadResult } from "./stage/async-stage-view-load-result";
+import { BakedMeshView } from "./stage/baked-mesh-view";
 import type {
   ApiClient,
   ApiGetResponse,
@@ -2122,99 +2123,6 @@ class ScaledSkeletonView {
   }
 }
 
-// =================================================================  SKINNED BODY (SMPL / baked)
-class BakedMeshView {
-  readonly group: THREE.Group;
-  readonly heavy = true;
-  mesh: THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial> | null = null;
-  verts: Float32Array | null = null;
-  numVerts = 0;
-  ready = false;
-  clipDuration: number | null = null;
-
-  constructor() {
-    this.group = new THREE.Group();
-    this.group.visible = false;
-    world.add(this.group);
-  }
-  clear(): void {
-    if (this.mesh) {
-      this.group.remove(this.mesh);
-      this.mesh.geometry.dispose();
-      this.mesh = null;
-    }
-    this.verts = null;
-    this.ready = false;
-  }
-  async load(bodyMesh: BodyMeshPayload | null | undefined): Promise<void> {
-    this.clear();
-    if (!bodyMesh?.available) return;
-    try {
-      const bin = Uint8Array.from(atob(bodyMesh.vertices_gz_b64), (c) => c.charCodeAt(0));
-      const ds = new DecompressionStream("gzip");
-      const buf = await new Response(new Blob([bin]).stream().pipeThrough(ds)).arrayBuffer();
-      this.verts = new Float32Array(buf);
-      this.numVerts = bodyMesh.num_verts;
-      const numFrames = bodyMesh.num_frames;
-      const expected = numFrames * this.numVerts * 3;
-      if (this.verts.length !== expected) {
-        console.warn("baked mesh vertex buffer size mismatch", this.verts.length, expected);
-        return;
-      }
-      this.clipDuration = null; // driven by skeleton timeline
-      const idx = bodyMesh.triangles.flat();
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute(
-        "position",
-        new THREE.BufferAttribute(this.verts.slice(0, this.numVerts * 3), 3)
-      );
-      geo.setIndex(idx);
-      geo.computeVertexNormals();
-      this.mesh = new THREE.Mesh(
-        geo,
-        new THREE.MeshStandardMaterial({
-          color: 0xb4c8dc, roughness: 0.55, metalness: 0.05,
-          side: THREE.DoubleSide, flatShading: true,
-        })
-      );
-      this.group.add(this.mesh);
-      this.ready = true;
-      this.setFrame(0);
-    } catch (e) {
-      console.warn("baked mesh decode failed", e);
-      this.ready = false;
-    }
-  }
-  get numFrames(): number {
-    return this.ready && this.numVerts && this.verts
-      ? this.verts.length / (this.numVerts * 3)
-      : 0;
-  }
-  setFrame(f: number): void {
-    this.setFrameFrac(f);
-  }
-  setFrameFrac(fi: number): void {
-    if (!this.ready || !this.mesh || !this.verts) return;
-    const max = this.numFrames - 1;
-    const f0 = Math.min(max, Math.floor(fi));
-    const off0 = f0 * this.numVerts * 3;
-    const attr = this.mesh.geometry.attributes.position;
-    const t = fi - f0;
-    if (t <= 1e-5 || f0 >= max) {
-      attr.array.set(this.verts.subarray(off0, off0 + this.numVerts * 3));
-    } else {
-      const off1 = (f0 + 1) * this.numVerts * 3;
-      const dst = attr.array;
-      const a = this.verts;
-      const n = this.numVerts * 3;
-      for (let i = 0; i < n; i++) {
-        dst[i] = a[off0 + i] + (a[off1 + i] - a[off0 + i]) * t;
-      }
-    }
-    attr.needsUpdate = true;
-  }
-}
-
 // =================================================================  ROBOT
 const _robotLinkDelta = new THREE.Matrix4();
 const _robotMeshMat = new THREE.Matrix4();
@@ -2559,7 +2467,10 @@ const comparisonPresets: Record<WorkflowId, ComparisonPreset> = {
 const skel = new SkeletonView();
 const refSkel = new ReferenceSkeletonView();
 const mesh = new CapsuleMeshView();
-const skin = new BakedMeshView();
+const skin = new BakedMeshView({ resourceDisposer: threeResourceDisposer });
+// Extracted Views are inert until the compatibility composition root assigns
+// their stable scene owner. A future Stage kernel can compose the same View.
+world.add(skin.group);
 const scaledSkel = new ScaledSkeletonView();
 const envView = new EnvView();
 const scaledEnv = new ScaledEnvView();
@@ -3594,7 +3505,9 @@ async function routeAfterRobotLoad(): Promise<void> {
  * Commit a newly loaded human motion, invalidate prior H2R results, and rebuild
  * every source-motion Three.js layer before publishing the new workflow state.
  */
-async function loadMotionPayload(payload: MotionPayload): Promise<void> {
+async function loadMotionPayload(
+  payload: MotionPayload,
+): Promise<AsyncStageViewLoadResult> {
   state.motion = payload;
   state.libraryEntry = payload.library_entry || null;
   state.reference = payload.suggested_reference ?? null;
@@ -3605,6 +3518,9 @@ async function loadMotionPayload(payload: MotionPayload): Promise<void> {
   h2rRunState = "idle";
   // In calibration mode only the robot + blue reference T-pose should be visible.
   if (state.calibrationMode) {
+    // Calibration does not render the baked body, but it must still invalidate
+    // a decode escaped from the previously active motion.
+    skin.clear();
     state.robotTrajectory = null;
     robot.trajectory = null;
     scaledSkel.clear();
@@ -3617,7 +3533,7 @@ async function loadMotionPayload(payload: MotionPayload): Promise<void> {
       `已加载 ${payload.name}（标定模式）`,
     ));
     updatePills();
-    return;
+    return "committed";
   }
   skel.load(payload, 0x0a84ff);
   mesh.load(payload);
@@ -3626,7 +3542,8 @@ async function loadMotionPayload(payload: MotionPayload): Promise<void> {
   if (!hasEnv) {
     envView.clear();
   }
-  await skin.load(payload.body_mesh);
+  const skinLoadResult = await skin.load(payload.body_mesh);
+  if (skinLoadResult === "stale") return "stale";
   // Terrain/objects clips default to the interaction-mesh backend (matches Viser
   // "Auto"); pure skeletal clips stay on Newton IK.
   if (payload.suggested_backend) {
@@ -3664,6 +3581,7 @@ async function loadMotionPayload(payload: MotionPayload): Promise<void> {
   if (state.robot) switchInspectorPanel("h2r");
   await refreshRetargetPanel();
   toast(runtimeText(`Loaded ${payload.name}`, `已加载 ${payload.name}`));
+  return "committed";
 }
 
 /**
@@ -3673,12 +3591,14 @@ async function loadMotionPayload(payload: MotionPayload): Promise<void> {
  */
 export async function presentHumanMotion(
   payload: MotionPayload,
-): Promise<void> {
-  await loadMotionPayload(payload);
+): Promise<"presented" | "superseded"> {
+  const loadResult = await loadMotionPayload(payload);
+  if (loadResult === "stale") return "superseded";
   await refreshLibrary();
   if (payload.library_entry) {
     addToBasket([payload.library_entry], { silent: true });
   }
+  return "presented";
 }
 
 function datasetSceneGlbUrl(token: string | null | undefined, o: SceneObjectPayload): string | null {
@@ -3813,7 +3733,7 @@ async function populateDvRobotSelect(preferred?: string): Promise<string> {
 async function loadLibraryEntryRequest(
   entry: LibraryEntry,
   options: { usage?: "human_to_robot"; rethrow?: boolean } = {},
-): Promise<void> {
+): Promise<AsyncStageViewLoadResult> {
   const label = entry.stem || entry.sequence_id || "";
   showLoading(runtimeText(`Loading motion… ${label}`, `加载动作中… ${label}`).trim());
   try {
@@ -3823,10 +3743,13 @@ async function loadLibraryEntryRequest(
       setLoadingProgress(frac, sub);
     });
     setLoadingProgress(1, runtimeText("Building scene…", "构建场景…"));
-    await loadMotionPayload(payload);
+    const loadResult = await loadMotionPayload(payload);
+    if (loadResult === "stale") return "stale";
+    return "committed";
   } catch (e) {
     toast(errorMessage(e), true);
     if (options.rethrow) throw e;
+    return "committed";
   } finally {
     hideLoading();
   }
@@ -3837,8 +3760,14 @@ async function loadLibraryEntry(entry: LibraryEntry): Promise<void> {
 }
 
 /** H2R loads only human reference motion; the backend verifies the real file. */
-async function loadHumanMotionEntry(entry: LibraryEntry): Promise<void> {
-  await loadLibraryEntryRequest(entry, { usage: "human_to_robot", rethrow: true });
+async function loadHumanMotionEntry(
+  entry: LibraryEntry,
+): Promise<"selected" | "superseded"> {
+  const loadResult = await loadLibraryEntryRequest(entry, {
+    usage: "human_to_robot",
+    rethrow: true,
+  });
+  return loadResult === "stale" ? "superseded" : "selected";
 }
 
 // library navigator
@@ -4275,7 +4204,8 @@ async function ingestMotionFiles(
       setLoadingProgress(frac, sub);
     }, { uploadFrac: 0 });
     setLoadingProgress(1, runtimeText("Building scene…", "构建场景…"));
-    await loadMotionPayload(payload);
+    const loadResult = await loadMotionPayload(payload);
+    if (loadResult === "stale") return null;
     if (linked || folder_label || payload.linked_folder) {
       await refreshLibrary();
       const label = folder_label || payload.linked_folder;

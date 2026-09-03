@@ -543,8 +543,18 @@ export class VideoToMotionController implements IDisposable {
       summary = resultSummary(payload);
       // Presentation is part of the use case, not a responsibility left to the
       // React view. A Stage/library failure therefore remains retryable state.
-      await this.#presentationService.presentHumanMotion(payload);
+      const presentationResult =
+        await this.#presentationService.presentHumanMotion(payload);
       this.#assertCurrentOperation(request);
+      if (presentationResult === "superseded") {
+        // A different motion won the shared Stage while its async View loaded.
+        // Treat that ownership loss as cancellation: it is neither a failed
+        // backend run nor a completed result this controller may publish.
+        request.abort(abortError());
+        if (this.#operation === request) this.#operation = null;
+        this.#update(this.#resetOperationState());
+        throw abortReason(request.signal);
+      }
     } catch (error) {
       if (!this.#isCurrentOperation(request) || request.signal.aborted) {
         if (this.#operation === request) this.#operation = null;

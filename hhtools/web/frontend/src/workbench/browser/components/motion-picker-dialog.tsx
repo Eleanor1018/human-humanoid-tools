@@ -164,8 +164,14 @@ export function MotionPickerDialog({
     setSelectingKey(entryKey);
     setError(null);
     try {
-      if (robot) await window.__hhApp.loadR2rLibraryEntry(entry);
-      else await window.__hhApp.loadHumanMotionEntry(entry);
+      if (robot) {
+        await window.__hhApp.loadR2rLibraryEntry(entry);
+      } else {
+        const selectionResult = await window.__hhApp.loadHumanMotionEntry(entry);
+        // Another motion won the shared Stage while this selection was loading.
+        // Keep the picker open instead of publishing and closing for stale data.
+        if (selectionResult === "superseded") return;
+      }
       onSelected?.(entry);
       onClose();
     } catch (cause) {

@@ -746,11 +746,13 @@ export interface UploadFile extends File {
   _relpath?: string
 }
 
+export type HumanMotionSelectionResult = "selected" | "superseded"
+
 export interface HhAppBridge {
   API: ApiClient
   toast: (message: string, isError?: boolean) => void
   loadLibraryEntry: (entry: LibraryEntry) => Promise<void>
-  loadHumanMotionEntry: (entry: LibraryEntry) => Promise<void>
+  loadHumanMotionEntry: (entry: LibraryEntry) => Promise<HumanMotionSelectionResult>
   loadR2rLibraryEntry: (entry: LibraryEntry) => Promise<void>
   pickR2rTrajectory: (options?: { folder?: boolean }) => Promise<void>
   previewRobotClip: (

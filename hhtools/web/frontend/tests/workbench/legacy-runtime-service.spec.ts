@@ -33,7 +33,7 @@ const payload: MotionPayload = {
 
 beforeEach(() => {
   runtimeMocks.presentHumanMotion.mockReset();
-  runtimeMocks.presentHumanMotion.mockResolvedValue(undefined);
+  runtimeMocks.presentHumanMotion.mockResolvedValue("presented");
   runtimeMocks.resetStageView.mockReset();
   runtimeMocks.subscribeH2rStageDisplayState.mockReset();
   runtimeMocks.subscribeH2rStageDisplayState.mockReturnValue(vi.fn());
@@ -65,9 +65,20 @@ describe("LegacyRuntimeService", () => {
   it("starts implicitly before forwarding one aggregate presentation", async () => {
     const service = new BrowserLegacyRuntimeService();
 
-    await expect(service.presentHumanMotion(payload)).resolves.toBeUndefined();
+    await expect(service.presentHumanMotion(payload)).resolves.toBe("presented");
 
     expect(runtimeMocks.presentHumanMotion).toHaveBeenCalledOnce();
+    expect(runtimeMocks.presentHumanMotion).toHaveBeenCalledWith(payload);
+  });
+
+  it("forwards a superseded aggregate presentation without translating it", async () => {
+    runtimeMocks.presentHumanMotion.mockResolvedValueOnce("superseded");
+    const service = new BrowserLegacyRuntimeService();
+
+    await expect(service.presentHumanMotion(payload)).resolves.toBe(
+      "superseded",
+    );
+
     expect(runtimeMocks.presentHumanMotion).toHaveBeenCalledWith(payload);
   });
 
