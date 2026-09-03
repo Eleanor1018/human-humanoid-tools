@@ -12,12 +12,45 @@ export interface SharedStagePlayerSnapshot {
   readonly playbarVisible: boolean;
 }
 
+/** Exact shared-player target owned by one committed R2R trajectory result. */
+export interface R2rPlaybackPresentation extends SharedStagePlayerSnapshot {
+  readonly active: true;
+}
+
+/**
+ * Freeze a fresh playback target before it is published by an async result.
+ *
+ * The object identity is significant: panel successors carry this same value
+ * until the matching result receipt has been presented or revoked.
+ */
+export function createR2rPlaybackPresentation({
+  duration,
+  t = 0,
+  playing = true,
+  playbarVisible = true,
+}: {
+  readonly duration: number;
+  readonly t?: number;
+  readonly playing?: boolean;
+  readonly playbarVisible?: boolean;
+}): R2rPlaybackPresentation {
+  return Object.freeze({
+    t,
+    duration,
+    active: true as const,
+    playing,
+    playbarVisible,
+  });
+}
+
 /**
  * Complete intent for the panel-ownership handoff slice.
  *
  * Layer/resource projection still belongs to the compatibility renderer. This
  * value owns only panel identity, Stage workflow ownership, and the H2R player
- * baseline that must survive an arbitrarily reentrant R2R visit.
+ * baseline that must survive an arbitrarily reentrant R2R visit. An optional
+ * R2R playback target is a capability borrowed from the independently owned
+ * async result; H2R intents can never carry it.
  */
 export interface PanelPresentationIntent {
   readonly panelId: string;
@@ -26,6 +59,7 @@ export interface PanelPresentationIntent {
   readonly restoreH2rPlayer: boolean;
   /** A stable repeated R2R request must not pause playback as a side effect. */
   readonly resetSharedPlayback: boolean;
+  readonly r2rPlayback: R2rPlaybackPresentation | null;
 }
 
 export type PanelPresentationOperation =
@@ -80,11 +114,14 @@ export function createPanelPresentationIntent({
   current,
   lastApplied,
   currentPlayer,
+  r2rPlayback,
 }: {
   readonly panelId: string;
   readonly current: PanelPresentationOperation | null;
   readonly lastApplied: PanelPresentationOperation | null;
   readonly currentPlayer: SharedStagePlayerSnapshot;
+  /** Exact pending target supplied by the async-result owner, if any. */
+  readonly r2rPlayback?: R2rPlaybackPresentation | null;
 }): PanelPresentationIntent {
   const stageOwner: PanelStageOwner = panelId === "r2r" ? "r2r" : "h2r";
   const predecessorIsUnsettled = current !== null && current !== lastApplied;
@@ -106,6 +143,12 @@ export function createPanelPresentationIntent({
     && current === lastApplied
     && current.value.stageOwner === stageOwner,
   );
+  const inheritedR2rPlayback = (
+    r2rPlayback === undefined
+    && stageOwner === "r2r"
+    && predecessorIsUnsettled
+    && current?.value.stageOwner === "r2r"
+  ) ? current.value.r2rPlayback : null;
 
   return Object.freeze({
     panelId,
@@ -114,5 +157,8 @@ export function createPanelPresentationIntent({
     restoreH2rPlayer:
       stageOwner === "h2r" && predecessorCarriesR2rBaseline,
     resetSharedPlayback: stageOwner === "r2r" && !stableSameOwner,
+    r2rPlayback: stageOwner === "r2r"
+      ? r2rPlayback === undefined ? inheritedR2rPlayback : r2rPlayback
+      : null,
   });
 }

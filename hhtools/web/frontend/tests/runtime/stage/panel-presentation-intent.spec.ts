@@ -5,6 +5,7 @@ import { LatestPresentationOperationCoordinator } from
 import {
   appliedPanelPresentationOwnsStage,
   createPanelPresentationIntent,
+  createR2rPlaybackPresentation,
   type PanelPresentationIntent,
   type PanelPresentationOperation,
   type SharedStagePlayerSnapshot,
@@ -35,9 +36,79 @@ describe("createPanelPresentationIntent", () => {
       h2rReturnBaseline: player(2, true),
       restoreH2rPlayer: false,
       resetSharedPlayback: true,
+      r2rPlayback: null,
     });
     expect(Object.isFrozen(intent)).toBe(true);
     expect(Object.isFrozen(intent.h2rReturnBaseline)).toBe(true);
+  });
+
+  it("carries one exact frozen R2R playback target", () => {
+    const playback = createR2rPlaybackPresentation({
+      duration: 4,
+      t: 1,
+      playing: false,
+    });
+
+    const intent = createPanelPresentationIntent({
+      panelId: "r2r",
+      current: null,
+      lastApplied: null,
+      currentPlayer: player(2),
+      r2rPlayback: playback,
+    });
+
+    expect(intent.r2rPlayback).toBe(playback);
+    expect(playback).toEqual({
+      t: 1,
+      duration: 4,
+      active: true,
+      playing: false,
+      playbarVisible: true,
+    });
+    expect(Object.isFrozen(playback)).toBe(true);
+  });
+
+  it("never lets an H2R intent carry an R2R playback capability", () => {
+    const intent = createPanelPresentationIntent({
+      panelId: "motion",
+      current: null,
+      lastApplied: null,
+      currentPlayer: player(2),
+      r2rPlayback: createR2rPlaybackPresentation({ duration: 4 }),
+    });
+
+    expect(intent.r2rPlayback).toBeNull();
+  });
+
+  it("inherits playback only across an unsettled same-R2R successor", () => {
+    const playback = createR2rPlaybackPresentation({ duration: 4 });
+    const coordinator = new LatestPresentationOperationCoordinator<
+      PanelPresentationIntent
+    >({ project: () => undefined });
+    coordinator.publish(createPanelPresentationIntent({
+      panelId: "r2r",
+      current: null,
+      lastApplied: null,
+      currentPlayer: player(2),
+      r2rPlayback: playback,
+    }));
+
+    const inherited = createPanelPresentationIntent({
+      panelId: "r2r",
+      current: coordinator.current,
+      lastApplied: null,
+      currentPlayer: player(8),
+    });
+    const explicitlyCleared = createPanelPresentationIntent({
+      panelId: "r2r",
+      current: coordinator.current,
+      lastApplied: null,
+      currentPlayer: player(8),
+      r2rPlayback: null,
+    });
+
+    expect(inherited.r2rPlayback).toBe(playback);
+    expect(explicitlyCleared.r2rPlayback).toBeNull();
   });
 
   it("inherits the root baseline across repeated R2R requests", () => {
