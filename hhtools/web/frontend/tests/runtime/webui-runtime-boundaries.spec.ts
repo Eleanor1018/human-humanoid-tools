@@ -682,10 +682,22 @@ describe("legacy runtime ownership boundaries", () => {
     expect(statusCommit).toBeGreaterThan(statusGuard);
     expect(status).toContain("!r2r.calibrating");
     const producerPendingGate = status.indexOf(
-      "r2r.calibrating || r2rCalibrationBootstrapIsPending()",
+      "|| r2rCalibrationBootstrapIsPending()",
     );
     expect(producerPendingGate).toBeGreaterThanOrEqual(0);
     expect(producerPendingGate).toBeLessThan(statusRequest);
+    const trajectoryPendingGate = status.indexOf(
+      "r2rTrajectorySelectionIsPending()",
+    );
+    const trajectoryValidatingGate = status.indexOf(
+      'r2rTrajectoryState === "validating"',
+    );
+    expect(trajectoryPendingGate).toBeGreaterThanOrEqual(0);
+    expect(trajectoryValidatingGate).toBeGreaterThanOrEqual(0);
+    expect(trajectoryPendingGate).toBeLessThan(statusRequest);
+    expect(trajectoryValidatingGate).toBeLessThan(statusRequest);
+    expect(status).toContain("!r2rTrajectorySelectionIsPending()");
+    expect(status).toContain('r2rTrajectoryState !== "validating"');
     expect(status).toContain("&& !r2rCalibrationBootstrapIsPending()");
     expect(status).toContain("identity.targetName");
     expect(status).toContain("identity.sourceName");
@@ -979,26 +991,17 @@ describe("legacy runtime ownership boundaries", () => {
           runtimeSource.indexOf("async function r2rLoadSourceRobot"),
           runtimeSource.indexOf("async function r2rLoadTargetRobot"),
         ),
-        start: "const attempt = startRobotViewLoad(r2rSrc, sourcePayload)",
+        start: "const viewAttempt = startRobotViewLoad(r2rSrc, sourcePayload)",
         commit: "r2r.sourcePayload = sourcePayload",
       },
       {
         name: "automatic source",
         source: runtimeSource.slice(
           runtimeSource.indexOf("async function r2rEnsureSourceLoaded"),
-          runtimeSource.indexOf("async function r2rUploadTraj"),
+          runtimeSource.indexOf("function failR2rTrajectorySelection"),
         ),
-        start: "const attempt = startRobotViewLoad(r2rSrc, sourcePayload)",
+        start: "const sourceViewAttempt = startRobotViewLoad(r2rSrc, sourcePayload)",
         commit: "r2r.sourcePayload = sourcePayload",
-      },
-      {
-        name: "trajectory source",
-        source: runtimeSource.slice(
-          runtimeSource.indexOf("async function r2rApplySourceTrajectoryResult"),
-          runtimeSource.indexOf("async function loadR2rLibraryEntry"),
-        ),
-        start: "const attempt = startRobotViewLoad(r2rSrc, sourcePayload)",
-        commit: "r2r.sourceToken = data.token",
       },
       {
         name: "retarget target",
@@ -1996,7 +1999,7 @@ describe("legacy runtime ownership boundaries", () => {
       "runCurrentPanelFollowups,",
     ]);
     expect(navigation).toContain("window.__hhUi?.setActivePanel(intent.panelId)");
-    expect(navigation).toContain("if (!authority.isCurrent()) return undefined");
+    expect(navigation).toContain("if (!authority.isCurrent()) return");
     expect(navigation).toContain("appliedPanelPresentationOwnsStage({");
     expect(runtimeSource.match(/__hhUi\?\.setActivePanel/g)).toHaveLength(1);
     expect(runtimeSource).not.toContain("inspectorPanelSwitchHook");
@@ -2011,6 +2014,19 @@ describe("legacy runtime ownership boundaries", () => {
     expect(relinquish).toBeLessThan(hideH2rViews);
     expect(hideH2rViews).toBeLessThan(applyR2r);
     expect(enter).toContain("if (intent.resetSharedPlayback)");
+    expect(enter).toContain("r2rTrajectoryResults.isCommitted(trajectoryCommit)");
+    expectTokensInOrder(enter, [
+      "r2rApplyStage()",
+      "if (!projectionIsCurrent()) return null",
+      "player.ready(playback.duration)",
+      "if (!projectionIsCurrent()) return null",
+      "player.seek(playback.duration > 0 ? playback.t / playback.duration : 0)",
+      "if (!projectionIsCurrent()) return null",
+      "_setPlaybarVisible(playback.playbarVisible)",
+      "if (!projectionIsCurrent()) return null",
+      "player.setPlaying(playback.playing)",
+      "if (!projectionIsCurrent()) return null",
+    ]);
     expect(enter).not.toContain("markH2rStageDisplayChanged()");
     expect(leave).toContain(
       "r2rApplyStage({ publishStageDisplay: false })",
@@ -2038,22 +2054,234 @@ describe("legacy runtime ownership boundaries", () => {
       'window.addEventListener("hhtools:panel-request"',
     );
 
+    const trajectoryRunner = runtimeSource.slice(
+      runtimeSource.indexOf("async function runR2rTrajectorySelection"),
+      runtimeSource.indexOf("function r2rApplySourceTrajectoryResult"),
+    );
     const trajectoryUpload = runtimeSource.slice(
       runtimeSource.indexOf("async function r2rUploadTraj"),
-      runtimeSource.indexOf("async function r2rApplySourceTrajectoryResult"),
+      runtimeSource.indexOf("async function pickR2rTrajectory"),
     );
     const librarySelection = runtimeSource.slice(
       runtimeSource.indexOf("async function loadR2rLibraryEntry"),
-      runtimeSource.indexOf("async function pickR2rTrajectory"),
+      runtimeSource.indexOf("async function r2rUploadTraj"),
     );
+    expectTokensInOrder(trajectoryRunner, [
+      "beginR2rTrajectorySelection(",
+      "await r2rEnsureSourceLoaded(trajectoryAttempt)",
+      'switchInspectorPanel("r2r")',
+      'panelSwitchSettledOnStageOwner(panelSwitch, "r2r")',
+      'r2rTrajectoryState = "validating"',
+    ]);
     for (const candidate of [trajectoryUpload, librarySelection]) {
-      expect(candidate.indexOf('switchInspectorPanel("r2r")')).toBeLessThan(
-        candidate.indexOf('r2rTrajectoryState = "validating"'),
-      );
-      expect(candidate).toContain(
-        'panelSwitchSettledOnStageOwner(panelSwitch, "r2r")',
-      );
+      expect(candidate).toContain("runR2rTrajectorySelection({");
     }
+  });
+
+  it("gives R2R source trajectories exact async and presentation ownership", () => {
+    const sourceOwnership = runtimeSource.slice(
+      runtimeSource.indexOf("type R2rSourceLoadKind"),
+      runtimeSource.indexOf("type R2rTrajectorySelectionKind"),
+    );
+    expect(sourceOwnership).toContain("new LatestAsyncAttemptOwner<");
+    expect(sourceOwnership).toContain("function beginR2rSourceLoad(");
+    expect(sourceOwnership).toContain("function finishR2rSourceLoad(");
+
+    const ownership = runtimeSource.slice(
+      runtimeSource.indexOf("type R2rTrajectorySelectionKind"),
+      runtimeSource.indexOf("interface R2rCalibrationIdentity"),
+    );
+    for (const identityFact of [
+      "sourceName",
+      "sourcePayload",
+      "sourceViewGeneration",
+      "sourceAliasesCommitted",
+    ]) {
+      expect(ownership).toContain(identityFact);
+    }
+    expect(ownership).toContain("new LatestAsyncResultOwner<");
+    expect(ownership).toContain("let r2rTrajectoryPendingAttempt:");
+    expect(ownership).toContain("function r2rTrajectorySelectionIsPending()");
+    expect(ownership).toContain('r2rTrajectoryState = "idle"');
+    expect(ownership).toContain("r2rTrajectoryResults.isLatestResult(commit)");
+    expect(ownership).not.toContain(
+      "lastAppliedPanelPresentation?.value.r2rPlayback === commit.value",
+    );
+    expect(ownership).toContain(
+      "r2rSrc.isLoadGenerationCurrent(identity.sourceViewGeneration)",
+    );
+
+    const runner = runtimeSource.slice(
+      runtimeSource.indexOf("async function runR2rTrajectorySelection"),
+      runtimeSource.indexOf("function r2rApplySourceTrajectoryResult"),
+    );
+    const begin = runner.indexOf("beginR2rTrajectorySelection(");
+    const firstAwait = runner.indexOf("await ");
+    expect(begin).toBeGreaterThanOrEqual(0);
+    expect(begin).toBeLessThan(firstAwait);
+    expect(runner).toContain('return "superseded"');
+    expect(runner).toMatch(/\?\s*"selected"\s*:\s*"superseded"/);
+    expect(runner).toContain("if (!isCurrent()) return;");
+    expectTokensInOrder(runner, [
+      "const data = await spec.load(reportProgress, isCurrent)",
+      "if (!data || !isCurrent())",
+      "r2rApplySourceTrajectoryResult(",
+    ]);
+    expectTokensInOrder(runner, [
+      "if (!committed)",
+      "r2rTrajectoryCommitIsSelected(committed)",
+      "publishR2rWorkflowState()",
+      "r2rTrajectoryCommitIsSelected(committed)",
+    ]);
+    expect(runner).toContain("void r2rUpdateRetargetBtn().catch(");
+    expectTokensInOrder(runner, [
+      "} catch (error) {",
+      "failR2rTrajectorySelection(trajectoryAttempt, error)",
+      'return "superseded"',
+    ]);
+
+    const failure = runtimeSource.slice(
+      runtimeSource.indexOf("function failR2rTrajectorySelection"),
+      runtimeSource.indexOf("async function runR2rTrajectorySelection"),
+    );
+    expectTokensInOrder(failure, [
+      'r2rTrajectoryState = "failed"',
+      "toast(errorMessage(error), true)",
+      "finishR2rTrajectorySelection(trajectoryAttempt)",
+      "publishR2rWorkflowState()",
+    ]);
+    expectTokensInOrder(runner, [
+      'if (!panelSwitchSettledOnStageOwner(panelSwitch, "r2r"))',
+      "finishR2rTrajectorySelection(trajectoryAttempt)",
+      "publishR2rWorkflowState()",
+      'return "superseded"',
+    ]);
+
+    const apply = runtimeSource.slice(
+      runtimeSource.indexOf("function r2rApplySourceTrajectoryResult"),
+      runtimeSource.indexOf("async function loadR2rLibraryEntry"),
+    );
+    expect(apply).toContain("r2rTrajectoryResults.isCurrent(trajectoryAttempt)");
+    expect(apply).toContain("r2rSrc.setTrajectory(data.trajectory)");
+    expect(apply).not.toContain("startRobotViewLoad(r2rSrc");
+    expect(apply).not.toMatch(/\bplayer\./);
+    expect(apply).not.toContain("r2rApplyStage(");
+    expect(apply).not.toContain("r2rFocus(");
+    const finalApplyGuard = apply.lastIndexOf("if (!isCurrent()) return null");
+    const domainCommit = apply.indexOf("commitR2rTrajectorySelection(");
+    expect(finalApplyGuard).toBeGreaterThanOrEqual(0);
+    expect(domainCommit).toBeGreaterThan(finalApplyGuard);
+    expect(apply).not.toContain("publishR2rWorkflowState()");
+    expect(apply).not.toContain("r2rUpdateRetargetBtn()");
+
+    const sourceSelection = runtimeSource.slice(
+      runtimeSource.indexOf("async function r2rLoadSourceRobot"),
+      runtimeSource.indexOf("async function r2rLoadTargetRobot"),
+    );
+    const sourceSelectionClaim = sourceSelection.indexOf(
+      'beginR2rSourceLoad("manual", name)',
+    );
+    const sourceSelectionAwait = sourceSelection.indexOf(
+      'await API.post("/api/robot/select"',
+    );
+    expect(sourceSelectionClaim).toBeGreaterThanOrEqual(0);
+    expect(sourceSelectionClaim).toBeLessThan(sourceSelectionAwait);
+    expect(sourceSelection.indexOf('if (r2rRunState === "running")'))
+      .toBeLessThan(sourceSelectionClaim);
+    expect(sourceSelection.match(/invalidateR2rTrajectorySelection\(\)/g))
+      .toHaveLength(2);
+    expect(sourceSelection.indexOf("invalidateR2rTrajectorySelection()"))
+      .toBeLessThan(sourceSelection.indexOf('await API.post("/api/robot/select"'));
+    expect(sourceSelection.indexOf("r2r.sourceToken = null"))
+      .toBeLessThan(sourceSelection.indexOf('await API.post("/api/robot/select"'));
+    expect(sourceSelection.indexOf("r2r.sourceName = null"))
+      .toBeLessThan(sourceSelectionAwait);
+    expect(sourceSelection.indexOf("r2r.sourcePayload = null"))
+      .toBeLessThan(sourceSelectionAwait);
+    expect(sourceSelection.indexOf("() => r2rSrc.clear()"))
+      .toBeLessThan(sourceSelectionAwait);
+    expect(sourceSelection.indexOf("() => r2rApplyStage()"))
+      .toBeLessThan(sourceSelectionAwait);
+    expectTokensInOrder(sourceSelection, [
+      'await API.post("/api/robot/select"',
+      "if (!sourceIsCurrent()) return",
+      "invalidateR2rTrajectorySelection()",
+      "startRobotViewLoad(r2rSrc, sourcePayload)",
+      "await viewAttempt.completion",
+      'loadResult === "stale"',
+      "r2r.sourcePayload = sourcePayload",
+    ]);
+
+    const automaticSource = runtimeSource.slice(
+      runtimeSource.indexOf("async function r2rEnsureSourceLoaded"),
+      runtimeSource.indexOf("function failR2rTrajectorySelection"),
+    );
+    const automaticSourceClaim = automaticSource.indexOf(
+      'beginR2rSourceLoad("trajectory", name)',
+    );
+    const automaticSourceAwait = automaticSource.indexOf(
+      'await API.post("/api/robot/select"',
+    );
+    expect(automaticSourceClaim).toBeGreaterThanOrEqual(0);
+    expect(automaticSourceClaim).toBeLessThan(automaticSourceAwait);
+    expect(automaticSource).toContain(
+      "trajectoryIsCurrent() && r2rSourceLoadAttempts.isCurrent(sourceAttempt)",
+    );
+    expectTokensInOrder(automaticSource, [
+      'beginR2rSourceLoad("trajectory", name)',
+      "() => r2rSrc.clear()",
+      'await API.post("/api/robot/select"',
+      "if (!sourceIsCurrent()) return superseded()",
+      "startRobotViewLoad(r2rSrc, sourcePayload)",
+      "await sourceViewAttempt.completion",
+      'loadResult === "stale"',
+      "r2r.sourcePayload = sourcePayload",
+      "finishR2rSourceLoad(sourceAttempt)",
+    ]);
+
+    const navigation = runtimeSource.slice(
+      runtimeSource.indexOf("interface PanelSwitchReceipt"),
+      runtimeSource.indexOf("/** After a robot is loaded"),
+    );
+    expect(navigation).toContain(
+      "r2rTrajectoryResults.pendingPresentation?.value ?? null",
+    );
+    expect(navigation).toContain(
+      "r2rTrajectoryResults.markPresented(presentedTrajectory)",
+    );
+    expect(navigation).toContain(
+      "publishPanelPresentationIntent(operation.value.panelId)",
+    );
+
+    const blocked = runtimeSource.slice(
+      runtimeSource.indexOf("function r2rBlockedReason"),
+      runtimeSource.indexOf("function publishR2rWorkflowState"),
+    );
+    const pendingGate = blocked.indexOf("r2rTrajectorySelectionIsPending()");
+    const validatingGate = blocked.indexOf('r2rTrajectoryState === "validating"');
+    const missingTokenGate = blocked.indexOf("!r2r.sourceToken");
+    expect(pendingGate).toBeGreaterThanOrEqual(0);
+    expect(validatingGate).toBeGreaterThanOrEqual(0);
+    expect(missingTokenGate).toBeGreaterThanOrEqual(0);
+    expect(pendingGate).toBeLessThan(missingTokenGate);
+    expect(validatingGate).toBeLessThan(missingTokenGate);
+    const retarget = runtimeSource.slice(
+      runtimeSource.indexOf("async function r2rRunRetarget"),
+      runtimeSource.indexOf("// --------------------------------------------------------------- batch"),
+    );
+    const retargetPendingGate = retarget.indexOf("r2rTrajectorySelectionIsPending()");
+    const retargetStateGate = retarget.indexOf('r2rTrajectoryState !== "idle"');
+    const calibrationAwait = retarget.indexOf("await r2rEnsureCalibration");
+    expect(retargetPendingGate).toBeGreaterThanOrEqual(0);
+    expect(retargetStateGate).toBeGreaterThanOrEqual(0);
+    expect(calibrationAwait).toBeGreaterThanOrEqual(0);
+    expect(retargetPendingGate).toBeLessThan(calibrationAwait);
+    expect(retargetStateGate).toBeLessThan(calibrationAwait);
+    const retargetClaim = retarget.indexOf('r2rRunState = "running"', calibrationAwait);
+    const firstProgressMutation = retarget.indexOf('prog.style.display = "block"');
+    expect(retargetClaim).toBeGreaterThan(calibrationAwait);
+    expect(firstProgressMutation).toBeGreaterThanOrEqual(0);
+    expect(retargetClaim).toBeLessThan(firstProgressMutation);
   });
 
   it("invalidates scaled previews when their H2R identity changes", () => {
@@ -2143,11 +2371,11 @@ describe("legacy runtime ownership boundaries", () => {
           runtimeSource.indexOf("async function r2rLoadSourceRobot"),
           runtimeSource.indexOf("async function r2rLoadTargetRobot"),
         ),
-        start: "const attempt = startRobotViewLoad(r2rSrc, sourcePayload)",
-        load: "loadResult = await attempt.completion",
+        start: "const viewAttempt = startRobotViewLoad(r2rSrc, sourcePayload)",
+        load: "loadResult = await viewAttempt.completion",
         staleCheck: 'loadResult === "stale"',
         generationCheck:
-          "!r2rSrc.isLoadGenerationCurrent(attempt.generation)",
+          "!r2rSrc.isLoadGenerationCurrent(viewAttempt.generation)",
         commit: "r2r.sourcePayload = sourcePayload",
       },
       {
@@ -2166,27 +2394,13 @@ describe("legacy runtime ownership boundaries", () => {
         name: "R2R automatic source",
         source: runtimeSource.slice(
           runtimeSource.indexOf("async function r2rEnsureSourceLoaded"),
-          runtimeSource.indexOf("async function r2rUploadTraj"),
+          runtimeSource.indexOf("function failR2rTrajectorySelection"),
         ),
-        start: "const attempt = startRobotViewLoad(r2rSrc, sourcePayload)",
-        load: "loadResult = await attempt.completion",
+        start: "const sourceViewAttempt = startRobotViewLoad(r2rSrc, sourcePayload)",
+        load: "const loadResult = await sourceViewAttempt.completion",
         staleCheck: 'loadResult === "stale"',
-        generationCheck:
-          "!r2rSrc.isLoadGenerationCurrent(attempt.generation)",
+        generationCheck: "!sourceIsCurrent()",
         commit: "r2r.sourcePayload = sourcePayload",
-      },
-      {
-        name: "R2R source trajectory",
-        source: runtimeSource.slice(
-          runtimeSource.indexOf("async function r2rApplySourceTrajectoryResult"),
-          runtimeSource.indexOf("async function loadR2rLibraryEntry"),
-        ),
-        start: "const attempt = startRobotViewLoad(r2rSrc, sourcePayload)",
-        load: "loadResult = await attempt.completion",
-        staleCheck: 'loadResult === "stale"',
-        generationCheck:
-          "!r2rSrc.isLoadGenerationCurrent(attempt.generation)",
-        commit: "r2rSrc.setTrajectory(data.trajectory)",
       },
       {
         name: "R2R retarget result",
@@ -2316,7 +2530,7 @@ describe("legacy runtime ownership boundaries", () => {
           runtimeSource.indexOf("async function r2rLoadTargetRobot"),
         ),
         generationGuard:
-          "if (!r2rSrc.isLoadGenerationCurrent(attempt.generation)) return",
+          "|| !r2rSrc.isLoadGenerationCurrent(viewAttempt.generation)",
         cleanup: 'clearR2rSourceAfterViewLoss("selected R2R source load")',
       },
       {
@@ -2327,26 +2541,6 @@ describe("legacy runtime ownership boundaries", () => {
         ),
         generationGuard: 'if (!isCurrent()) return "stale"',
         cleanup: "rollbackR2rCalibrationBootstrap(",
-      },
-      {
-        name: "R2R automatic source",
-        source: runtimeSource.slice(
-          runtimeSource.indexOf("async function r2rEnsureSourceLoaded"),
-          runtimeSource.indexOf("async function r2rUploadTraj"),
-        ),
-        generationGuard:
-          "if (!r2rSrc.isLoadGenerationCurrent(attempt.generation)) return false",
-        cleanup: 'clearR2rSourceAfterViewLoss("automatic R2R source load")',
-      },
-      {
-        name: "R2R trajectory source",
-        source: runtimeSource.slice(
-          runtimeSource.indexOf("async function r2rApplySourceTrajectoryResult"),
-          runtimeSource.indexOf("async function loadR2rLibraryEntry"),
-        ),
-        generationGuard:
-          'if (!r2rSrc.isLoadGenerationCurrent(attempt.generation)) return "stale"',
-        cleanup: 'clearR2rSourceAfterViewLoss("R2R trajectory source load")',
       },
       {
         name: "R2R retarget target",

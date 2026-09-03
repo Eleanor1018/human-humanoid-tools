@@ -18,6 +18,13 @@ const entry: LibraryEntry = {
   motion_category: "motion",
 };
 
+const robotEntry: LibraryEntry = {
+  source_path: "/motions/robot-walk.csv",
+  stem: "Robot walk",
+  asset_kind: "robot_trajectory",
+  motion_category: "motion",
+};
+
 afterEach(() => {
   cleanup();
   delete window.__hhApp;
@@ -76,6 +83,38 @@ describe("MotionPickerDialog", () => {
     await waitFor(() => expect(loadHumanMotionEntry).toHaveBeenCalledWith(entry));
     await waitFor(() =>
       expect(screen.getByRole("option", { name: /Walk cycle/ })).toBeEnabled(),
+    );
+    expect(onSelected).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+
+  it("keeps the robot picker open when another trajectory supersedes selection", async () => {
+    const loadR2rLibraryEntry = vi.fn(async () => "superseded" as const);
+    window.__hhApp = {
+      API: {
+        get: vi.fn(async () => ({ entries: [robotEntry] })),
+      },
+      loadR2rLibraryEntry,
+    } as unknown as HhAppBridge;
+    const onClose = vi.fn();
+    const onSelected = vi.fn();
+
+    render(
+      <MotionPickerDialog
+        open
+        locale="en"
+        assetKind="robot_trajectory"
+        onClose={onClose}
+        onImport={vi.fn()}
+        onSelected={onSelected}
+      />,
+    );
+    fireEvent.click(await screen.findByRole("option", { name: /Robot walk/ }));
+
+    await waitFor(() => expect(loadR2rLibraryEntry).toHaveBeenCalledWith(robotEntry));
+    await waitFor(() =>
+      expect(screen.getByRole("option", { name: /Robot walk/ })).toBeEnabled(),
     );
     expect(onSelected).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();

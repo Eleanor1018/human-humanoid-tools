@@ -164,14 +164,12 @@ export function MotionPickerDialog({
     setSelectingKey(entryKey);
     setError(null);
     try {
-      if (robot) {
-        await window.__hhApp.loadR2rLibraryEntry(entry);
-      } else {
-        const selectionResult = await window.__hhApp.loadHumanMotionEntry(entry);
-        // Another motion won the shared Stage while this selection was loading.
-        // Keep the picker open instead of publishing and closing for stale data.
-        if (selectionResult === "superseded") return;
-      }
+      const selectionResult = robot
+        ? await window.__hhApp.loadR2rLibraryEntry(entry)
+        : await window.__hhApp.loadHumanMotionEntry(entry);
+      // Another selection or workflow won while this request was loading.
+      // Keep the picker open instead of closing it for stale data.
+      if (selectionResult === "superseded") return;
       onSelected?.(entry);
       onClose();
     } catch (cause) {

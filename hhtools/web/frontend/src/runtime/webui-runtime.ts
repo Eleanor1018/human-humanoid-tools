@@ -179,6 +179,10 @@ import {
   type LatestAsyncAttempt,
 } from "./stage/latest-async-attempt-owner";
 import {
+  LatestAsyncResultOwner,
+  type CommittedAsyncResult,
+} from "./stage/latest-async-result-owner";
+import {
   cleanupReplacedPointerGestureOrRollback,
   inheritedPointerGestureOrbitBaseline,
   LatestPointerGestureOwner,
@@ -203,9 +207,11 @@ import {
 import {
   appliedPanelPresentationOwnsStage,
   createPanelPresentationIntent,
+  createR2rPlaybackPresentation,
   type PanelPresentationIntent,
   type PanelPresentationOperation,
   type PanelStageOwner,
+  type R2rPlaybackPresentation,
   type SharedStagePlayerSnapshot,
 } from "./stage/panel-presentation-intent";
 import { installReentrantSessionResource, ReentrantHostMutationGate } from
@@ -244,6 +250,7 @@ import type {
   JobResult,
   JobStartResponse,
   JointWorldPayload,
+  MotionSelectionResult,
   PlaybackUiState,
   PlaybackPayload,
   PlaybackView,
@@ -3032,16 +3039,16 @@ function captureSharedStagePlayer(): SharedStagePlayerSnapshot {
 function projectPanelPresentation(
   intent: PanelPresentationIntent,
   authority: PresentationProjectionAuthority,
-): undefined {
+): R2rTrajectoryPresentationCommit | null {
   window.__hhUi?.setActivePanel(intent.panelId);
-  if (!authority.isCurrent()) return undefined;
+  if (!authority.isCurrent()) return null;
 
   if (intent.stageOwner === "r2r") {
-    r2rEnterPanel(intent, authority);
+    return r2rEnterPanel(intent, authority);
   } else {
     r2rLeavePanel(intent, authority);
   }
-  return undefined;
+  return null;
 }
 
 const panelPresentationCoordinator =
@@ -3049,11 +3056,43 @@ const panelPresentationCoordinator =
     project: (target, authority) => {
       const operation = target.current;
       if (!operation) return undefined;
-      projectPanelPresentation(operation.value, authority);
-      if (authority.isCurrent()) lastAppliedPanelPresentation = operation;
+      const presentedTrajectory = projectPanelPresentation(
+        operation.value,
+        authority,
+      );
+      if (!authority.isCurrent()) return undefined;
+      if (operation.value.r2rPlayback) {
+        if (
+          !presentedTrajectory
+          || !r2rTrajectoryResults.markPresented(presentedTrajectory)
+        ) {
+          // The panel survived but its borrowed result did not. Publish a
+          // callback-free repair carrying the latest pending result (or none);
+          // the outer coordinator frame will drain it after this projector exits.
+          publishPanelPresentationIntent(operation.value.panelId);
+          return undefined;
+        }
+      }
+      lastAppliedPanelPresentation = operation;
       return undefined;
     },
   });
+
+/** Publish one immutable panel target without entering a browser host callback. */
+function publishPanelPresentationIntent(
+  panelId: string,
+): PanelPresentationOperation | null {
+  if (!panelId) return null;
+  const normalizedPanelId = panelId === "robot" ? "h2r" : panelId;
+  const intent = createPanelPresentationIntent({
+    panelId: normalizedPanelId,
+    current: panelPresentationCoordinator.current,
+    lastApplied: lastAppliedPanelPresentation,
+    currentPlayer: captureSharedStagePlayer(),
+    r2rPlayback: r2rTrajectoryResults.pendingPresentation?.value ?? null,
+  });
+  return panelPresentationCoordinator.publish(intent).current;
+}
 
 function runCurrentPanelFollowups(): void {
   const operation = panelPresentationCoordinator.current;
@@ -3076,15 +3115,8 @@ function runCurrentPanelFollowups(): void {
 
 /** Publish before the first host callback, then reconcile latest-only. */
 function switchInspectorPanel(panelId: string): PanelSwitchReceipt | null {
-  if (!panelId) return null;
-  const normalizedPanelId = panelId === "robot" ? "h2r" : panelId;
-  const intent = createPanelPresentationIntent({
-    panelId: normalizedPanelId,
-    current: panelPresentationCoordinator.current,
-    lastApplied: lastAppliedPanelPresentation,
-    currentPlayer: captureSharedStagePlayer(),
-  });
-  const operation = panelPresentationCoordinator.publish(intent).current;
+  const operation = publishPanelPresentationIntent(panelId);
+  if (!operation) return null;
   // A stale projection may fail after applying a successor. Finalization still
   // observes that winner, while the obsolete caller's error keeps propagating.
   const disposition = reconcilePresentationWithFinalizer(
@@ -9141,6 +9173,179 @@ const r2r: R2rState = {
   tgtScaledScene: null,
 };
 
+type R2rSourceLoadKind = "manual" | "trajectory";
+
+/** User intent that owns both source transport and the resulting RobotView. */
+interface R2rSourceLoadIdentity {
+  readonly kind: R2rSourceLoadKind;
+  readonly name: string;
+}
+
+const r2rSourceLoadAttempts = new LatestAsyncAttemptOwner<
+  R2rSourceLoadIdentity
+>(() => true);
+
+let r2rSourceLoadPendingAttempt:
+  LatestAsyncAttempt<R2rSourceLoadIdentity> | null = null;
+
+/** Reserve before transport so response order cannot replace intent order. */
+function beginR2rSourceLoad(
+  kind: R2rSourceLoadKind,
+  name: string,
+): LatestAsyncAttempt<R2rSourceLoadIdentity> {
+  const attempt = r2rSourceLoadAttempts.begin(Object.freeze({ kind, name }));
+  r2rSourceLoadPendingAttempt = attempt;
+  return attempt;
+}
+
+function finishR2rSourceLoad(
+  attempt: LatestAsyncAttempt<R2rSourceLoadIdentity>,
+): boolean {
+  if (!r2rSourceLoadAttempts.finish(attempt)) return false;
+  if (r2rSourceLoadPendingAttempt === attempt) {
+    r2rSourceLoadPendingAttempt = null;
+  }
+  return true;
+}
+
+type R2rTrajectorySelectionKind = "upload" | "library";
+
+/** Immutable source capability captured by one trajectory-selection attempt. */
+interface R2rTrajectorySelectionIdentity {
+  readonly kind: R2rTrajectorySelectionKind;
+  readonly requestLabel: string;
+  readonly sourceName: string | null;
+  readonly sourcePayload: RobotPayload | null;
+  readonly sourceViewGeneration: number | null;
+  /** False only while this attempt owns an automatic source View candidate. */
+  readonly sourceAliasesCommitted: boolean;
+}
+
+type R2rTrajectoryPresentationCommit = CommittedAsyncResult<
+  R2rTrajectorySelectionIdentity,
+  R2rPlaybackPresentation
+>;
+
+function r2rTrajectoryIdentityIsCurrent(
+  identity: R2rTrajectorySelectionIdentity,
+): boolean {
+  if (
+    identity.sourceName === null
+    || identity.sourcePayload === null
+    || identity.sourceViewGeneration === null
+  ) {
+    return r2r.sourceName === null && r2r.sourcePayload === null;
+  }
+  if (!r2rSrc.isLoadGenerationCurrent(identity.sourceViewGeneration)) {
+    return false;
+  }
+  if (!identity.sourceAliasesCommitted) {
+    return r2r.sourceName === null && r2r.sourcePayload === null;
+  }
+  return (
+    r2r.sourceName === identity.sourceName
+    && r2r.sourcePayload === identity.sourcePayload
+  );
+}
+
+const r2rTrajectoryResults = new LatestAsyncResultOwner<
+  R2rTrajectorySelectionIdentity,
+  R2rPlaybackPresentation
+>(r2rTrajectoryIdentityIsCurrent);
+
+let r2rTrajectoryPendingAttempt:
+  LatestAsyncAttempt<R2rTrajectorySelectionIdentity> | null = null;
+
+function beginR2rTrajectorySelection(
+  identity: R2rTrajectorySelectionIdentity,
+): LatestAsyncAttempt<R2rTrajectorySelectionIdentity> {
+  const attempt = r2rTrajectoryResults.begin(identity);
+  // `pendingAttempt` owns the new pre-validation interval. Retire any
+  // predecessor's transient label now so a cancelled successor cannot leave
+  // the workflow permanently stuck on `validating`. Preserve a stable
+  // `failed` baseline until the replacement itself reaches validation.
+  if (r2rTrajectoryState === "validating") r2rTrajectoryState = "idle";
+  r2rTrajectoryPendingAttempt = attempt;
+  return attempt;
+}
+
+function finishR2rTrajectorySelection(
+  attempt: LatestAsyncAttempt<R2rTrajectorySelectionIdentity>,
+): boolean {
+  if (!r2rTrajectoryResults.finish(attempt)) return false;
+  if (r2rTrajectoryPendingAttempt === attempt) {
+    r2rTrajectoryPendingAttempt = null;
+  }
+  return true;
+}
+
+function commitR2rTrajectorySelection(
+  attempt: LatestAsyncAttempt<R2rTrajectorySelectionIdentity>,
+  presentation: R2rPlaybackPresentation,
+): R2rTrajectoryPresentationCommit | null {
+  const committed = r2rTrajectoryResults.commit(attempt, presentation);
+  if (committed && r2rTrajectoryPendingAttempt === attempt) {
+    r2rTrajectoryPendingAttempt = null;
+  }
+  return committed;
+}
+
+function invalidateR2rTrajectorySelection(): void {
+  const claimedAttempt = r2rTrajectoryPendingAttempt;
+  r2rTrajectoryResults.invalidate();
+  // Source replacement/loss is a terminal boundary for validation UI state.
+  r2rTrajectoryState = "idle";
+  if (r2rTrajectoryPendingAttempt === claimedAttempt) {
+    r2rTrajectoryPendingAttempt = null;
+  }
+}
+
+function r2rTrajectorySelectionIsPending(): boolean {
+  const attempt = r2rTrajectoryPendingAttempt;
+  return attempt !== null && r2rTrajectoryResults.isCurrent(attempt);
+}
+
+/** Domain selection outlives presentation, but not a successor or invalidation. */
+function r2rTrajectoryCommitIsSelected(
+  commit: R2rTrajectoryPresentationCommit,
+): boolean {
+  return r2rTrajectoryResults.isLatestResult(commit);
+}
+
+function captureR2rTrajectorySelectionIdentity(
+  kind: R2rTrajectorySelectionKind,
+  requestLabel: string,
+): R2rTrajectorySelectionIdentity {
+  const hasCommittedSource = Boolean(r2r.sourceName && r2r.sourcePayload);
+  return Object.freeze({
+    kind,
+    requestLabel,
+    sourceName: hasCommittedSource ? r2r.sourceName : null,
+    sourcePayload: hasCommittedSource ? r2r.sourcePayload : null,
+    sourceViewGeneration: hasCommittedSource ? r2rSrc.loadGeneration : null,
+    sourceAliasesCommitted: hasCommittedSource,
+  });
+}
+
+function rebindR2rTrajectorySelection(
+  attempt: LatestAsyncAttempt<R2rTrajectorySelectionIdentity>,
+  source: {
+    readonly name: string;
+    readonly payload: RobotPayload;
+    readonly viewGeneration: number;
+    readonly aliasesCommitted: boolean;
+  },
+): LatestAsyncAttempt<R2rTrajectorySelectionIdentity> | null {
+  if (!r2rTrajectoryResults.isCurrent(attempt)) return null;
+  return beginR2rTrajectorySelection(Object.freeze({
+    ...attempt.identity,
+    sourceName: source.name,
+    sourcePayload: source.payload,
+    sourceViewGeneration: source.viewGeneration,
+    sourceAliasesCommitted: source.aliasesCommitted,
+  }));
+}
+
 interface R2rCalibrationIdentity {
   readonly sourceName: string;
   readonly sourcePayload: RobotPayload | null;
@@ -9572,6 +9777,17 @@ function r2rBlockedReason(): string | null {
     "Source robot is missing. Load the robot model associated with the trajectory first.",
     "缺少源机器人：请先加载轨迹所属的 Robot Model。",
   );
+  if (
+    r2rTrajectorySelectionIsPending()
+    || r2rTrajectoryState === "validating"
+  ) return runtimeText(
+    "Source trajectory validation is still running.",
+    "源机器人轨迹仍在校验中。",
+  );
+  if (r2rTrajectoryState === "failed") return runtimeText(
+    "The latest source trajectory validation failed. Select it again to retry.",
+    "最近一次源机器人轨迹校验失败，请重新选择后重试。",
+  );
   if (!r2r.sourceToken) return runtimeText(
     "Source robot trajectory is missing. Upload a CSV, PKL, or NPZ trajectory.",
     "缺少源 Robot Trajectory：请上传 CSV、PKL 或 NPZ 轨迹。",
@@ -9967,19 +10183,53 @@ window.addEventListener("hhtools:comparison-command", (event) => {
 function r2rEnterPanel(
   intent: PanelPresentationIntent,
   authority: PresentationProjectionAuthority,
-): undefined {
+): R2rTrajectoryPresentationCommit | null {
+  const playback = intent.r2rPlayback;
+  const trajectoryCommit = playback
+    ? r2rTrajectoryResults.pendingPresentation
+    : null;
+  if (
+    playback
+    && (
+      !trajectoryCommit
+      || trajectoryCommit.value !== playback
+      || !r2rTrajectoryResults.isCommitted(trajectoryCommit)
+    )
+  ) return null;
+  const projectionIsCurrent = (): boolean => Boolean(
+    authority.isCurrent()
+    && (
+      !playback
+      || (
+        trajectoryCommit
+        && r2rTrajectoryResults.isCommitted(trajectoryCommit)
+      )
+    )
+  );
+
   r2r.active = true;
-  if (!authority.isCurrent()) return undefined;
+  if (!projectionIsCurrent()) return null;
   h2rOwnsStage = false;
-  if (!authority.isCurrent()) return undefined;
+  if (!projectionIsCurrent()) return null;
   applyH2rPhysicalVisibility();
-  if (!authority.isCurrent()) return undefined;
+  if (!projectionIsCurrent()) return null;
   if (intent.resetSharedPlayback) {
     player.setPlaying(false);
-    if (!authority.isCurrent()) return undefined;
+    if (!projectionIsCurrent()) return null;
   }
   r2rApplyStage();
-  return undefined;
+  if (!projectionIsCurrent()) return null;
+  if (!playback || !trajectoryCommit) return null;
+
+  player.ready(playback.duration);
+  if (!projectionIsCurrent()) return null;
+  player.seek(playback.duration > 0 ? playback.t / playback.duration : 0);
+  if (!projectionIsCurrent()) return null;
+  _setPlaybarVisible(playback.playbarVisible);
+  if (!projectionIsCurrent()) return null;
+  player.setPlaying(playback.playing);
+  if (!projectionIsCurrent()) return null;
+  return trajectoryCommit;
 }
 
 /** Project H2R ownership and restore only this operation's root player state. */
@@ -10038,7 +10288,12 @@ async function r2rUpdateRetargetBtn(): Promise<R2rCalibrationStatusResult> {
   const calBtn = document.getElementById("r2r-calib-btn");
   const rtBtn = document.getElementById("r2r-retarget-btn");
   if (calBtn) calBtn.disabled = !(r2r.targetName && r2r.sourceName);
-  if (r2r.calibrating || r2rCalibrationBootstrapIsPending()) {
+  if (
+    r2rTrajectorySelectionIsPending()
+    || r2rTrajectoryState === "validating"
+    || r2r.calibrating
+    || r2rCalibrationBootstrapIsPending()
+  ) {
     r2rCalibrationStatusAttempts.invalidate();
     if (rtBtn) rtBtn.disabled = true;
     publishR2rWorkflowState();
@@ -10060,7 +10315,9 @@ async function r2rUpdateRetargetBtn(): Promise<R2rCalibrationStatusResult> {
 
   const statusAttempt = r2rCalibrationStatusAttempts.begin(identity);
   const statusIsCurrent = (): boolean => (
-    !r2r.calibrating
+    !r2rTrajectorySelectionIsPending()
+    && r2rTrajectoryState !== "validating"
+    && !r2r.calibrating
     && !r2rCalibrationBootstrapIsPending()
     && r2rCalibrationStatusAttempts.isCurrent(statusAttempt)
   );
@@ -10090,7 +10347,14 @@ async function r2rUpdateRetargetBtn(): Promise<R2rCalibrationStatusResult> {
       ? runtimeText("Calibration ready", "标定已就绪")
       : runtimeText("Calibration required in Robot → Robot", "需要先在“机器人 → 机器人”中完成标定");
   }
-  if (rtBtn) rtBtn.disabled = !(r2r.sourceToken && r2r.targetName && calibrated);
+  if (rtBtn) {
+    rtBtn.disabled = !(
+      r2rTrajectoryState === "idle"
+      && r2r.sourceToken
+      && r2r.targetName
+      && calibrated
+    );
+  }
   r2rRenderBasket();
   if (!statusIsCurrent()) return { kind: "stale", receipt: null };
   publishR2rWorkflowState();
@@ -10269,6 +10533,9 @@ function clearR2rDerivedTargetAfterViewLoss(
 
 /** Terminal compensation for a current-generation R2R source load failure. */
 function clearR2rSourceAfterViewLoss(context: string): void {
+  // Source capability loss revokes both an in-flight selection and any hidden
+  // trajectory result that still waits for a future R2R presentation.
+  invalidateR2rTrajectorySelection();
   invalidateR2rCalibrationAttempts();
   r2r.sourceName = null;
   r2r.sourcePayload = null;
@@ -10333,48 +10600,133 @@ async function r2rLoadSourceRobot(
   { activateWorkspace = true }: { activateWorkspace?: boolean } = {},
 ): Promise<void> {
   if (!name) return;
-  prepareR2rRobotReplacement();
-  toast(runtimeText("Loading source robot…", "加载源机器人…"));
+  if (r2rRunState === "running") {
+    toast(runtimeText(
+      "Wait for the current R2R retarget task before replacing its source robot.",
+      "当前 R2R Retarget 仍在运行，请等待完成后再替换源机器人。",
+    ), true);
+    return;
+  }
+  const sourceAttempt = beginR2rSourceLoad("manual", name);
+  const sourceIsCurrent = (): boolean => (
+    r2rSourceLoadAttempts.isCurrent(sourceAttempt)
+  );
   try {
-    const sourcePayload = await API.post("/api/robot/select", { name });
+    // The user's replacement intent wins before any host callback or transport
+    // can yield. Canonical source capabilities are withdrawn while the exact
+    // source owner protects the network and RobotView phases.
+    invalidateR2rTrajectorySelection();
+    r2r.sourceToken = null;
+    r2r.sourceStem = null;
+    r2r.exportToken = null;
+    r2rRunState = "idle";
+    r2r.calibrated = false;
     prepareR2rRobotReplacement();
-    const attempt = startRobotViewLoad(r2rSrc, sourcePayload);
+    if (!sourceIsCurrent()) return;
+    r2r.sourceName = null;
+    r2r.sourcePayload = null;
+    r2r.hasScene = false;
+    r2r.scaledScene = null;
+    runBestEffortCleanup(
+      "R2R source replacement RobotView cleanup failed",
+      () => r2rSrc.clear(),
+    );
+    if (!sourceIsCurrent()) return;
+    runBestEffortCleanup(
+      "R2R source replacement skeleton cleanup failed",
+      () => r2rSrcSkel.clear(),
+    );
+    if (!sourceIsCurrent()) return;
+    runBestEffortCleanup(
+      "R2R source replacement environment cleanup failed",
+      () => r2rSrcEnv.clear(),
+    );
+    if (!sourceIsCurrent()) return;
+    r2rVis.srcSkel = false;
+    r2rVis.srcEnv = false;
+    clearR2rDerivedTargetAfterViewLoss("R2R source replacement");
+    if (!sourceIsCurrent()) return;
+    runBestEffortCleanup(
+      "R2R source replacement Stage projection failed",
+      () => r2rApplyStage(),
+    );
+    if (!sourceIsCurrent()) return;
+    clearResultDiagnostics("r2r");
+    if (!sourceIsCurrent()) return;
+    const trajectoryValue = document.getElementById("r2r-trajectory-value");
+    if (trajectoryValue) {
+      trajectoryValue.textContent = runtimeText("Not loaded", "未加载");
+    }
+    if (!sourceIsCurrent()) return;
+    setR2rRobotStatus("source", runtimeText(
+      `Loading source robot: ${name}`,
+      `正在加载源机器人：${name}`,
+    ));
+    if (!sourceIsCurrent()) return;
+    publishR2rWorkflowState();
+    if (!sourceIsCurrent()) return;
+    toast(runtimeText("Loading source robot…", "加载源机器人…"));
+    if (!sourceIsCurrent()) return;
+
+    const sourcePayload = await API.post("/api/robot/select", { name });
+    if (!sourceIsCurrent()) return;
+    invalidateR2rTrajectorySelection();
+    prepareR2rRobotReplacement();
+    if (!sourceIsCurrent()) return;
+    const viewAttempt = startRobotViewLoad(r2rSrc, sourcePayload);
+    if (!sourceIsCurrent()) return;
     let loadResult: AsyncStageViewLoadResult;
     try {
-      loadResult = await attempt.completion;
+      loadResult = await viewAttempt.completion;
     } catch (error) {
-      if (!r2rSrc.isLoadGenerationCurrent(attempt.generation)) return;
+      if (
+        !sourceIsCurrent()
+        || !r2rSrc.isLoadGenerationCurrent(viewAttempt.generation)
+      ) {
+        finishR2rSourceLoad(sourceAttempt);
+        return;
+      }
       clearR2rSourceAfterViewLoss("selected R2R source load");
+      if (!sourceIsCurrent()) return;
       throw error;
     }
     if (
       loadResult === "stale"
-      || !r2rSrc.isLoadGenerationCurrent(attempt.generation)
-    ) return;
-    prepareR2rRobotReplacement();
-    if (r2r.sourceName !== name) {
-      r2r.sourceToken = null;
-      r2r.sourceStem = null;
-      r2rTrajectoryState = "idle";
-      const trajectoryValue = document.getElementById("r2r-trajectory-value");
-      if (trajectoryValue) trajectoryValue.textContent = runtimeText("Not loaded", "未加载");
+      || !sourceIsCurrent()
+      || !r2rSrc.isLoadGenerationCurrent(viewAttempt.generation)
+    ) {
+      finishR2rSourceLoad(sourceAttempt);
+      return;
     }
+    prepareR2rRobotReplacement();
+    if (!sourceIsCurrent()) return;
+    r2rTrajectoryState = "idle";
     r2r.calibrated = false;
     r2r.sourcePayload = sourcePayload;
     r2r.sourceName = name;
+    r2rVis.srcRobot = true;
+    const sourceRobotToggle = document.getElementById(
+      "r2r-tg-src-robot",
+    ) as HTMLButtonElement | null;
+    if (sourceRobotToggle) sourceRobotToggle.disabled = false;
+    if (!sourceIsCurrent()) return;
     r2r.exportToken = null;
     r2rRunState = "idle";
     clearResultDiagnostics("r2r");
+    if (!sourceIsCurrent()) return;
     syncR2rRobotSelects("source", name);
+    if (!sourceIsCurrent()) return;
     let workspaceActivationSettled = true;
     if (activateWorkspace) {
       const panelSwitch = switchInspectorPanel("r2r");
+      if (!sourceIsCurrent()) return;
       workspaceActivationSettled = panelSwitchSettledOnStageOwner(
         panelSwitch,
         "r2r",
       );
       if (workspaceActivationSettled) {
         r2rFocus(r2rSrc);
+        if (!sourceIsCurrent()) return;
         workspaceActivationSettled = panelSwitchSettledOnStageOwner(
           panelSwitch,
           "r2r",
@@ -10385,10 +10737,15 @@ async function r2rLoadSourceRobot(
       `Source robot: ${sourcePayload.display_name}`,
       `源机器人：${sourcePayload.display_name}`,
     ));
+    if (!sourceIsCurrent()) return;
+    publishR2rWorkflowState();
+    if (!sourceIsCurrent()) return;
     toast(runtimeText(
       `Source robot loaded: ${sourcePayload.display_name}`,
       `源机器人已加载：${sourcePayload.display_name}`,
     ));
+    if (!sourceIsCurrent()) return;
+    if (!finishR2rSourceLoad(sourceAttempt)) return;
     // A cross-owner navigation cancels only shared-Stage continuation. The
     // successfully loaded source facts and their panel-independent status stay
     // committed instead of being mislabeled stale.
@@ -10397,7 +10754,24 @@ async function r2rLoadSourceRobot(
     }
     r2rRenderBasket();
   } catch (error) {
-    toast(errorMessage(error), true);
+    if (!sourceIsCurrent()) return;
+    runBestEffortCleanup("R2R source failure status publication failed", () => {
+      setR2rRobotStatus("source", runtimeText(
+        "Source robot: not loaded",
+        "源机器人：未加载",
+      ));
+    });
+    if (!sourceIsCurrent()) return;
+    runBestEffortCleanup(
+      "R2R source failure workflow publication failed",
+      () => publishR2rWorkflowState(),
+    );
+    if (!sourceIsCurrent()) return;
+    runBestEffortCleanup(
+      "R2R source failure toast failed",
+      () => toast(errorMessage(error), true),
+    );
+    finishR2rSourceLoad(sourceAttempt);
   }
 }
 
@@ -11344,175 +11718,320 @@ async function r2rSaveCalib(): Promise<void> {
 }
 
 // --------------------------------------------------------------- trajectory IO
-async function r2rEnsureSourceLoaded(): Promise<boolean> {
-  if (r2r.sourceName && r2r.sourcePayload) return true;
+type R2rSourceEnsureResult =
+  | {
+      readonly kind: "ready";
+      readonly attempt: LatestAsyncAttempt<R2rTrajectorySelectionIdentity>;
+    }
+  | { readonly kind: "superseded" };
+
+interface R2rTrajectorySelectionSpec {
+  readonly kind: R2rTrajectorySelectionKind;
+  readonly requestLabel: string;
+  readonly fallbackStem: string;
+  readonly load: (
+    progress: (fraction: number, message: string) => void,
+    isCurrent: () => boolean,
+  ) => Promise<R2rSourceTrajectoryResult | null>;
+  readonly successMessage: (result: R2rSourceTrajectoryResult) => string;
+}
+
+async function r2rEnsureSourceLoaded(
+  initialAttempt: LatestAsyncAttempt<R2rTrajectorySelectionIdentity>,
+): Promise<R2rSourceEnsureResult> {
+  let trajectoryAttempt = initialAttempt;
+  const trajectoryIsCurrent = (): boolean => (
+    r2rTrajectoryResults.isCurrent(trajectoryAttempt)
+  );
+  if (r2r.sourceName && r2r.sourcePayload) {
+    return trajectoryIsCurrent()
+      ? { kind: "ready", attempt: trajectoryAttempt }
+      : { kind: "superseded" };
+  }
   const name = document.getElementById("r2r-source-select")?.value;
+  if (!trajectoryIsCurrent()) return { kind: "superseded" };
   if (!name) {
-    toast(runtimeText(
+    throw new Error(runtimeText(
       "Select and load G1 (or another source robot) in “1 · Source robot” first",
       "请先在「1 · 源机器人」选择并加载 G1（或其它源机器人）",
-    ), true);
-    return false;
+    ));
   }
-  prepareR2rRobotReplacement();
-  toast(runtimeText("Loading source robot automatically…", "自动加载源机器人…"));
+  const sourceAttempt = beginR2rSourceLoad("trajectory", name);
+  const sourceIsCurrent = (): boolean => (
+    trajectoryIsCurrent() && r2rSourceLoadAttempts.isCurrent(sourceAttempt)
+  );
+  const superseded = (): R2rSourceEnsureResult => {
+    finishR2rSourceLoad(sourceAttempt);
+    return { kind: "superseded" };
+  };
   try {
+    // Reserve both owners before clearing: disposal callbacks may synchronously
+    // start a newer manual or trajectory-driven source request.
+    runBestEffortCleanup(
+      "automatic R2R source replacement cleanup failed",
+      () => r2rSrc.clear(),
+    );
+    if (!sourceIsCurrent()) return superseded();
+    prepareR2rRobotReplacement();
+    if (!sourceIsCurrent()) return superseded();
+    toast(runtimeText("Loading source robot automatically…", "自动加载源机器人…"));
+    if (!sourceIsCurrent()) return superseded();
+
     const sourcePayload = await API.post("/api/robot/select", { name });
+    if (!sourceIsCurrent()) return superseded();
     prepareR2rRobotReplacement();
-    const attempt = startRobotViewLoad(r2rSrc, sourcePayload);
-    let loadResult: AsyncStageViewLoadResult;
-    try {
-      loadResult = await attempt.completion;
-    } catch (error) {
-      if (!r2rSrc.isLoadGenerationCurrent(attempt.generation)) return false;
-      clearR2rSourceAfterViewLoss("automatic R2R source load");
-      throw error;
-    }
-    if (
-      loadResult === "stale"
-      || !r2rSrc.isLoadGenerationCurrent(attempt.generation)
-    ) return false;
+    if (!sourceIsCurrent()) return superseded();
+    const sourceViewAttempt = startRobotViewLoad(r2rSrc, sourcePayload);
+    if (!sourceIsCurrent()) return superseded();
+    const rebound = rebindR2rTrajectorySelection(trajectoryAttempt, {
+      name,
+      payload: sourcePayload,
+      viewGeneration: sourceViewAttempt.generation,
+      aliasesCommitted: false,
+    });
+    if (!rebound) return superseded();
+    trajectoryAttempt = rebound;
+
+    const loadResult = await sourceViewAttempt.completion;
+    if (loadResult === "stale" || !sourceIsCurrent()) return superseded();
+
     prepareR2rRobotReplacement();
+    if (!sourceIsCurrent()) return superseded();
+    // Aliases and the rebound trajectory owner publish as one synchronous
+    // fact; no host callback is allowed between these assignments.
     r2r.sourcePayload = sourcePayload;
     r2r.sourceName = name;
+    trajectoryAttempt = beginR2rTrajectorySelection(Object.freeze({
+      ...trajectoryAttempt.identity,
+      sourceAliasesCommitted: true,
+    }));
+    if (!sourceIsCurrent()) return superseded();
     r2r.calibrated = false;
+    r2rVis.srcRobot = true;
+    const sourceRobotToggle = document.getElementById(
+      "r2r-tg-src-robot",
+    ) as HTMLButtonElement | null;
+    if (sourceRobotToggle) sourceRobotToggle.disabled = false;
+    if (!sourceIsCurrent()) return superseded();
     setR2rRobotStatus("source", runtimeText(
       `Source robot: ${sourcePayload.display_name}`,
       `源机器人：${sourcePayload.display_name}`,
     ));
+    if (!sourceIsCurrent()) return superseded();
     publishR2rWorkflowState();
-    return true;
-  } catch (e) {
-    toast(errorMessage(e), true);
-    return false;
+    if (!sourceIsCurrent()) return superseded();
+    if (!finishR2rSourceLoad(sourceAttempt)) {
+      return { kind: "superseded" };
+    }
+    return { kind: "ready", attempt: trajectoryAttempt };
+  } catch (error) {
+    if (!sourceIsCurrent()) return superseded();
+    finishR2rSourceLoad(sourceAttempt);
+    throw error;
   }
 }
 
-async function r2rUploadTraj(
-  files: UploadFile[],
-  profile = "auto",
-): Promise<void> {
-  if (!files?.length) return;
-  if (!(await r2rEnsureSourceLoaded())) return;
-  const sourceName = r2r.sourceName;
-  const sourcePayload = r2r.sourcePayload;
-  if (!sourceName || !sourcePayload) return;
-  const st = document.getElementById("r2r-traj-status");
-  const prog = document.getElementById("r2r-traj-progress");
-  const bar = prog?.querySelector<HTMLElement>(".bar");
+function failR2rTrajectorySelection(
+  trajectoryAttempt: LatestAsyncAttempt<R2rTrajectorySelectionIdentity>,
+  error: unknown,
+): boolean {
+  const isCurrent = (): boolean => (
+    r2rTrajectoryResults.isCurrent(trajectoryAttempt)
+  );
+  if (!isCurrent()) return false;
+  r2rTrajectoryState = "failed";
+  const status = document.getElementById("r2r-traj-status");
+  if (status) status.textContent = "";
+  if (!isCurrent()) return false;
+  const progress = document.getElementById("r2r-traj-progress");
+  if (progress) progress.style.display = "none";
+  if (!isCurrent()) return false;
   try {
+    toast(errorMessage(error), true);
+  } catch (toastError) {
+    console.warn("R2R trajectory failure toast failed", errorMessage(toastError));
+  }
+  if (!isCurrent()) return false;
+  if (!finishR2rTrajectorySelection(trajectoryAttempt)) return false;
+  // Publish only after clearing `pendingAttempt`; otherwise the terminal
+  // failed node would retain the obsolete "validation still running" reason.
+  try {
+    publishR2rWorkflowState();
+  } catch (publicationError) {
+    console.warn(
+      "R2R trajectory failure publication failed",
+      errorMessage(publicationError),
+    );
+  }
+  return true;
+}
+
+async function runR2rTrajectorySelection(
+  spec: R2rTrajectorySelectionSpec,
+): Promise<MotionSelectionResult> {
+  if (r2rRunState === "running") {
+    const message = runtimeText(
+      "Wait for the current R2R retarget task before replacing its source trajectory.",
+      "当前 R2R Retarget 仍在运行，请等待完成后再替换源轨迹。",
+    );
+    toast(message, true);
+    throw new Error(message);
+  }
+  let trajectoryAttempt = beginR2rTrajectorySelection(
+    captureR2rTrajectorySelectionIdentity(spec.kind, spec.requestLabel),
+  );
+  const isCurrent = (): boolean => (
+    r2rTrajectoryResults.isCurrent(trajectoryAttempt)
+  );
+  let selectedData: R2rSourceTrajectoryResult | null = null;
+  let committed: R2rTrajectoryPresentationCommit | null = null;
+  try {
+    const source = await r2rEnsureSourceLoaded(trajectoryAttempt);
+    if (source.kind === "superseded") return "superseded";
+    trajectoryAttempt = source.attempt;
+    if (!isCurrent()) return "superseded";
+
     const panelSwitch = switchInspectorPanel("r2r");
-    if (!panelSwitchSettledOnStageOwner(panelSwitch, "r2r")) return;
+    if (!isCurrent()) return "superseded";
+    if (!panelSwitchSettledOnStageOwner(panelSwitch, "r2r")) {
+      if (finishR2rTrajectorySelection(trajectoryAttempt)) {
+        // The cancelled successor may have retired a predecessor's transient
+        // `validating` label. Publish that terminal baseline exactly once.
+        try {
+          publishR2rWorkflowState();
+        } catch (error) {
+          console.warn(
+            "R2R trajectory cancellation publication failed",
+            errorMessage(error),
+          );
+        }
+      }
+      return "superseded";
+    }
     // Publish `validating` only after the shared Stage has actually settled on
     // R2R. A synchronous cross-owner successor must not leave a phantom task.
-    if (prog) {
-      prog.style.display = "block";
-      prog.classList.remove("indet");
+    const status = document.getElementById("r2r-traj-status");
+    const progress = document.getElementById("r2r-traj-progress");
+    const bar = progress?.querySelector<HTMLElement>(".bar");
+    if (progress) {
+      progress.style.display = "block";
+      progress.classList.remove("indet");
       if (bar) bar.style.width = "0%";
     }
+    if (!isCurrent()) return "superseded";
     r2rTrajectoryState = "validating";
     r2r.exportToken = null;
     r2rRunState = "idle";
     clearResultDiagnostics("r2r");
+    if (!isCurrent()) return "superseded";
     publishR2rWorkflowState();
-    st.textContent = runtimeText("Uploading…", "上传中…");
-    toast(runtimeText("Uploading source trajectory…", "上传源轨迹…"));
-    const qsParts = [
-      `source_robot=${encodeURIComponent(sourceName)}`,
-      `profile=${encodeURIComponent(profile)}`,
-    ];
-    const srcFps = parseOptionalFps(document.getElementById("r2r-source-fps"));
-    if (srcFps != null) qsParts.push(`source_fps=${encodeURIComponent(srcFps)}`);
-    const qs = qsParts.join("&");
-    const { job_id } = await uploadFilesXHR(
-      `/api/r2r/source/upload?${qs}`,
-      files,
-      {},
-      (frac) => {
-        const progress = frac ?? 0;
-        if (bar) bar.style.width = `${Math.max(2, progress * 18).toFixed(0)}%`;
-        st.textContent = runtimeText(
-          `Uploading ${Math.round(progress * 100)}%…`,
-          `上传 ${Math.round(progress * 100)}%…`,
-        );
-      },
-    );
-    const data = await waitMotionJob<R2rSourceTrajectoryResult>(job_id, (frac, sub) => {
-      if (bar) bar.style.width = `${Math.max(2, 18 + frac * 82).toFixed(0)}%`;
-      st.textContent = sub;
-    }, { uploadFrac: 0.18 });
-    const fallbackStem = (files[0].name || "source").replace(/\.[^.]+$/, "");
-    const loadResult = await r2rApplySourceTrajectoryResult(
+    if (!isCurrent()) return "superseded";
+    const reportProgress = (fraction: number, message: string): void => {
+      if (!isCurrent()) return;
+      if (bar) bar.style.width = `${Math.max(2, fraction * 100).toFixed(0)}%`;
+      if (!isCurrent()) return;
+      if (status) status.textContent = message;
+    };
+    const data = await spec.load(reportProgress, isCurrent);
+    if (!data || !isCurrent()) return "superseded";
+    selectedData = data;
+    committed = r2rApplySourceTrajectoryResult(
       data,
-      sourcePayload,
-      fallbackStem,
+      spec.fallbackStem,
+      trajectoryAttempt,
     );
-    if (loadResult === "stale") return;
-    toast(runtimeText(
-      `Uploaded ${data.num_frames} frames; playing the source trajectory`,
-      `上传成功：${data.num_frames} 帧，正在播放源机器人轨迹`,
-    ));
-  } catch (e) {
-    r2rTrajectoryState = "failed";
-    st.textContent = "";
-    if (prog) prog.style.display = "none";
-    publishR2rWorkflowState();
-    toast(errorMessage(e), true);
+    if (!committed) return "superseded";
+  } catch (error) {
+    if (!failR2rTrajectorySelection(trajectoryAttempt, error)) {
+      return "superseded";
+    }
+    throw error;
   }
+
+  // Domain data is already committed. Publication/presentation/toast failures
+  // must not roll it back to `failed`; the exact receipt stays available for a
+  // later panel reconciliation.
+  if (!selectedData) return "superseded";
+  if (!r2rTrajectoryCommitIsSelected(committed)) return "superseded";
+  try {
+    // The pending attempt was cleared by commit, so hidden H2R completion now
+    // publishes `ready` rather than leaving React on a stale validating frame.
+    publishR2rWorkflowState();
+  } catch (error) {
+    console.warn("R2R trajectory workflow publication failed", errorMessage(error));
+  }
+  if (!r2rTrajectoryCommitIsSelected(committed)) return "superseded";
+  try {
+    toast(spec.successMessage(selectedData));
+  } catch (error) {
+    console.warn("R2R trajectory success toast failed", errorMessage(error));
+  }
+  if (!r2rTrajectoryCommitIsSelected(committed)) return "superseded";
+  if (appliedPanelPresentationOwnsStage({
+    current: panelPresentationCoordinator.current,
+    lastApplied: lastAppliedPanelPresentation,
+    stageOwner: "r2r",
+  })) {
+    try {
+      switchInspectorPanel("r2r");
+    } catch (error) {
+      console.warn("R2R trajectory presentation deferred", errorMessage(error));
+    }
+  } else {
+    // Calibration status is R2R-local and may refresh while H2R keeps the
+    // shared Stage. Its own exact owner suppresses a superseded response.
+    void r2rUpdateRetargetBtn().catch((error) => {
+      console.warn("R2R trajectory status refresh failed", errorMessage(error));
+    });
+  }
+  return r2rTrajectoryCommitIsSelected(committed)
+    ? "selected"
+    : "superseded";
 }
 
-async function r2rApplySourceTrajectoryResult(
+function r2rApplySourceTrajectoryResult(
   data: R2rSourceTrajectoryResult,
-  sourcePayload: RobotPayload,
   fallbackStem: string,
-): Promise<AsyncStageViewLoadResult> {
+  trajectoryAttempt: LatestAsyncAttempt<R2rTrajectorySelectionIdentity>,
+): R2rTrajectoryPresentationCommit | null {
+  const isCurrent = (): boolean => (
+    r2rTrajectoryResults.isCurrent(trajectoryAttempt)
+  );
+  if (!isCurrent()) return null;
   const status = document.getElementById("r2r-traj-status");
   const progress = document.getElementById("r2r-traj-progress");
   const bar = progress?.querySelector<HTMLElement>(".bar");
   const sourceStem = data.name || fallbackStem || "source";
 
-  // Replacing the source View changes calibration identity even when the robot
-  // name stays the same, so pending bootstrap/status continuations lose ownership.
+  // The source RobotView is already locked by the attempt identity. Reusing it
+  // avoids a second GLB parse and a needless GPU resource replacement merely
+  // to install a new trajectory on the same robot.
   prepareR2rRobotReplacement();
-  const attempt = startRobotViewLoad(r2rSrc, sourcePayload);
-  let loadResult: AsyncStageViewLoadResult;
-  try {
-    loadResult = await attempt.completion;
-  } catch (error) {
-    if (!r2rSrc.isLoadGenerationCurrent(attempt.generation)) return "stale";
-    clearR2rSourceAfterViewLoss("R2R trajectory source load");
-    throw error;
-  }
-  if (
-    loadResult === "stale"
-    || !r2rSrc.isLoadGenerationCurrent(attempt.generation)
-  ) return "stale";
-
-  prepareR2rRobotReplacement();
+  if (!isCurrent()) return null;
   r2r.sourceToken = data.token;
   r2rTrajectoryState = "idle";
   r2r.sourceStem = sourceStem;
   r2r.hasScene = !!data.has_scene;
   if (data.suggested_backend) r2rApplySuggestedBackend(data.suggested_backend);
+  if (!isCurrent()) return null;
   r2rSrc.setTrajectory(data.trajectory);
+  if (!isCurrent()) return null;
   if (data.skeleton_preview) {
     r2rSrcSkel.load(data.skeleton_preview);
+    if (!isCurrent()) return null;
     const skBtn = document.getElementById("r2r-tg-src-skel");
     if (skBtn) skBtn.disabled = false;
   }
+  if (!isCurrent()) return null;
   const clipDur = Math.max(0.1, (data.num_frames - 1) / (data.framerate || 30));
   r2rLoadSrcScene(data.scaled_scene, data.token, clipDur);
+  if (!isCurrent()) return null;
   r2rVis.srcRobot = true;
   r2rVis.srcSkel = false;
   r2rVis.srcEnv = !!data.scaled_scene;
   r2rVis.tgtRobot = false;
   r2rVis.tgtSkel = false;
   r2rVis.tgtEnv = false;
-  player.ready(r2rSrc.clipDuration || 1);
-  player.seek(0);
-  r2rApplyStage();
-  r2rFocus(r2rSrc);
-  player.setPlaying(true);
   const profile = data.upload_profile ? ` · ${data.upload_profile}` : "";
   if (status) {
     status.textContent = runtimeText(
@@ -11520,75 +12039,101 @@ async function r2rApplySourceTrajectoryResult(
       `已加载：${data.num_frames} 帧 @ ${data.framerate.toFixed(1)} fps${profile}`,
     );
   }
+  if (!isCurrent()) return null;
   const selection = document.getElementById("r2r-trajectory-value");
   if (selection) selection.textContent = sourceStem;
+  if (!isCurrent()) return null;
   if (progress) progress.style.display = "block";
   if (bar) bar.style.width = "100%";
-  publishR2rWorkflowState();
-  await r2rUpdateRetargetBtn();
-  return "committed";
+  if (!isCurrent()) return null;
+  return commitR2rTrajectorySelection(
+    trajectoryAttempt,
+    createR2rPlaybackPresentation({ duration: r2rSrc.clipDuration || 1 }),
+  );
 }
 
 /** Load an existing robot trajectory through the R2R-only backend boundary. */
-async function loadR2rLibraryEntry(entry: LibraryEntry): Promise<void> {
-  if (!(await r2rEnsureSourceLoaded())) {
-    throw new Error(runtimeText(
-      "Load the source robot before selecting its trajectory.",
-      "请先加载源机器人，再选择对应轨迹。",
-    ));
-  }
-  const sourceName = r2r.sourceName;
-  const sourcePayload = r2r.sourcePayload;
-  if (!sourceName || !sourcePayload) return;
-
-  const status = document.getElementById("r2r-traj-status");
-  const progress = document.getElementById("r2r-traj-progress");
-  const bar = progress?.querySelector<HTMLElement>(".bar");
-
-  try {
-    const panelSwitch = switchInspectorPanel("r2r");
-    if (!panelSwitchSettledOnStageOwner(panelSwitch, "r2r")) return;
-    // As above, panel handoff precedes candidate workflow publication so an
-    // immediately superseding H2R request leaves no stuck validation state.
-    if (progress) {
-      progress.style.display = "block";
-      progress.classList.remove("indet");
-    }
-    if (bar) bar.style.width = "2%";
-    if (status) status.textContent = runtimeText("Validating trajectory…", "正在校验机器人轨迹……");
-    r2rTrajectoryState = "validating";
-    r2r.exportToken = null;
-    r2rRunState = "idle";
-    clearResultDiagnostics("r2r");
-    publishR2rWorkflowState();
-    const sourceFps = parseOptionalFps(document.getElementById("r2r-source-fps"));
-    const { job_id } = await API.post("/api/r2r/source/library", {
-      ...entry,
-      source_robot: sourceName,
-      source_fps: sourceFps,
-    });
-    const data = await waitMotionJob<R2rSourceTrajectoryResult>(job_id, (frac, sub) => {
-      if (bar) bar.style.width = `${Math.max(2, frac * 100).toFixed(0)}%`;
-      if (status) status.textContent = sub;
-    });
-    const fallbackStem = entry.stem || entry.sequence_id || "source";
-    const loadResult = await r2rApplySourceTrajectoryResult(
-      data,
-      sourcePayload,
-      fallbackStem,
-    );
-    if (loadResult === "stale") return;
-    toast(runtimeText(
+async function loadR2rLibraryEntry(
+  entry: LibraryEntry,
+): Promise<MotionSelectionResult> {
+  const fallbackStem = entry.stem || entry.sequence_id || "source";
+  return runR2rTrajectorySelection({
+    kind: "library",
+    requestLabel: fallbackStem,
+    fallbackStem,
+    load: async (reportProgress, isCurrent) => {
+      const sourceName = r2r.sourceName;
+      if (!sourceName || !isCurrent()) return null;
+      reportProgress(0.02, runtimeText(
+        "Validating trajectory…",
+        "正在校验机器人轨迹……",
+      ));
+      const sourceFps = parseOptionalFps(document.getElementById("r2r-source-fps"));
+      const { job_id } = await API.post("/api/r2r/source/library", {
+        ...entry,
+        source_robot: sourceName,
+        source_fps: sourceFps,
+      });
+      if (!isCurrent()) return null;
+      return waitMotionJob<R2rSourceTrajectoryResult>(job_id, (frac, sub) => {
+        reportProgress(frac, sub);
+      });
+    },
+    successMessage: (data) => runtimeText(
       `Loaded robot trajectory: ${data.name || fallbackStem}`,
       `机器人轨迹已加载：${data.name || fallbackStem}`,
-    ));
-  } catch (error) {
-    r2rTrajectoryState = "failed";
-    if (status) status.textContent = "";
-    if (progress) progress.style.display = "none";
-    publishR2rWorkflowState();
-    toast(errorMessage(error), true);
-    throw error;
+    ),
+  });
+}
+
+async function r2rUploadTraj(
+  files: UploadFile[],
+  profile = "auto",
+): Promise<void> {
+  if (!files?.length) return;
+  const fallbackStem = (files[0].name || "source").replace(/\.[^.]+$/, "");
+  try {
+    await runR2rTrajectorySelection({
+      kind: "upload",
+      requestLabel: fallbackStem,
+      fallbackStem,
+      load: async (reportProgress, isCurrent) => {
+        const sourceName = r2r.sourceName;
+        if (!sourceName || !isCurrent()) return null;
+        reportProgress(0, runtimeText("Uploading…", "上传中…"));
+        const qsParts = [
+          `source_robot=${encodeURIComponent(sourceName)}`,
+          `profile=${encodeURIComponent(profile)}`,
+        ];
+        const sourceFps = parseOptionalFps(document.getElementById("r2r-source-fps"));
+        if (sourceFps != null) {
+          qsParts.push(`source_fps=${encodeURIComponent(sourceFps)}`);
+        }
+        const { job_id } = await uploadFilesXHR(
+          `/api/r2r/source/upload?${qsParts.join("&")}`,
+          files,
+          {},
+          (fraction) => {
+            const progress = fraction ?? 0;
+            reportProgress(progress * 0.18, runtimeText(
+              `Uploading ${Math.round(progress * 100)}%…`,
+              `上传 ${Math.round(progress * 100)}%…`,
+            ));
+          },
+        );
+        if (!isCurrent()) return null;
+        return waitMotionJob<R2rSourceTrajectoryResult>(job_id, (fraction, sub) => {
+          reportProgress(0.18 + fraction * 0.82, sub);
+        }, { uploadFrac: 0.18 });
+      },
+      successMessage: (data) => runtimeText(
+        `Uploaded ${data.num_frames} frames; the source trajectory is ready`,
+        `上传成功：${data.num_frames} 帧，源机器人轨迹已就绪`,
+      ),
+    });
+  } catch {
+    // The common runner owns the current failure state and toast. File-picker
+    // entrypoints have no caller UI that can render a rejected promise.
   }
 }
 
@@ -11626,6 +12171,17 @@ function r2rIngestTraj(files: UploadFile[], profile = "auto"): void {
 
 // --------------------------------------------------------------- retarget
 async function r2rRunRetarget(): Promise<void> {
+  if (r2rTrajectorySelectionIsPending() || r2rTrajectoryState !== "idle") {
+    toast(runtimeText(
+      r2rTrajectorySelectionIsPending() || r2rTrajectoryState === "validating"
+        ? "Wait for source trajectory validation to finish."
+        : "Select the source trajectory again before retargeting.",
+      r2rTrajectorySelectionIsPending() || r2rTrajectoryState === "validating"
+        ? "请等待源机器人轨迹校验完成。"
+        : "请重新选择源机器人轨迹后再执行 Retarget。",
+    ), true);
+    return;
+  }
   if (!r2r.sourceToken || !r2r.targetName || !r2r.sourceName) {
     toast(runtimeText(
       "Upload a source trajectory and load the target robot first",
@@ -11633,25 +12189,44 @@ async function r2rRunRetarget(): Promise<void> {
     ), true);
     return;
   }
+  const requestedSourceName = r2r.sourceName;
+  const requestedSourcePayload = r2r.sourcePayload;
+  const requestedSourceToken = r2r.sourceToken;
+  const requestedSourceViewGeneration = r2rSrc.loadGeneration;
   const calibrationResult = await r2rEnsureCalibration({ auto: true });
-  if (calibrationResult !== "ready") return;
-  const prog = document.getElementById("r2r-progress");
-  const bar = prog.querySelector<HTMLElement>(".bar");
-  const status = document.getElementById("r2r-status");
-  if (!bar) throw new Error("R2R progress bar is missing");
-  prog.style.display = "block";
-  prog.classList.add("indet");
-  bar.style.width = "0%";
-  renderSpinnerStatus(status, runtimeText(
-    "Retargeting… The first run for a new robot is slower.",
-    "正在 retarget…（新机器人首次较慢）",
-  ));
-  document.getElementById("r2r-retarget-btn").disabled = true;
+  if (
+    calibrationResult !== "ready"
+    || r2rTrajectorySelectionIsPending()
+    || r2rTrajectoryState !== "idle"
+    || r2r.sourceName !== requestedSourceName
+    || r2r.sourcePayload !== requestedSourcePayload
+    || r2r.sourceToken !== requestedSourceToken
+    || !r2rSrc.isLoadGenerationCurrent(requestedSourceViewGeneration)
+  ) return;
+  // Claim before the first DOM mutation. A synchronously reentrant trajectory
+  // selection now sees `running` and cannot overlap this unowned legacy job.
   r2rRunState = "running";
-  r2r.exportToken = null;
-  clearResultDiagnostics("r2r");
-  publishR2rWorkflowState();
+  let prog: HTMLElement | null = null;
+  let status: HTMLElement | null = null;
   try {
+    prog = document.getElementById("r2r-progress");
+    status = document.getElementById("r2r-status");
+    const bar = prog?.querySelector<HTMLElement>(".bar") ?? null;
+    if (!prog || !bar) throw new Error("R2R progress UI is missing");
+    const progressElement = prog;
+    prog.style.display = "block";
+    prog.classList.add("indet");
+    bar.style.width = "0%";
+    renderSpinnerStatus(status, runtimeText(
+      "Retargeting… The first run for a new robot is slower.",
+      "正在 retarget…（新机器人首次较慢）",
+    ));
+    const retargetButton = document.getElementById("r2r-retarget-btn") as
+      HTMLButtonElement | null;
+    if (retargetButton) retargetButton.disabled = true;
+    r2r.exportToken = null;
+    clearResultDiagnostics("r2r");
+    publishR2rWorkflowState();
     const body: R2rRetargetRequest = {
       target: r2r.targetName,
       source: r2r.sourceName,
@@ -11662,7 +12237,7 @@ async function r2rRunRetarget(): Promise<void> {
     if (fps) body.retarget_fps = fps;
     const { job_id } = await API.post("/api/r2r/retarget", body);
     const j = await pollJob<RetargetResult>(job_id, (jp) => {
-      setRetargetProgress(prog, bar, jp);
+      setRetargetProgress(progressElement, bar, jp);
       renderSpinnerStatus(status, jp.message || runtimeText("Retargeting…", "正在 retarget…"));
     });
     let targetPayload = r2r.targetPayload;
@@ -11739,8 +12314,8 @@ async function r2rRunRetarget(): Promise<void> {
       "R2R Retarget 完成，正在播放目标机器人",
     ));
   } catch (e) {
-    status.textContent = "";
-    prog.classList.remove("indet");
+    if (status) status.textContent = "";
+    if (prog) prog.classList.remove("indet");
     r2rRunState = "failed";
     toast(errorMessage(e), true);
   } finally {

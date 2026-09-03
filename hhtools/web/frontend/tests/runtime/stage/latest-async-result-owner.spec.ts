@@ -33,6 +33,7 @@ describe("LatestAsyncResultOwner", () => {
     const second = owner.begin({ name: "B" });
 
     expect(owner.isCommitted(committed)).toBe(false);
+    expect(owner.isLatestResult(committed)).toBe(false);
     expect(owner.pendingPresentation).toBeNull();
     expect(owner.isCurrent(second)).toBe(true);
   });
@@ -48,6 +49,7 @@ describe("LatestAsyncResultOwner", () => {
     owner.invalidate();
 
     expect(owner.isCommitted(committed)).toBe(false);
+    expect(owner.isLatestResult(committed)).toBe(false);
     expect(owner.pendingPresentation).toBeNull();
   });
 
@@ -69,7 +71,20 @@ describe("LatestAsyncResultOwner", () => {
 
     expect(owner.markPresented(committed)).toBe(true);
     expect(owner.markPresented(committed)).toBe(false);
+    expect(owner.isLatestResult(committed)).toBe(true);
     expect(owner.pendingPresentation).toBeNull();
+  });
+
+  it("revokes a presented result as soon as its successor begins", () => {
+    const owner = new LatestAsyncResultOwner<Identity, ResultValue>(() => true);
+    const firstAttempt = owner.begin({ name: "A" });
+    const first = owner.commit(firstAttempt, { token: "A" })!;
+    expect(owner.markPresented(first)).toBe(true);
+
+    const secondAttempt = owner.begin({ name: "B" });
+
+    expect(owner.isLatestResult(first)).toBe(false);
+    expect(owner.isCurrent(secondAttempt)).toBe(true);
   });
 
   it("does not let a stale receipt consume its successor", () => {

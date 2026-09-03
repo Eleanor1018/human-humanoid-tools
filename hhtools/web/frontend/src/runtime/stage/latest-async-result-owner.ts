@@ -25,6 +25,7 @@ export interface CommittedAsyncResult<Identity, Value> {
  */
 export class LatestAsyncResultOwner<Identity, Value> {
   readonly #attempts: LatestAsyncAttemptOwner<Identity>;
+  #latestResult: CommittedAsyncResult<Identity, Value> | null = null;
   #pendingPresentation: CommittedAsyncResult<Identity, Value> | null = null;
 
   constructor(isIdentityCurrent: AsyncAttemptIdentityValidator<Identity>) {
@@ -35,9 +36,10 @@ export class LatestAsyncResultOwner<Identity, Value> {
     return this.#pendingPresentation;
   }
 
-  /** A newer request revokes both the old continuation and its pending result. */
+  /** A newer request revokes the old continuation and every old result claim. */
   begin(identity: Identity): LatestAsyncAttempt<Identity> {
     const attempt = this.#attempts.begin(identity);
+    this.#latestResult = null;
     this.#pendingPresentation = null;
     return attempt;
   }
@@ -56,6 +58,7 @@ export class LatestAsyncResultOwner<Identity, Value> {
   ): CommittedAsyncResult<Identity, Value> | null {
     if (!this.#attempts.finish(attempt)) return null;
     const committed = Object.freeze({ attempt, value });
+    this.#latestResult = committed;
     this.#pendingPresentation = committed;
     return committed;
   }
@@ -68,9 +71,21 @@ export class LatestAsyncResultOwner<Identity, Value> {
   /** Revoke the current request and any hidden result waiting for presentation. */
   invalidate(): void {
     this.#attempts.invalidate();
+    this.#latestResult = null;
     this.#pendingPresentation = null;
   }
 
+  /**
+   * Whether this is still the latest domain result.
+   *
+   * Presentation may consume its pending receipt without changing this fact.
+   * Only a newer request or explicit invalidation revokes domain selection.
+   */
+  isLatestResult(commit: CommittedAsyncResult<Identity, Value>): boolean {
+    return this.#latestResult === commit;
+  }
+
+  /** Whether this exact result is still waiting for shared-surface projection. */
   isCommitted(commit: CommittedAsyncResult<Identity, Value>): boolean {
     return this.#pendingPresentation === commit;
   }
