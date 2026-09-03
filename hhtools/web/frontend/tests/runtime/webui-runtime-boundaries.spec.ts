@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import asyncFrameTaskSource from "../../src/runtime/stage/coalesced-async-frame-task.ts?raw";
+import latestAttemptOwnerSource from "../../src/runtime/stage/latest-async-attempt-owner.ts?raw";
 import runtimeSource from "../../src/runtime/webui-runtime.ts?raw";
 import commandRegistrySource from "../../src/runtime/command-registry.ts?raw";
 import robotViewSource from "../../src/runtime/stage/robot-view.ts?raw";
@@ -40,8 +41,6 @@ describe("legacy runtime ownership boundaries", () => {
     );
     expect(h2rEntry.indexOf("h2rCalibrationFkPreview.start()"))
       .toBeLessThan(h2rEntry.indexOf("state.calibrationMode = true"));
-    expect(h2rEntry.lastIndexOf("h2rCalibrationFkPreview.stop()"))
-      .toBeLessThan(h2rEntry.lastIndexOf("state.calibrationMode = false"));
 
     const h2rPreview = runtimeSource.slice(
       runtimeSource.indexOf("interface H2rCalibrationFkResult"),
@@ -55,7 +54,7 @@ describe("legacy runtime ownership boundaries", () => {
     expect(h2rPreview).toContain("state.reference !== result.reference");
 
     const h2rExit = runtimeSource.slice(
-      runtimeSource.indexOf("async function exitCalibrationMode"),
+      runtimeSource.indexOf("function exitCalibrationMode"),
       runtimeSource.indexOf("function setCalibJointValue"),
     );
     expect(h2rExit.indexOf("h2rCalibrationFkPreview.stop()"))
@@ -101,6 +100,153 @@ describe("legacy runtime ownership boundaries", () => {
     expect(asyncFrameTaskSource).not.toMatch(/\b(?:document|window)\b/);
     expect(asyncFrameTaskSource).toContain("this.#session = null");
     expect(asyncFrameTaskSource).toContain("if (!this.#isCurrent(session)) return");
+  });
+
+  it("guards H2R calibration bootstrap and status publication by attempt identity", () => {
+    expect(runtimeSource).toContain(
+      'from "./stage/latest-async-attempt-owner"',
+    );
+    expect(latestAttemptOwnerSource).not.toMatch(/\b(?:document|window)\b/);
+    expect(latestAttemptOwnerSource).toContain("export class LatestAsyncAttemptOwner");
+
+    const bootstrapDefinitions = runtimeSource.slice(
+      runtimeSource.indexOf("interface H2rCalibrationPairIdentity"),
+      runtimeSource.indexOf("async function enterCalibrationMode"),
+    );
+    for (const identityCheck of [
+      "state.robot === identity.robot",
+      "state.robot?.name === identity.robotName",
+      "robot.isLoadGenerationCurrent(identity.robotViewGeneration)",
+      "state.motion === identity.motion",
+      "(state.motion?.token ?? null) === identity.motionToken",
+      "state.reference === identity.reference",
+    ]) {
+      expect(bootstrapDefinitions).toContain(identityCheck);
+    }
+
+    const entry = runtimeSource.slice(
+      runtimeSource.indexOf("async function enterCalibrationMode"),
+      runtimeSource.indexOf("function updateCalibRestoreButton"),
+    );
+    const beginAttempt = entry.indexOf("h2rCalibrationBootstrapAttempts.begin({");
+    const firstSessionMutation = entry.indexOf("state.calibRestore = _snapshotVis()");
+    const request = entry.indexOf('await API.post("/api/calibration/session"');
+    const awaitGuard = entry.indexOf('if (!isCurrent()) return "stale"', request);
+    const referenceValidation = entry.indexOf("if (!session.reference)", awaitGuard);
+    const firstResponseMutation = entry.indexOf("state.calibLimits =", referenceValidation);
+    expect(beginAttempt).toBeGreaterThanOrEqual(0);
+    expect(firstSessionMutation).toBeGreaterThan(beginAttempt);
+    expect(request).toBeGreaterThan(firstSessionMutation);
+    expect(awaitGuard).toBeGreaterThan(request);
+    expect(referenceValidation).toBeGreaterThan(awaitGuard);
+    expect(firstResponseMutation).toBeGreaterThan(referenceValidation);
+    expect(entry).toContain("robot: attempt.identity.robotName");
+    expect(entry).toContain("reference: attempt.identity.reference");
+    expect(entry).toContain("motion_token: attempt.identity.motionToken");
+    expect(entry).toContain("robotGroundOffset: robot.groundOffset");
+    expect(entry).not.toContain("robot: state.robot.name");
+    expect(entry).not.toContain("motion_token: state.motion?.token");
+    expect(entry.match(/state\.calibOrbitSaved = \{/g)).toHaveLength(1);
+    expect(entry).toContain("if (enteringFresh) {");
+    const catchStart = entry.lastIndexOf("} catch (error) {");
+    const staleCatchGuard = entry.indexOf('if (!isCurrent()) return "stale"', catchStart);
+    const rollbackCall = entry.indexOf("rollbackH2rCalibrationBootstrap(attempt, error)", catchStart);
+    expect(staleCatchGuard).toBeGreaterThan(catchStart);
+    expect(rollbackCall).toBeGreaterThan(staleCatchGuard);
+
+    const rollback = runtimeSource.slice(
+      runtimeSource.indexOf("function rollbackH2rCalibrationBootstrap"),
+      runtimeSource.indexOf("async function enterCalibrationMode"),
+    );
+    expect(rollback).toContain("): boolean {");
+    expect(rollback.indexOf("h2rCalibrationBootstrapAttempts.isCurrent(attempt)"))
+      .toBeLessThan(rollback.indexOf("h2rCalibrationFkPreview.stop()"));
+    expect(rollback).toContain("state.calibrationMode = false");
+    expect(rollback).toContain("calibManip.stop()");
+    expect(rollback).toContain("_restoreVis(visibilitySnapshot)");
+    expect(rollback).toContain("robot.groundOffset = attempt.identity.robotGroundOffset");
+    expect(rollback).toContain("toast(errorMessage(error), true)");
+    const rollbackFinish = rollback.indexOf(
+      "h2rCalibrationBootstrapAttempts.finish(attempt)",
+    );
+    expect(rollbackFinish).toBeGreaterThanOrEqual(0);
+    expect(rollback.indexOf("state.calibOrbitSaved = null"))
+      .toBeGreaterThan(rollbackFinish);
+    expect(rollback.indexOf("state.calibRestore = null"))
+      .toBeGreaterThan(rollbackFinish);
+    expect(entry).toContain("rollbackH2rCalibrationBootstrap(attempt, error)");
+    expect(entry).toContain('? "failed"');
+    expect(entry).toContain(': "stale"');
+
+    const exit = runtimeSource.slice(
+      runtimeSource.indexOf("function exitCalibrationMode"),
+      runtimeSource.indexOf("function setCalibJointValue"),
+    );
+    expect(exit.indexOf("h2rCalibrationBootstrapAttempts.invalidate()"))
+      .toBeLessThan(exit.indexOf("h2rCalibrationFkPreview.stop()"));
+    expect(exit.indexOf("h2rCalibrationStatusAttempts.invalidate()"))
+      .toBeLessThan(exit.indexOf("state.calibrationMode = false"));
+    const viewLoss = runtimeSource.slice(
+      runtimeSource.indexOf("function clearH2rRobotAfterViewLoss"),
+      runtimeSource.indexOf("async function refreshScaledPreview"),
+    );
+    expect(viewLoss.indexOf("h2rCalibrationBootstrapAttempts.invalidate()"))
+      .toBeLessThan(viewLoss.indexOf("state.robot = null"));
+    expect(viewLoss.indexOf("h2rCalibrationStatusAttempts.invalidate()"))
+      .toBeLessThan(viewLoss.indexOf("state.robot = null"));
+
+    const motionLoad = runtimeSource.slice(
+      runtimeSource.indexOf("async function loadMotionPayload"),
+      runtimeSource.indexOf("export async function presentHumanMotion"),
+    );
+    expect(motionLoad).toContain("const wasCalibrating = state.calibrationMode");
+    expect(motionLoad).toContain("await enterCalibrationMode(calibrationDraft)");
+    expect(motionLoad).toContain("calibrationMotionLoadDisposition(");
+    expect(motionLoad).toContain("state.calibrationMode,");
+    expect(motionLoad).toContain('if (disposition === "stale") return "stale"');
+    expect(motionLoad).toContain('if (disposition === "calibration")');
+    expect(motionLoad).toContain("(state.motion?.token ?? null) === calibrationMotionToken");
+    expect(motionLoad).toContain('state.motion?.token !== payload.token) return "stale"');
+    expect(motionLoad).toContain("exitCalibrationMode()");
+
+    const statusRefreshStart = runtimeSource.indexOf("async function refreshRetargetPanel");
+    const statusRefresh = runtimeSource.slice(
+      statusRefreshStart,
+      runtimeSource.indexOf(
+        'document.getElementById("rt-ref-select")',
+        statusRefreshStart,
+      ),
+    );
+    const statusAwait = statusRefresh.indexOf("calibrationStatus = await API.get(");
+    const statusGuard = statusRefresh.indexOf("if (!statusIsCurrent()) return", statusAwait);
+    const statusCommit = statusRefresh.indexOf("state.calibration =", statusGuard);
+    expect(statusAwait).toBeGreaterThanOrEqual(0);
+    expect(statusGuard).toBeGreaterThan(statusAwait);
+    expect(statusCommit).toBeGreaterThan(statusGuard);
+    expect(statusRefresh).toContain("h2rCalibrationStatusAttempts.begin({");
+    expect(statusRefresh).toContain("motion: state.motion");
+    expect(statusRefresh).toContain("motionToken: state.motion?.token ?? null");
+
+    const recalibrate = runtimeSource.slice(
+      runtimeSource.indexOf('document.getElementById("recalib-btn").onclick'),
+      runtimeSource.indexOf('document.getElementById("calib-zero").onclick'),
+    );
+    const recalibrateAwait = recalibrate.indexOf("const st = await API.get(");
+    const recalibrateGuard = recalibrate.indexOf(
+      "h2rCalibrationStatusAttempts.isCurrent(statusAttempt)",
+      recalibrateAwait,
+    );
+    const recalibrateEntry = recalibrate.indexOf("await enterCalibrationMode(jq)");
+    expect(recalibrateGuard).toBeGreaterThan(recalibrateAwait);
+    expect(recalibrateEntry).toBeGreaterThan(recalibrateGuard);
+    expect(recalibrate).toContain("motion: activeMotion");
+    expect(recalibrate).toContain("motionToken: activeMotion?.token ?? null");
+
+    expect(runtimeSource).toContain("function buildCalibSliders(");
+    expect(runtimeSource).not.toContain("async function buildCalibSliders(");
+    expect(runtimeSource).not.toContain("await buildCalibSliders(");
+    expect(runtimeSource).toContain("function exitCalibrationMode(): void");
+    expect(runtimeSource).not.toContain("await exitCalibrationMode()");
   });
 
   it("invalidates async environment loads and disposes stale GLTF scenes", () => {
@@ -482,7 +628,7 @@ describe("legacy runtime ownership boundaries", () => {
     );
     const backendPublication = motionLoad.indexOf("payload.suggested_backend");
     const calibrationStart = motionLoad.indexOf(
-      "if (state.calibrationMode)",
+      "if (wasCalibrating)",
     );
     const calibrationSkinClear = motionLoad.indexOf(
       "skin.clear()",

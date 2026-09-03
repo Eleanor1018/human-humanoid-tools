@@ -168,7 +168,15 @@ import type {
 import { ThreeResourceDisposer } from "@/platform/graphics/common/three-resource-disposer";
 import type { AsyncStageViewLoadResult } from "./stage/async-stage-view-load-result";
 import { BakedMeshView } from "./stage/baked-mesh-view";
+import {
+  calibrationMotionLoadDisposition,
+  type CalibrationBootstrapResult,
+} from "./stage/calibration-motion-load-disposition";
 import { CoalescedAsyncFrameTask } from "./stage/coalesced-async-frame-task";
+import {
+  LatestAsyncAttemptOwner,
+  type LatestAsyncAttempt,
+} from "./stage/latest-async-attempt-owner";
 import {
   effectivePlaybackDuration,
   resolvePlaybackFrame,
@@ -2471,6 +2479,8 @@ function startRobotViewLoad(
 function clearH2rRobotAfterViewLoss(context: string): void {
   const calibrationRestore = state.calibRestore;
 
+  h2rCalibrationBootstrapAttempts.invalidate();
+  h2rCalibrationStatusAttempts.invalidate();
   // FK Promises cannot be cancelled, so withdraw their publication owner
   // before any robot or calibration aliases are released.
   h2rCalibrationFkPreview.stop();
@@ -3186,7 +3196,7 @@ async function onReferenceChange(newRef: string): Promise<void> {
   if (!newRef || newRef === state.reference) return;
   const wasCalibrating = state.calibrationMode;
   const savedQ = wasCalibrating ? { ...state.calibQ } : null;
-  if (wasCalibrating) await exitCalibrationMode();
+  if (wasCalibrating) exitCalibrationMode();
   // Scale parameters and every retarget result belong to one exact
   // motion/robot/reference tuple. Invalidate them before querying calibration
   // for the new reference so an old preview can never masquerade as current.
@@ -3254,6 +3264,8 @@ async function routeAfterRobotLoad(): Promise<void> {
 async function loadMotionPayload(
   payload: MotionPayload,
 ): Promise<AsyncStageViewLoadResult> {
+  const wasCalibrating = state.calibrationMode;
+  const calibrationDraft = wasCalibrating ? { ...state.calibQ } : null;
   state.motion = payload;
   state.libraryEntry = payload.library_entry || null;
   state.reference = payload.suggested_reference ?? null;
@@ -3263,23 +3275,57 @@ async function loadMotionPayload(
   state.calibration = false;
   h2rRunState = "idle";
   // In calibration mode only the robot + blue reference T-pose should be visible.
-  if (state.calibrationMode) {
-    // Calibration does not render the baked body, but it must still invalidate
-    // a decode escaped from the previously active motion.
-    skin.clear();
-    state.robotTrajectory = null;
-    robot.trajectory = null;
-    scaledSkel.clear();
-    scaledEnv.clear();
-    player.setPlaying(false);
-    await refreshRetargetPanel();
-    _applyCalibSceneLayout();
-    toast(runtimeText(
-      `Loaded ${payload.name} (calibration mode)`,
-      `已加载 ${payload.name}（标定模式）`,
-    ));
-    updatePills();
-    return "committed";
+  if (wasCalibrating) {
+    try {
+      // Calibration does not render the baked body, but it must still invalidate
+      // a decode escaped from the previously active motion.
+      skin.clear();
+      state.robotTrajectory = null;
+      robot.trajectory = null;
+      scaledSkel.clear();
+      scaledEnv.clear();
+      player.setPlaying(false);
+
+      if (state.robot && state.reference) {
+        const calibrationRobot = state.robot;
+        const calibrationRobotName = calibrationRobot.name;
+        const calibrationRobotGeneration = robot.loadGeneration;
+        const calibrationReference = state.reference;
+        const calibrationMotionToken = payload.token ?? null;
+        const entryResult = await enterCalibrationMode(calibrationDraft);
+        const calibrationIdentityIsCurrent = (): boolean => (
+          state.motion === payload
+          && (state.motion?.token ?? null) === calibrationMotionToken
+          && state.robot === calibrationRobot
+          && state.robot?.name === calibrationRobotName
+          && robot.isLoadGenerationCurrent(calibrationRobotGeneration)
+          && state.reference === calibrationReference
+        );
+        const disposition = calibrationMotionLoadDisposition(
+          entryResult,
+          calibrationIdentityIsCurrent(),
+          state.calibrationMode,
+        );
+        if (disposition === "stale") return "stale";
+        if (disposition === "calibration") {
+          _applyCalibSceneLayout();
+          if (!calibrationIdentityIsCurrent()) return "stale";
+          toast(runtimeText(
+            `Loaded ${payload.name} (calibration mode)`,
+            `已加载 ${payload.name}（标定模式）`,
+          ));
+          if (!calibrationIdentityIsCurrent()) return "stale";
+          updatePills();
+          return "committed";
+        }
+      } else {
+        // A motion without a usable reference cannot retain an ownerless editor.
+        exitCalibrationMode();
+      }
+    } catch (error) {
+      if (state.motion === payload) exitCalibrationMode();
+      throw error;
+    }
   }
   skel.load(payload, 0x0a84ff);
   mesh.load(payload);
@@ -3326,6 +3372,7 @@ async function loadMotionPayload(
   updateRetargetFpsPlaceholder();
   if (state.robot) switchInspectorPanel("h2r");
   await refreshRetargetPanel();
+  if (state.motion !== payload || state.motion?.token !== payload.token) return "stale";
   toast(runtimeText(`Loaded ${payload.name}`, `已加载 ${payload.name}`));
   return "committed";
 }
@@ -4201,7 +4248,25 @@ async function applyRobot(
   // scaled skeleton/scene when a calibration already exists (no retarget needed).
   if (state.calibrationMode) {
     switchInspectorPanel("h2r");
-    await enterCalibrationMode(state.calibQ);
+    const calibrationMotion = state.motion;
+    const calibrationMotionToken = calibrationMotion?.token ?? null;
+    const calibrationReference = state.reference;
+    const calibrationRobotName = robotData.name;
+    const calibrationEntry = await enterCalibrationMode(state.calibQ);
+    if (
+      calibrationEntry !== "entered"
+      || state.robot !== robotData
+      || state.robot?.name !== calibrationRobotName
+      || !robot.isLoadGenerationCurrent(attempt.generation)
+      || state.motion !== calibrationMotion
+      || (state.motion?.token ?? null) !== calibrationMotionToken
+      || state.reference !== calibrationReference
+    ) {
+      return state.robot === robotData
+        && robot.isLoadGenerationCurrent(attempt.generation)
+        ? "committed"
+        : "stale";
+    }
     toast(runtimeText(
       `Robot loaded in calibration pose: ${robotData.display_name}`,
       `机器人已加载（标定姿态）：${robotData.display_name}`,
@@ -5486,89 +5551,243 @@ function _restoreVis(snap: ViewVisibilitySnapshot | null): void {
   });
 }
 
+interface H2rCalibrationPairIdentity {
+  readonly robot: RobotPayload;
+  readonly robotName: string;
+  readonly robotViewGeneration: number;
+  readonly motion: MotionPayload | null;
+  readonly motionToken: string | null;
+  readonly reference: string;
+}
+
+interface H2rCalibrationBootstrapIdentity extends H2rCalibrationPairIdentity {
+  readonly robotGroundOffset: number;
+}
+
+const h2rCalibrationBootstrapAttempts = new LatestAsyncAttemptOwner<
+  H2rCalibrationBootstrapIdentity
+>((identity) => (
+  state.robot === identity.robot
+  && state.robot?.name === identity.robotName
+  && robot.isLoadGenerationCurrent(identity.robotViewGeneration)
+  && state.motion === identity.motion
+  && (state.motion?.token ?? null) === identity.motionToken
+  && state.reference === identity.reference
+));
+
+const h2rCalibrationStatusAttempts = new LatestAsyncAttemptOwner<
+  H2rCalibrationPairIdentity
+>((identity) => (
+  state.robot === identity.robot
+  && state.robot?.name === identity.robotName
+  && robot.isLoadGenerationCurrent(identity.robotViewGeneration)
+  && state.motion === identity.motion
+  && (state.motion?.token ?? null) === identity.motionToken
+  && state.reference === identity.reference
+));
+
+function h2rCalibrationStatusUrl(
+  identity: H2rCalibrationPairIdentity,
+): `/api/calibration/status${string}` {
+  return `/api/calibration/status?robot=${encodeURIComponent(identity.robotName)}&reference=${encodeURIComponent(identity.reference)}`;
+}
+
+function rollbackH2rCalibrationBootstrap(
+  attempt: LatestAsyncAttempt<H2rCalibrationBootstrapIdentity>,
+  error: unknown,
+): boolean {
+  if (!h2rCalibrationBootstrapAttempts.isCurrent(attempt)) return false;
+  const visibilitySnapshot = state.calibRestore;
+  const orbitSnapshot = state.calibOrbitSaved;
+
+  h2rCalibrationFkPreview.stop();
+  if (!h2rCalibrationBootstrapAttempts.isCurrent(attempt)) return false;
+
+  // Canonical aliases become terminal before fallible renderer/DOM cleanup.
+  state.calibrationMode = false;
+  state.calibNeedsCameraFocus = false;
+  state.calibLimits = null;
+  state.calibQ = {};
+  state.calibSliderRows = {};
+  state.calibBaselineQ = null;
+  state.calibDraftQ = null;
+  state.calibHasSaved = false;
+  calibrationEditorUi.h2r.comparison = "current";
+
+  const cleanup = (context: string, action: () => void): boolean => {
+    if (!h2rCalibrationBootstrapAttempts.isCurrent(attempt)) return false;
+    runBestEffortCleanup(context, action);
+    return h2rCalibrationBootstrapAttempts.isCurrent(attempt);
+  };
+
+  if (orbitSnapshot && !cleanup("calibration bootstrap: orbit restore failed", () => {
+    orbit.minDistance = orbitSnapshot.minDistance;
+    orbit.maxDistance = orbitSnapshot.maxDistance;
+    orbit.zoomSpeed = orbitSnapshot.zoomSpeed;
+  })) return false;
+  if (!cleanup("calibration bootstrap: manipulator cleanup failed", () => calibManip.stop())) return false;
+  if (!cleanup("calibration bootstrap: robot opacity restore failed", () => robot.setOpacity(1))) return false;
+  if (!cleanup("calibration bootstrap: editor cleanup failed", () => {
+    const card = document.getElementById("calib-card");
+    if (card) card.style.display = "none";
+    document.getElementById("calib-sliders")?.replaceChildren();
+    document.getElementById("calib-banner")?.classList.add("hidden");
+  })) return false;
+  if (!cleanup("calibration bootstrap: visibility restore failed", () => {
+    if (visibilitySnapshot) {
+      _restoreVis(visibilitySnapshot);
+    } else {
+      refSkel.clear();
+      refSkel.group.visible = false;
+      markH2rStageDisplayChanged();
+    }
+  })) return false;
+  if (!cleanup("calibration bootstrap: robot ground offset restore failed", () => {
+    robot.groundOffset = attempt.identity.robotGroundOffset;
+  })) return false;
+  if (!cleanup("calibration bootstrap: robot pose restore failed", () => {
+    if (robot.trajectory) robot.setFrame(0);
+    else robot.applyStatic();
+  })) return false;
+  if (!cleanup("calibration bootstrap: workflow publication failed", () => {
+    publishH2rWorkflowState();
+    emitCalibrationEditorState("h2r");
+  })) return false;
+  if (!cleanup("calibration bootstrap: error notification failed", () => {
+    toast(errorMessage(error), true);
+  })) return false;
+  if (!h2rCalibrationBootstrapAttempts.finish(attempt)) return false;
+  // The original snapshots belong to the whole calibration lifetime. Keep them
+  // available until A is fully retired so a reentrant B inherits the real
+  // pre-calibration baseline instead of a partially restored scene.
+  state.calibOrbitSaved = null;
+  state.calibRestore = null;
+  return true;
+}
+
 async function enterCalibrationMode(
   initialQ: Record<string, number> | null = null,
-): Promise<void> {
-  if (!state.robot || !state.reference) return;
-  const calCard = document.getElementById("calib-card");
-  calCard.style.display = "block";
-  document.getElementById("retarget-btn").disabled = true;
-  setCalChip(runtimeText("Calibrating…", "标定中…"), "warn");
+): Promise<CalibrationBootstrapResult> {
+  const activeRobot = state.robot;
+  const activeMotion = state.motion;
+  const reference = state.reference;
+  if (!activeRobot || !reference) return "failed";
 
-  if (!state.calibrationMode) {
-    state.calibRestore = _snapshotVis();
-    h2rCalibrationFkPreview.start();
-  }
-  state.calibrationMode = true;
-  state.calibNeedsCameraFocus = true;
-  state.calibOrbitSaved = {
-    minDistance: orbit.minDistance,
-    maxDistance: orbit.maxDistance,
-    zoomSpeed: orbit.zoomSpeed,
-  };
-  orbit.zoomSpeed = 0.022;
-  applyCalibOrbitLimits();
-  updateCalibBanner(state.reference);
-  document.getElementById("calib-banner")?.classList.remove("hidden");
-  _applyCalibSceneLayout();
-  publishH2rWorkflowState();
-  toast(runtimeText(
-    "Calibration mode started. Align the robot to the blue reference skeleton.",
-    "已进入标定模式：请对齐蓝色参考骨架",
-  ));
-  if (player.active) player.seek(0);
+  h2rCalibrationStatusAttempts.invalidate();
+  const attempt = h2rCalibrationBootstrapAttempts.begin({
+    robot: activeRobot,
+    robotName: activeRobot.name,
+    robotViewGeneration: robot.loadGeneration,
+    motion: activeMotion,
+    motionToken: activeMotion?.token ?? null,
+    robotGroundOffset: robot.groundOffset,
+    reference,
+  });
+  const requestedInitialQ = initialQ && typeof initialQ === "object"
+    ? { ...initialQ }
+    : null;
+  const enteringFresh = (
+    !state.calibrationMode
+    && state.calibRestore === null
+    && state.calibOrbitSaved === null
+  );
+  const isCurrent = (): boolean =>
+    h2rCalibrationBootstrapAttempts.isCurrent(attempt);
 
-  let session: import("./types").CalibrationSession;
   try {
-    session = await API.post("/api/calibration/session", {
-      robot: state.robot.name,
-      reference: state.reference,
-      motion_token: state.motion?.token || null,
-    });
-  } catch (e) {
-    h2rCalibrationFkPreview.stop();
-    state.calibrationMode = false;
-    state.calibNeedsCameraFocus = false;
-    if (state.calibOrbitSaved) {
-      orbit.minDistance = state.calibOrbitSaved.minDistance;
-      orbit.maxDistance = state.calibOrbitSaved.maxDistance;
-      orbit.zoomSpeed = state.calibOrbitSaved.zoomSpeed ?? orbit.zoomSpeed;
-      state.calibOrbitSaved = null;
+    if (enteringFresh) {
+      state.calibRestore = _snapshotVis();
+      state.calibOrbitSaved = {
+        minDistance: orbit.minDistance,
+        maxDistance: orbit.maxDistance,
+        zoomSpeed: orbit.zoomSpeed,
+      };
     }
-    document.getElementById("calib-banner")?.classList.add("hidden");
-    const snap = state.calibRestore;
-    state.calibRestore = null;
-    _restoreVis(snap);
+    if (!isCurrent()) return "stale";
+
+    // Each bootstrap attempt owns a fresh FK publication generation, while the
+    // original visibility/orbit snapshots span all same-session re-entries.
+    h2rCalibrationFkPreview.start();
+    if (!isCurrent()) return "stale";
+    state.calibrationMode = true;
+    state.calibNeedsCameraFocus = true;
+
+    const calCard = document.getElementById("calib-card");
+    if (!calCard) throw new Error("Calibration card is unavailable");
+    calCard.style.display = "block";
+    const retargetButton = document.getElementById("retarget-btn") as HTMLButtonElement | null;
+    if (retargetButton) retargetButton.disabled = true;
+    setCalChip(runtimeText("Calibrating…", "标定中…"), "warn");
+    if (!isCurrent()) return "stale";
+
+    orbit.zoomSpeed = 0.022;
+    applyCalibOrbitLimits();
+    if (!isCurrent()) return "stale";
+    updateCalibBanner(reference);
+    if (!isCurrent()) return "stale";
+    document.getElementById("calib-banner")?.classList.remove("hidden");
+    _applyCalibSceneLayout();
+    if (!isCurrent()) return "stale";
     publishH2rWorkflowState();
-    toast(errorMessage(e), true);
-    return;
+    if (!isCurrent()) return "stale";
+    toast(runtimeText(
+      "Calibration mode started. Align the robot to the blue reference skeleton.",
+      "已进入标定模式：请对齐蓝色参考骨架",
+    ));
+    if (!isCurrent()) return "stale";
+    if (player.active) player.seek(0);
+    if (!isCurrent()) return "stale";
+
+    const session = await API.post("/api/calibration/session", {
+      robot: attempt.identity.robotName,
+      reference: attempt.identity.reference,
+      motion_token: attempt.identity.motionToken,
+    });
+    if (!isCurrent()) return "stale";
+    if (!session.reference) throw new Error(runtimeText(
+      "Calibration session did not include a reference pose",
+      "标定会话未返回参考姿态",
+    ));
+
+    state.calibLimits = session.joint_limits || [];
+    robot.groundOffset = session.ground_offset_z ?? robot.groundOffset;
+    refSkel.load(session.reference);
+    if (!isCurrent()) return "stale";
+    refSkel.configureMappings(attempt.identity.robot.ik_map ?? {});
+    if (!isCurrent()) return "stale";
+    if (session.reference_name) updateCalibBanner(session.reference_name);
+    if (!isCurrent()) return "stale";
+    _applyCalibSceneLayout();
+    if (!isCurrent()) return "stale";
+
+    const q = requestedInitialQ ?? { ...(session.joint_q || {}) };
+    state.calibHasSaved = !!session.has_saved_calibration;
+    state.calibBaselineQ = state.calibHasSaved ? { ...q } : null;
+    state.calibDraftQ = { ...q };
+    calibrationEditorUi.h2r.comparison = "current";
+    updateCalibRestoreButton();
+    if (!isCurrent()) return "stale";
+    calibManip.start(state.calibLimits);
+    if (!isCurrent()) return "stale";
+    buildCalibSliders(q, state.calibLimits);
+    if (!isCurrent()) return "stale";
+    applyCalibrationVisualization("h2r");
+    if (!isCurrent()) return "stale";
+    updateH2rCalibrationValidation();
+    if (!isCurrent()) return "stale";
+    publishH2rWorkflowState();
+    if (!isCurrent()) return "stale";
+    calCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    if (!isCurrent()) return "stale";
+    return h2rCalibrationBootstrapAttempts.finish(attempt)
+      ? "entered"
+      : "stale";
+  } catch (error) {
+    if (!isCurrent()) return "stale";
+    return rollbackH2rCalibrationBootstrap(attempt, error)
+      ? "failed"
+      : "stale";
   }
-
-  state.calibLimits = session.joint_limits || [];
-  robot.groundOffset = session.ground_offset_z ?? robot.groundOffset;
-  if (!session.reference) throw new Error(runtimeText(
-    "Calibration session did not include a reference pose",
-    "标定会话未返回参考姿态",
-  ));
-  refSkel.load(session.reference);
-  refSkel.configureMappings(state.robot.ik_map ?? {});
-  if (session.reference_name) updateCalibBanner(session.reference_name);
-  _applyCalibSceneLayout();
-
-  const q = initialQ && typeof initialQ === "object"
-    ? initialQ
-    : (session.joint_q || {});
-  state.calibHasSaved = !!session.has_saved_calibration;
-  state.calibBaselineQ = state.calibHasSaved ? { ...q } : null;
-  state.calibDraftQ = { ...q };
-  calibrationEditorUi.h2r.comparison = "current";
-  updateCalibRestoreButton();
-  calibManip.start(state.calibLimits);
-  await buildCalibSliders(q, state.calibLimits);
-  applyCalibrationVisualization("h2r");
-  updateH2rCalibrationValidation();
-  publishH2rWorkflowState();
-  calCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
 function updateCalibRestoreButton(): void {
@@ -5583,7 +5802,9 @@ function updateCalibRestoreButton(): void {
     );
 }
 
-async function exitCalibrationMode(): Promise<void> {
+function exitCalibrationMode(): void {
+  h2rCalibrationBootstrapAttempts.invalidate();
+  h2rCalibrationStatusAttempts.invalidate();
   h2rCalibrationFkPreview.stop();
   state.calibrationMode = false;
   state.calibNeedsCameraFocus = false;
@@ -5660,10 +5881,10 @@ function setCalibJointValue(
   previewCalibPose({ live });
 }
 
-async function buildCalibSliders(
+function buildCalibSliders(
   initialQ: Record<string, number>,
   limitsList: RobotJointLimit[] | null,
-): Promise<void> {
+): void {
   const box = document.getElementById("calib-sliders");
   box.replaceChildren();
   state.calibQ = {};
@@ -5804,6 +6025,7 @@ function previewCalibPose(
  * is orchestration, not a pure render: a missing calibration may open the editor.
  */
 async function refreshRetargetPanel(): Promise<void> {
+  h2rCalibrationStatusAttempts.invalidate();
   document.getElementById("rt-motion").textContent = state.motion
     ? state.motion.name
     : runtimeText("Not loaded", "未加载");
@@ -5826,43 +6048,71 @@ async function refreshRetargetPanel(): Promise<void> {
     publishH2rWorkflowState();
     return;
   }
+
+  const statusAttempt = h2rCalibrationStatusAttempts.begin({
+    robot: state.robot,
+    robotName: state.robot.name,
+    robotViewGeneration: robot.loadGeneration,
+    motion: state.motion,
+    motionToken: state.motion?.token ?? null,
+    reference: state.reference,
+  });
+  const statusIsCurrent = (): boolean => (
+    !state.calibrationMode
+    && h2rCalibrationStatusAttempts.isCurrent(statusAttempt)
+  );
+  let calibrationStatus: ApiGetResponse<`/api/calibration/status${string}`>;
   try {
-    const st = await API.get(
-      `/api/calibration/status?robot=${encodeURIComponent(state.robot.name)}&reference=${encodeURIComponent(state.reference)}`
-    );
-    state.calibration = st.calibrated;
-    if (st.calibrated) {
-      setCalChip(
-        st.bundled && !st.path
-          ? runtimeText("Built-in scale parameters", "内置缩放参数")
-          : runtimeText("Calibrated", "已标定"),
-        "ok",
-      );
-      calCard.style.display = "none";
-      btn.disabled = !state.motion;
-      if (state.motion) await refreshScaledPreview();
-    } else {
-      setCalChip(runtimeText(
-        "Not calibrated — calibration required",
-        "未标定 — 请先标定",
-      ), "warn");
-      btn.disabled = true;
-      if (state.motion) {
-        await enterCalibrationMode(st.joint_q || null);
-      } else {
-        calCard.style.display = "none";
-      }
-    }
-  } catch (e) {
+    calibrationStatus = await API.get(h2rCalibrationStatusUrl(statusAttempt.identity));
+    if (!statusIsCurrent()) return;
+  } catch {
+    if (!statusIsCurrent()) return;
     setCalChip(runtimeText("Not calibrated", "未标定"), "warn");
+    if (!statusIsCurrent()) return;
     btn.disabled = true;
     if (state.motion) {
       await enterCalibrationMode(null);
+      return;
+    }
+    calCard.style.display = "none";
+    if (!statusIsCurrent()) return;
+    publishH2rWorkflowState();
+    if (statusIsCurrent()) h2rCalibrationStatusAttempts.finish(statusAttempt);
+    return;
+  }
+
+  state.calibration = calibrationStatus.calibrated;
+  if (calibrationStatus.calibrated) {
+    setCalChip(
+      calibrationStatus.bundled && !calibrationStatus.path
+        ? runtimeText("Built-in scale parameters", "内置缩放参数")
+        : runtimeText("Calibrated", "已标定"),
+      "ok",
+    );
+    if (!statusIsCurrent()) return;
+    calCard.style.display = "none";
+    btn.disabled = !state.motion;
+    if (state.motion) {
+      await refreshScaledPreview();
+      if (!statusIsCurrent()) return;
+    }
+  } else {
+    setCalChip(runtimeText(
+      "Not calibrated — calibration required",
+      "未标定 — 请先标定",
+    ), "warn");
+    if (!statusIsCurrent()) return;
+    btn.disabled = true;
+    if (state.motion) {
+      await enterCalibrationMode(calibrationStatus.joint_q || null);
+      return;
     } else {
       calCard.style.display = "none";
     }
   }
+  if (!statusIsCurrent()) return;
   publishH2rWorkflowState();
+  if (statusIsCurrent()) h2rCalibrationStatusAttempts.finish(statusAttempt);
 }
 
 document.getElementById("rt-ref-select")?.addEventListener("change", (ev) => {
@@ -5872,14 +6122,31 @@ document.getElementById("rt-ref-select")?.addEventListener("change", (ev) => {
 });
 
 document.getElementById("recalib-btn").onclick = async () => {
-  if (!state.robot || !state.reference) return;
+  const activeRobot = state.robot;
+  const activeMotion = state.motion;
+  const reference = state.reference;
+  if (!activeRobot || !reference || state.calibrationMode) return;
+  const statusAttempt = h2rCalibrationStatusAttempts.begin({
+    robot: activeRobot,
+    robotName: activeRobot.name,
+    robotViewGeneration: robot.loadGeneration,
+    motion: activeMotion,
+    motionToken: activeMotion?.token ?? null,
+    reference,
+  });
   let jq: Record<string, number> | null = null;
   try {
-    const st = await API.get(
-      `/api/calibration/status?robot=${encodeURIComponent(state.robot.name)}&reference=${encodeURIComponent(state.reference)}`
-    );
+    const st = await API.get(h2rCalibrationStatusUrl(statusAttempt.identity));
+    if (!h2rCalibrationStatusAttempts.isCurrent(statusAttempt)) return;
     jq = st.joint_q || null;
-  } catch { /* session seeds from yaml */ }
+  } catch {
+    if (!h2rCalibrationStatusAttempts.isCurrent(statusAttempt)) return;
+    // The calibration session can still seed its draft from backend defaults.
+  }
+  if (
+    state.calibrationMode
+    || !h2rCalibrationStatusAttempts.isCurrent(statusAttempt)
+  ) return;
   await enterCalibrationMode(jq);
 };
 
@@ -5904,7 +6171,7 @@ document.getElementById("calib-restore").onclick = async () => {
 };
 
 document.getElementById("calib-cancel").onclick = async () => {
-  await exitCalibrationMode();
+  exitCalibrationMode();
   document.getElementById("calib-card").style.display = "none";
   toast(runtimeText("Calibration cancelled", "已取消标定"));
   refreshRetargetPanel();
@@ -5923,7 +6190,7 @@ document.getElementById("calib-save").onclick = async () => {
     });
     state.calibBaselineQ = { ...savedQ };
     state.calibHasSaved = true;
-    await exitCalibrationMode();
+    exitCalibrationMode();
     document.getElementById("calib-card").style.display = "none";
     state.calibration = true;
     // Robot still holds the last calibration FK pose until retarget supplies a
@@ -6321,7 +6588,9 @@ async function syncBatchRefHint(): Promise<void> {
       action.onclick = async () => {
         switchInspectorPanel("h2r");
         await onReferenceChange(ref);
-        (document.getElementById("recalib-btn") as HTMLButtonElement | null)?.click();
+        if (!state.calibrationMode && state.reference === ref) {
+          (document.getElementById("recalib-btn") as HTMLButtonElement | null)?.click();
+        }
       };
       controls.appendChild(action);
     } else {
@@ -7202,7 +7471,7 @@ async function applyCalibrationComparison(
   if (!target) target = { ...current };
 
   ui.comparison = comparison;
-  if (workflow === "h2r") await buildCalibSliders({ ...target }, state.calibLimits);
+  if (workflow === "h2r") buildCalibSliders({ ...target }, state.calibLimits);
   else r2rBuildSliders({ ...target }, r2r.calibLimits);
   emitCalibrationEditorState(workflow);
 }
@@ -7219,7 +7488,7 @@ async function resetCalibrationRegion(workflow: WorkflowId): Promise<void> {
   ui.comparison = "current";
   if (workflow === "h2r") {
     state.calibDraftQ = { ...next };
-    await buildCalibSliders(next, state.calibLimits);
+    buildCalibSliders(next, state.calibLimits);
   } else {
     r2r.calibDraftQ = { ...next };
     r2rBuildSliders(next, r2r.calibLimits);
