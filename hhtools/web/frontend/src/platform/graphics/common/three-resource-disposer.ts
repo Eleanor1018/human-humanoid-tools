@@ -73,8 +73,8 @@ function emptyCollection(): CollectedThreeResources {
 }
 
 /**
- * Releases the geometry, material, and texture resources used by the current
- * Stage's regular Mesh, Line, Sprite, Points, and SkinnedMesh object trees.
+ * Releases geometry, material, and texture resources reachable from standard
+ * Mesh, Line, Sprite, Points, and SkinnedMesh Object3D trees.
  *
  * Three.js deliberately does not dispose geometry, material, or texture when
  * an Object3D is removed. This helper discovers those resources without
@@ -85,7 +85,7 @@ function emptyCollection(): CollectedThreeResources {
  *
  * InstancedMesh and BatchedMesh have additional object-owned GPU allocations,
  * so this deliberately rejects them instead of performing an incomplete
- * cleanup. Add a dedicated owner path before either type enters the Stage.
+ * cleanup. Add dedicated owner-specific disposal before supporting either type.
  * Callers must invoke this only at a terminal ownership boundary: every live
  * alias must leave the render set in the same disposal pass.
  */
@@ -103,7 +103,7 @@ export class ThreeResourceDisposer {
 
   /**
    * Dispose every child subtree and empty `owner`, while preserving the stable
-   * Group/Scene object that application state and visibility controls retain.
+   * Group/Scene object that callers retain as their stable graph owner.
    */
   disposeObject3DChildren(
     owner: Object3D,
@@ -143,7 +143,7 @@ export class ThreeResourceDisposer {
       const candidate = object as Object3DWithRenderResources;
       if (candidate.isInstancedMesh || candidate.isBatchedMesh) {
         throw new Error(
-          "InstancedMesh and BatchedMesh require dedicated Stage disposal",
+          "InstancedMesh and BatchedMesh require dedicated owner disposal",
         );
       }
       if (isBufferGeometry(candidate.geometry)) {

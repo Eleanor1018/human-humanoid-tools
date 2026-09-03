@@ -16,7 +16,7 @@ import {
   WebGLRenderTarget,
 } from "three";
 
-import { ThreeResourceDisposer } from "../../src/workbench/browser/stage/three-resource-disposer";
+import { ThreeResourceDisposer } from "../../src/platform/graphics/common/three-resource-disposer";
 
 describe("ThreeResourceDisposer", () => {
   it("disposes shared geometry, material, and texture exactly once", () => {
@@ -179,7 +179,7 @@ describe("ThreeResourceDisposer", () => {
       1,
     );
     expect(() => disposer.disposeObject3DResources(instanced)).toThrow(
-      "InstancedMesh and BatchedMesh require dedicated Stage disposal",
+      "InstancedMesh and BatchedMesh require dedicated owner disposal",
     );
 
     const target = new WebGLRenderTarget(1, 1);

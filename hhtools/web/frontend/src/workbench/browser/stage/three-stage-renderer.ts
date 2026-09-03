@@ -1,11 +1,11 @@
 import type { IDisposable } from "@/base/common/disposable";
-import type { IStageView } from "@/workbench/services/stage/common/stage-view";
-import type { Camera, Object3D, Scene } from "three";
-
 import {
   ThreeResourceDisposer,
   type ThreeResourceExtras,
-} from "./three-resource-disposer";
+} from "@/platform/graphics/common/three-resource-disposer";
+import type { IStageView } from "@/workbench/services/stage/common/stage-view";
+import type { Camera, Object3D, Scene } from "three";
+
 import type { ThreeStageDomReferences } from "./three-stage-renderer-mount";
 
 export type { ThreeStageDomReferences } from "./three-stage-renderer-mount";

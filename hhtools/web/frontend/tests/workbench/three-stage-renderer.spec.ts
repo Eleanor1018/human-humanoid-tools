@@ -11,8 +11,10 @@ import {
 } from "three";
 import type { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 
-import { ThreeResourceDisposer } from "../../src/workbench/browser/stage/three-resource-disposer";
-import type { ThreeResourceExtras } from "../../src/workbench/browser/stage/three-resource-disposer";
+import {
+  ThreeResourceDisposer,
+  type ThreeResourceExtras,
+} from "../../src/platform/graphics/common/three-resource-disposer";
 import {
   ThreeStageRenderer,
   type ThreeStageBrowserEnvironment,
