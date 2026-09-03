@@ -48,6 +48,11 @@ describe("legacy runtime ownership boundaries", () => {
     expect(runtimeSource).not.toContain('getElementById("view-hud-r2r")');
   });
 
+  it("leaves Stage empty and Reset presentation to React", () => {
+    expect(runtimeSource).not.toMatch(/["'](?:stage-empty|view-reset-btn)["']/);
+    expect(runtimeSource).not.toContain("resetVisible");
+  });
+
   it("lets the React-owned V2M batch dropzone handle its own files", () => {
     const start = runtimeSource.indexOf(
       'setupDropzone(\n  document.getElementById("stage")',
@@ -348,6 +353,7 @@ describe("legacy runtime ownership boundaries", () => {
       runtimeSource.indexOf("interface R2rRetargetRequest"),
     );
     expect(snapshotContract).not.toContain("vis:");
+    expect(snapshotContract).not.toContain("resetVisible");
   });
 
   it("invalidates scaled previews when their H2R identity changes", () => {

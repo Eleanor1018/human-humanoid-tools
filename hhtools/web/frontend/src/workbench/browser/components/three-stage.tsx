@@ -8,7 +8,7 @@ import type {
   IStageModelService,
   IStagePlaybackCommands,
 } from "@/workbench/services/stage/common/stage-service";
-import { useStageRendererOwner } from "@/workbench/services/stage/browser/use-stage-model-state";
+import { useStageSurfaceState } from "@/workbench/services/stage/browser/use-stage-model-state";
 import { cn } from "@/lib/utils";
 import { H2rStageLayerControls } from "./h2r-stage-layer-controls";
 import { PlaybackBar } from "./playback-bar";
@@ -34,7 +34,7 @@ export function ThreeStage({
   batchWorkspace?: ReactNode;
 }) {
   const text = useLocaleText(locale);
-  const stageOwner = useStageRendererOwner(stageModelService);
+  const stageSurface = useStageSurfaceState(stageModelService);
   const legacyToggle = (
     id: string,
     en: string,
@@ -79,9 +79,12 @@ export function ThreeStage({
           stageModelService={stageModelService}
         />
         <div
-          className={cn("view-hud", stageOwner !== "r2r" && "hidden")}
+          className={cn(
+            "view-hud",
+            stageSurface.owner !== "r2r" && "hidden",
+          )}
           id="view-hud-r2r"
-          aria-hidden={stageOwner !== "r2r"}
+          aria-hidden={stageSurface.owner !== "r2r"}
         >
           <div className="view-hud-row" data-row="r2r-src">
             <span className="view-hud-tag">{text("Source", "源")}</span>
@@ -97,7 +100,11 @@ export function ThreeStage({
           </div>
         </div>
       </div>
-      <div className="stage-empty" id="stage-empty">
+      <div
+        className={cn("stage-empty", !stageSurface.empty && "hidden")}
+        id="stage-empty"
+        aria-hidden={!stageSurface.empty}
+      >
         <div>
           <div className="glyph">🎞</div>
           <div className="big">
@@ -115,10 +122,15 @@ export function ThreeStage({
       <div className="stage-overlay">
         <button
           type="button"
-          className="view-reset-btn hidden"
+          className={cn(
+            "view-reset-btn",
+            !stageSurface.canResetView && "hidden",
+          )}
           id="view-reset-btn"
           title={text("Reset view", "回到默认视角")}
           aria-label={text("Reset view", "回到默认视角")}
+          aria-hidden={!stageSurface.canResetView}
+          disabled={!stageSurface.canResetView}
           onClick={() => stageDisplayCommands.resetView()}
         >
           <svg

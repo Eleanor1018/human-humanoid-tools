@@ -17,6 +17,7 @@ import { SearchField } from "../../src/workbench/browser/components/search-field
 import { SidebarNavigation } from "../../src/workbench/browser/components/sidebar-navigation";
 import { JobDrawer } from "../../src/workbench/browser/components/job-drawer";
 import { StageModel } from "../../src/workbench/services/stage/common/stage-model";
+import { useStageSurfaceState } from "../../src/workbench/services/stage/browser/use-stage-model-state";
 import {
   STAGE_LAYER_IDS,
   type StageLayerId,
@@ -122,7 +123,7 @@ describe("React workbench components", () => {
     stageModel.dispose();
   });
 
-  it("routes the Stage reset button through its narrow command contract", () => {
+  it("renders and commands Reset from canonical Stage surface state", () => {
     const stageModel = new StageModel(vi.fn());
     const resetView = vi.fn();
 
@@ -140,9 +141,76 @@ describe("React workbench components", () => {
         }}
       />,
     );
-    fireEvent.click(screen.getByLabelText("Reset view"));
+    const empty = document.getElementById("stage-empty")!;
+    const reset = screen.getByLabelText("Reset view") as HTMLButtonElement;
+
+    expect(empty).not.toHaveClass("hidden");
+    expect(empty).toHaveAttribute("aria-hidden", "false");
+    expect(reset).toHaveClass("hidden");
+    expect(reset).toHaveAttribute("aria-hidden", "true");
+    expect(reset).toBeDisabled();
+    fireEvent.click(reset);
+    expect(resetView).not.toHaveBeenCalled();
+
+    act(() => {
+      stageModel.updateState({
+        display: { empty: false, canResetView: true },
+      });
+    });
+
+    expect(document.getElementById("stage-empty")).toBe(empty);
+    expect(screen.getByLabelText("Reset view")).toBe(reset);
+    expect(empty).toHaveClass("hidden");
+    expect(empty).toHaveAttribute("aria-hidden", "true");
+    expect(reset).not.toHaveClass("hidden");
+    expect(reset).toHaveAttribute("aria-hidden", "false");
+    expect(reset).toBeEnabled();
+    fireEvent.click(reset);
 
     expect(resetView).toHaveBeenCalledOnce();
+
+    act(() => {
+      stageModel.updateState({
+        display: { empty: true, canResetView: true },
+      });
+    });
+    expect(stageModel.state.display.canResetView).toBe(false);
+    expect(empty).not.toHaveClass("hidden");
+    expect(reset).toHaveClass("hidden");
+    expect(reset).toBeDisabled();
+    stageModel.dispose();
+  });
+
+  it("keeps Stage surface subscriptions stable across unrelated traffic", () => {
+    const stageModel = new StageModel(vi.fn());
+    let renderCount = 0;
+
+    function SurfaceProbe() {
+      const surface = useStageSurfaceState(stageModel);
+      renderCount += 1;
+      return <output data-testid="stage-surface-owner">{surface.owner}</output>;
+    }
+
+    render(<SurfaceProbe />);
+    expect(renderCount).toBe(1);
+
+    act(() => {
+      stageModel.updateState({
+        playback: { currentTime: 1, duration: 2 },
+        display: {
+          layers: {
+            sourceSkeleton: { available: true },
+          },
+        },
+      });
+    });
+    expect(renderCount).toBe(1);
+
+    act(() => {
+      stageModel.updateState({ display: { owner: "r2r" } });
+    });
+    expect(renderCount).toBe(2);
+    expect(screen.getByTestId("stage-surface-owner")).toHaveTextContent("r2r");
     stageModel.dispose();
   });
 

@@ -1,11 +1,14 @@
-import { useCallback, useSyncExternalStore } from "react";
+import { useCallback, useMemo, useSyncExternalStore } from "react";
 
 import type {
   IStageModelService,
   StageDisplayState,
-  StageRendererOwner,
   StageState,
 } from "@/workbench/services/stage/common/stage-service";
+
+export type StageSurfaceState = Readonly<
+  Pick<StageDisplayState, "owner" | "empty" | "canResetView">
+>;
 
 /**
  * React read adapter for the Stage model's immutable external snapshots.
@@ -56,12 +59,16 @@ export function useStageDisplayState(
 }
 
 /**
- * Observe only shared renderer ownership. H2R layer publications reuse the
- * same owner string, so they do not make the parent ThreeStage tree rerender.
+ * Observe only presentation shared by the active Stage surface.
+ *
+ * The Stage model replaces its display object when any H2R layer changes. The
+ * cached projection below keeps the same object identity unless one of these
+ * three surface fields changes, so playback and layer traffic cannot rerender
+ * the parent ThreeStage tree at animation-frame frequency.
  */
-export function useStageRendererOwner(
+export function useStageSurfaceState(
   stageModelService: IStageModelService,
-): StageRendererOwner {
+): StageSurfaceState {
   const subscribe = useCallback(
     (onStoreChange: () => void) => {
       const subscription = stageModelService.onDidChangeState(onStoreChange);
@@ -69,10 +76,21 @@ export function useStageRendererOwner(
     },
     [stageModelService],
   );
-  const getSnapshot = useCallback(
-    () => stageModelService.state.display.owner,
-    [stageModelService],
-  );
+  const getSnapshot = useMemo(() => {
+    let cached: StageSurfaceState | undefined;
+    return (): StageSurfaceState => {
+      const { owner, empty, canResetView } = stageModelService.state.display;
+      if (
+        cached?.owner === owner &&
+        cached.empty === empty &&
+        cached.canResetView === canResetView
+      ) {
+        return cached;
+      }
+      cached = Object.freeze({ owner, empty, canResetView });
+      return cached;
+    };
+  }, [stageModelService]);
 
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }

@@ -241,11 +241,18 @@ describe("Workbench DOM contract", () => {
       canResetView: initialDisplay.canResetView,
       layers: initialDisplay.layers,
     });
+    const stageEmpty = document.getElementById("stage-empty")!;
+    const resetView = document.getElementById(
+      "view-reset-btn",
+    ) as HTMLButtonElement;
     await waitFor(() => {
       expect(document.getElementById("tg-skeleton")).toHaveClass("on");
       expect(document.getElementById("tg-skeleton")).toBeEnabled();
       expect(document.getElementById("tg-robot")).toHaveClass("on");
       expect(document.getElementById("tg-env")).toBeDisabled();
+      expect(stageEmpty).toHaveClass("hidden");
+      expect(resetView).not.toHaveClass("hidden");
+      expect(resetView).toBeEnabled();
     });
     const skeleton = document.getElementById(
       "tg-skeleton",
@@ -271,6 +278,11 @@ describe("Workbench DOM contract", () => {
       expect(document.getElementById("view-hud-r2r")).not.toHaveClass(
         "hidden",
       );
+      expect(document.getElementById("stage-empty")).toBe(stageEmpty);
+      expect(document.getElementById("view-reset-btn")).toBe(resetView);
+      expect(stageEmpty).not.toHaveClass("hidden");
+      expect(resetView).toHaveClass("hidden");
+      expect(resetView).toBeDisabled();
     });
 
     act(() => {
@@ -299,6 +311,11 @@ describe("Workbench DOM contract", () => {
       expect(document.getElementById("tg-skeleton")).toBeDisabled();
       expect(document.getElementById("tg-env")).toHaveClass("on");
       expect(document.getElementById("tg-env")).toBeEnabled();
+      expect(document.getElementById("stage-empty")).toBe(stageEmpty);
+      expect(document.getElementById("view-reset-btn")).toBe(resetView);
+      expect(stageEmpty).toHaveClass("hidden");
+      expect(resetView).not.toHaveClass("hidden");
+      expect(resetView).toBeEnabled();
     });
   });
 

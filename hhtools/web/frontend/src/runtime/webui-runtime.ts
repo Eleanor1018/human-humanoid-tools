@@ -2591,10 +2591,10 @@ const player: PlayerController = {
 };
 
 function revealStage(): void {
+  // Empty/reset presentation is projected by React from the Stage model. The
+  // compatibility runtime still owns playback visibility until its renderer
+  // moves behind the Stage view contract.
   _setPlaybarVisible(true);
-  document.getElementById("view-reset-btn")?.classList.remove("hidden");
-  // React projects the matching layer HUD from the published Stage owner.
-  document.getElementById("stage-empty").style.display = "none";
 }
 
 window.addEventListener("hhtools:playback-command", (event) => {
@@ -7169,7 +7169,6 @@ interface R2rMainSnapshot {
     duration: number;
     active: boolean;
     playbarVisible: boolean;
-    resetVisible: boolean;
   };
 }
 
@@ -7830,7 +7829,6 @@ function r2rApplyStage(
   applyH2rPhysicalVisibility();
   if (r2r.calibrating) {
     const facts = collectR2rStageSurfaceFacts();
-    const surface = projectR2rStageSurface(facts);
     r2rSrc.group.visible = false;
     r2rSrcSkel.group.visible = false;
     r2rSrcEnv.group.visible = false;
@@ -7838,11 +7836,6 @@ function r2rApplyStage(
     r2rTgtEnv.group.visible = false;
     r2rTgt.group.visible = facts.targetRobotAvailable;
     refSkel.group.visible = facts.referenceAvailable;
-    if (!surface.empty) {
-      revealStage();
-    } else {
-      document.getElementById("view-reset-btn")?.classList.add("hidden");
-    }
     player.active = false;
     _setPlaybarVisible(false);
     player.setPlaying(false);
@@ -7881,7 +7874,6 @@ function r2rApplyStage(
     player.active = false;
     player.setPlaying(false);
     _setPlaybarVisible(false);
-    document.getElementById("view-reset-btn")?.classList.add("hidden");
   }
   if (publishStageDisplay) markH2rStageDisplayChanged();
 }
@@ -7936,7 +7928,6 @@ function r2rEnterPanel(): void {
       duration: player.duration,
       active: player.active,
       playbarVisible,
-      resetVisible: !document.getElementById("view-reset-btn")?.classList.contains("hidden"),
     },
   };
   r2r.active = true;
@@ -7963,7 +7954,6 @@ function r2rLeavePanel(): void {
     player.active = s.player.active;
     player.setPlaying(false);
     _setPlaybarVisible(s.player.playbarVisible);
-    document.getElementById("view-reset-btn")?.classList.toggle("hidden", !s.player.resetVisible);
   } else {
     refSkel.group.visible = false;
   }

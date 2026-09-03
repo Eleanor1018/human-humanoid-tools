@@ -1148,6 +1148,7 @@ button { font-family: inherit; cursor: pointer; }
   position: absolute; inset: 0; display: grid; place-items: center;
   text-align: center; pointer-events: none;
 }
+.stage-empty.hidden { display: none; }
 .stage-empty .big { font-size: 19px; font-weight: 600; margin-bottom: 6px; }
 .stage-empty .sub { font-size: 13px; color: var(--ink-secondary); max-width: 360px; }
 .stage-empty .glyph { font-size: 54px; opacity: 0.18; margin-bottom: 18px; }
