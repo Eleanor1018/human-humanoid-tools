@@ -850,9 +850,9 @@ describe("legacy runtime ownership boundaries", () => {
       runtimeSource.indexOf("class CalibManipulator"),
       runtimeSource.indexOf("const calibManip = new CalibManipulator"),
     );
-    const initStart = manipulatorSource.indexOf("private _initLimitGizmo(): void");
+    const initStart = manipulatorSource.indexOf("private _initLimitGizmo(");
     const disposeStart = manipulatorSource.indexOf("private _disposeLimitGizmo(): void");
-    const buildTagsStart = manipulatorSource.indexOf("private _buildTags(): void");
+    const buildTagsStart = manipulatorSource.indexOf("private _buildTags(");
     const initSource = manipulatorSource.slice(initStart, disposeStart);
     const disposeSource = manipulatorSource.slice(disposeStart, buildTagsStart);
 
@@ -882,6 +882,228 @@ describe("legacy runtime ownership boundaries", () => {
     expect(disposeSource.slice(disposeResources)).not.toContain("this._limitGroup");
     expect(disposeSource).not.toContain(".geometry.dispose()");
     expect(disposeSource).not.toContain(".material.dispose()");
+  });
+
+  it("terminalizes card, track, and canvas pointer gestures under one owner", () => {
+    const manipulatorSource = runtimeSource.slice(
+      runtimeSource.indexOf("type CalibrationPointerGestureEnd"),
+      runtimeSource.indexOf("const calibManip = new CalibManipulator"),
+    );
+    for (const kind of ['readonly kind: "card"', 'readonly kind: "track"', 'readonly kind: "canvas"']) {
+      expect(manipulatorSource).toContain(kind);
+    }
+    for (const ownedField of [
+      "readonly pointerId: number",
+      "readonly captureTarget: HTMLElement",
+      "readonly context: CalibrationContext",
+      "readonly session: PointerGestureSession",
+      "orbitEnabledBefore: boolean",
+      "new LatestPointerGestureOwner<CalibrationPointerGesture>()",
+    ]) expect(manipulatorSource).toContain(ownedField);
+
+    const lostCaptureSource = manipulatorSource.slice(
+      manipulatorSource.indexOf("this._onLostPointerCapture ="),
+      manipulatorSource.indexOf("get dragging():"),
+    );
+    expect(lostCaptureSource).toContain("this._gestureOwner.capture");
+    expect(lostCaptureSource).not.toContain("this._gestureOwner.current");
+    expect(lostCaptureSource).toContain("matchesOwnedPointerCaptureLoss(gesture, event)");
+    expect(lostCaptureSource).toContain("retargets the event to its ownerDocument");
+
+    const startSource = manipulatorSource.slice(
+      manipulatorSource.indexOf("start(limitsList:"),
+      manipulatorSource.indexOf("stop(): void"),
+    );
+    expect(startSource.indexOf("this._gestureOwner.beginSession()"))
+      .toBeLessThan(startSource.indexOf("_finishPointerGestureForReplacement()"));
+    expect(startSource.indexOf("_finishPointerGestureForReplacement()"))
+      .toBeLessThan(startSource.indexOf("this._ctx ="));
+    expect(startSource).toContain("this._initLimitGizmo(session)");
+    expect(startSource).toContain("this._buildTags(session)");
+    expect(startSource.match(/if \(!sessionIsCurrent\(\)\) return/g)?.length)
+      .toBeGreaterThanOrEqual(10);
+    for (const listener of [
+      'window.addEventListener("pointermove", this._onMove)',
+      'window.addEventListener("pointerup", this._onUp)',
+      'window.addEventListener("pointercancel", this._onCancel)',
+      'window.addEventListener("lostpointercapture", this._onLostPointerCapture)',
+    ]) expect(startSource).toContain(listener);
+
+    const stopSource = manipulatorSource.slice(
+      manipulatorSource.indexOf("stop(): void"),
+      manipulatorSource.indexOf("private _initLimitGizmo"),
+    );
+    const deactivate = stopSource.indexOf("this.active = false");
+    const finishGesture = stopSource.indexOf('_finishPointerGesture(gesture, "stop")');
+    const firstSessionGuard = stopSource.indexOf("if (!sessionIsCurrent()) return");
+    const destroyHud = stopSource.indexOf('this.hud.innerHTML = ""');
+    const disposeGizmo = stopSource.indexOf("this._disposeLimitGizmo()");
+    const clearHighlights = stopSource.indexOf("setCalibHighlights({})");
+    const clearContext = stopSource.indexOf("this._ctx = null");
+    expect(finishGesture).toBeGreaterThan(deactivate);
+    expect(firstSessionGuard).toBeGreaterThan(finishGesture);
+    expect(destroyHud).toBeGreaterThan(finishGesture);
+    expect(stopSource.indexOf("if (!sessionIsCurrent()) return", disposeGizmo))
+      .toBeGreaterThan(disposeGizmo);
+    expect(stopSource.indexOf("if (!sessionIsCurrent()) return", clearHighlights))
+      .toBeGreaterThan(clearHighlights);
+    expect(clearContext).toBeGreaterThan(destroyHud);
+    for (const listener of [
+      'window.removeEventListener("pointermove", this._onMove)',
+      'window.removeEventListener("pointerup", this._onUp)',
+      'window.removeEventListener("pointercancel", this._onCancel)',
+      'window.removeEventListener("lostpointercapture", this._onLostPointerCapture)',
+    ]) expect(stopSource).toContain(listener);
+
+    const beginSource = manipulatorSource.slice(
+      manipulatorSource.indexOf("private _beginPointerGesture"),
+      manipulatorSource.indexOf("private _cleanupPointerGesture"),
+    );
+    const publishGesture = beginSource.indexOf("this._gestureOwner.begin(gesture)");
+    const validateExpectedSession = beginSource.indexOf(
+      "this._gestureOwner.isSessionCurrent(expectedSession)",
+    );
+    const inheritOrbit = beginSource.indexOf("inheritedPointerGestureOrbitBaseline(");
+    const cleanupPrevious = beginSource.indexOf("this._cleanupPointerGesture(");
+    const disableOrbit = beginSource.indexOf("orbit.enabled = false");
+    const reserveCapture = beginSource.indexOf("this._gestureOwner.reserveCapture(owned)");
+    const requestCapture = beginSource.indexOf("gesture.captureTarget.setPointerCapture");
+    expect(validateExpectedSession).toBeGreaterThanOrEqual(0);
+    expect(validateExpectedSession).toBeLessThan(publishGesture);
+    expect(beginSource).toContain("gesture.session !== expectedSession");
+    expect(beginSource).toContain("this._ctx !== gesture.context");
+    expect(inheritOrbit).toBeGreaterThan(publishGesture);
+    expect(inheritOrbit).toBeLessThan(cleanupPrevious);
+    expect(cleanupPrevious).toBeGreaterThan(publishGesture);
+    expect(disableOrbit).toBeGreaterThan(cleanupPrevious);
+    expect(reserveCapture).toBeGreaterThan(disableOrbit);
+    expect(requestCapture).toBeGreaterThan(disableOrbit);
+    expect(beginSource).toContain("The stable window pointerup/cancel listeners still terminate");
+    expect(beginSource).toContain("if (!this._isCurrentPointerGesture(owned))");
+    expect(beginSource).toContain("this._gestureOwner.takeCapture(owned)");
+
+    const cleanupSource = manipulatorSource.slice(
+      manipulatorSource.indexOf("private _cleanupPointerGesture"),
+      manipulatorSource.indexOf("private _finishPointerGesture("),
+    );
+    for (const cleanup of [
+      'classList.remove("is-dragging")',
+      'classList.remove("track-dragging")',
+      "successor.card === gesture.card",
+      "successor.tag?.el === gesture.tag?.el",
+      "this._projectPointerGestureSharedState(handoff, gesture.orbitEnabledBefore)",
+      'classList.toggle("calib-dragging", projection.stageDragging)',
+      "orbit.enabled = projection.orbitEnabled",
+      "this._gestureOwner.isTransitionCurrent(handoff)",
+      "this._gestureOwner.takeCapture(owned)",
+      "gesture.captureTarget.releasePointerCapture(gesture.pointerId)",
+    ]) expect(cleanupSource).toContain(cleanup);
+    const projectShared = cleanupSource.indexOf(
+      "this._projectPointerGestureSharedState(handoff, gesture.orbitEnabledBefore)",
+    );
+    const takeCapture = cleanupSource.indexOf("this._gestureOwner.takeCapture(owned)");
+    const releaseCapture = cleanupSource.indexOf("releasePointerCapture");
+    expect(projectShared).toBeGreaterThanOrEqual(0);
+    expect(takeCapture).toBeGreaterThan(projectShared);
+    expect(releaseCapture).toBeGreaterThan(takeCapture);
+
+    const finishSource = manipulatorSource.slice(
+      manipulatorSource.indexOf("private _finishPointerGesture("),
+      manipulatorSource.indexOf("private _finishPointerGestureForReplacement"),
+    );
+    const takeGesture = finishSource.indexOf("this._gestureOwner.finish(owned)");
+    const cleanupGesture = finishSource.indexOf("this._cleanupPointerGesture(owned, handoff)");
+    const completeOnly = finishSource.indexOf('reason === "complete"');
+    const flush = finishSource.indexOf("gesture.context.previewFk({ flush: true })");
+    expect(cleanupGesture).toBeGreaterThan(takeGesture);
+    expect(completeOnly).toBeGreaterThan(cleanupGesture);
+    expect(flush).toBeGreaterThan(completeOnly);
+    expect(finishSource).toContain('gesture.kind !== "card"');
+    expect(finishSource).toContain("this._gestureOwner.isTransitionCurrent(handoff)");
+    expect(finishSource).toContain("this._ctx === gesture.context");
+
+    const hudBindings = manipulatorSource.slice(
+      manipulatorSource.indexOf("private _bindHudCardDrag"),
+      manipulatorSource.indexOf("\n  setSelected("),
+    );
+    expect(hudBindings).not.toContain('addEventListener("pointermove"');
+    expect(hudBindings).not.toContain('addEventListener("pointerup"');
+    expect(hudBindings).not.toContain('addEventListener("pointercancel"');
+    expect(hudBindings.match(/e\.button !== 0/g)).toHaveLength(2);
+    expect(hudBindings).toContain("this.setSelected(name, { gesture: owned })");
+    expect(hudBindings.match(/context: CalibrationContext/g)).toHaveLength(2);
+    expect(hudBindings.match(/session: PointerGestureSession/g)).toHaveLength(2);
+    expect(hudBindings.match(/this\._ctx === context/g)).toHaveLength(2);
+    expect(hudBindings.match(/this\._gestureOwner\.isSessionCurrent\(session\)/g))
+      .toHaveLength(2);
+    expect(hudBindings).not.toContain("const context = this._ctx");
+    expect(hudBindings).not.toContain("this._tags.get(name)");
+
+    const buildTagsSource = manipulatorSource.slice(
+      manipulatorSource.indexOf("private _buildTags("),
+      manipulatorSource.indexOf("\n  setAngleUnit("),
+    );
+    expect(buildTagsSource).toContain("const context = this._ctx");
+    expect(buildTagsSource).toContain(
+      "this._bindHudCardDrag(card, head, context, session)",
+    );
+    expect(buildTagsSource).toContain(
+      "this._bindHudTrackDrag(name, track, thumb, meta, tag, context, session)",
+    );
+
+    const setSelectedSource = manipulatorSource.slice(
+      manipulatorSource.indexOf("\n  setSelected("),
+      manipulatorSource.indexOf("private _syncHighlights"),
+    );
+    expect(setSelectedSource).toContain("gesture?: OwnedCalibrationPointerGesture | null");
+    expect(setSelectedSource).toContain("const context = gesture?.value.context ?? this.context");
+    expect(setSelectedSource).toContain("const tags = [...this._tags.entries()]");
+    expect(setSelectedSource).toContain("const sliderRows = context.getSliderRows()");
+    expect(setSelectedSource.match(/if \(!gestureIsCurrent\(\)\) return/g)?.length)
+      .toBeGreaterThanOrEqual(8);
+
+    const positionTagsSource = manipulatorSource.slice(
+      manipulatorSource.indexOf("\n  _positionTags("),
+      manipulatorSource.indexOf("private _pointerNdc"),
+    );
+    for (const snapshot of [
+      "const selected = this.selected",
+      "const tags = [...this._tags.entries()]",
+      "const jointWorld = this.jointWorld",
+      "const hudPinned = this._hudPinned",
+      "const pickAnchor = this._pickAnchor?.clone()",
+    ]) expect(positionTagsSource).toContain(snapshot);
+    expect(positionTagsSource).toContain(
+      "this._applyHudPin(el, hudPinned.x, hudPinned.y, layout, gesture)",
+    );
+    expect(positionTagsSource.match(/if \(!gestureIsCurrent\(\)\) return/g)?.length)
+      .toBeGreaterThanOrEqual(8);
+
+    const canvasPointers = manipulatorSource.slice(
+      manipulatorSource.indexOf("private _pointerDown"),
+      manipulatorSource.indexOf("private _applyDrag"),
+    );
+    expect(canvasPointers).toContain(
+      "if (!eventSessionIsCurrent() || e.button !== 0) return",
+    );
+    expect(canvasPointers).toContain("const session = this._gestureOwner.currentSession");
+    expect(canvasPointers).toContain("this._gestureOwner.isSessionCurrent(session)");
+    expect(canvasPointers).toContain(
+      "this._pickMeshes(e.clientX, e.clientY, context)",
+    );
+    expect(canvasPointers).toContain("this._beginPointerGesture(gesture, session)");
+    expect(canvasPointers).toContain("if (e.pointerId !== gesture.pointerId) return");
+    expect(canvasPointers).toContain("event.pointerId !== owned.value.pointerId");
+    expect(canvasPointers).toContain(
+      "this.setSelected(joint, { scrollPanel: true, gesture: owned })",
+    );
+    expect(canvasPointers).toContain("this._positionTags(owned)");
+    const prismaticStart = canvasPointers.indexOf('meta.type === "prismatic"');
+    const prismaticEnd = canvasPointers.indexOf("return;", prismaticStart);
+    expect(prismaticStart).toBeGreaterThanOrEqual(0);
+    expect(canvasPointers.slice(prismaticStart, prismaticEnd)).not.toContain(
+      "orbit.enabled = false",
+    );
   });
 
   it("exposes Stage reset without installing a DOM click owner", () => {

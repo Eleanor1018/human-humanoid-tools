@@ -178,6 +178,15 @@ import {
   type LatestAsyncAttempt,
 } from "./stage/latest-async-attempt-owner";
 import {
+  inheritedPointerGestureOrbitBaseline,
+  LatestPointerGestureOwner,
+  matchesOwnedPointerCaptureLoss,
+  projectPointerGestureSharedState,
+  type OwnedPointerGesture,
+  type PointerGestureSession,
+  type PointerGestureTransition,
+} from "./stage/latest-pointer-gesture-owner";
+import {
   effectivePlaybackDuration,
   resolvePlaybackFrame,
 } from "./stage/playback-timing";
@@ -4755,6 +4764,53 @@ interface Point2D {
   y: number;
 }
 
+type CalibrationPointerGestureEnd =
+  | "complete"
+  | "cancel"
+  | "lost-capture"
+  | "replacement"
+  | "stop";
+
+interface CalibrationPointerGestureBase {
+  readonly pointerId: number;
+  readonly captureTarget: HTMLElement;
+  readonly context: CalibrationContext;
+  readonly session: PointerGestureSession;
+  activated: boolean;
+  orbitEnabledBefore: boolean;
+}
+
+interface CalibrationCardPointerGesture extends CalibrationPointerGestureBase {
+  readonly kind: "card";
+  readonly card: HTMLElement;
+  readonly layout: HudLayout;
+  readonly start: { px: number; py: number; ax: number; ay: number };
+}
+
+interface CalibrationTrackPointerGesture extends CalibrationPointerGestureBase {
+  readonly kind: "track";
+  readonly joint: string;
+  readonly track: HTMLElement;
+  readonly tag: CalibrationHudTag | null;
+  readonly meta: CalibrationJointMeta;
+}
+
+interface CalibrationCanvasPointerGesture extends CalibrationPointerGestureBase {
+  readonly kind: "canvas";
+  readonly joint: string;
+  dragRef: THREE.Vector3 | null;
+  dragStartQ: number;
+}
+
+type CalibrationPointerGesture =
+  | CalibrationCardPointerGesture
+  | CalibrationTrackPointerGesture
+  | CalibrationCanvasPointerGesture;
+
+type OwnedCalibrationPointerGesture = OwnedPointerGesture<CalibrationPointerGesture>;
+type CalibrationPointerGestureTransition =
+  PointerGestureTransition<CalibrationPointerGesture>;
+
 class CalibManipulator {
   readonly canvas: HTMLCanvasElement;
   readonly hud: HTMLElement;
@@ -4769,21 +4825,19 @@ class CalibManipulator {
   selected: string | null = null;
   hoveredLink: string | null = null;
   hoveredJoint: string | null = null;
-  dragging = false;
   angleUnit: CalibrationAngleUnit = "rad";
-  _dragRef: THREE.Vector3 | null = null;
-  _dragStartQ = 0;
   readonly _tags = new Map<string, CalibrationHudTag>();
   _limitGroup: CalibrationLimitGizmo | null = null;
   _pickScreen: Point2D | null = null;
   _pickAnchor: THREE.Vector3 | null = null;
   _hudPinned: Point2D | null = null;
-  _hudCardDrag: boolean | null = null;
-  _hudTrackDrag: string | null = null;
   _ctx: CalibrationContext | null = null;
+  readonly _gestureOwner = new LatestPointerGestureOwner<CalibrationPointerGesture>();
   readonly _onDown: (event: PointerEvent) => void;
   readonly _onMove: (event: PointerEvent) => void;
   readonly _onUp: (event: PointerEvent) => void;
+  readonly _onCancel: (event: PointerEvent) => void;
+  readonly _onLostPointerCapture: (event: PointerEvent) => void;
 
   constructor({
     canvasEl,
@@ -4799,7 +4853,30 @@ class CalibManipulator {
     this.stage = stageEl;
     this._onDown = (event) => this._pointerDown(event);
     this._onMove = (event) => this._pointerMove(event);
-    this._onUp = () => this._pointerUp();
+    this._onUp = (event) => this._pointerUp(event, "complete");
+    this._onCancel = (event) => this._pointerUp(event, "cancel");
+    this._onLostPointerCapture = (event) => {
+      // Pointer Events may dispatch a pending loss after release. If its target
+      // was disconnected, the spec retargets the event to its ownerDocument;
+      // resolve only the exact capture token currently awaiting that pointer.
+      const owned = this._gestureOwner.capture;
+      const gesture = owned?.value;
+      if (
+        owned
+        && gesture
+        && matchesOwnedPointerCaptureLoss(gesture, event)
+      ) this._finishPointerGesture(owned, "lost-capture");
+    };
+  }
+
+  get dragging(): boolean {
+    const gesture = this._gestureOwner.current?.value;
+    return gesture?.kind === "canvas" && gesture.activated;
+  }
+
+  get _hudCardDrag(): boolean {
+    const gesture = this._gestureOwner.current?.value;
+    return gesture?.kind === "card" && gesture.activated;
   }
 
   private _defaultCtx(): CalibrationContext {
@@ -4819,65 +4896,108 @@ class CalibManipulator {
   }
 
   start(limitsList: RobotJointLimit[], ctx: CalibrationContext | null = null): void {
-    this.active = true;
-    this._ctx = ctx || this._defaultCtx();
-    this.jointMeta = {};
-    this.linkToJoint = {};
-    this.jointToLink = {};
+    const session = this._gestureOwner.beginSession();
+    const sessionIsCurrent = (): boolean => (
+      this._gestureOwner.isSessionCurrent(session)
+    );
+    if (!this._finishPointerGestureForReplacement()) return;
+    if (!sessionIsCurrent()) return;
+    const context = ctx || this._defaultCtx();
+    const jointMeta: Record<string, CalibrationJointMeta> = {};
+    const linkToJoint: Record<string, string> = {};
+    const jointToLink: Record<string, string> = {};
     for (const L of limitsList || []) {
       if (!L.name || L.type === "fixed") continue;
       const lo = L.lower != null ? L.lower : -Math.PI;
       const hi = L.upper != null ? L.upper : Math.PI;
-      this.jointMeta[L.name] = {
+      jointMeta[L.name] = {
         child_link: L.child_link,
         lower: lo,
         upper: hi,
         type: L.type || "revolute",
       };
       if (L.child_link) {
-        this.linkToJoint[L.child_link] = L.name;
-        this.jointToLink[L.name] = L.child_link;
+        linkToJoint[L.child_link] = L.name;
+        jointToLink[L.name] = L.child_link;
       }
     }
+    if (!sessionIsCurrent()) return;
+    this.active = true;
+    this._ctx = context;
+    this.jointMeta = jointMeta;
+    this.linkToJoint = linkToJoint;
+    this.jointToLink = jointToLink;
     this.hud.classList.remove("hidden");
+    if (!sessionIsCurrent()) return;
     this.hud.setAttribute("aria-hidden", "false");
+    if (!sessionIsCurrent()) return;
     this.stage.classList.add("calib-pickable");
-    this._initLimitGizmo();
-    this._buildTags();
+    if (!sessionIsCurrent()) return;
+    this._initLimitGizmo(session);
+    if (!sessionIsCurrent()) return;
+    this._buildTags(session);
+    if (!sessionIsCurrent()) return;
     this.canvas.addEventListener("pointerdown", this._onDown);
+    if (!sessionIsCurrent()) return;
     window.addEventListener("pointermove", this._onMove);
+    if (!sessionIsCurrent()) return;
     window.addEventListener("pointerup", this._onUp);
-    window.addEventListener("pointercancel", this._onUp);
+    if (!sessionIsCurrent()) return;
+    window.addEventListener("pointercancel", this._onCancel);
+    if (!sessionIsCurrent()) return;
+    window.addEventListener("lostpointercapture", this._onLostPointerCapture);
   }
 
   stop(): void {
+    const session = this._gestureOwner.beginSession();
+    const sessionIsCurrent = (): boolean => (
+      this._gestureOwner.isSessionCurrent(session)
+    );
+    // Fail closed before releasing capture, then clean the exact gesture while
+    // its captured context and HUD nodes are still available.
     this.active = false;
+    const gesture = this._gestureOwner.current;
+    if (gesture) this._finishPointerGesture(gesture, "stop");
+    // Treat releasePointerCapture as a reentrant host boundary even though the
+    // browser processes the corresponding capture loss later. If host code or
+    // a test adapter started a successor, this stop no longer owns shared UI.
+    if (!sessionIsCurrent()) return;
     this.selected = null;
     this.hoveredLink = null;
     this.hoveredJoint = null;
-    this.dragging = false;
     this._pickScreen = null;
     this._pickAnchor = null;
     this._hudPinned = null;
-    this._hudCardDrag = null;
     this.hud.innerHTML = "";
+    if (!sessionIsCurrent()) return;
     this.hud.classList.add("hidden");
+    if (!sessionIsCurrent()) return;
     this.hud.setAttribute("aria-hidden", "true");
+    if (!sessionIsCurrent()) return;
     this.stage.classList.remove("calib-pickable", "calib-dragging", "calib-hover-joint");
+    if (!sessionIsCurrent()) return;
     this._tags.clear();
     this._disposeLimitGizmo();
+    if (!sessionIsCurrent()) return;
     (this._ctx?.robotView || robot).setCalibHighlights({});
+    if (!sessionIsCurrent()) return;
     this._ctx = null;
     document.getElementById("calib-hover-hint")?.classList.remove("show");
+    if (!sessionIsCurrent()) return;
     this.canvas.removeEventListener("pointerdown", this._onDown);
+    if (!sessionIsCurrent()) return;
     window.removeEventListener("pointermove", this._onMove);
+    if (!sessionIsCurrent()) return;
     window.removeEventListener("pointerup", this._onUp);
-    window.removeEventListener("pointercancel", this._onUp);
-    orbit.enabled = true;
+    if (!sessionIsCurrent()) return;
+    window.removeEventListener("pointercancel", this._onCancel);
+    if (!sessionIsCurrent()) return;
+    window.removeEventListener("lostpointercapture", this._onLostPointerCapture);
   }
 
-  private _initLimitGizmo(): void {
+  private _initLimitGizmo(session: PointerGestureSession): void {
     this._disposeLimitGizmo();
+    if (!this._gestureOwner.isSessionCurrent(session)) return;
     const g = new THREE.Group();
     const arcMat = new THREE.LineBasicMaterial({ color: 0x94a3b8, transparent: true, opacity: 0.85 });
     const loMat = new THREE.MeshBasicMaterial({ color: 0xef4444 });
@@ -4885,7 +5005,7 @@ class CalibManipulator {
     const curMat = new THREE.MeshBasicMaterial({ color: 0x2563eb });
     const needleMat = new THREE.LineBasicMaterial({ color: 0x2563eb, linewidth: 2 });
     const tickGeo = new THREE.SphereGeometry(0.012, 10, 10);
-    this._limitGroup = {
+    const candidate: CalibrationLimitGizmo = {
       group: g,
       arc: new THREE.Line(new THREE.BufferGeometry(), arcMat),
       loTick: new THREE.Mesh(tickGeo, loMat),
@@ -4893,9 +5013,14 @@ class CalibManipulator {
       curTick: new THREE.Mesh(tickGeo.clone(), curMat),
       needle: new THREE.Line(new THREE.BufferGeometry(), needleMat),
     };
-    g.add(this._limitGroup.arc, this._limitGroup.loTick, this._limitGroup.hiTick,
-      this._limitGroup.curTick, this._limitGroup.needle);
+    g.add(candidate.arc, candidate.loTick, candidate.hiTick,
+      candidate.curTick, candidate.needle);
+    if (!this._gestureOwner.isSessionCurrent(session)) {
+      disposeDetachedThreeObject(g, "Stale calibration limit gizmo disposal failed");
+      return;
+    }
     g.visible = false;
+    this._limitGroup = candidate;
     world.add(g);
   }
 
@@ -4924,11 +5049,18 @@ class CalibManipulator {
     }
   }
 
-  private _buildTags(): void {
-    this.hud.innerHTML = "";
-    this._tags.clear();
-    for (const name of Object.keys(this.jointMeta)) {
-      const meta = this.jointMeta[name];
+  private _buildTags(session: PointerGestureSession): void {
+    // Build off-DOM so a reentrant start cannot observe a half-built tag set.
+    // Only the exact session may publish the fragment and its matching aliases.
+    if (!this._gestureOwner.isSessionCurrent(session)) return;
+    const context = this._ctx;
+    if (!context) return;
+    const jointMeta = this.jointMeta;
+    const angleUnit = this.angleUnit;
+    const fragment = document.createDocumentFragment();
+    const candidateTags = new Map<string, CalibrationHudTag>();
+    for (const name of Object.keys(jointMeta)) {
+      const meta = jointMeta[name];
       const card = document.createElement("div");
       card.className = "calib-hud-card";
       card.dataset.joint = name;
@@ -4946,14 +5078,14 @@ class CalibManipulator {
       nameEl.title = name;
       const unit = document.createElement("span");
       unit.className = "joint-unit";
-      unit.textContent = this.angleUnit;
+      unit.textContent = angleUnit;
       head.append(grip, nameEl, unit);
 
       const limitRow = document.createElement("div");
       limitRow.className = "calib-limit-row";
       const loEl = document.createElement("span");
       loEl.className = "limit-end limit-lo";
-      loEl.textContent = formatCalibrationAngle(meta.lower, this.angleUnit, 2);
+      loEl.textContent = formatCalibrationAngle(meta.lower, angleUnit, 2);
       const track = document.createElement("div");
       track.className = "limit-track";
       const fill = document.createElement("div");
@@ -4964,16 +5096,16 @@ class CalibManipulator {
       track.appendChild(thumb);
       const hiEl = document.createElement("span");
       hiEl.className = "limit-end limit-hi";
-      hiEl.textContent = formatCalibrationAngle(meta.upper, this.angleUnit, 2);
+      hiEl.textContent = formatCalibrationAngle(meta.upper, angleUnit, 2);
       limitRow.append(loEl, track, hiEl);
 
       const input = document.createElement("input");
       input.type = "number";
       input.className = "calib-angle-input";
-      input.step = this.angleUnit === "deg" ? "0.1" : "0.001";
+      input.step = angleUnit === "deg" ? "0.1" : "0.001";
       input.value = "0.000";
-      input.min = String(angleForDisplay(meta.lower, this.angleUnit));
-      input.max = String(angleForDisplay(meta.upper, this.angleUnit));
+      input.min = String(angleForDisplay(meta.lower, angleUnit));
+      input.max = String(angleForDisplay(meta.upper, angleUnit));
       input.addEventListener("input", () => {
         this.context.jointChange(name, input.value, { from: "hud-input", live: true });
       });
@@ -4987,11 +5119,29 @@ class CalibManipulator {
       input.addEventListener("pointerdown", (ev) => ev.stopPropagation());
 
       card.append(head, limitRow, input);
-      this.hud.appendChild(card);
-      this._bindHudCardDrag(card, head);
-      this._bindHudTrackDrag(name, track, thumb, meta);
-      this._tags.set(name, { el: card, input, nameEl, unitEl: unit, loEl, hiEl, track, thumb, fill });
+      const tag: CalibrationHudTag = {
+        el: card,
+        input,
+        nameEl,
+        unitEl: unit,
+        loEl,
+        hiEl,
+        track,
+        thumb,
+        fill,
+      };
+      // DOM dispatch keeps its original event path after replacement. Capture
+      // the exact build owner so a detached A listener can never adopt B.
+      this._bindHudCardDrag(card, head, context, session);
+      this._bindHudTrackDrag(name, track, thumb, meta, tag, context, session);
+      fragment.appendChild(card);
+      candidateTags.set(name, tag);
     }
+    if (!this._gestureOwner.isSessionCurrent(session)) return;
+    this.hud.replaceChildren(fragment);
+    if (!this._gestureOwner.isSessionCurrent(session)) return;
+    this._tags.clear();
+    for (const [name, tag] of candidateTags) this._tags.set(name, tag);
   }
 
   setAngleUnit(unit: CalibrationAngleUnit): void {
@@ -5028,49 +5178,267 @@ class CalibManipulator {
     x: number,
     y: number,
     layout: HudLayout = this._hudLayout(),
-  ): Point2D {
+    gesture: OwnedCalibrationPointerGesture | null = null,
+  ): Point2D | null {
+    const gestureIsCurrent = (): boolean => (
+      !gesture || this._isCurrentPointerGesture(gesture)
+    );
+    if (!gestureIsCurrent()) return null;
     const { w, h, cardW, cardH, pad } = layout;
     const clamped = this._clampHudCard(x, y, w, h, cardW, cardH, pad);
     el.classList.remove("screen-docked", "screen-pick");
+    if (!gestureIsCurrent()) return null;
     el.classList.add("user-pinned", "visible");
+    if (!gestureIsCurrent()) return null;
     el.style.left = `${clamped.x}px`;
+    if (!gestureIsCurrent()) return null;
     el.style.top = `${clamped.y}px`;
+    if (!gestureIsCurrent()) return null;
     return clamped;
   }
 
-  private _bindHudCardDrag(card: HTMLElement, head: HTMLElement): void {
+  private _isCurrentPointerGesture(owned: OwnedCalibrationPointerGesture): boolean {
+    const gesture = owned.value;
+    return (
+      this._gestureOwner.isCurrent(owned)
+      && this._gestureOwner.isSessionCurrent(gesture.session)
+      && this.active
+      && this._ctx === gesture.context
+    );
+  }
+
+  /** Fail closed before publishing, then replace before releasing old capture. */
+  private _beginPointerGesture(
+    gesture: CalibrationPointerGesture,
+    expectedSession: PointerGestureSession,
+  ): OwnedCalibrationPointerGesture | null {
+    // Layout, picking, and DOM dispatch are host boundaries. A same-context
+    // start may have replaced their session while the old handler was paused;
+    // never let that stale handler publish and retire the newer gesture.
+    if (
+      gesture.session !== expectedSession
+      || !this.active
+      || this._ctx !== gesture.context
+      || !this._gestureOwner.isSessionCurrent(expectedSession)
+    ) return null;
+    const replacement = this._gestureOwner.begin(gesture);
+    const owned = replacement.current;
+    gesture.orbitEnabledBefore = inheritedPointerGestureOrbitBaseline(
+      replacement.previous?.value ?? null,
+      orbit.enabled,
+    );
+    if (replacement.previous) {
+      this._cleanupPointerGesture(replacement.previous, replacement.handoff);
+    }
+    if (!this._isCurrentPointerGesture(owned)) {
+      if (this._gestureOwner.isCurrent(owned)) {
+        this._finishPointerGesture(owned, "cancel");
+      }
+      return null;
+    }
+
+    gesture.activated = true;
+    try {
+      if (gesture.kind === "card") {
+        gesture.card.classList.add("user-pinned", "is-dragging");
+        if (!this._isCurrentPointerGesture(owned)) return null;
+      } else if (gesture.kind === "track") {
+        gesture.tag?.el.classList.add("track-dragging");
+        if (!this._isCurrentPointerGesture(owned)) return null;
+        this.stage.classList.add("calib-dragging");
+        if (!this._isCurrentPointerGesture(owned)) return null;
+      } else {
+        this.stage.classList.add("calib-dragging");
+        if (!this._isCurrentPointerGesture(owned)) return null;
+      }
+      orbit.enabled = false;
+    } catch (error) {
+      this._finishPointerGesture(owned, "cancel");
+      throw error;
+    }
+    if (!this._isCurrentPointerGesture(owned)) return null;
+
+    // Reserve the exact capture identity before invoking host code. The stable
+    // window pointerup/cancel listeners remain the fallback when capture fails.
+    if (!this._gestureOwner.reserveCapture(owned)) {
+      this._finishPointerGesture(owned, "cancel");
+      return null;
+    }
+    try {
+      gesture.captureTarget.setPointerCapture(gesture.pointerId);
+    } catch {
+      this._gestureOwner.takeCapture(owned);
+      // The stable window pointerup/cancel listeners still terminate the drag.
+    }
+    if (!this._isCurrentPointerGesture(owned)) {
+      if (this._gestureOwner.isCurrent(owned)) {
+        this._finishPointerGesture(owned, "cancel");
+      } else {
+        this._releasePointerGestureCapture(owned);
+      }
+      return null;
+    }
+    return owned;
+  }
+
+  /**
+   * Clear shared effects only while the handoff that took this gesture is
+   * still current. Every DOM/host call may synchronously install generation C;
+   * A cleanup must then stop before it mutates C's CSS or orbit state.
+   */
+  private _cleanupPointerGesture(
+    owned: OwnedCalibrationPointerGesture,
+    handoff: CalibrationPointerGestureTransition,
+  ): void {
+    const gesture = owned.value;
+    const handoffIsCurrent = (): boolean => (
+      this._gestureOwner.isTransitionCurrent(handoff)
+    );
+    const wasActivated = gesture.activated;
+    gesture.activated = false;
+    if (wasActivated) {
+      const successor = handoff.current?.value ?? null;
+      if (
+        gesture.kind === "card"
+        && handoffIsCurrent()
+        && !(
+          successor?.activated
+          && successor.kind === "card"
+          && successor.card === gesture.card
+        )
+      ) {
+        runBestEffortCleanup("Calibration card drag cleanup failed", () => {
+          gesture.card.classList.remove("is-dragging");
+        });
+      } else if (gesture.kind === "track") {
+        const successorOwnsTag = Boolean(
+          successor?.activated
+          && successor.kind === "track"
+          && successor.tag?.el === gesture.tag?.el,
+        );
+        if (handoffIsCurrent() && !successorOwnsTag) {
+          runBestEffortCleanup("Calibration track tag cleanup failed", () => {
+            gesture.tag?.el.classList.remove("track-dragging");
+          });
+        }
+      }
+    }
+    if (gesture.kind === "canvas") gesture.dragRef = null;
+
+    // Projection, rather than inverse mutation, also terminalizes shared state
+    // when an unactivated B is replaced by a nested C during A's DOM cleanup.
+    this._projectPointerGestureSharedState(handoff, gesture.orbitEnabledBefore);
+
+    // Capture is record-private and must always be released, even after a
+    // successor invalidates the shared cleanup handoff. Take before asking
+    // for release: pending-capture processing may dispatch the loss later, and
+    // this retired record must no longer appear capture-current.
+    this._releasePointerGestureCapture(owned);
+  }
+
+  private _projectPointerGestureSharedState(
+    handoff: CalibrationPointerGestureTransition,
+    orbitEnabledBefore: boolean,
+  ): void {
+    if (!this._gestureOwner.isTransitionCurrent(handoff)) return;
+    const current = handoff.current?.value ?? null;
+    const projection = projectPointerGestureSharedState(
+      current
+        ? {
+            activated: current.activated,
+            stageDragging: current.kind !== "card",
+          }
+        : null,
+      orbitEnabledBefore,
+    );
+    runBestEffortCleanup("Calibration stage drag projection failed", () => {
+      this.stage.classList.toggle("calib-dragging", projection.stageDragging);
+    });
+    if (!this._gestureOwner.isTransitionCurrent(handoff)) return;
+    runBestEffortCleanup("Calibration orbit projection failed", () => {
+      orbit.enabled = projection.orbitEnabled;
+    });
+  }
+
+  private _releasePointerGestureCapture(owned: OwnedCalibrationPointerGesture): void {
+    if (!this._gestureOwner.takeCapture(owned)) return;
+    const gesture = owned.value;
+    runBestEffortCleanup("Calibration pointer capture release failed", () => {
+      gesture.captureTarget.releasePointerCapture(gesture.pointerId);
+    });
+  }
+
+  private _finishPointerGesture(
+    owned: OwnedCalibrationPointerGesture,
+    reason: CalibrationPointerGestureEnd,
+  ): CalibrationPointerGestureTransition | null {
+    const handoff = this._gestureOwner.finish(owned);
+    if (!handoff) return null;
+    const gesture = owned.value;
+    this._cleanupPointerGesture(owned, handoff);
+
+    // A host override may re-enter while capture is released; the browser can
+    // also report loss later. Only an uninterrupted normal completion may
+    // publish one final FK preview.
+    if (
+      reason === "complete"
+      && gesture.kind !== "card"
+      && this._gestureOwner.isTransitionCurrent(handoff)
+      && this.active
+      && this._ctx === gesture.context
+    ) gesture.context.previewFk({ flush: true });
+    return handoff;
+  }
+
+  /** Abort if capture release re-entry installed a newer gesture. */
+  private _finishPointerGestureForReplacement(): boolean {
+    const owned = this._gestureOwner.current;
+    if (!owned) return true;
+    const handoff = this._finishPointerGesture(owned, "replacement");
+    return Boolean(
+      handoff && this._gestureOwner.isTransitionCurrent(handoff),
+    );
+  }
+
+  private _bindHudCardDrag(
+    card: HTMLElement,
+    head: HTMLElement,
+    context: CalibrationContext,
+    session: PointerGestureSession,
+  ): void {
     const onDown = (e: PointerEvent): void => {
-      if (e.button !== 0) return;
+      const eventSessionIsCurrent = (): boolean => (
+        this.active
+        && this._ctx === context
+        && this._gestureOwner.isSessionCurrent(session)
+      );
+      if (!eventSessionIsCurrent() || e.button !== 0) return;
+      if (!eventSessionIsCurrent()) return;
       e.stopPropagation();
+      if (!eventSessionIsCurrent()) return;
       e.preventDefault();
+      if (!eventSessionIsCurrent()) return;
       const layout = this._hudLayout();
+      if (!eventSessionIsCurrent()) return;
       const hudRect = this.hud.getBoundingClientRect();
+      if (!eventSessionIsCurrent()) return;
       const cardRect = card.getBoundingClientRect();
-      card.classList.add("user-pinned", "is-dragging");
+      if (!eventSessionIsCurrent()) return;
       const anchorX = cardRect.left - hudRect.left + cardRect.width * 0.5;
       const anchorY = cardRect.top - hudRect.top + cardRect.height * 0.5;
       const start = { px: e.clientX, py: e.clientY, ax: anchorX, ay: anchorY };
-      this._hudCardDrag = true;
-      orbit.enabled = false;
-      try { head.setPointerCapture(e.pointerId); } catch { /* ignore */ }
-      const onMove = (ev: PointerEvent): void => {
-        const x = start.ax + (ev.clientX - start.px);
-        const y = start.ay + (ev.clientY - start.py);
-        this._hudPinned = { x, y };
-        this._applyHudPin(card, x, y, layout);
-      };
-      const onUp = (ev: PointerEvent): void => {
-        this._hudCardDrag = false;
-        card.classList.remove("is-dragging");
-        orbit.enabled = true;
-        try { head.releasePointerCapture(ev.pointerId); } catch { /* ignore */ }
-        head.removeEventListener("pointermove", onMove);
-        head.removeEventListener("pointerup", onUp);
-        head.removeEventListener("pointercancel", onUp);
-      };
-      head.addEventListener("pointermove", onMove);
-      head.addEventListener("pointerup", onUp);
-      head.addEventListener("pointercancel", onUp);
+      this._beginPointerGesture({
+        kind: "card",
+        pointerId: e.pointerId,
+        captureTarget: head,
+        context,
+        session,
+        activated: false,
+        orbitEnabledBefore: orbit.enabled,
+        card,
+        layout,
+        start,
+      }, session);
     };
     head.addEventListener("pointerdown", onDown);
   }
@@ -5080,79 +5448,144 @@ class CalibManipulator {
     track: HTMLElement,
     thumb: HTMLElement,
     meta: CalibrationJointMeta,
+    tag: CalibrationHudTag,
+    context: CalibrationContext,
+    session: PointerGestureSession,
   ): void {
-    const tag = () => this._tags.get(name);
-    const paintThumb = (clientX: number): number => {
-      const rect = track.getBoundingClientRect();
-      const t = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
-      const pct = `${(t * 100).toFixed(2)}%`;
-      const row = tag();
-      if (row) {
-        row.thumb.style.left = pct;
-        row.fill.style.width = pct;
-      }
-      return meta.lower + t * (meta.upper - meta.lower);
-    };
-    const move = (clientX: number): void => {
-      const val = paintThumb(clientX);
-      this.context.jointChange(name, val, { from: "hud-track", live: true });
-    };
     const onDown = (e: PointerEvent): void => {
+      const eventSessionIsCurrent = (): boolean => (
+        this.active
+        && this._ctx === context
+        && this._gestureOwner.isSessionCurrent(session)
+      );
+      if (!eventSessionIsCurrent() || e.button !== 0) return;
+      if (!eventSessionIsCurrent()) return;
       e.stopPropagation();
+      if (!eventSessionIsCurrent()) return;
       e.preventDefault();
-      this._hudTrackDrag = name;
-      this.setSelected(name);
-      const row = tag();
-      row?.el.classList.add("track-dragging");
-      this.stage.classList.add("calib-dragging");
-      orbit.enabled = false;
-      try { track.setPointerCapture(e.pointerId); } catch { /* ignore */ }
-      move(e.clientX);
-      const onMove = (ev: PointerEvent): void => {
-        if (this._hudTrackDrag === name) move(ev.clientX);
+      if (!eventSessionIsCurrent()) return;
+      const gesture: CalibrationTrackPointerGesture = {
+        kind: "track",
+        pointerId: e.pointerId,
+        captureTarget: track,
+        context,
+        session,
+        activated: false,
+        orbitEnabledBefore: orbit.enabled,
+        joint: name,
+        track,
+        tag,
+        meta,
       };
-      const onUp = (ev: PointerEvent): void => {
-        if (this._hudTrackDrag !== name) return;
-        this._hudTrackDrag = null;
-        row?.el.classList.remove("track-dragging");
-        this.stage.classList.remove("calib-dragging");
-        orbit.enabled = true;
-        this.context.previewFk({ flush: true });
-        try { track.releasePointerCapture(ev.pointerId); } catch { /* ignore */ }
-        track.removeEventListener("pointermove", onMove);
-        track.removeEventListener("pointerup", onUp);
-        track.removeEventListener("pointercancel", onUp);
-      };
-      track.addEventListener("pointermove", onMove);
-      track.addEventListener("pointerup", onUp);
-      track.addEventListener("pointercancel", onUp);
+      const owned = this._beginPointerGesture(gesture, session);
+      if (!owned) return;
+      try {
+        this.setSelected(name, { gesture: owned });
+        if (this._isCurrentPointerGesture(owned)) {
+          this._moveTrackPointerGesture(owned, e.clientX);
+        }
+      } catch (error) {
+        this._finishPointerGesture(owned, "cancel");
+        throw error;
+      }
     };
     track.addEventListener("pointerdown", onDown);
     thumb.addEventListener("pointerdown", onDown);
   }
 
-  setSelected(jointName: string, { scrollPanel = false }: { scrollPanel?: boolean } = {}): void {
-    if (!this.active) return;
+  private _moveCardPointerGesture(
+    owned: OwnedCalibrationPointerGesture,
+    clientX: number,
+    clientY: number,
+  ): void {
+    const gesture = owned.value;
+    if (gesture.kind !== "card" || !this._isCurrentPointerGesture(owned)) return;
+    const x = gesture.start.ax + (clientX - gesture.start.px);
+    const y = gesture.start.ay + (clientY - gesture.start.py);
+    this._hudPinned = { x, y };
+    if (!this._isCurrentPointerGesture(owned)) return;
+    this._applyHudPin(gesture.card, x, y, gesture.layout, owned);
+    if (!this._isCurrentPointerGesture(owned)) return;
+  }
+
+  private _moveTrackPointerGesture(
+    owned: OwnedCalibrationPointerGesture,
+    clientX: number,
+  ): void {
+    const gesture = owned.value;
+    if (gesture.kind !== "track" || !this._isCurrentPointerGesture(owned)) return;
+    const rect = gesture.track.getBoundingClientRect();
+    if (!this._isCurrentPointerGesture(owned)) return;
+    const t = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+    const pct = `${(t * 100).toFixed(2)}%`;
+    if (gesture.tag) {
+      gesture.tag.thumb.style.left = pct;
+      if (!this._isCurrentPointerGesture(owned)) return;
+      gesture.tag.fill.style.width = pct;
+      if (!this._isCurrentPointerGesture(owned)) return;
+    }
+    const value = gesture.meta.lower + t * (gesture.meta.upper - gesture.meta.lower);
+    gesture.context.jointChange(gesture.joint, value, {
+      from: "hud-track",
+      live: true,
+    });
+  }
+
+  setSelected(
+    jointName: string,
+    {
+      scrollPanel = false,
+      gesture = null,
+    }: {
+      scrollPanel?: boolean;
+      gesture?: OwnedCalibrationPointerGesture | null;
+    } = {},
+  ): void {
+    const gestureIsCurrent = (): boolean => (
+      !gesture || this._isCurrentPointerGesture(gesture)
+    );
+    if (!this.active || !gestureIsCurrent()) return;
+    const context = gesture?.value.context ?? this.context;
+    const tags = [...this._tags.entries()];
     this.selected = jointName;
-    for (const [j, { el }] of this._tags) {
+    for (const [j, { el }] of tags) {
+      if (!gestureIsCurrent()) return;
       el.classList.toggle("visible", j === jointName);
+      if (!gestureIsCurrent()) return;
     }
-    const sliderRows = this.context.getSliderRows();
-    for (const [j, rowRec] of Object.entries(sliderRows)) {
+    const sliderRows = context.getSliderRows();
+    if (!gestureIsCurrent()) return;
+    const sliderEntries = Object.entries(sliderRows);
+    if (!gestureIsCurrent()) return;
+    for (const [j, rowRec] of sliderEntries) {
+      if (!gestureIsCurrent()) return;
       rowRec.row?.classList.toggle("selected", j === jointName);
+      if (!gestureIsCurrent()) return;
     }
-    this._syncHighlights();
-    this._updateLimitGizmo();
+    this._syncHighlights(gesture);
+    if (!gestureIsCurrent()) return;
+    this._updateLimitGizmo(gesture);
+    if (!gestureIsCurrent()) return;
     if (scrollPanel && jointName && sliderRows[jointName]?.row) {
       sliderRows[jointName].row.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      if (!gestureIsCurrent()) return;
     }
   }
 
-  private _syncHighlights(): void {
+  private _syncHighlights(
+    gesture: OwnedCalibrationPointerGesture | null = null,
+  ): void {
+    if (gesture && !this._isCurrentPointerGesture(gesture)) return;
+    const context = gesture?.value.context ?? this.context;
     const selLink = this.selected ? this.jointToLink[this.selected] : null;
     const hovLink = this.hoveredLink;
-    this.context.robotView.setCalibHighlights({ hover: hovLink, selected: selLink });
-    this.stage.classList.toggle("calib-hover-joint", !!(this.hoveredJoint && !this.dragging));
+    const hoveredJoint = this.hoveredJoint;
+    const dragging = gesture
+      ? gesture.value.kind === "canvas" && gesture.value.activated
+      : this.dragging;
+    context.robotView.setCalibHighlights({ hover: hovLink, selected: selLink });
+    if (gesture && !this._isCurrentPointerGesture(gesture)) return;
+    this.stage.classList.toggle("calib-hover-joint", !!(hoveredJoint && !dragging));
   }
 
   updateHudValue(
@@ -5198,19 +5631,28 @@ class CalibManipulator {
     return _arcRef.normalize();
   }
 
-  private _updateLimitGizmo(): void {
-    if (!this._limitGroup || !this.selected) {
-      if (this._limitGroup) this._limitGroup.group.visible = false;
+  private _updateLimitGizmo(
+    gesture: OwnedCalibrationPointerGesture | null = null,
+  ): void {
+    if (gesture && !this._isCurrentPointerGesture(gesture)) return;
+    const limitGroup = this._limitGroup;
+    const selected = this.selected;
+    const jointMeta = this.jointMeta;
+    const jointWorld = this.jointWorld;
+    const context = gesture?.value.context ?? this.context;
+    if (!limitGroup || !selected) {
+      if (limitGroup) limitGroup.group.visible = false;
       return;
     }
-    const joint = this.selected;
-    const meta = this.jointMeta[joint];
-    const jw = this.jointWorld[joint];
+    const joint = selected;
+    const meta = jointMeta[joint];
+    const jw = jointWorld[joint];
     if (!meta || !jw?.pivot || !jw?.axis || meta.type === "prismatic") {
-      this._limitGroup.group.visible = false;
+      limitGroup.group.visible = false;
       return;
     }
-    const q = this.context.getQ()[joint] ?? 0;
+    const q = context.getQ()[joint] ?? 0;
+    if (gesture && !this._isCurrentPointerGesture(gesture)) return;
     const pivot = hhtoolsToWorldVec3(jw.pivot[0], jw.pivot[1], jw.pivot[2], new THREE.Vector3());
     const axis = hhtoolsToWorldVec3(jw.axis[0], jw.axis[1], jw.axis[2], _hhtoolsAxis).normalize();
     const ref = this._perpRef(axis, pivot);
@@ -5223,17 +5665,22 @@ class CalibManipulator {
       const ang = meta.lower + (meta.upper - meta.lower) * t;
       arcPts.push(arcPointWorld(pivot, axis, ref, ang, R));
     }
-    this._limitGroup.arc.geometry.setFromPoints(arcPts);
+    limitGroup.arc.geometry.setFromPoints(arcPts);
+    if (gesture && !this._isCurrentPointerGesture(gesture)) return;
 
     const loP = arcPointWorld(pivot, axis, ref, meta.lower, R);
     const hiP = arcPointWorld(pivot, axis, ref, meta.upper, R);
     const curP = arcPointWorld(pivot, axis, ref, q, R);
-    this._limitGroup.loTick.position.copy(loP);
-    this._limitGroup.hiTick.position.copy(hiP);
-    this._limitGroup.curTick.position.copy(curP);
-    this._limitGroup.needle.geometry.setFromPoints([pivot, curP]);
+    limitGroup.loTick.position.copy(loP);
+    if (gesture && !this._isCurrentPointerGesture(gesture)) return;
+    limitGroup.hiTick.position.copy(hiP);
+    if (gesture && !this._isCurrentPointerGesture(gesture)) return;
+    limitGroup.curTick.position.copy(curP);
+    if (gesture && !this._isCurrentPointerGesture(gesture)) return;
+    limitGroup.needle.geometry.setFromPoints([pivot, curP]);
+    if (gesture && !this._isCurrentPointerGesture(gesture)) return;
 
-    this._limitGroup.group.visible = true;
+    limitGroup.group.visible = true;
   }
 
   private _clampHudCard(
@@ -5267,21 +5714,35 @@ class CalibManipulator {
     };
   }
 
-  _positionTags(): void {
-    if (!this.active || this._hudCardDrag) return;
+  _positionTags(
+    gesture: OwnedCalibrationPointerGesture | null = null,
+  ): void {
+    const gestureIsCurrent = (): boolean => (
+      !gesture || this._isCurrentPointerGesture(gesture)
+    );
+    if (!this.active || !gestureIsCurrent() || this._hudCardDrag) return;
+    const selected = this.selected;
+    const tags = [...this._tags.entries()];
+    const jointWorld = this.jointWorld;
+    const hudPinned = this._hudPinned ? { ...this._hudPinned } : null;
+    const pickAnchor = this._pickAnchor?.clone() ?? null;
     const layout = this._hudLayout();
+    if (!gestureIsCurrent()) return;
     const { ox, oy, w, h } = layout;
     const _proj = new THREE.Vector3();
-    for (const [name, { el }] of this._tags) {
-      if (!this.selected || name !== this.selected) {
+    for (const [name, { el }] of tags) {
+      if (!gestureIsCurrent()) return;
+      if (!selected || name !== selected) {
         el.classList.remove("visible", "screen-docked", "screen-pick", "user-pinned", "is-dragging");
+        if (!gestureIsCurrent()) return;
         continue;
       }
-      const jw = this.jointWorld[name];
+      const jw = jointWorld[name];
       if (!jw?.pivot) continue;
 
-      if (this._hudPinned) {
-        this._applyHudPin(el, this._hudPinned.x, this._hudPinned.y, layout);
+      if (hudPinned) {
+        this._applyHudPin(el, hudPinned.x, hudPinned.y, layout, gesture);
+        if (!gestureIsCurrent()) return;
         continue;
       }
 
@@ -5289,7 +5750,7 @@ class CalibManipulator {
       let sy = h * 0.38 + oy;
       let mode = "screen-docked";
 
-      const anchor = this._pickAnchor;
+      const anchor = pickAnchor;
       if (anchor) {
         const hit = this._projectToHud(anchor, w, h, ox, oy, _proj);
         if (hit.inFront) {
@@ -5309,11 +5770,17 @@ class CalibManipulator {
 
       const clamped = this._clampHudCard(sx, sy, w, h, layout.cardW, layout.cardH, layout.pad);
       el.classList.remove("user-pinned");
+      if (!gestureIsCurrent()) return;
       el.classList.toggle("screen-docked", mode === "screen-docked");
+      if (!gestureIsCurrent()) return;
       el.classList.toggle("screen-pick", mode === "screen-pick");
+      if (!gestureIsCurrent()) return;
       el.style.left = `${clamped.x}px`;
+      if (!gestureIsCurrent()) return;
       el.style.top = `${clamped.y}px`;
+      if (!gestureIsCurrent()) return;
       el.classList.add("visible");
+      if (!gestureIsCurrent()) return;
     }
   }
 
@@ -5323,11 +5790,15 @@ class CalibManipulator {
     this.pointer.y = -((clientY - rect.top) / rect.height) * 2 + 1;
   }
 
-  private _pickMeshes(clientX: number, clientY: number): THREE.Intersection<THREE.Object3D>[] {
+  private _pickMeshes(
+    clientX: number,
+    clientY: number,
+    context: CalibrationContext | null = this._ctx,
+  ): THREE.Intersection<THREE.Object3D>[] {
     this._pointerNdc(clientX, clientY);
     this.raycaster.setFromCamera(this.pointer, camera);
     const meshes: THREE.Object3D[] = [];
-    this._ctx?.robotView.group.traverse((node) => {
+    context?.robotView.group.traverse((node) => {
       const candidate = node as THREE.Mesh;
       if (candidate.isMesh && candidate.visible) meshes.push(candidate);
     });
@@ -5363,13 +5834,30 @@ class CalibManipulator {
   }
 
   private _pointerDown(e: PointerEvent): void {
-    if (!this.active || e.button !== 0) return;
-    if (e.target instanceof Element && e.target.closest(".calib-hud-card")) return;
-    const hits = this._pickMeshes(e.clientX, e.clientY);
-    const joint = this._jointForLink(
-      hits.length ? this._ctx?.robotView._linkForNode(hits[0].object) ?? null : null,
+    const context = this._ctx;
+    const session = this._gestureOwner.currentSession;
+    if (!context || !session) return;
+    const eventSessionIsCurrent = (): boolean => (
+      this.active
+      && this._ctx === context
+      && this._gestureOwner.isSessionCurrent(session)
     );
+    if (!eventSessionIsCurrent() || e.button !== 0) return;
+    if (!eventSessionIsCurrent()) return;
+    const hudCard = e.target instanceof Element
+      ? e.target.closest(".calib-hud-card")
+      : null;
+    if (!eventSessionIsCurrent() || hudCard) return;
+    const hits = this._pickMeshes(e.clientX, e.clientY, context);
+    if (!eventSessionIsCurrent()) return;
+    const link = hits.length
+      ? context.robotView._linkForNode(hits[0].object)
+      : null;
+    if (!eventSessionIsCurrent()) return;
+    const joint = this._jointForLink(link);
     if (!joint) {
+      if (!this._finishPointerGestureForReplacement()) return;
+      if (!eventSessionIsCurrent()) return;
       this.selected = null;
       for (const { el } of this._tags.values()) el.classList.remove("visible");
       for (const rowRec of Object.values(this.context.getSliderRows())) {
@@ -5377,49 +5865,89 @@ class CalibManipulator {
       }
       this._updateLimitGizmo();
       this._syncHighlights();
-      orbit.enabled = true;
       return;
     }
     e.preventDefault();
-    this._pickScreen = { x: e.clientX, y: e.clientY };
-    this._pickAnchor = hits[0].point.clone();
-    this._hudPinned = null;
-    this.setSelected(joint, { scrollPanel: true });
+    if (!eventSessionIsCurrent()) return;
     const meta = this.jointMeta[joint];
     if (!meta || meta.type === "prismatic") {
-      orbit.enabled = false;
+      if (!this._finishPointerGestureForReplacement()) return;
+      if (!eventSessionIsCurrent()) return;
+      this._pickScreen = { x: e.clientX, y: e.clientY };
+      this._pickAnchor = hits[0].point.clone();
+      this._hudPinned = null;
+      this.setSelected(joint, { scrollPanel: true });
       return;
     }
-    this.dragging = true;
-    this._dragRef = null;
-    this._dragStartQ = this.context.getQ()[joint] ?? 0;
-    this.stage.classList.add("calib-dragging");
-    orbit.enabled = false;
-    try { this.canvas.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+    const dragStartQ = context.getQ()[joint] ?? 0;
+    if (!eventSessionIsCurrent()) return;
+    const gesture: CalibrationCanvasPointerGesture = {
+      kind: "canvas",
+      pointerId: e.pointerId,
+      captureTarget: this.canvas,
+      context,
+      session,
+      activated: false,
+      orbitEnabledBefore: orbit.enabled,
+      joint,
+      dragRef: null,
+      dragStartQ,
+    };
+    const owned = this._beginPointerGesture(gesture, session);
+    if (!owned) return;
+    try {
+      this._pickScreen = { x: e.clientX, y: e.clientY };
+      this._pickAnchor = hits[0].point.clone();
+      this._hudPinned = null;
+      this.setSelected(joint, { scrollPanel: true, gesture: owned });
+    } catch (error) {
+      this._finishPointerGesture(owned, "cancel");
+      throw error;
+    }
   }
 
   private _pointerMove(e: PointerEvent): void {
     if (!this.active) return;
-    if (this.dragging && this.selected) {
-      this._applyDrag(e.clientX, e.clientY);
-    } else {
-      this._updateHover(e.clientX, e.clientY);
+    const owned = this._gestureOwner.current;
+    if (owned) {
+      const gesture = owned.value;
+      if (e.pointerId !== gesture.pointerId) return;
+      try {
+        if (gesture.kind === "card") {
+          this._moveCardPointerGesture(owned, e.clientX, e.clientY);
+        } else if (gesture.kind === "track") {
+          this._moveTrackPointerGesture(owned, e.clientX);
+        } else {
+          this._applyDrag(owned, e.clientX, e.clientY);
+        }
+        if (this._isCurrentPointerGesture(owned)) this._positionTags(owned);
+      } catch (error) {
+        this._finishPointerGesture(owned, "cancel");
+        throw error;
+      }
+      return;
     }
+    this._updateHover(e.clientX, e.clientY);
     this._positionTags();
   }
 
-  private _pointerUp(): void {
-    if (!this.dragging) return;
-    this.dragging = false;
-    this._dragRef = null;
-    this.stage.classList.remove("calib-dragging");
-    orbit.enabled = true;
-    this.context.previewFk({ flush: true });
+  private _pointerUp(
+    event: PointerEvent,
+    reason: Extract<CalibrationPointerGestureEnd, "complete" | "cancel">,
+  ): void {
+    const owned = this._gestureOwner.current;
+    if (!owned || event.pointerId !== owned.value.pointerId) return;
+    this._finishPointerGesture(owned, reason);
   }
 
-  private _applyDrag(clientX: number, clientY: number): void {
-    const joint = this.selected;
-    if (!joint || !this._ctx) return;
+  private _applyDrag(
+    owned: OwnedCalibrationPointerGesture,
+    clientX: number,
+    clientY: number,
+  ): void {
+    const gesture = owned.value;
+    if (gesture.kind !== "canvas" || !this._isCurrentPointerGesture(owned)) return;
+    const joint = gesture.joint;
     const jw = this.jointWorld[joint];
     const meta = this.jointMeta[joint];
     if (!jw?.pivot || !jw?.axis || !meta) return;
@@ -5437,17 +5965,18 @@ class CalibManipulator {
     if (len < 1e-6) return;
     vec.divideScalar(len);
 
-    if (!this._dragRef) {
-      this._dragRef = vec.clone();
+    if (!gesture.dragRef) {
+      gesture.dragRef = vec.clone();
       return;
     }
 
-    const cross = new THREE.Vector3().crossVectors(this._dragRef, vec);
+    const cross = new THREE.Vector3().crossVectors(gesture.dragRef, vec);
     const sinA = axis.dot(cross);
-    const cosA = this._dragRef.dot(vec);
+    const cosA = gesture.dragRef.dot(vec);
     const delta = Math.atan2(sinA, cosA);
-    const newQ = Math.min(meta.upper, Math.max(meta.lower, this._dragStartQ + delta));
-    this._ctx.jointChange(joint, newQ, { from: "drag", live: true });
+    const newQ = Math.min(meta.upper, Math.max(meta.lower, gesture.dragStartQ + delta));
+    if (!this._isCurrentPointerGesture(owned)) return;
+    gesture.context.jointChange(joint, newQ, { from: "drag", live: true });
   }
 }
 
