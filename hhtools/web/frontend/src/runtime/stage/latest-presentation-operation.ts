@@ -177,3 +177,38 @@ export class LatestPresentationOperationCoordinator<Value> {
     return applied ? "applied" : "unchanged";
   }
 }
+
+/**
+ * Reconcile and then run the latest winner's synchronous post-commit work.
+ *
+ * A stale projection can publish and successfully apply a successor before it
+ * rethrows its own failure. The finalizer must still observe that successor.
+ * If both phases fail, preserve both causal errors instead of allowing normal
+ * `finally` replacement semantics to hide the reconciliation failure.
+ */
+export function reconcilePresentationWithFinalizer<Value>(
+  coordinator: LatestPresentationOperationCoordinator<Value>,
+  finalize: () => void,
+): PresentationReconcileDisposition {
+  const errors: unknown[] = [];
+  let disposition: PresentationReconcileDisposition = "unchanged";
+  try {
+    disposition = coordinator.reconcile();
+  } catch (error) {
+    appendPresentationError(errors, error);
+  }
+  try {
+    finalize();
+  } catch (error) {
+    appendPresentationError(errors, error);
+  }
+
+  if (errors.length === 1) throw errors[0];
+  if (errors.length > 1) {
+    throw new AggregateError(
+      errors,
+      "Presentation reconciliation and finalization failed",
+    );
+  }
+  return disposition;
+}

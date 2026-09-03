@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   LatestPresentationOperationCoordinator,
+  reconcilePresentationWithFinalizer,
   type OwnedPresentationOperation,
   type PresentationProjector,
 } from "../../../src/runtime/stage/latest-presentation-operation";
@@ -219,6 +220,69 @@ describe("LatestPresentationOperationCoordinator", () => {
     expect(thrown).toBe(failure);
     expect(projected).toEqual(["A", "C"]);
     expect(coordinator.reconcile()).toBe("unchanged");
+  });
+
+  it("finalizes the applied successor before rethrowing a stale error", () => {
+    const failure = new Error("A failed late");
+    const followedUp: string[] = [];
+    let lastApplied: OwnedPresentationOperation<PresentationIntent> | null = null;
+    let coordinator: LatestPresentationOperationCoordinator<PresentationIntent>;
+    coordinator = new LatestPresentationOperationCoordinator({
+      project: (target, authority) => {
+        const operation = target.current;
+        if (!operation) return undefined;
+        if (operation.value.name === "A") {
+          coordinator.publish({ name: "C" });
+          throw failure;
+        }
+        if (authority.isCurrent()) lastApplied = operation;
+        return undefined;
+      },
+    });
+    coordinator.publish({ name: "A" });
+
+    let thrown: unknown;
+    try {
+      reconcilePresentationWithFinalizer(coordinator, () => {
+        if (coordinator.current === lastApplied && lastApplied) {
+          followedUp.push(lastApplied.value.name);
+        }
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBe(failure);
+    expect(coordinator.current?.value.name).toBe("C");
+    expect(followedUp).toEqual(["C"]);
+  });
+
+  it("preserves reconciliation and finalizer failures in causal order", () => {
+    const reconcileFailure = new Error("projection failed");
+    const finalizerFailure = new Error("follow-up failed");
+    const coordinator = new LatestPresentationOperationCoordinator<
+      PresentationIntent
+    >({
+      project: () => {
+        throw reconcileFailure;
+      },
+    });
+    coordinator.publish({ name: "A" });
+
+    let thrown: unknown;
+    try {
+      reconcilePresentationWithFinalizer(coordinator, () => {
+        throw finalizerFailure;
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(AggregateError);
+    expect((thrown as AggregateError).errors).toEqual([
+      reconcileFailure,
+      finalizerFailure,
+    ]);
   });
 
   it("flattens stale and current projection failures in causal order", () => {
