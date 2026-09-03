@@ -845,6 +845,45 @@ describe("legacy runtime ownership boundaries", () => {
     }
   });
 
+  it("terminally disposes every calibration limit-gizmo GPU resource", () => {
+    const manipulatorSource = runtimeSource.slice(
+      runtimeSource.indexOf("class CalibManipulator"),
+      runtimeSource.indexOf("const calibManip = new CalibManipulator"),
+    );
+    const initStart = manipulatorSource.indexOf("private _initLimitGizmo(): void");
+    const disposeStart = manipulatorSource.indexOf("private _disposeLimitGizmo(): void");
+    const buildTagsStart = manipulatorSource.indexOf("private _buildTags(): void");
+    const initSource = manipulatorSource.slice(initStart, disposeStart);
+    const disposeSource = manipulatorSource.slice(disposeStart, buildTagsStart);
+
+    expect(initStart).toBeGreaterThanOrEqual(0);
+    expect(disposeStart).toBeGreaterThan(initStart);
+    expect(buildTagsStart).toBeGreaterThan(disposeStart);
+    expect(initSource.match(/new THREE\.(?:LineBasic|MeshBasic)Material/g))
+      .toHaveLength(5);
+
+    const take = disposeSource.indexOf("const owned = this._limitGroup");
+    const releaseAlias = disposeSource.indexOf("this._limitGroup = null");
+    const detach = disposeSource.indexOf("world.remove(owned.group)");
+    const disposeResources = disposeSource.indexOf(
+      "threeResourceDisposer.disposeObject3DResources(owned.group)",
+    );
+    const reportErrors = disposeSource.indexOf(
+      'throw new AggregateError(errors, "Failed to dispose calibration limit gizmo")',
+    );
+    expect(take).toBeGreaterThanOrEqual(0);
+    expect(releaseAlias).toBeGreaterThan(take);
+    expect(detach).toBeGreaterThan(releaseAlias);
+    expect(disposeResources).toBeGreaterThan(detach);
+    expect(reportErrors).toBeGreaterThan(disposeResources);
+
+    // The old generation is captured once and never reaches back through the
+    // shared alias after a detach/dispose callback can synchronously re-enter.
+    expect(disposeSource.slice(disposeResources)).not.toContain("this._limitGroup");
+    expect(disposeSource).not.toContain(".geometry.dispose()");
+    expect(disposeSource).not.toContain(".material.dispose()");
+  });
+
   it("exposes Stage reset without installing a DOM click owner", () => {
     expect(runtimeSource).toContain("export function resetStageView");
     expect(runtimeSource).not.toContain(

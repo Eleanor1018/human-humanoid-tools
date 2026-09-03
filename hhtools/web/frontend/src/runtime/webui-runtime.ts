@@ -4900,14 +4900,28 @@ class CalibManipulator {
   }
 
   private _disposeLimitGizmo(): void {
-    if (!this._limitGroup) return;
-    world.remove(this._limitGroup.group);
-    this._limitGroup.arc.geometry.dispose();
-    this._limitGroup.needle.geometry.dispose();
-    this._limitGroup.loTick.geometry.dispose();
-    this._limitGroup.hiTick.geometry.dispose();
-    this._limitGroup.curTick.geometry.dispose();
+    // Relinquish the shared alias before detach/dispose dispatches synchronous
+    // Three.js events. A callback may install a successor that this release must
+    // neither clear nor dispose after it returns.
+    const owned = this._limitGroup;
     this._limitGroup = null;
+    if (!owned) return;
+
+    const errors: unknown[] = [];
+    try {
+      world.remove(owned.group);
+    } catch (error) {
+      errors.push(error);
+    }
+    try {
+      threeResourceDisposer.disposeObject3DResources(owned.group);
+    } catch (error) {
+      if (error instanceof AggregateError) errors.push(...error.errors);
+      else errors.push(error);
+    }
+    if (errors.length > 0) {
+      throw new AggregateError(errors, "Failed to dispose calibration limit gizmo");
+    }
   }
 
   private _buildTags(): void {
