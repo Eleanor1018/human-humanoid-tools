@@ -6,6 +6,7 @@ import latestSessionLifecycleSource from "../../src/runtime/stage/latest-session
 import reentrantSessionInstallSource from "../../src/runtime/stage/reentrant-session-install.ts?raw";
 import runtimeSource from "../../src/runtime/webui-runtime.ts?raw";
 import commandRegistrySource from "../../src/runtime/command-registry.ts?raw";
+import referenceSkeletonViewSource from "../../src/runtime/stage/reference-skeleton-view.ts?raw";
 import robotViewSource from "../../src/runtime/stage/robot-view.ts?raw";
 
 function expectTokensInOrder(source: string, tokens: readonly string[]): void {
@@ -88,13 +89,34 @@ describe("legacy runtime ownership boundaries", () => {
     );
   });
 
-  it("composes the extracted inert Robot Views explicitly", () => {
+  it("composes extracted inert Stage Views explicitly", () => {
     expect(runtimeSource).toContain(
       'import { RobotView } from "./stage/robot-view"',
     );
+    expect(runtimeSource).toContain(
+      'from "./stage/reference-skeleton-view"',
+    );
     expect(runtimeSource).not.toContain("class RobotView");
+    expect(runtimeSource).not.toContain("class ReferenceSkeletonView");
     expect(robotViewSource).toContain("export class RobotView");
+    expect(referenceSkeletonViewSource).toContain(
+      "export class ReferenceSkeletonView",
+    );
     expect(robotViewSource).not.toContain("world.add(");
+    expect(referenceSkeletonViewSource).not.toContain("world.add(");
+    expect(referenceSkeletonViewSource).not.toMatch(
+      /\bdocument\.(?:getElementById|querySelector)/,
+    );
+    for (const injectedDependency of [
+      "labelRoot,",
+      "lineRoot,",
+      "camera,",
+      "localize,",
+      "resourceDisposer,",
+    ]) {
+      expect(referenceSkeletonViewSource).toContain(injectedDependency);
+    }
+    expect(runtimeSource.match(/world\.add\(refSkel\.group\)/g)).toHaveLength(1);
     expect(runtimeSource.match(/world\.add\((?:robot|r2rSrc|r2rTgt)\.group\)/g))
       .toHaveLength(3);
   });
@@ -943,7 +965,7 @@ describe("legacy runtime ownership boundaries", () => {
     const synchronousViews = [
       {
         className: "SkeletonView",
-        endMarker: "class ReferenceSkeletonView",
+        endMarker: "class EnvView",
         inventory: [
           "...this.spheres.map((sphere) => sphere.geometry)",
           "...(this.lineGeom ? [this.lineGeom] : [])",
@@ -959,37 +981,6 @@ describe("legacy runtime ownership boundaries", () => {
           "this.parents = []",
           "this.frameIndices = null",
           "this.exclude = new Set()",
-        ],
-      },
-      {
-        className: "ReferenceSkeletonView",
-        endMarker: "class EnvView",
-        inventory: [
-          "...this.spheres.map((sphere) => sphere.geometry)",
-          "...(this.lineGeom ? [this.lineGeom] : [])",
-          "...this.spheres.map((sphere) => sphere.material)",
-          "...(this.lines ? [this.lines.material] : [])",
-          "...(this.mappedMaterial ? [this.mappedMaterial] : [])",
-          "...(this.contextMaterial ? [this.contextMaterial] : [])",
-        ],
-        cleanup: [
-          "this.group.clear()",
-          "this.labelRoot.replaceChildren()",
-          "this.lineRoot.replaceChildren()",
-        ],
-        aliasReleases: [
-          "this.lineGeom = null",
-          "this.lines = null",
-          "this.mappedMaterial = null",
-          "this.contextMaterial = null",
-          "this.spheres = []",
-          "this.parents = []",
-          "this.boneNames = []",
-          "this.canonicalNames = []",
-          "this.referenceQuaternions = []",
-          "this.exclude = new Set()",
-          "this.mappings = []",
-          "this.group.visible = false",
         ],
       },
       {
@@ -1085,6 +1076,49 @@ describe("legacy runtime ownership boundaries", () => {
         ).toBeGreaterThan(previousCleanup);
       }
     }
+
+    const referenceClearStart = referenceSkeletonViewSource.indexOf("clear(): void {");
+    const referenceClearEnd = referenceSkeletonViewSource.indexOf(
+      "\n  load(",
+      referenceClearStart,
+    );
+    const referenceClearSource = referenceSkeletonViewSource.slice(
+      referenceClearStart,
+      referenceClearEnd,
+    );
+    expect(referenceClearStart).toBeGreaterThanOrEqual(0);
+    expect(referenceClearEnd).toBeGreaterThan(referenceClearStart);
+    expect(referenceClearSource).toContain(
+      "this.#resourceDisposer.disposeObject3DChildren(this.group",
+    );
+    for (const ownedResource of [
+      "...this.spheres.map((sphere) => sphere.geometry)",
+      "...(this.lineGeom ? [this.lineGeom] : [])",
+      "...this.spheres.map((sphere) => sphere.material)",
+      "...(this.lines ? [this.lines.material] : [])",
+      "...(this.mappedMaterial ? [this.mappedMaterial] : [])",
+      "...(this.contextMaterial ? [this.contextMaterial] : [])",
+    ]) {
+      expect(referenceClearSource).toContain(ownedResource);
+    }
+    expectTokensInOrder(referenceClearSource, [
+      "finally {",
+      "this.group.clear()",
+      "this.labelRoot.replaceChildren()",
+      "this.lineRoot.replaceChildren()",
+      "this.spheres = []",
+      "this.parents = []",
+      "this.boneNames = []",
+      "this.canonicalNames = []",
+      "this.referenceQuaternions = []",
+      "this.exclude = new Set()",
+      "this.mappings = []",
+      "this.lineGeom = null",
+      "this.lines = null",
+      "this.mappedMaterial = null",
+      "this.contextMaterial = null",
+      "this.group.visible = false",
+    ]);
   });
 
   it("terminally disposes every calibration limit-gizmo GPU resource", () => {
