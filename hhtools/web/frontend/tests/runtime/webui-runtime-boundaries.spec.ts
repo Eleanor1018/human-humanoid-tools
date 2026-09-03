@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import runtimeSource from "../../src/runtime/webui-runtime.ts?raw";
+import commandRegistrySource from "../../src/runtime/command-registry.ts?raw";
 
 describe("legacy runtime ownership boundaries", () => {
   it("exposes Stage reset without installing a DOM click owner", () => {
@@ -51,6 +52,13 @@ describe("legacy runtime ownership boundaries", () => {
   it("leaves Stage empty and Reset presentation to React", () => {
     expect(runtimeSource).not.toMatch(/["'](?:stage-empty|view-reset-btn)["']/);
     expect(runtimeSource).not.toContain("resetVisible");
+  });
+
+  it("keeps application Reset commands off the DOM compatibility boundary", () => {
+    expect(commandRegistrySource).not.toContain("document.");
+    expect(commandRegistrySource).not.toMatch(/["']view-reset-btn["']/);
+    expect(commandRegistrySource).toContain("run: context.resetView");
+    expect(commandRegistrySource).toContain("enabled: context.canResetView");
   });
 
   it("lets the React-owned V2M batch dropzone handle its own files", () => {

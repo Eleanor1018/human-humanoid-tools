@@ -58,6 +58,25 @@ export function useStageDisplayState(
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
+/** Subscribe only to whether the active renderer currently supports Reset. */
+export function useStageCanResetView(
+  stageModelService: IStageModelService,
+): boolean {
+  const subscribe = useCallback(
+    (onStoreChange: () => void) => {
+      const subscription = stageModelService.onDidChangeState(onStoreChange);
+      return () => subscription.dispose();
+    },
+    [stageModelService],
+  );
+  const getSnapshot = useCallback(
+    () => stageModelService.state.display.canResetView,
+    [stageModelService],
+  );
+
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
 /**
  * Observe only presentation shared by the active Stage surface.
  *

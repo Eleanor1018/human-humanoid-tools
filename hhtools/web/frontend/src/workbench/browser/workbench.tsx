@@ -333,6 +333,8 @@ export function Workbench({ panelContributions }: WorkbenchProps) {
     activePanel,
     locale,
     theme,
+    stageDisplayCommands,
+    stageModelService,
     onOpenSettings: () => {
       setSettingsOpen(true);
       void refreshSettings();

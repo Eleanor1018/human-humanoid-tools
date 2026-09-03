@@ -1,8 +1,9 @@
 /**
- * Builds the single command model consumed by menus, the command palette, and
- * keyboard routes. Most commands publish typed application intents so React
- * chrome does not need to know which compatibility-runtime control implements
- * an action. The returned list is a snapshot and should be rebuilt when its
+ * Builds the single command model consumed by menus and the command palette.
+ * Shortcut strings are metadata until a dedicated dispatcher consumes this
+ * same model. Most commands publish typed application intents so React chrome
+ * does not need to know which compatibility-runtime control implements an
+ * action. The returned list is a snapshot and should be rebuilt when its
  * context (active panel, locale, theme, or capabilities) changes.
  */
 
@@ -45,6 +46,8 @@ export interface CommandRegistryContext {
   locale?: WorkspaceLocale
   canExportResult?: boolean
   exportResult?: () => void
+  canResetView: boolean
+  resetView: () => void
   canExitApplication?: boolean
   exitApplication?: () => void
 }
@@ -337,7 +340,11 @@ export function createApplicationCommands(
       detail: context.applicationMode ? localize(locale, 'Return to the default camera position', '回到当前对象的默认相机位置') : '回到当前对象的默认相机位置',
       shortcut: 'F',
       keywords: 'camera reset focus 相机 视角 重置',
-      run: () => document.getElementById('view-reset-btn')?.click(),
+      enabled: context.canResetView,
+      disabledReason: context.canResetView
+        ? undefined
+        : localize(locale, 'No Stage content to frame', '暂无可取景的 Stage 内容'),
+      run: context.resetView,
     },
     {
       id: 'panels-reveal',

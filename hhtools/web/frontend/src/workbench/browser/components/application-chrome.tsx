@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Search } from "lucide-react";
 
 import {
@@ -12,12 +12,19 @@ import type {
   WorkspacePanelId,
   WorkspaceTheme,
 } from "@/workbench/common/workspace";
+import { useStageCanResetView } from "@/workbench/services/stage/browser/use-stage-model-state";
+import type {
+  IStageDisplayCommands,
+  IStageModelService,
+} from "@/workbench/services/stage/common/stage-service";
 import { cn } from "@/lib/utils";
 
 interface ApplicationChromeProps {
   activePanel: WorkspacePanelId;
   locale: WorkspaceLocale;
   theme: WorkspaceTheme;
+  stageDisplayCommands: IStageDisplayCommands;
+  stageModelService: IStageModelService;
   onOpenSettings(): void;
   onOpenAbout(): void;
   onToggleTheme(): void;
@@ -26,8 +33,17 @@ interface ApplicationChromeProps {
 function useApplicationCommands(
   props: ApplicationChromeProps,
 ): ApplicationCommand[] {
-  // Menus, keyboard shortcuts, and Ctrl+K are projections of one registry.
-  // Adding a command there automatically keeps every command surface aligned.
+  const modelCanResetView = useStageCanResetView(props.stageModelService);
+  // Batch temporarily replaces the visual Stage, so its hidden 3D renderer is
+  // not an active Reset target even when it still retains loaded content.
+  const canResetView = modelCanResetView && props.activePanel !== "batch";
+  const resetView = useCallback(
+    () => props.stageDisplayCommands.resetView(),
+    [props.stageDisplayCommands],
+  );
+
+  // Menus and Ctrl+K are projections of one registry. Adding a command there
+  // keeps every implemented command surface aligned.
   return useMemo(
     () =>
       createApplicationCommands({
@@ -41,6 +57,8 @@ function useApplicationCommands(
         canExitApplication: window.hhtoolsDesktop !== undefined,
         exitApplication: () => window.close(),
         canExportResult: true,
+        canResetView,
+        resetView,
         exportResult: () => {
           // Export buttons still belong to the compatibility runtime. This
           // adapter is the only chrome-level place allowed to invoke them.
@@ -55,7 +73,16 @@ function useApplicationCommands(
             button.click();
         },
       }),
-    [props],
+    [
+      canResetView,
+      props.activePanel,
+      props.locale,
+      props.onOpenAbout,
+      props.onOpenSettings,
+      props.onToggleTheme,
+      props.theme,
+      resetView,
+    ],
   );
 }
 

@@ -73,6 +73,50 @@ function renderWorkbench(
 }
 
 describe("Workbench DOM contract", () => {
+  it("routes application Reset through the Stage command contract", () => {
+    const { services } = renderWorkbench();
+    const resetView = vi
+      .spyOn(services.stageDisplayCommands, "resetView")
+      .mockImplementation(() => undefined);
+
+    fireEvent.click(screen.getByTitle("Open command palette"));
+    fireEvent.change(screen.getByLabelText("Search commands"), {
+      target: { value: "Reset 3D View" },
+    });
+    const resetCommand = screen
+      .getByText("Reset 3D View")
+      .closest("button") as HTMLButtonElement;
+
+    expect(resetCommand).toBeDisabled();
+    fireEvent.click(resetCommand);
+    expect(resetView).not.toHaveBeenCalled();
+
+    act(() => {
+      services.stageModelService.updateState({
+        display: { empty: false, canResetView: true },
+      });
+    });
+    expect(resetCommand).toBeEnabled();
+    fireEvent.click(resetCommand);
+    expect(resetView).toHaveBeenCalledOnce();
+
+    // Batch replaces the visible 3D surface without clearing its model, so
+    // the command must close even though canResetView remains true underneath.
+    fireEvent.click(
+      document.querySelector<HTMLButtonElement>(
+        '.nav-item[data-panel="batch"]',
+      )!,
+    );
+    fireEvent.click(screen.getByTitle("Open command palette"));
+    fireEvent.change(screen.getByLabelText("Search commands"), {
+      target: { value: "Reset 3D View" },
+    });
+    expect(
+      screen.getByText("Reset 3D View").closest("button"),
+    ).toBeDisabled();
+    expect(resetView).toHaveBeenCalledOnce();
+  });
+
   it("isolates React-owned Batch state from legacy Stage classes", () => {
     renderWorkbench();
     const batchNavigation = document.querySelector<HTMLButtonElement>(
