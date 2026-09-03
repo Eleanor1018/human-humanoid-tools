@@ -53,13 +53,18 @@ export class BrowserLegacyStageDisplayStateAdapter implements IDisposable {
   ): void => {
     if (this.#disposed) return;
 
-    // Ownership changes are meaningful even while H2R is inactive: React will
-    // use them to select the matching HUD. H2R layer and surface facts stay at
-    // their last confirmed values until the renderer returns the canvas and
-    // publishes a complete active snapshot.
+    // Surface facts always describe the active renderer. H2R layer facts stay
+    // at their last confirmed values while R2R owns the canvas, then update as
+    // part of the complete H2R hand-back snapshot.
     try {
       if (!snapshot.ownsStage) {
-        this.#stageOwner.updateState({ display: { owner: "r2r" } });
+        this.#stageOwner.updateState({
+          display: {
+            owner: "r2r",
+            empty: snapshot.empty,
+            canResetView: snapshot.canResetView,
+          },
+        });
         return;
       }
       this.#stageOwner.updateState({

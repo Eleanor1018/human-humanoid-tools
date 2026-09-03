@@ -219,6 +219,24 @@ describe("H2rStageDisplayPublisher", () => {
     expect(Object.values(current.layers).every(Object.isFrozen)).toBe(true);
   });
 
+  it("normalizes Reset capability for an empty active R2R surface", () => {
+    const mutable = createMutableSnapshot();
+    mutable.ownsStage = false;
+    mutable.empty = true;
+    mutable.canResetView = true;
+    const publisher = new H2rStageDisplayPublisher(() => mutable, vi.fn());
+    const listener = vi.fn<(snapshot: H2rStageDisplaySnapshot) => void>();
+
+    publisher.subscribe(listener);
+
+    expect(listener.mock.calls[0][0].canResetView).toBe(false);
+    expect(
+      Object.values(listener.mock.calls[0][0].layers).every(
+        (layer) => !layer.canToggle,
+      ),
+    ).toBe(true);
+  });
+
   it("deduplicates no-ops and publishes a changed capability", () => {
     const mutable = createMutableSnapshot();
     const publisher = new H2rStageDisplayPublisher(() => mutable, vi.fn());
@@ -281,7 +299,7 @@ describe("H2rStageDisplayPublisher", () => {
     expect(listener.mock.calls[0][0].layers.sourceSkeleton.visible).toBe(false);
   });
 
-  it("closes reset and interaction capabilities while R2R owns Stage", () => {
+  it("preserves active-surface Reset while closing H2R interaction", () => {
     const mutable = createMutableSnapshot();
     const publisher = new H2rStageDisplayPublisher(() => mutable, vi.fn());
     const listener = vi.fn<(snapshot: H2rStageDisplaySnapshot) => void>();
@@ -292,7 +310,7 @@ describe("H2rStageDisplayPublisher", () => {
     publisher.markChanged();
 
     const current = listener.mock.calls[0][0];
-    expect(current.canResetView).toBe(false);
+    expect(current.canResetView).toBe(true);
     expect(
       Object.values(current.layers).every((layer) => !layer.canToggle),
     ).toBe(true);

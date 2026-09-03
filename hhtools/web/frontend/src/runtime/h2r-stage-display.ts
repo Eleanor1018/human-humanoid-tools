@@ -31,6 +31,7 @@ export type H2rStageLayerSnapshots = Readonly<
 export interface H2rStageDisplaySnapshot {
   /** False while R2R temporarily owns the shared canvas and player. */
   readonly ownsStage: boolean;
+  /** Presentation facts for whichever workflow currently owns the surface. */
   readonly empty: boolean;
   readonly canResetView: boolean;
   readonly layers: H2rStageLayerSnapshots;
@@ -160,7 +161,9 @@ function freezeSnapshot(
   return Object.freeze({
     ownsStage,
     empty,
-    canResetView: ownsStage && !empty && Boolean(candidate.canResetView),
+    // Reset belongs to the active shared surface, including R2R. Only H2R
+    // layer interaction is gated by `ownsStage` in `freezeLayer` above.
+    canResetView: !empty && Boolean(candidate.canResetView),
     layers: Object.freeze(layers),
   });
 }

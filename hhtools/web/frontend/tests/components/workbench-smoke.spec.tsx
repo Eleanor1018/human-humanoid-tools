@@ -232,10 +232,17 @@ describe("Workbench DOM contract", () => {
     expect(skeleton).toHaveClass("on");
 
     act(() => {
-      publishDisplay?.({ ...initialDisplay, ownsStage: false });
+      publishDisplay?.({
+        ...initialDisplay,
+        ownsStage: false,
+        empty: true,
+        canResetView: false,
+      });
     });
     await waitFor(() => {
       expect(services.stageModelService.state.display.owner).toBe("r2r");
+      expect(services.stageModelService.state.display.empty).toBe(true);
+      expect(services.stageModelService.state.display.canResetView).toBe(false);
       expect(document.getElementById("view-hud")).toHaveClass("hidden");
       expect(document.getElementById("view-hud-r2r")).not.toHaveClass(
         "hidden",

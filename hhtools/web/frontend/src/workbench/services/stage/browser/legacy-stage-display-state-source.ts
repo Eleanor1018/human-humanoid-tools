@@ -2,7 +2,8 @@ import type { IDisposable } from "@/base/common/disposable";
 import type { StageDisplayState } from "@/workbench/services/stage/common/stage-service";
 
 /**
- * Complete H2R display snapshot produced by the compatibility renderer.
+ * Complete current surface plus H2R layer snapshot from the compatibility
+ * renderer.
  *
  * `ownsStage` prevents R2R's temporary physical hiding of H2R Three.js groups
  * from being mistaken for a user visibility change. The browser adapter maps

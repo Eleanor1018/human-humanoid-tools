@@ -283,6 +283,30 @@ describe("legacy runtime ownership boundaries", () => {
     expect(cleanup).toBeLessThan(projection);
   });
 
+  it("publishes R2R surface facts through the passive Stage source", () => {
+    const collect = runtimeSource.slice(
+      runtimeSource.indexOf("function collectH2rStageDisplaySnapshot"),
+      runtimeSource.indexOf("const h2rStageDisplayPublisher"),
+    );
+    const apply = runtimeSource.slice(
+      runtimeSource.indexOf("function r2rApplyStage"),
+      runtimeSource.indexOf("/** Apply a repeatable R2R visibility preset"),
+    );
+
+    expect(collect).toContain("if (h2rOwnsStage) return h2rSnapshot");
+    expect(collect).toContain("collectR2rStageSurface()");
+    expect(apply).toContain("collectR2rStageSurfaceFacts()");
+    expect(apply).toContain("projectR2rStageSurface(facts)");
+    expect(apply).toContain(
+      "r2rTgt.group.visible = facts.targetRobotAvailable",
+    );
+    expect(apply).toContain(
+      "refSkel.group.visible = facts.referenceAvailable",
+    );
+    expect(apply).toContain("if (!surface.empty)");
+    expect(apply.match(/markH2rStageDisplayChanged\(\)/g)).toHaveLength(3);
+  });
+
   it("publishes R2R ownership only around a complete H2R handoff", () => {
     const enter = runtimeSource.slice(
       runtimeSource.indexOf("function r2rEnterPanel"),
@@ -298,11 +322,13 @@ describe("legacy runtime ownership boundaries", () => {
     const relinquish = normalEnter.indexOf("h2rOwnsStage = false");
     const hideH2rViews = normalEnter.indexOf("applyH2rPhysicalVisibility()");
     const applyR2r = normalEnter.indexOf("r2rApplyStage()");
-    const publishHandoff = normalEnter.indexOf("markH2rStageDisplayChanged()");
     expect(snapshot).toBeLessThan(relinquish);
     expect(relinquish).toBeLessThan(hideH2rViews);
     expect(hideH2rViews).toBeLessThan(applyR2r);
-    expect(applyR2r).toBeLessThan(publishHandoff);
+    expect(normalEnter).not.toContain("markH2rStageDisplayChanged()");
+    expect(leave).toContain(
+      "r2rApplyStage({ publishStageDisplay: false })",
+    );
     expect(leave.indexOf("h2rOwnsStage = true")).toBeLessThan(
       leave.indexOf("applyH2rPhysicalVisibility()"),
     );

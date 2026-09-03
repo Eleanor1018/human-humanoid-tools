@@ -190,6 +190,11 @@ import {
   type H2rStageDisplaySnapshot,
   type H2rStageLayerId,
 } from "./h2r-stage-display";
+import {
+  projectR2rStageSurface,
+  type R2rStageSurfaceFacts,
+  type R2rStageSurfaceSnapshot,
+} from "./r2r-stage-surface";
 import type {
   JobConfigResponse,
   JobListResponse,
@@ -2813,7 +2818,7 @@ const state: AppState = {
  */
 function collectH2rStageDisplaySnapshot(): H2rStageDisplaySnapshot {
   const available = h2rLayerAvailability();
-  return projectH2rStageDisplaySnapshot({
+  const h2rSnapshot = projectH2rStageDisplaySnapshot({
     ownsStage: h2rOwnsStage,
     calibrationMode: state.calibrationMode,
     hasMotion: state.motion !== null,
@@ -2845,6 +2850,11 @@ function collectH2rStageDisplaySnapshot(): H2rStageDisplaySnapshot {
       },
     },
   });
+  if (h2rOwnsStage) return h2rSnapshot;
+
+  // The passive source describes the active shared surface while retaining
+  // H2R's confirmed layer facts for the eventual ownership hand-back.
+  return { ...h2rSnapshot, ...collectR2rStageSurface() };
 }
 
 const h2rStageDisplayPublisher = new H2rStageDisplayPublisher(
@@ -7771,11 +7781,40 @@ function r2rLoadTgtScene(
   if (envBtn) envBtn.disabled = false;
 }
 
+/** Read the same R2R resource facts used by rendering and presentation. */
+function collectR2rStageSurfaceFacts(): R2rStageSurfaceFacts {
+  return {
+    calibrating: r2r.calibrating,
+    // A trajectory cannot render without robot geometry. Read the group so a
+    // cleared view cannot stay available through RobotView's cached metadata.
+    sourceRobotAvailable: r2rSrc.group.children.length > 0,
+    targetRobotAvailable: r2rTgt.group.children.length > 0,
+    sourceSkeletonAvailable: r2rSrcSkel.numFrames > 0,
+    targetSkeletonAvailable: r2rTgtSkel.numFrames > 0,
+    sourceEnvironmentAvailable:
+      r2rSrcEnv.numFrames > 0 || Boolean(r2r.scaledScene?.terrain),
+    targetEnvironmentAvailable:
+      r2rTgtEnv.numFrames > 0 || Boolean(r2r.tgtScaledScene?.terrain),
+    referenceAvailable: refSkel.spheres.length > 0,
+  };
+}
+
+function collectR2rStageSurface(): R2rStageSurfaceSnapshot {
+  return projectR2rStageSurface(collectR2rStageSurfaceFacts());
+}
+
+interface R2rStageApplyOptions {
+  /** Suppress the transient R2R snapshot during synchronous H2R hand-back. */
+  readonly publishStageDisplay?: boolean;
+}
+
 /**
  * Sole authority for R2R stage visibility: hide H2R views while R2R owns the
  * shared canvas, then project the workflow's visibility model onto its views.
  */
-function r2rApplyStage(): void {
+function r2rApplyStage(
+  { publishStageDisplay = true }: R2rStageApplyOptions = {},
+): void {
   if (!r2r.active) {
     r2rSrc.group.visible = false;
     r2rTgt.group.visible = false;
@@ -7783,31 +7822,42 @@ function r2rApplyStage(): void {
     r2rTgtSkel.group.visible = false;
     r2rSrcEnv.group.visible = false;
     r2rTgtEnv.group.visible = false;
+    if (publishStageDisplay) markH2rStageDisplayChanged();
     return;
   }
   // R2R may re-project after any of its own resource changes. Re-assert the
   // H2R ownership boundary every time without mutating H2R's logical intents.
   applyH2rPhysicalVisibility();
   if (r2r.calibrating) {
+    const facts = collectR2rStageSurfaceFacts();
+    const surface = projectR2rStageSurface(facts);
     r2rSrc.group.visible = false;
     r2rSrcSkel.group.visible = false;
     r2rSrcEnv.group.visible = false;
     r2rTgtSkel.group.visible = false;
     r2rTgtEnv.group.visible = false;
-    r2rTgt.group.visible = (r2rTgt.links?.length || 0) > 0;
-    refSkel.group.visible = true;
-    revealStage();
+    r2rTgt.group.visible = facts.targetRobotAvailable;
+    refSkel.group.visible = facts.referenceAvailable;
+    if (!surface.empty) {
+      revealStage();
+    } else {
+      document.getElementById("view-reset-btn")?.classList.add("hidden");
+    }
+    player.active = false;
     _setPlaybarVisible(false);
     player.setPlaying(false);
+    if (publishStageDisplay) markH2rStageDisplayChanged();
     return;
   }
   refSkel.group.visible = false;
-  const hasSrc = !!(r2rSrc.trajectory || r2rSrc.links?.length);
-  const hasTgt = !!(r2rTgt.trajectory || r2rTgt.links?.length);
-  const hasSrcSk = r2rSrcSkel.numFrames > 0;
-  const hasTgtSk = r2rTgtSkel.numFrames > 0;
-  const hasSrcEnv = r2rSrcEnv.numFrames > 0 || !!r2r.scaledScene?.terrain;
-  const hasTgtEnv = r2rTgtEnv.numFrames > 0 || !!r2r.tgtScaledScene?.terrain;
+  const facts = collectR2rStageSurfaceFacts();
+  const surface = projectR2rStageSurface(facts);
+  const hasSrc = facts.sourceRobotAvailable;
+  const hasTgt = facts.targetRobotAvailable;
+  const hasSrcSk = facts.sourceSkeletonAvailable;
+  const hasTgtSk = facts.targetSkeletonAvailable;
+  const hasSrcEnv = facts.sourceEnvironmentAvailable;
+  const hasTgtEnv = facts.targetEnvironmentAvailable;
   r2rSrc.group.visible = r2rVis.srcRobot && hasSrc;
   r2rSrcSkel.group.visible = r2rVis.srcSkel && hasSrcSk;
   r2rSrcEnv.group.visible = r2rVis.srcEnv && hasSrcEnv;
@@ -7820,7 +7870,7 @@ function r2rApplyStage(): void {
   r2rSetToggle("r2r-tg-tgt-robot", r2rTgt.group.visible);
   r2rSetToggle("r2r-tg-tgt-skel", r2rTgtSkel.group.visible);
   r2rSetToggle("r2r-tg-tgt-env", r2rTgtEnv.group.visible);
-  if (hasSrc || hasTgt || hasSrcSk || hasTgtSk || hasSrcEnv || hasTgtEnv) {
+  if (!surface.empty) {
     player.active = true;
     revealStage();
     _setPlaybarVisible(true);
@@ -7833,7 +7883,7 @@ function r2rApplyStage(): void {
     _setPlaybarVisible(false);
     document.getElementById("view-reset-btn")?.classList.add("hidden");
   }
-
+  if (publishStageDisplay) markH2rStageDisplayChanged();
 }
 
 /** Apply a repeatable R2R visibility preset using the workflow's isolated views. */
@@ -7874,7 +7924,6 @@ function r2rEnterPanel(): void {
     h2rOwnsStage = false;
     applyH2rPhysicalVisibility();
     r2rApplyStage();
-    markH2rStageDisplayChanged();
     return;
   }
   // Capture shared non-visibility state before transferring canvas ownership.
@@ -7895,15 +7944,16 @@ function r2rEnterPanel(): void {
   applyH2rPhysicalVisibility();
   player.setPlaying(false);
   r2rApplyStage();
-  markH2rStageDisplayChanged();
   void r2rUpdateRetargetBtn();
 }
 
 function r2rLeavePanel(): void {
   if (!r2r.active) return;
   r2r.active = false;
-  if (r2r.calibrating) r2rExitCalib();
-  r2rApplyStage();
+  if (r2r.calibrating) {
+    r2rExitCalib({ publishStageDisplay: false });
+  }
+  r2rApplyStage({ publishStageDisplay: false });
   const s = _r2rMainSnap;
   _r2rMainSnap = null;
   if (s) {
@@ -8356,7 +8406,9 @@ async function r2rStartCalib(
     ));
 }
 
-function r2rExitCalib(): void {
+function r2rExitCalib(
+  { publishStageDisplay = true }: R2rStageApplyOptions = {},
+): void {
   r2r.calibrating = false;
   r2r.calibNeedsCameraFocus = false;
   if (r2r.calibOrbitSaved) {
@@ -8376,7 +8428,7 @@ function r2rExitCalib(): void {
   document.getElementById("calib-banner")?.classList.add("hidden");
   refSkel.clear();
   refSkel.group.visible = false;
-  r2rApplyStage();
+  r2rApplyStage({ publishStageDisplay });
   publishR2rWorkflowState();
   emitCalibrationEditorState("r2r");
 }
