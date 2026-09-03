@@ -130,6 +130,7 @@ describe("React workbench components", () => {
     render(
       <ThreeStage
         locale="en"
+        stageRendererMount={null}
         stageDisplayCommands={{ resetView }}
         stageLayerCommands={{ toggleLayer: vi.fn() }}
         stageModelService={stageModel}
@@ -220,6 +221,7 @@ describe("React workbench components", () => {
     render(
       <ThreeStage
         locale="en"
+        stageRendererMount={null}
         stageDisplayCommands={{ resetView: vi.fn() }}
         stageLayerCommands={{ toggleLayer }}
         stageModelService={stageModel}
@@ -249,6 +251,7 @@ describe("React workbench components", () => {
     render(
       <ThreeStage
         locale="en"
+        stageRendererMount={null}
         stageDisplayCommands={{ resetView: vi.fn() }}
         stageLayerCommands={{ toggleLayer: vi.fn() }}
         stageModelService={stageModel}

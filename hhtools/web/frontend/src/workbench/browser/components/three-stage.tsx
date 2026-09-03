@@ -1,4 +1,9 @@
-import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
+import {
+  useEffect,
+  useRef,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+} from "react";
 
 import { useLocaleText } from "@/workbench/services/localization/browser/use-locale-text";
 import type { WorkspaceLocale } from "@/workbench/common/workspace";
@@ -9,18 +14,34 @@ import type {
   IStagePlaybackCommands,
 } from "@/workbench/services/stage/common/stage-service";
 import { useStageSurfaceState } from "@/workbench/services/stage/browser/use-stage-model-state";
+import type {
+  ThreeStageRendererMount,
+} from "@/workbench/browser/stage/three-stage-renderer-mount";
 import { cn } from "@/lib/utils";
 import { H2rStageLayerControls } from "./h2r-stage-layer-controls";
 import { PlaybackBar } from "./playback-bar";
 import { StageLayerToggle } from "./stage-layer-toggle";
 
-/** Stable DOM contract consumed by the Three.js stage compatibility service. */
+function reportMountErrorSafely(
+  stageRendererMount: ThreeStageRendererMount,
+  error: unknown,
+): void {
+  try {
+    stageRendererMount.reportError(error);
+  } catch {
+    // Reporting is observational. It cannot escape a React effect and obscure
+    // the renderer setup or cleanup failure that was already handed off.
+  }
+}
+
+/** React-owned Stage surface shared with exactly one renderer through a mount. */
 export function ThreeStage({
   locale,
   stageDisplayCommands,
   stageLayerCommands,
   stageModelService,
   stagePlaybackCommands,
+  stageRendererMount,
   batchActive = false,
   batchWorkspace,
 }: {
@@ -29,12 +50,47 @@ export function ThreeStage({
   stageLayerCommands: IStageLayerCommands;
   stageModelService: IStageModelService;
   stagePlaybackCommands: IStagePlaybackCommands;
+  /** Null while the legacy runtime remains the sole Stage renderer owner. */
+  stageRendererMount: ThreeStageRendererMount | null;
   /** Batch replaces the visible Stage surface while preserving WebGL state. */
   batchActive?: boolean;
   batchWorkspace?: ReactNode;
 }) {
+  const stageRef = useRef<HTMLElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const text = useLocaleText(locale);
   const stageSurface = useStageSurfaceState(stageModelService);
+
+  useEffect(() => {
+    if (!stageRendererMount) return;
+
+    const stage = stageRef.current;
+    const canvas = canvasRef.current;
+    if (!stage || !canvas || canvas.parentElement !== stage) {
+      reportMountErrorSafely(
+        stageRendererMount,
+        new Error("React did not commit the expected Stage renderer DOM"),
+      );
+      return;
+    }
+
+    let lease: ReturnType<ThreeStageRendererMount["mount"]>;
+    try {
+      lease = stageRendererMount.mount({ stage, canvas });
+    } catch (error) {
+      reportMountErrorSafely(stageRendererMount, error);
+      return;
+    }
+
+    return () => {
+      try {
+        lease.dispose();
+      } catch (error) {
+        reportMountErrorSafely(stageRendererMount, error);
+      }
+    };
+  }, [stageRendererMount]);
+
   const legacyToggle = (
     id: string,
     en: string,
@@ -52,10 +108,11 @@ export function ThreeStage({
   );
   return (
     <main
+      ref={stageRef}
       id="stage"
       data-batch-active={batchActive ? "true" : undefined}
     >
-      <canvas id="three-canvas" />
+      <canvas ref={canvasRef} id="three-canvas" />
       <svg
         id="calib-mapping-overlay"
         className="calib-mapping-overlay"

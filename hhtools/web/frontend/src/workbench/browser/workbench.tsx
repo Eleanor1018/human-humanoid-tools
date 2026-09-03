@@ -45,6 +45,9 @@ import {
 import { cn } from "@/lib/utils";
 import { WorkbenchCommandIds } from "@/workbench/common/command-ids";
 import type { GvhmrOptionalComponentState } from "@/workbench/services/gvhmr/common/gvhmr-component-service";
+import type {
+  ThreeStageRendererMount,
+} from "@/workbench/browser/stage/three-stage-renderer-mount";
 
 // Unmigrated command-palette imports still resolve to compatibility elements.
 // Migrated features such as V2M register commands instead of entering this map.
@@ -91,9 +94,13 @@ const importTargets: Record<
  */
 interface WorkbenchProps {
   panelContributions: readonly WorkbenchPanelContribution[];
+  stageRendererMount: ThreeStageRendererMount | null;
 }
 
-export function Workbench({ panelContributions }: WorkbenchProps) {
+export function Workbench({
+  panelContributions,
+  stageRendererMount,
+}: WorkbenchProps) {
   // These concrete implementations are assembled in main.tsx; the shell only
   // sees their stable interfaces. Remaining window bridges below are explicit
   // migration seams, not members of the new service graph.
@@ -411,6 +418,7 @@ export function Workbench({ panelContributions }: WorkbenchProps) {
           stageLayerCommands={stageLayerCommands}
           stageModelService={stageModelService}
           stagePlaybackCommands={stagePlaybackCommands}
+          stageRendererMount={stageRendererMount}
           batchActive={activePanel === "batch"}
           batchWorkspace={
             <BatchStage

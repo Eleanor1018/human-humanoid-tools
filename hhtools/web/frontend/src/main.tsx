@@ -63,7 +63,12 @@ createRoot(root).render(
     lifecycle={contributionLifecycle}
   >
     <TooltipProvider>
-      <Workbench panelContributions={panelContributions} />
+      <Workbench
+        panelContributions={panelContributions}
+        // The compatibility contribution is still the sole renderer owner.
+        // A real mount is provided only in the later atomic legacy cutover.
+        stageRendererMount={null}
+      />
     </TooltipProvider>
   </WorkbenchServicesProvider>,
 );

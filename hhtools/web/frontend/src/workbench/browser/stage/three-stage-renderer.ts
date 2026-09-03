@@ -6,12 +6,9 @@ import {
   ThreeResourceDisposer,
   type ThreeResourceExtras,
 } from "./three-resource-disposer";
+import type { ThreeStageDomReferences } from "./three-stage-renderer-mount";
 
-/** React supplies these stable elements; the renderer never searches the DOM. */
-export interface ThreeStageDomReferences {
-  readonly stage: HTMLElement;
-  readonly canvas: HTMLCanvasElement;
-}
+export type { ThreeStageDomReferences } from "./three-stage-renderer-mount";
 
 /**
  * Browser scheduling is injected so lifecycle tests never create WebGL state.

@@ -13,6 +13,9 @@ vi.mock("../../src/runtime/dataset-viz", () => ({}));
 
 import { Workbench } from "../../src/workbench/browser/workbench";
 import { WorkbenchServicesProvider } from "../../src/workbench/browser/workbench-service-context";
+import type {
+  ThreeStageRendererMount,
+} from "../../src/workbench/browser/stage/three-stage-renderer-mount";
 import {
   WorkbenchContributionLifecycle,
   WorkbenchLifecyclePhase,
@@ -52,6 +55,7 @@ function mockWorkbenchGetRequests(
 
 function renderWorkbench(
   contributions?: readonly WorkbenchPanelContribution[],
+  stageRendererMount: ThreeStageRendererMount | null = null,
 ) {
   const services = createBrowserWorkbenchServices(vi.fn());
   mockWorkbenchGetRequests(services);
@@ -66,13 +70,36 @@ function renderWorkbench(
   });
   const view = render(
     <WorkbenchServicesProvider services={services} lifecycle={lifecycle}>
-      <Workbench panelContributions={contributions ?? [panelContribution]} />
+      <Workbench
+        panelContributions={contributions ?? [panelContribution]}
+        stageRendererMount={stageRendererMount}
+      />
     </WorkbenchServicesProvider>,
   );
   return { ...view, services };
 }
 
 describe("Workbench DOM contract", () => {
+  it("passes the browser-local Stage mount to the committed surface", () => {
+    const dispose = vi.fn();
+    const mount = vi.fn(() => ({ dispose }));
+    const stageRendererMount: ThreeStageRendererMount = {
+      mount,
+      reportError: vi.fn(),
+    };
+
+    const view = renderWorkbench(undefined, stageRendererMount);
+    const stage = document.getElementById("stage") as HTMLElement;
+    const canvas = document.getElementById(
+      "three-canvas",
+    ) as HTMLCanvasElement;
+
+    expect(mount).toHaveBeenCalledWith({ stage, canvas });
+    expect(mount).toHaveBeenCalledOnce();
+    view.unmount();
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
   it("routes application Reset through the Stage command contract", () => {
     const { services } = renderWorkbench();
     const resetView = vi
@@ -283,7 +310,10 @@ describe("Workbench DOM contract", () => {
 
     const rendered = render(
       <WorkbenchServicesProvider services={services} lifecycle={lifecycle}>
-        <Workbench panelContributions={[panelContribution]} />
+        <Workbench
+          panelContributions={[panelContribution]}
+          stageRendererMount={null}
+        />
       </WorkbenchServicesProvider>,
     );
 
