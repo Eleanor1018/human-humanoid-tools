@@ -819,7 +819,6 @@ describe("legacy runtime ownership boundaries", () => {
     const guardedEffects = [
       "r2rCalibrationFkPreview.stop()",
       'switchInspectorPanel("r2r")',
-      "r2rEnterPanel()",
       "r2rCalibrationFkPreview.start()",
       "applyCalibOrbitLimits({",
       "updateR2rCalibBanner()",
@@ -843,6 +842,11 @@ describe("legacy runtime ownership boundaries", () => {
       expect(effectAt, `bootstrap effect: ${effect}`).toBeGreaterThanOrEqual(0);
       expect(relativeGuard, `bootstrap guard: ${effect}`).toBeGreaterThanOrEqual(0);
     }
+    expect(entry).toContain("const panelSwitch = switchInspectorPanel(\"r2r\")");
+    expect(entry).toContain(
+      "!panelSwitchSettledOnStageOwner(panelSwitch, \"r2r\")",
+    );
+    expect(entry).not.toContain("r2rEnterPanel()");
     expectTokensInOrder(entry, [
       "reserveCalibrationManipulatorSession(",
       "payload: reference",
@@ -1971,27 +1975,48 @@ describe("legacy runtime ownership boundaries", () => {
   });
 
   it("publishes R2R ownership only around a complete H2R handoff", () => {
+    const navigation = runtimeSource.slice(
+      runtimeSource.indexOf("interface PanelSwitchReceipt"),
+      runtimeSource.indexOf("/** After a robot is loaded"),
+    );
     const enter = runtimeSource.slice(
       runtimeSource.indexOf("function r2rEnterPanel"),
       runtimeSource.indexOf("function r2rLeavePanel"),
     );
     const leave = runtimeSource.slice(
       runtimeSource.indexOf("function r2rLeavePanel"),
-      runtimeSource.indexOf("// Hook panel switching"),
+      runtimeSource.indexOf("function r2rSetCalChip"),
     );
-    const normalEnter = enter.slice(enter.indexOf("_r2rMainSnap ="));
 
-    const snapshot = normalEnter.indexOf("_r2rMainSnap =");
-    const relinquish = normalEnter.indexOf("h2rOwnsStage = false");
-    const hideH2rViews = normalEnter.indexOf("applyH2rPhysicalVisibility()");
-    const applyR2r = normalEnter.indexOf("r2rApplyStage()");
-    expect(snapshot).toBeLessThan(relinquish);
+    expectTokensInOrder(navigation, [
+      "createPanelPresentationIntent({",
+      "panelPresentationCoordinator.publish(intent)",
+      "reconcilePresentationWithFinalizer(",
+      "panelPresentationCoordinator,",
+      "runCurrentPanelFollowups,",
+    ]);
+    expect(navigation).toContain("window.__hhUi?.setActivePanel(intent.panelId)");
+    expect(navigation).toContain("if (!authority.isCurrent()) return undefined");
+    expect(navigation).toContain("appliedPanelPresentationOwnsStage({");
+    expect(runtimeSource.match(/__hhUi\?\.setActivePanel/g)).toHaveLength(1);
+    expect(runtimeSource).not.toContain("inspectorPanelSwitchHook");
+    expect(runtimeSource).not.toContain("panelSwitchReceiptIsCurrent");
+    expect(runtimeSource).not.toContain("_r2rMainSnap");
+    expect(runtimeSource.match(/if \(!r2r\.active\) r2rEnterPanel\(\)/g))
+      .toBeNull();
+
+    const relinquish = enter.indexOf("h2rOwnsStage = false");
+    const hideH2rViews = enter.indexOf("applyH2rPhysicalVisibility()");
+    const applyR2r = enter.indexOf("r2rApplyStage()");
     expect(relinquish).toBeLessThan(hideH2rViews);
     expect(hideH2rViews).toBeLessThan(applyR2r);
-    expect(normalEnter).not.toContain("markH2rStageDisplayChanged()");
+    expect(enter).toContain("if (intent.resetSharedPlayback)");
+    expect(enter).not.toContain("markH2rStageDisplayChanged()");
     expect(leave).toContain(
       "r2rApplyStage({ publishStageDisplay: false })",
     );
+    expect(leave).toContain("if (intent.restoreH2rPlayer)");
+    expect(leave).toContain("const baseline = intent.h2rReturnBaseline");
     expect(leave.indexOf("h2rOwnsStage = true")).toBeLessThan(
       leave.indexOf("applyH2rPhysicalVisibility()"),
     );
@@ -2004,15 +2029,31 @@ describe("legacy runtime ownership boundaries", () => {
     expect(
       [...runtimeSource.matchAll(/\bh2rOwnsStage\s*=\s*(true|false)/g)]
         .map((match) => match[1]),
-    ).toEqual(["true", "false", "false", "true"]);
+    ).toEqual(["true", "false", "true"]);
 
-    const snapshotContract = runtimeSource.slice(
-      runtimeSource.indexOf("interface R2rMainSnapshot"),
-      runtimeSource.indexOf("interface R2rRetargetRequest"),
+    const init = runtimeSource.slice(runtimeSource.indexOf("(async function init()"));
+    expect(init.indexOf("switchInspectorPanel(initialWorkspacePreferences.activePanel)"))
+      .toBeLessThan(init.indexOf("await verifyUiBuild()"));
+    expect(runtimeSource).not.toContain(
+      'window.addEventListener("hhtools:panel-request"',
     );
-    expect(snapshotContract).not.toContain("vis:");
-    expect(snapshotContract).not.toContain("resetVisible");
-    expect(snapshotContract).not.toContain("refSkel");
+
+    const trajectoryUpload = runtimeSource.slice(
+      runtimeSource.indexOf("async function r2rUploadTraj"),
+      runtimeSource.indexOf("async function r2rApplySourceTrajectoryResult"),
+    );
+    const librarySelection = runtimeSource.slice(
+      runtimeSource.indexOf("async function loadR2rLibraryEntry"),
+      runtimeSource.indexOf("async function pickR2rTrajectory"),
+    );
+    for (const candidate of [trajectoryUpload, librarySelection]) {
+      expect(candidate.indexOf('switchInspectorPanel("r2r")')).toBeLessThan(
+        candidate.indexOf('r2rTrajectoryState = "validating"'),
+      );
+      expect(candidate).toContain(
+        'panelSwitchSettledOnStageOwner(panelSwitch, "r2r")',
+      );
+    }
   });
 
   it("invalidates scaled previews when their H2R identity changes", () => {

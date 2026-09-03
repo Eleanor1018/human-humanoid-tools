@@ -152,11 +152,11 @@ export function Workbench({
     updateWorkspacePreferences({ activePanel: panel });
   }, []);
   /**
-   * User-facing navigation must cross the compatibility boundary exactly once.
-   * React consumes this event to update the panel, while the legacy runtime
-   * uses the same event to transfer shared Stage ownership to or from R2R.
-   * Runtime-originated navigation calls `setActivePanel` through `__hhUi`
-   * directly, which prevents this request path from recursing.
+   * User-facing navigation enters through one event consumer below. Once the
+   * compatibility runtime is ready, that consumer delegates to its exact
+   * presentation coordinator; the coordinator alone calls `setActivePanel`
+   * while transferring shared Stage ownership. Before runtime activation the
+   * same consumer falls back to local React state so navigation remains live.
    */
   const requestPanel = useCallback((panel: string) => {
     windowEventBus.emit("hhtools:panel-request", panel);
@@ -265,7 +265,11 @@ export function Workbench({
     };
     const panelSubscription = windowEventBus.on(
       "hhtools:panel-request",
-      (event) => setActivePanel(event.detail),
+      (event) => {
+        const runtimePanelSwitch = window.__hhApp?.switchInspectorPanel;
+        if (runtimePanelSwitch) runtimePanelSwitch(event.detail);
+        else setActivePanel(event.detail);
+      },
     );
     const importSubscription = windowEventBus.on(
       "hhtools:import-command",

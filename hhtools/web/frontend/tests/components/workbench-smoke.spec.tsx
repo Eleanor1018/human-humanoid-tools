@@ -31,7 +31,11 @@ import type {
 } from "../../src/workbench/services/stage/browser/legacy-stage-display-state-source";
 import runtimeSource from "../../src/runtime/webui-runtime.ts?raw";
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  delete window.__hhApp;
+  delete window.__hhtoolsReady;
+});
 
 function mockWorkbenchGetRequests(
   services: ReturnType<typeof createBrowserWorkbenchServices>,
@@ -205,6 +209,28 @@ describe("Workbench DOM contract", () => {
     } finally {
       window.removeEventListener("hhtools:panel-request", onPanelRequest);
     }
+  });
+
+  it("delegates each ready panel request once to the runtime coordinator", () => {
+    renderWorkbench();
+    const setActivePanel = window.__hhUi!.setActivePanel;
+    const runtimePanelSwitch = vi.fn((panel: string) => {
+      setActivePanel(panel);
+    });
+    window.__hhApp = {
+      switchInspectorPanel: runtimePanelSwitch,
+    } as unknown as NonNullable<Window["__hhApp"]>;
+    const r2rNavigation = document.querySelector<HTMLButtonElement>(
+      '.nav-item[data-panel="r2r"]',
+    )!;
+
+    fireEvent.click(r2rNavigation);
+
+    expect(runtimePanelSwitch).toHaveBeenCalledOnce();
+    expect(runtimePanelSwitch).toHaveBeenCalledWith("r2r");
+    expect(document.querySelector('[data-panel="r2r"].panel')).toHaveClass(
+      "active",
+    );
   });
 
   it("commits every runtime DOM port before startup and display attachment", async () => {

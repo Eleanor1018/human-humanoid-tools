@@ -194,6 +194,20 @@ import {
   type SessionReservation,
   type SessionSetupAuthority,
 } from "./stage/latest-session-lifecycle";
+import {
+  LatestPresentationOperationCoordinator,
+  reconcilePresentationWithFinalizer,
+  type PresentationProjectionAuthority,
+  type PresentationReconcileDisposition,
+} from "./stage/latest-presentation-operation";
+import {
+  appliedPanelPresentationOwnsStage,
+  createPanelPresentationIntent,
+  type PanelPresentationIntent,
+  type PanelPresentationOperation,
+  type PanelStageOwner,
+  type SharedStagePlayerSnapshot,
+} from "./stage/panel-presentation-intent";
 import { installReentrantSessionResource, ReentrantHostMutationGate } from
   "./stage/reentrant-session-install";
 import {
@@ -2989,31 +3003,129 @@ function updatePills(): void {
 }
 
 // =================================================================  NAVIGATION BRIDGE
-let inspectorPanelSwitchHook: ((panelId: string) => void) | null = null;
+interface PanelSwitchReceipt {
+  readonly operation: PanelPresentationOperation;
+  readonly disposition: PresentationReconcileDisposition;
+}
 
-function switchInspectorPanel(panelId: string): void {
-  if (!panelId) return;
-  const normalizedPanelId = panelId === "robot" ? "h2r" : panelId;
-  window.__hhUi?.setActivePanel(normalizedPanelId);
-  inspectorPanelSwitchHook?.(normalizedPanelId);
-  if (normalizedPanelId === "batch") {
+let lastAppliedPanelPresentation: PanelPresentationOperation | null = null;
+let lastFollowedUpPanelPresentation: PanelPresentationOperation | null = null;
+
+function captureSharedStagePlayer(): SharedStagePlayerSnapshot {
+  return {
+    t: player.t,
+    duration: player.duration,
+    active: player.active,
+    playing: player.playing,
+    playbarVisible,
+  };
+}
+
+/**
+ * Project one complete panel handoff inside the coordinator's host frame.
+ *
+ * The compatibility visibility helpers still read their own logical models;
+ * this operation owns the panel id, Stage workflow owner, and shared player
+ * hand-back. Broader layer/orbit/robot snapshots join the same intent in the
+ * following migration slices.
+ */
+function projectPanelPresentation(
+  intent: PanelPresentationIntent,
+  authority: PresentationProjectionAuthority,
+): undefined {
+  window.__hhUi?.setActivePanel(intent.panelId);
+  if (!authority.isCurrent()) return undefined;
+
+  if (intent.stageOwner === "r2r") {
+    r2rEnterPanel(intent, authority);
+  } else {
+    r2rLeavePanel(intent, authority);
+  }
+  return undefined;
+}
+
+const panelPresentationCoordinator =
+  new LatestPresentationOperationCoordinator<PanelPresentationIntent>({
+    project: (target, authority) => {
+      const operation = target.current;
+      if (!operation) return undefined;
+      projectPanelPresentation(operation.value, authority);
+      if (authority.isCurrent()) lastAppliedPanelPresentation = operation;
+      return undefined;
+    },
+  });
+
+function runCurrentPanelFollowups(): void {
+  const operation = panelPresentationCoordinator.current;
+  if (
+    !operation
+    || operation !== lastAppliedPanelPresentation
+    || operation === lastFollowedUpPanelPresentation
+  ) return;
+  // Mark before entering a DOM/request helper so synchronous reentry cannot
+  // execute the same generation twice.
+  lastFollowedUpPanelPresentation = operation;
+  if (operation.value.panelId === "batch") {
     renderBasket({ refreshCompatibility: false });
+    if (!panelPresentationCoordinator.isCurrent(operation)) return;
     void syncBatchRefHint();
+  } else if (operation.value.stageOwner === "r2r") {
+    void r2rUpdateRetargetBtn();
   }
 }
 
-window.addEventListener("hhtools:panel-request", (event) => {
-  switchInspectorPanel(event.detail);
-});
+/** Publish before the first host callback, then reconcile latest-only. */
+function switchInspectorPanel(panelId: string): PanelSwitchReceipt | null {
+  if (!panelId) return null;
+  const normalizedPanelId = panelId === "robot" ? "h2r" : panelId;
+  const intent = createPanelPresentationIntent({
+    panelId: normalizedPanelId,
+    current: panelPresentationCoordinator.current,
+    lastApplied: lastAppliedPanelPresentation,
+    currentPlayer: captureSharedStagePlayer(),
+  });
+  const operation = panelPresentationCoordinator.publish(intent).current;
+  // A stale projection may fail after applying a successor. Finalization still
+  // observes that winner, while the obsolete caller's error keeps propagating.
+  const disposition = reconcilePresentationWithFinalizer(
+    panelPresentationCoordinator,
+    runCurrentPanelFollowups,
+  );
+  return Object.freeze({ operation, disposition });
+}
+
+/**
+ * Confirm that a requested switch settled on the required workflow owner.
+ *
+ * The receipt's exact operation protects only its own presentation frame. A
+ * newer panel operation with the same Stage owner must not cancel a domain
+ * continuation that is independently protected by its own attempt or lease.
+ */
+function panelSwitchSettledOnStageOwner(
+  receipt: PanelSwitchReceipt | null,
+  stageOwner: PanelStageOwner,
+): boolean {
+  return Boolean(
+    receipt
+    && receipt.disposition !== "deferred"
+    && appliedPanelPresentationOwnsStage({
+      current: panelPresentationCoordinator.current,
+      lastApplied: lastAppliedPanelPresentation,
+      stageOwner,
+    }),
+  );
+}
 
 /** After a robot is loaded, jump to the panel that matches the current workflow. */
 async function routeAfterRobotLoad(): Promise<void> {
   if (!state.motion) {
-    switchInspectorPanel("robot-assets");
+    const panelSwitch = switchInspectorPanel("robot-assets");
+    if (!panelSwitchSettledOnStageOwner(panelSwitch, "h2r")) return;
     await refreshRetargetPanel();
     return;
   }
-  switchInspectorPanel("h2r");
+  const panelSwitch = switchInspectorPanel("h2r");
+  if (!panelSwitchSettledOnStageOwner(panelSwitch, "h2r")) return;
   await refreshRetargetPanel();
 }
 
@@ -3131,7 +3243,10 @@ async function loadMotionPayload(
   renderMotionDetails(payload);
   updatePills();
   updateRetargetFpsPlaceholder();
-  if (state.robot) switchInspectorPanel("h2r");
+  if (state.robot) {
+    const panelSwitch = switchInspectorPanel("h2r");
+    if (!panelSwitchSettledOnStageOwner(panelSwitch, "h2r")) return "stale";
+  }
   await refreshRetargetPanel();
   if (state.motion !== payload || state.motion?.token !== payload.token) return "stale";
   toast(runtimeText(`Loaded ${payload.name}`, `已加载 ${payload.name}`));
@@ -4010,7 +4125,8 @@ async function applyRobot(
   // Await so state.calibration is fresh; refreshRetargetPanel itself loads the
   // scaled skeleton/scene when a calibration already exists (no retarget needed).
   if (state.calibrationMode) {
-    switchInspectorPanel("h2r");
+    const panelSwitch = switchInspectorPanel("h2r");
+    if (!panelSwitchSettledOnStageOwner(panelSwitch, "h2r")) return "stale";
     const calibrationMotion = state.motion;
     const calibrationMotionToken = calibrationMotion?.token ?? null;
     const calibrationReference = state.reference;
@@ -8258,7 +8374,8 @@ async function syncBatchRefHint(): Promise<void> {
       const action = textElement("button", "batch-compatibility-action", runtimeText("Calibrate", "去标定"));
       action.type = "button";
       action.onclick = async () => {
-        switchInspectorPanel("h2r");
+        const panelSwitch = switchInspectorPanel("h2r");
+        if (!panelSwitchSettledOnStageOwner(panelSwitch, "h2r")) return;
         await onReferenceChange(ref);
         if (!state.calibrationMode && state.reference === ref) {
           (document.getElementById("recalib-btn") as HTMLButtonElement | null)?.click();
@@ -8914,8 +9031,9 @@ function wrapSelectDropdowns(): void {
 // =================================================================  ROBOT-TO-ROBOT (R2R)
 // A self-contained module: its own two RobotView instances + state, so it never
 // touches the human→robot workflow's `state.robot` / `robot` view. Shared
-// player/reference state is snapshotted across panel switches; H2R visibility
-// remains live in its requested model and is physically projected on return.
+// player hand-back travels in exact panel intents, while calibration references
+// retain their exact manipulator-session owner. H2R visibility remains live in
+// its requested model and is physically projected when ownership returns.
 type R2rVisibilityKey =
   | "srcRobot"
   | "srcSkel"
@@ -8949,15 +9067,6 @@ interface R2rState {
   basket: LibraryEntry[];
   scaledScene: ScenePayload | null;
   tgtScaledScene: ScenePayload | null;
-}
-
-interface R2rMainSnapshot {
-  player: {
-    t: number;
-    duration: number;
-    active: boolean;
-    playbarVisible: boolean;
-  };
 }
 
 interface R2rRetargetRequest {
@@ -9645,7 +9754,6 @@ const r2rVis: Record<R2rVisibilityKey, boolean> = {
   tgtEnv: false,
 };
 
-let _r2rMainSnap: R2rMainSnapshot | null = null;
 const _r2rVec = new THREE.Vector3();
 
 function r2rFocus(view: PlaybackView): void {
@@ -9855,76 +9963,70 @@ window.addEventListener("hhtools:comparison-command", (event) => {
   else applyR2rComparisonPreset(preset);
 });
 
-/**
- * Transfer the shared canvas/player from H2R to R2R. Shared player/reference
- * state is snapshotted; H2R visibility intent remains live while physically hidden.
- */
-function r2rEnterPanel(): void {
-  if (r2r.active) {
-    h2rOwnsStage = false;
-    applyH2rPhysicalVisibility();
-    r2rApplyStage();
-    return;
-  }
-  // Capture shared non-visibility state before transferring canvas ownership.
-  // H2R visibility stays live in `h2rRequestedVisibility`, so it is projected
-  // from the newest intent on return instead of restored from a stale snapshot.
-  _r2rMainSnap = {
-    player: {
-      t: player.t,
-      duration: player.duration,
-      active: player.active,
-      playbarVisible,
-    },
-  };
+/** Project the R2R side of an exact panel operation. */
+function r2rEnterPanel(
+  intent: PanelPresentationIntent,
+  authority: PresentationProjectionAuthority,
+): undefined {
   r2r.active = true;
+  if (!authority.isCurrent()) return undefined;
   h2rOwnsStage = false;
+  if (!authority.isCurrent()) return undefined;
   applyH2rPhysicalVisibility();
-  player.setPlaying(false);
+  if (!authority.isCurrent()) return undefined;
+  if (intent.resetSharedPlayback) {
+    player.setPlaying(false);
+    if (!authority.isCurrent()) return undefined;
+  }
   r2rApplyStage();
-  void r2rUpdateRetargetBtn();
+  return undefined;
 }
 
-function r2rLeavePanel(): void {
-  if (!r2r.active) return;
+/** Project H2R ownership and restore only this operation's root player state. */
+function r2rLeavePanel(
+  intent: PanelPresentationIntent,
+  authority: PresentationProjectionAuthority,
+): undefined {
   // Leaving owns teardown even when bootstrap has not reached `calibrating` yet.
   r2r.active = false;
-  if (
-    r2r.calibrating
-    || r2rCalibrationResourcesOwned
-    || r2r.calibOrbitSaved !== null
-    || r2rCalibrationManipulatorSession !== null
-  ) {
-    r2rExitCalib({ publishStageDisplay: false });
-  } else {
-    invalidateR2rCalibrationAttempts();
-    r2rCalibrationFkPreview.stop();
-  }
-  r2rApplyStage({ publishStageDisplay: false });
-  const s = _r2rMainSnap;
-  _r2rMainSnap = null;
-  if (s) {
-    player.t = s.player.t;
-    player.duration = s.player.duration;
-    player.active = s.player.active;
+  if (!authority.isCurrent()) return undefined;
+  if (intent.restoreH2rPlayer) {
+    if (
+      r2r.calibrating
+      || r2rCalibrationResourcesOwned
+      || r2r.calibOrbitSaved !== null
+      || r2rCalibrationManipulatorSession !== null
+    ) {
+      r2rExitCalib({ publishStageDisplay: false });
+    } else {
+      invalidateR2rCalibrationAttempts();
+      r2rCalibrationFkPreview.stop();
+    }
+    if (!authority.isCurrent()) return undefined;
+    r2rApplyStage({ publishStageDisplay: false });
+    if (!authority.isCurrent()) return undefined;
+    const baseline = intent.h2rReturnBaseline;
+    player.t = baseline.t;
+    player.duration = baseline.duration;
+    player.active = baseline.active;
     player.setPlaying(false);
-    _setPlaybarVisible(s.player.playbarVisible);
+    if (!authority.isCurrent()) return undefined;
+    _setPlaybarVisible(baseline.playbarVisible);
+    if (!authority.isCurrent()) return undefined;
   }
   // Re-open H2R capabilities only after its renderer snapshot has been
   // restored. React derives HUD ownership from the final publication.
   h2rOwnsStage = true;
+  if (!authority.isCurrent()) return undefined;
   applyH2rPhysicalVisibility();
+  if (!authority.isCurrent()) return undefined;
   projectCalibrationReferenceStageVisibility();
+  if (!authority.isCurrent()) return undefined;
   if (player.active) player.refreshFrame();
+  if (!authority.isCurrent()) return undefined;
   markH2rStageDisplayChanged();
+  return undefined;
 }
-
-// Hook panel switching so the R2R stage is shown/hidden with its tab.
-inspectorPanelSwitchHook = (panelId: string): void => {
-  const leaving = r2r.active && panelId !== "r2r";
-  if (panelId === "r2r") r2rEnterPanel();
-  else if (leaving) r2rLeavePanel();
-};
 
 function r2rSetCalChip(text: unknown, cls = ""): void {
   const el = document.getElementById("r2r-cal");
@@ -10264,11 +10366,20 @@ async function r2rLoadSourceRobot(
     r2rRunState = "idle";
     clearResultDiagnostics("r2r");
     syncR2rRobotSelects("source", name);
+    let workspaceActivationSettled = true;
     if (activateWorkspace) {
-      switchInspectorPanel("r2r");
-      if (!r2r.active) r2rEnterPanel();
-      r2rApplyStage();
-      r2rFocus(r2rSrc);
+      const panelSwitch = switchInspectorPanel("r2r");
+      workspaceActivationSettled = panelSwitchSettledOnStageOwner(
+        panelSwitch,
+        "r2r",
+      );
+      if (workspaceActivationSettled) {
+        r2rFocus(r2rSrc);
+        workspaceActivationSettled = panelSwitchSettledOnStageOwner(
+          panelSwitch,
+          "r2r",
+        );
+      }
     }
     setR2rRobotStatus("source", runtimeText(
       `Source robot: ${sourcePayload.display_name}`,
@@ -10278,7 +10389,12 @@ async function r2rLoadSourceRobot(
       `Source robot loaded: ${sourcePayload.display_name}`,
       `源机器人已加载：${sourcePayload.display_name}`,
     ));
-    await r2rMaybeAutoCalib();
+    // A cross-owner navigation cancels only shared-Stage continuation. The
+    // successfully loaded source facts and their panel-independent status stay
+    // committed instead of being mislabeled stale.
+    if (!activateWorkspace || workspaceActivationSettled) {
+      await r2rMaybeAutoCalib();
+    }
     r2rRenderBasket();
   } catch (error) {
     toast(errorMessage(error), true);
@@ -10921,10 +11037,11 @@ async function r2rStartCalib(
     // Enter calibration only after the target renderer generation commits.
     r2r.targetPayload = targetPayload;
     if (!manipulatorOwnsLease()) return "stale";
-    switchInspectorPanel("r2r");
-    if (!manipulatorOwnsLease()) return "stale";
-    if (!r2r.active) r2rEnterPanel();
-    if (!manipulatorOwnsLease()) return "stale";
+    const panelSwitch = switchInspectorPanel("r2r");
+    if (
+      !manipulatorOwnsLease()
+      || !panelSwitchSettledOnStageOwner(panelSwitch, "r2r")
+    ) return "stale";
     r2rCalibrationFkPreview.start();
     if (!manipulatorOwnsLease()) return "stale";
 
@@ -11283,21 +11400,23 @@ async function r2rUploadTraj(
   const st = document.getElementById("r2r-traj-status");
   const prog = document.getElementById("r2r-traj-progress");
   const bar = prog?.querySelector<HTMLElement>(".bar");
-  if (prog) {
-    prog.style.display = "block";
-    prog.classList.remove("indet");
-    if (bar) bar.style.width = "0%";
-  }
-  r2rTrajectoryState = "validating";
-  r2r.exportToken = null;
-  r2rRunState = "idle";
-  clearResultDiagnostics("r2r");
-  publishR2rWorkflowState();
-  st.textContent = runtimeText("Uploading…", "上传中…");
-  toast(runtimeText("Uploading source trajectory…", "上传源轨迹…"));
   try {
-    switchInspectorPanel("r2r");
-    if (!r2r.active) r2rEnterPanel();
+    const panelSwitch = switchInspectorPanel("r2r");
+    if (!panelSwitchSettledOnStageOwner(panelSwitch, "r2r")) return;
+    // Publish `validating` only after the shared Stage has actually settled on
+    // R2R. A synchronous cross-owner successor must not leave a phantom task.
+    if (prog) {
+      prog.style.display = "block";
+      prog.classList.remove("indet");
+      if (bar) bar.style.width = "0%";
+    }
+    r2rTrajectoryState = "validating";
+    r2r.exportToken = null;
+    r2rRunState = "idle";
+    clearResultDiagnostics("r2r");
+    publishR2rWorkflowState();
+    st.textContent = runtimeText("Uploading…", "上传中…");
+    toast(runtimeText("Uploading source trajectory…", "上传源轨迹…"));
     const qsParts = [
       `source_robot=${encodeURIComponent(sourceName)}`,
       `profile=${encodeURIComponent(profile)}`,
@@ -11425,21 +11544,23 @@ async function loadR2rLibraryEntry(entry: LibraryEntry): Promise<void> {
   const status = document.getElementById("r2r-traj-status");
   const progress = document.getElementById("r2r-traj-progress");
   const bar = progress?.querySelector<HTMLElement>(".bar");
-  if (progress) {
-    progress.style.display = "block";
-    progress.classList.remove("indet");
-  }
-  if (bar) bar.style.width = "2%";
-  if (status) status.textContent = runtimeText("Validating trajectory…", "正在校验机器人轨迹……");
-  r2rTrajectoryState = "validating";
-  r2r.exportToken = null;
-  r2rRunState = "idle";
-  clearResultDiagnostics("r2r");
-  publishR2rWorkflowState();
 
   try {
-    switchInspectorPanel("r2r");
-    if (!r2r.active) r2rEnterPanel();
+    const panelSwitch = switchInspectorPanel("r2r");
+    if (!panelSwitchSettledOnStageOwner(panelSwitch, "r2r")) return;
+    // As above, panel handoff precedes candidate workflow publication so an
+    // immediately superseding H2R request leaves no stuck validation state.
+    if (progress) {
+      progress.style.display = "block";
+      progress.classList.remove("indet");
+    }
+    if (bar) bar.style.width = "2%";
+    if (status) status.textContent = runtimeText("Validating trajectory…", "正在校验机器人轨迹……");
+    r2rTrajectoryState = "validating";
+    r2r.exportToken = null;
+    r2rRunState = "idle";
+    clearResultDiagnostics("r2r");
+    publishR2rWorkflowState();
     const sourceFps = parseOptionalFps(document.getElementById("r2r-source-fps"));
     const { job_id } = await API.post("/api/r2r/source/library", {
       ...entry,
@@ -11967,12 +12088,15 @@ async function verifyUiBuild() {
   installJobHistoryBridge();
   // React owns panel dimensions and persistence; the runtime only consumes the resulting canvas size.
   document.getElementById("lib-link-path")?.addEventListener("click", () => linkLibraryPath());
+  // Claim the startup preference before the first await. A user request that
+  // follows now publishes a newer exact operation and can never be overwritten
+  // when health/catalog loading eventually completes.
+  switchInspectorPanel(initialWorkspacePreferences.activePanel);
   await verifyUiBuild();
   // Independent catalogs load together; none is allowed to delay the others.
   await Promise.all([loadReferenceCatalog(), refreshLibrary(), refreshRobotList()]);
   renderBasket();
   r2rInit();
-  switchInspectorPanel(initialWorkspacePreferences.activePanel);
   // Reconcile initial HUD preferences after catalogs and the active workflow
   // have established their resource/ownership state.
   markH2rStageDisplayChanged();
