@@ -6,6 +6,7 @@ import type {
   IStageModelService,
   StageLayerId,
 } from "@/workbench/services/stage/common/stage-service";
+import { cn } from "@/lib/utils";
 
 import { StageLayerToggle } from "./stage-layer-toggle";
 
@@ -70,7 +71,7 @@ export function H2rStageLayerControls({
   readonly stageModelService: IStageModelService;
 }) {
   const text = useLocaleText(locale);
-  const { layers } = useStageDisplayState(stageModelService);
+  const { layers, owner } = useStageDisplayState(stageModelService);
   const renderToggle = (descriptor: H2rLayerToggleDescriptor) => {
     const layer = layers[descriptor.layerId];
     return (
@@ -90,7 +91,11 @@ export function H2rStageLayerControls({
   };
 
   return (
-    <div className="view-hud" id="view-hud">
+    <div
+      className={cn("view-hud", owner !== "h2r" && "hidden")}
+      id="view-hud"
+      aria-hidden={owner !== "h2r"}
+    >
       <div className="view-hud-row" data-row="motion">
         {MOTION_LAYER_TOGGLES.map(renderToggle)}
       </div>

@@ -232,6 +232,17 @@ describe("Workbench DOM contract", () => {
     expect(skeleton).toHaveClass("on");
 
     act(() => {
+      publishDisplay?.({ ...initialDisplay, ownsStage: false });
+    });
+    await waitFor(() => {
+      expect(services.stageModelService.state.display.owner).toBe("r2r");
+      expect(document.getElementById("view-hud")).toHaveClass("hidden");
+      expect(document.getElementById("view-hud-r2r")).not.toHaveClass(
+        "hidden",
+      );
+    });
+
+    act(() => {
       publishDisplay?.({
         ...initialDisplay,
         layers: {
@@ -250,6 +261,9 @@ describe("Workbench DOM contract", () => {
       });
     });
     await waitFor(() => {
+      expect(services.stageModelService.state.display.owner).toBe("h2r");
+      expect(document.getElementById("view-hud")).not.toHaveClass("hidden");
+      expect(document.getElementById("view-hud-r2r")).toHaveClass("hidden");
       expect(document.getElementById("tg-skeleton")).not.toHaveClass("on");
       expect(document.getElementById("tg-skeleton")).toBeDisabled();
       expect(document.getElementById("tg-env")).toHaveClass("on");

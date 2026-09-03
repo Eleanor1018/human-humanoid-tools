@@ -2556,15 +2556,7 @@ const player: PlayerController = {
 function revealStage(): void {
   _setPlaybarVisible(true);
   document.getElementById("view-reset-btn")?.classList.remove("hidden");
-  // Resource commits can reveal the shared canvas from either workflow. Keep
-  // both HUDs aligned with the ownership flag instead of reviving H2R controls
-  // while an R2R projection is active.
-  document
-    .getElementById("view-hud")
-    ?.classList.toggle("hidden", !h2rOwnsStage);
-  document
-    .getElementById("view-hud-r2r")
-    ?.classList.toggle("hidden", h2rOwnsStage);
+  // React projects the matching layer HUD from the published Stage owner.
   document.getElementById("stage-empty").style.display = "none";
 }
 
@@ -7870,8 +7862,6 @@ function r2rEnterPanel(): void {
   h2rOwnsStage = false;
   applyH2rPhysicalVisibility();
   player.setPlaying(false);
-  document.getElementById("view-hud")?.classList.add("hidden");
-  document.getElementById("view-hud-r2r")?.classList.remove("hidden");
   r2rApplyStage();
   markH2rStageDisplayChanged();
   void r2rUpdateRetargetBtn();
@@ -7895,10 +7885,8 @@ function r2rLeavePanel(): void {
   } else {
     refSkel.group.visible = false;
   }
-  document.getElementById("view-hud-r2r")?.classList.add("hidden");
-  document.getElementById("view-hud")?.classList.remove("hidden");
-  // Re-open H2R capabilities only after its renderer snapshot and HUD have
-  // been restored. React derives the toggle presentation from the publication.
+  // Re-open H2R capabilities only after its renderer snapshot has been
+  // restored. React derives HUD ownership from the final publication.
   h2rOwnsStage = true;
   applyH2rPhysicalVisibility();
   if (player.active) player.refreshFrame();

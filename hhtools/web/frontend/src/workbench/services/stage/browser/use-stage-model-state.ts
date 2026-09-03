@@ -3,6 +3,7 @@ import { useCallback, useSyncExternalStore } from "react";
 import type {
   IStageModelService,
   StageDisplayState,
+  StageRendererOwner,
   StageState,
 } from "@/workbench/services/stage/common/stage-service";
 
@@ -48,6 +49,28 @@ export function useStageDisplayState(
   );
   const getSnapshot = useCallback(
     () => stageModelService.state.display,
+    [stageModelService],
+  );
+
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
+/**
+ * Observe only shared renderer ownership. H2R layer publications reuse the
+ * same owner string, so they do not make the parent ThreeStage tree rerender.
+ */
+export function useStageRendererOwner(
+  stageModelService: IStageModelService,
+): StageRendererOwner {
+  const subscribe = useCallback(
+    (onStoreChange: () => void) => {
+      const subscription = stageModelService.onDidChangeState(onStoreChange);
+      return () => subscription.dispose();
+    },
+    [stageModelService],
+  );
+  const getSnapshot = useCallback(
+    () => stageModelService.state.display.owner,
     [stageModelService],
   );
 

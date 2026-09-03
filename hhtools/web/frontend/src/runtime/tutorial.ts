@@ -19,7 +19,6 @@ interface LocalizedCopy {
 }
 
 interface TourStepContext {
-  revealViewHud: (visible: boolean) => void;
   revealExportCard: (visible: boolean) => void;
   revealDetails: (detailsId: string, visible: boolean) => void;
 }
@@ -160,8 +159,6 @@ const STEPS: readonly TourStep[] = [
       "使用舞台控制项对比源骨架或身体、物体与地形、标定后的参考层以及 Retarget 机器人。多个显示层可以同时打开，便于检查对齐效果。",
     ),
     placement: "bottom",
-    beforeShow: ({ revealViewHud }) => revealViewHud(true),
-    afterLeave: ({ revealViewHud }) => revealViewHud(false),
   },
   {
     id: "export",
@@ -239,22 +236,6 @@ export class GuidedTour {
     markFirstRunTutorialSeen();
   }
 
-  revealViewHud(on: boolean): void {
-    const hud = document.getElementById("view-hud");
-    if (!hud) return;
-    if (on) {
-      hud.classList.remove("hidden");
-      hud.dataset.tourForced = "1";
-      return;
-    }
-    if (!hud.dataset.tourForced) return;
-    const runtime = window.__hh as { player?: { active?: boolean } } | undefined;
-    const motionLoaded = runtime?.player?.active;
-    // The shared workspace keeps view controls available before a motion is loaded.
-    if (!motionLoaded) hud.classList.remove("hidden");
-    delete hud.dataset.tourForced;
-  }
-
   revealExportCard(on: boolean): void {
     const card = document.getElementById("rt-export-card");
     if (!card) return;
@@ -291,7 +272,6 @@ export class GuidedTour {
 
   private _stepCtx(): TourStepContext {
     return {
-      revealViewHud: (v) => this.revealViewHud(v),
       revealExportCard: (v) => this.revealExportCard(v),
       revealDetails: (id, v) => this.revealDetails(id, v),
     };

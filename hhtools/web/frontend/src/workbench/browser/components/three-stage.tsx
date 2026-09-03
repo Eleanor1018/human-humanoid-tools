@@ -8,6 +8,8 @@ import type {
   IStageModelService,
   IStagePlaybackCommands,
 } from "@/workbench/services/stage/common/stage-service";
+import { useStageRendererOwner } from "@/workbench/services/stage/browser/use-stage-model-state";
+import { cn } from "@/lib/utils";
 import { H2rStageLayerControls } from "./h2r-stage-layer-controls";
 import { PlaybackBar } from "./playback-bar";
 import { StageLayerToggle } from "./stage-layer-toggle";
@@ -29,6 +31,7 @@ export function ThreeStage({
   batchWorkspace?: ReactNode;
 }) {
   const text = useLocaleText(locale);
+  const stageOwner = useStageRendererOwner(stageModelService);
   const legacyToggle = (
     id: string,
     en: string,
@@ -69,7 +72,11 @@ export function ThreeStage({
           stageLayerCommands={stageLayerCommands}
           stageModelService={stageModelService}
         />
-        <div className="view-hud hidden" id="view-hud-r2r">
+        <div
+          className={cn("view-hud", stageOwner !== "r2r" && "hidden")}
+          id="view-hud-r2r"
+          aria-hidden={stageOwner !== "r2r"}
+        >
           <div className="view-hud-row" data-row="r2r-src">
             <span className="view-hud-tag">{text("Source", "源")}</span>
             {legacyToggle("r2r-tg-src-robot", "Robot", "机器人", false, true)}

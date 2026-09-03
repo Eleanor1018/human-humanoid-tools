@@ -10,25 +10,9 @@ describe("legacy runtime ownership boundaries", () => {
     );
   });
 
-  it("keeps both Stage HUDs aligned with the active renderer owner", () => {
-    const start = runtimeSource.indexOf("function revealStage");
-    const end = runtimeSource.indexOf(
-      'window.addEventListener("hhtools:playback-command"',
-      start,
-    );
-    const reveal = runtimeSource.slice(start, end);
-
-    expect(start).toBeGreaterThanOrEqual(0);
-    expect(end).toBeGreaterThan(start);
-    expect(reveal).toContain(
-      '.getElementById("view-hud")\n    ?.classList.toggle("hidden", !h2rOwnsStage)',
-    );
-    expect(reveal).toContain(
-      '.getElementById("view-hud-r2r")\n    ?.classList.toggle("hidden", h2rOwnsStage)',
-    );
-    expect(reveal).not.toContain(
-      'getElementById("view-hud").classList.remove("hidden")',
-    );
+  it("leaves both Stage layer HUD wrappers to React", () => {
+    expect(runtimeSource).not.toContain('getElementById("view-hud")');
+    expect(runtimeSource).not.toContain('getElementById("view-hud-r2r")');
   });
 
   it("lets the React-owned V2M batch dropzone handle its own files", () => {
@@ -286,11 +270,6 @@ describe("legacy runtime ownership boundaries", () => {
     expect(relinquish).toBeLessThan(hideH2rViews);
     expect(hideH2rViews).toBeLessThan(applyR2r);
     expect(applyR2r).toBeLessThan(publishHandoff);
-    expect(
-      leave.indexOf(
-        'document.getElementById("view-hud")?.classList.remove("hidden")',
-      ),
-    ).toBeLessThan(leave.indexOf("h2rOwnsStage = true"));
     expect(leave.indexOf("h2rOwnsStage = true")).toBeLessThan(
       leave.indexOf("applyH2rPhysicalVisibility()"),
     );

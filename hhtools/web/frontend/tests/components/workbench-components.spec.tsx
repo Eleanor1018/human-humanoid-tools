@@ -176,6 +176,43 @@ describe("React workbench components", () => {
     stageModel.dispose();
   });
 
+  it("renders the matching Stage HUD without replacing compatibility nodes", () => {
+    const stageModel = new StageModel(vi.fn());
+    render(
+      <ThreeStage
+        locale="en"
+        stageDisplayCommands={{ resetView: vi.fn() }}
+        stageLayerCommands={{ toggleLayer: vi.fn() }}
+        stageModelService={stageModel}
+        stagePlaybackCommands={{
+          togglePlayback: vi.fn(),
+          seekToFraction: vi.fn(),
+          setPlaybackSpeed: vi.fn(),
+          togglePlaybackLoop: vi.fn(),
+        }}
+      />,
+    );
+    const h2rHud = document.getElementById("view-hud")!;
+    const r2rHud = document.getElementById("view-hud-r2r")!;
+
+    expect(h2rHud).not.toHaveClass("hidden");
+    expect(h2rHud).toHaveAttribute("aria-hidden", "false");
+    expect(r2rHud).toHaveClass("hidden");
+    expect(r2rHud).toHaveAttribute("aria-hidden", "true");
+
+    act(() => {
+      stageModel.updateState({ display: { owner: "r2r" } });
+    });
+
+    expect(document.getElementById("view-hud")).toBe(h2rHud);
+    expect(document.getElementById("view-hud-r2r")).toBe(r2rHud);
+    expect(h2rHud).toHaveClass("hidden");
+    expect(h2rHud).toHaveAttribute("aria-hidden", "true");
+    expect(r2rHud).not.toHaveClass("hidden");
+    expect(r2rHud).toHaveAttribute("aria-hidden", "false");
+    stageModel.dispose();
+  });
+
   it("renders and commands H2R layers through canonical Stage contracts", () => {
     const stageModel = new StageModel(vi.fn());
     const toggleLayer = vi.fn();
