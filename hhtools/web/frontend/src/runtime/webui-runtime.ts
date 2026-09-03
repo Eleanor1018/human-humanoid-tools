@@ -166,6 +166,7 @@ import type {
   Vec3,
 } from "@/domain/motion/common/motion";
 import { ThreeResourceDisposer } from "@/platform/graphics/common/three-resource-disposer";
+import type { ThreeResourceExtras } from "@/platform/graphics/common/three-resource-disposer";
 import type { AsyncStageViewLoadResult } from "./stage/async-stage-view-load-result";
 import { BakedMeshView } from "./stage/baked-mesh-view";
 import {
@@ -178,14 +179,23 @@ import {
   type LatestAsyncAttempt,
 } from "./stage/latest-async-attempt-owner";
 import {
+  cleanupReplacedPointerGestureOrRollback,
   inheritedPointerGestureOrbitBaseline,
   LatestPointerGestureOwner,
   matchesOwnedPointerCaptureLoss,
-  projectPointerGestureSharedState,
+  samePointerCaptureIdentity,
   type OwnedPointerGesture,
-  type PointerGestureSession,
   type PointerGestureTransition,
 } from "./stage/latest-pointer-gesture-owner";
+import {
+  LatestSessionLifecycle,
+  type SessionCleanupAuthority,
+  type SessionLifecycleLease,
+  type SessionReservation,
+  type SessionSetupAuthority,
+} from "./stage/latest-session-lifecycle";
+import { installReentrantSessionResource, ReentrantHostMutationGate } from
+  "./stage/reentrant-session-install";
 import {
   effectivePlaybackDuration,
   resolvePlaybackFrame,
@@ -1056,9 +1066,17 @@ function animate(): void {
     camera.position.y += oy;
     camera.position.z += oz;
   }
-  if ((state.calibrationMode || r2r.calibrating) && calibManip.active && !calibManip._hudCardDrag) {
-    calibManip._positionTags();
-    refSkel.updateOverlay(r2r.calibrating ? r2rTgt : robot);
+  const manipulatorSession = calibManip.currentSession;
+  const calibrationWorkflow = manipulatorSession?.value.owner ?? null;
+  if (
+    manipulatorSession
+    && calibrationWorkflow
+    && calibrationManipulatorAlias(calibrationWorkflow) === manipulatorSession
+  ) {
+    calibManip.positionTags(manipulatorSession);
+    if (calibrationSessionIsCurrent(calibrationWorkflow, manipulatorSession)) {
+      refSkel.updateOverlay(calibrationWorkflow === "r2r" ? r2rTgt : robot);
+    }
   }
   orbit.update();
   renderer.render(scene, camera);
@@ -2490,9 +2508,14 @@ function clearH2rRobotAfterViewLoss(context: string): void {
 
   h2rCalibrationBootstrapAttempts.invalidate();
   h2rCalibrationStatusAttempts.invalidate();
+  const manipulatorSession = h2rCalibrationManipulatorSession;
+  h2rCalibrationManipulatorSession = null;
   // FK Promises cannot be cancelled, so withdraw their publication owner
   // before any robot or calibration aliases are released.
-  h2rCalibrationFkPreview.stop();
+  runBestEffortCleanup(
+    `${context}: calibration FK owner cleanup failed`,
+    () => h2rCalibrationFkPreview.stop(),
+  );
 
   // If calibration teardown stopped part-way through, restore orbit ownership
   // before releasing its saved snapshot.
@@ -2524,7 +2547,12 @@ function clearH2rRobotAfterViewLoss(context: string): void {
   calibrationEditorUi.h2r.comparison = "current";
   h2rRunState = "idle";
 
-  runBestEffortCleanup(`${context}: calibration manipulator cleanup failed`, () => calibManip.stop());
+  runBestEffortCleanup(
+    `${context}: calibration manipulator cleanup failed`,
+    () => {
+      if (manipulatorSession) calibManip.stop(manipulatorSession);
+    },
+  );
   if (calibrationRestore) {
     runBestEffortCleanup(
       `${context}: calibration visibility restore failed`,
@@ -4764,6 +4792,53 @@ interface Point2D {
   y: number;
 }
 
+interface CalibrationSessionListener {
+  readonly target: EventTarget;
+  readonly type: string;
+  readonly listener: EventListener;
+}
+
+interface CalibrationManipulatorSessionState {
+  context: CalibrationContext | null;
+  readonly jointMeta: Record<string, CalibrationJointMeta>;
+  readonly linkToJoint: Record<string, string>;
+  readonly jointToLink: Record<string, string>;
+  jointWorld: Record<string, CalibrationJointWorld>;
+  selected: string | null;
+  hoveredLink: string | null;
+  hoveredJoint: string | null;
+  angleUnit: CalibrationAngleUnit;
+  orbitEnabledBaseline: boolean;
+  tags: Map<string, CalibrationHudTag>;
+  limitGroup: CalibrationLimitGizmo | null;
+  hudRoot: HTMLElement | null;
+  externalRoots: HTMLElement[];
+  listeners: CalibrationSessionListener[];
+  pickScreen: Point2D | null;
+  pickAnchor: THREE.Vector3 | null;
+  hudPinned: Point2D | null;
+}
+
+interface CalibrationSurfaceProjection {
+  readonly session: CalibrationManipulatorSession | null;
+  readonly context: CalibrationContext | null;
+  readonly selectedJoint: string | null;
+  readonly selectedLink: string | null;
+  readonly hoveredLink: string | null;
+  readonly hoveredJoint: string | null;
+  readonly gesture: OwnedCalibrationPointerGesture | null;
+  readonly dragging: boolean;
+}
+
+type CalibrationManipulatorSession = SessionLifecycleLease<
+  WorkflowId,
+  CalibrationManipulatorSessionState
+>;
+type CalibrationManipulatorReservation = SessionReservation<
+  WorkflowId,
+  CalibrationManipulatorSessionState
+>;
+
 type CalibrationPointerGestureEnd =
   | "complete"
   | "cancel"
@@ -4775,7 +4850,7 @@ interface CalibrationPointerGestureBase {
   readonly pointerId: number;
   readonly captureTarget: HTMLElement;
   readonly context: CalibrationContext;
-  readonly session: PointerGestureSession;
+  readonly session: CalibrationManipulatorSession;
   activated: boolean;
   orbitEnabledBefore: boolean;
 }
@@ -4811,33 +4886,28 @@ type OwnedCalibrationPointerGesture = OwnedPointerGesture<CalibrationPointerGest
 type CalibrationPointerGestureTransition =
   PointerGestureTransition<CalibrationPointerGesture>;
 
+/** Preserve deterministic cleanup order while recursively flattening failures. */
+function appendCalibrationCleanupError(errors: unknown[], error: unknown): void {
+  if (error instanceof AggregateError) {
+    for (const nested of error.errors) appendCalibrationCleanupError(errors, nested);
+    return;
+  }
+  errors.push(error);
+}
+
 class CalibManipulator {
   readonly canvas: HTMLCanvasElement;
   readonly hud: HTMLElement;
   readonly stage: HTMLElement;
-  active = false;
   readonly raycaster = new THREE.Raycaster();
   readonly pointer = new THREE.Vector2();
-  jointMeta: Record<string, CalibrationJointMeta> = {};
-  linkToJoint: Record<string, string> = {};
-  jointToLink: Record<string, string> = {};
-  jointWorld: Record<string, CalibrationJointWorld> = {};
-  selected: string | null = null;
-  hoveredLink: string | null = null;
-  hoveredJoint: string | null = null;
-  angleUnit: CalibrationAngleUnit = "rad";
-  readonly _tags = new Map<string, CalibrationHudTag>();
-  _limitGroup: CalibrationLimitGizmo | null = null;
-  _pickScreen: Point2D | null = null;
-  _pickAnchor: THREE.Vector3 | null = null;
-  _hudPinned: Point2D | null = null;
-  _ctx: CalibrationContext | null = null;
-  readonly _gestureOwner = new LatestPointerGestureOwner<CalibrationPointerGesture>();
-  readonly _onDown: (event: PointerEvent) => void;
-  readonly _onMove: (event: PointerEvent) => void;
-  readonly _onUp: (event: PointerEvent) => void;
-  readonly _onCancel: (event: PointerEvent) => void;
-  readonly _onLostPointerCapture: (event: PointerEvent) => void;
+  private readonly _gestureOwner = new LatestPointerGestureOwner<CalibrationPointerGesture>();
+  private readonly _pointerCaptureGate = new ReentrantHostMutationGate();
+  private _orbitProjection = orbit.enabled;
+  private readonly _sessions: LatestSessionLifecycle<
+    WorkflowId,
+    CalibrationManipulatorSessionState
+  >;
 
   constructor({
     canvasEl,
@@ -4851,187 +4921,195 @@ class CalibManipulator {
     this.canvas = canvasEl;
     this.hud = hudEl;
     this.stage = stageEl;
-    this._onDown = (event) => this._pointerDown(event);
-    this._onMove = (event) => this._pointerMove(event);
-    this._onUp = (event) => this._pointerUp(event, "complete");
-    this._onCancel = (event) => this._pointerUp(event, "cancel");
-    this._onLostPointerCapture = (event) => {
-      // Pointer Events may dispatch a pending loss after release. If its target
-      // was disconnected, the spec retargets the event to its ownerDocument;
-      // resolve only the exact capture token currently awaiting that pointer.
-      const owned = this._gestureOwner.capture;
-      const gesture = owned?.value;
-      if (
-        owned
-        && gesture
-        && matchesOwnedPointerCaptureLoss(gesture, event)
-      ) this._finishPointerGesture(owned, "lost-capture");
-    };
+    this._sessions = new LatestSessionLifecycle({
+      cleanup: (session, authority) => this._cleanupSession(session, authority),
+    });
   }
 
-  get dragging(): boolean {
-    const gesture = this._gestureOwner.current?.value;
-    return gesture?.kind === "canvas" && gesture.activated;
+  get currentSession(): CalibrationManipulatorSession | null {
+    const session = this._sessions.current;
+    return session && this._sessions.isActive(session) ? session : null;
   }
 
-  get _hudCardDrag(): boolean {
-    const gesture = this._gestureOwner.current?.value;
-    return gesture?.kind === "card" && gesture.activated;
+  isCurrent(session: CalibrationManipulatorSession | null): boolean {
+    return Boolean(session && this._sessions.isActive(session));
   }
 
-  private _defaultCtx(): CalibrationContext {
-    return {
-      robotView: robot,
-      getQ: () => state.calibQ,
-      getSliderRows: () => state.calibSliderRows,
-      jointChange: (name, val, opts) => setCalibJointValue(name, val, opts),
-      previewFk: (opts) => previewCalibPose(opts),
-    };
-  }
-
-  /** Active calibration methods share one context for their full lifetime. */
-  private get context(): CalibrationContext {
-    if (!this._ctx) throw new Error("Calibration manipulator is not active");
-    return this._ctx;
-  }
-
-  start(limitsList: RobotJointLimit[], ctx: CalibrationContext | null = null): void {
-    const session = this._gestureOwner.beginSession();
-    const sessionIsCurrent = (): boolean => (
-      this._gestureOwner.isSessionCurrent(session)
-    );
-    if (!this._finishPointerGestureForReplacement()) return;
-    if (!sessionIsCurrent()) return;
-    const context = ctx || this._defaultCtx();
+  reserve(
+    workflow: WorkflowId,
+    limitsList: RobotJointLimit[],
+    angleUnit: CalibrationAngleUnit,
+  ): CalibrationManipulatorReservation {
+    // Parse limits before ownership changes. A malformed candidate therefore
+    // cannot retire the currently usable session.
     const jointMeta: Record<string, CalibrationJointMeta> = {};
     const linkToJoint: Record<string, string> = {};
     const jointToLink: Record<string, string> = {};
-    for (const L of limitsList || []) {
-      if (!L.name || L.type === "fixed") continue;
-      const lo = L.lower != null ? L.lower : -Math.PI;
-      const hi = L.upper != null ? L.upper : Math.PI;
-      jointMeta[L.name] = {
-        child_link: L.child_link,
-        lower: lo,
-        upper: hi,
-        type: L.type || "revolute",
+    for (const limit of limitsList || []) {
+      if (!limit.name || limit.type === "fixed") continue;
+      const lower = limit.lower != null ? limit.lower : -Math.PI;
+      const upper = limit.upper != null ? limit.upper : Math.PI;
+      jointMeta[limit.name] = {
+        child_link: limit.child_link,
+        lower,
+        upper,
+        type: limit.type || "revolute",
       };
-      if (L.child_link) {
-        linkToJoint[L.child_link] = L.name;
-        jointToLink[L.name] = L.child_link;
+      if (limit.child_link) {
+        linkToJoint[limit.child_link] = limit.name;
+        jointToLink[limit.name] = limit.child_link;
       }
     }
-    if (!sessionIsCurrent()) return;
-    this.active = true;
-    this._ctx = context;
-    this.jointMeta = jointMeta;
-    this.linkToJoint = linkToJoint;
-    this.jointToLink = jointToLink;
-    this.hud.classList.remove("hidden");
-    if (!sessionIsCurrent()) return;
-    this.hud.setAttribute("aria-hidden", "false");
-    if (!sessionIsCurrent()) return;
-    this.stage.classList.add("calib-pickable");
-    if (!sessionIsCurrent()) return;
-    this._initLimitGizmo(session);
-    if (!sessionIsCurrent()) return;
-    this._buildTags(session);
-    if (!sessionIsCurrent()) return;
-    this.canvas.addEventListener("pointerdown", this._onDown);
-    if (!sessionIsCurrent()) return;
-    window.addEventListener("pointermove", this._onMove);
-    if (!sessionIsCurrent()) return;
-    window.addEventListener("pointerup", this._onUp);
-    if (!sessionIsCurrent()) return;
-    window.addEventListener("pointercancel", this._onCancel);
-    if (!sessionIsCurrent()) return;
-    window.addEventListener("lostpointercapture", this._onLostPointerCapture);
+    return this._sessions.reserve(workflow, {
+      context: null,
+      jointMeta,
+      linkToJoint,
+      jointToLink,
+      jointWorld: {},
+      selected: null,
+      hoveredLink: null,
+      hoveredJoint: null,
+      angleUnit,
+      orbitEnabledBaseline: (() => {
+        // A terminal stop removes A from `current` before invoking cleanup.
+        // Reentrant C still inherits A's root baseline from the cleanup stack,
+        // never the transient `orbit.enabled = false` of A's active gesture.
+        const lineage = this._sessions.current ?? this._sessions.currentCleanup;
+        return lineage
+          ? this._state(lineage).orbitEnabledBaseline
+          : this._orbitProjection;
+      })(),
+      tags: new Map(),
+      limitGroup: null,
+      hudRoot: null,
+      externalRoots: [],
+      listeners: [],
+      pickScreen: null,
+      pickAnchor: null,
+      hudPinned: null,
+    });
   }
 
-  stop(): void {
-    const session = this._gestureOwner.beginSession();
-    const sessionIsCurrent = (): boolean => (
-      this._gestureOwner.isSessionCurrent(session)
-    );
-    // Fail closed before releasing capture, then clean the exact gesture while
-    // its captured context and HUD nodes are still available.
-    this.active = false;
-    const gesture = this._gestureOwner.current;
-    if (gesture) this._finishPointerGesture(gesture, "stop");
-    // Treat releasePointerCapture as a reentrant host boundary even though the
-    // browser processes the corresponding capture loss later. If host code or
-    // a test adapter started a successor, this stop no longer owns shared UI.
-    if (!sessionIsCurrent()) return;
-    this.selected = null;
-    this.hoveredLink = null;
-    this.hoveredJoint = null;
-    this._pickScreen = null;
-    this._pickAnchor = null;
-    this._hudPinned = null;
-    this.hud.innerHTML = "";
-    if (!sessionIsCurrent()) return;
-    this.hud.classList.add("hidden");
-    if (!sessionIsCurrent()) return;
-    this.hud.setAttribute("aria-hidden", "true");
-    if (!sessionIsCurrent()) return;
-    this.stage.classList.remove("calib-pickable", "calib-dragging", "calib-hover-joint");
-    if (!sessionIsCurrent()) return;
-    this._tags.clear();
-    this._disposeLimitGizmo();
-    if (!sessionIsCurrent()) return;
-    (this._ctx?.robotView || robot).setCalibHighlights({});
-    if (!sessionIsCurrent()) return;
-    this._ctx = null;
-    document.getElementById("calib-hover-hint")?.classList.remove("show");
-    if (!sessionIsCurrent()) return;
-    this.canvas.removeEventListener("pointerdown", this._onDown);
-    if (!sessionIsCurrent()) return;
-    window.removeEventListener("pointermove", this._onMove);
-    if (!sessionIsCurrent()) return;
-    window.removeEventListener("pointerup", this._onUp);
-    if (!sessionIsCurrent()) return;
-    window.removeEventListener("pointercancel", this._onCancel);
-    if (!sessionIsCurrent()) return;
-    window.removeEventListener("lostpointercapture", this._onLostPointerCapture);
+  start(
+    session: CalibrationManipulatorSession,
+    createContext: (session: CalibrationManipulatorSession) => CalibrationContext,
+  ): boolean {
+    return this._sessions.start(session, (owned, authority) => {
+      const context = createContext(owned);
+      if (!authority.isCurrent()) return;
+      this._state(owned).context = context;
+      this._initLimitGizmo(owned, authority);
+      if (!authority.isCurrent()) return;
+      this._buildTags(owned, authority);
+      if (!authority.isCurrent()) return;
+      this._installSessionListeners(owned, authority);
+      if (!authority.isCurrent()) return;
+      this._publishActiveSurface(owned, authority);
+    }) === "started";
   }
 
-  private _initLimitGizmo(session: PointerGestureSession): void {
-    this._disposeLimitGizmo();
-    if (!this._gestureOwner.isSessionCurrent(session)) return;
+  stop(session: CalibrationManipulatorSession): boolean {
+    return this._sessions.stop(session) === "stopped";
+  }
+
+  private _state(
+    session: CalibrationManipulatorSession,
+  ): CalibrationManipulatorSessionState {
+    return session.value.value;
+  }
+
+  private _initLimitGizmo(
+    session: CalibrationManipulatorSession,
+    authority: SessionSetupAuthority,
+  ): void {
+    if (!authority.isCurrent()) return;
     const g = new THREE.Group();
-    const arcMat = new THREE.LineBasicMaterial({ color: 0x94a3b8, transparent: true, opacity: 0.85 });
-    const loMat = new THREE.MeshBasicMaterial({ color: 0xef4444 });
-    const hiMat = new THREE.MeshBasicMaterial({ color: 0xef4444 });
-    const curMat = new THREE.MeshBasicMaterial({ color: 0x2563eb });
-    const needleMat = new THREE.LineBasicMaterial({ color: 0x2563eb, linewidth: 2 });
-    const tickGeo = new THREE.SphereGeometry(0.012, 10, 10);
-    const candidate: CalibrationLimitGizmo = {
-      group: g,
-      arc: new THREE.Line(new THREE.BufferGeometry(), arcMat),
-      loTick: new THREE.Mesh(tickGeo, loMat),
-      hiTick: new THREE.Mesh(tickGeo.clone(), hiMat),
-      curTick: new THREE.Mesh(tickGeo.clone(), curMat),
-      needle: new THREE.Line(new THREE.BufferGeometry(), needleMat),
+    // Constructors can fail between producing a GPU resource and attaching it
+    // to the graph. Register each identity immediately so rollback also owns
+    // those detached resources; the disposer deduplicates graph + extras.
+    const extras: ThreeResourceExtras & {
+      geometries: THREE.BufferGeometry[];
+      materials: THREE.Material[];
+    } = {
+      geometries: [],
+      materials: [],
     };
-    g.add(candidate.arc, candidate.loTick, candidate.hiTick,
-      candidate.curTick, candidate.needle);
-    if (!this._gestureOwner.isSessionCurrent(session)) {
-      disposeDetachedThreeObject(g, "Stale calibration limit gizmo disposal failed");
+    const ownGeometry = <Geometry extends THREE.BufferGeometry>(
+      geometry: Geometry,
+    ): Geometry => {
+      extras.geometries.push(geometry);
+      return geometry;
+    };
+    const ownMaterial = <Material extends THREE.Material>(
+      material: Material,
+    ): Material => {
+      extras.materials.push(material);
+      return material;
+    };
+    let candidate: CalibrationLimitGizmo;
+    try {
+      const arcGeometry = ownGeometry(new THREE.BufferGeometry());
+      const arcMaterial = ownMaterial(new THREE.LineBasicMaterial({
+        color: 0x94a3b8,
+        transparent: true,
+        opacity: 0.85,
+      }));
+      const arc = new THREE.Line(arcGeometry, arcMaterial);
+      g.add(arc);
+      const tickGeo = ownGeometry(new THREE.SphereGeometry(0.012, 10, 10));
+      const loMaterial = ownMaterial(new THREE.MeshBasicMaterial({ color: 0xef4444 }));
+      const loTick = new THREE.Mesh(tickGeo, loMaterial);
+      g.add(loTick);
+      const hiGeometry = ownGeometry(tickGeo.clone());
+      const hiMaterial = ownMaterial(new THREE.MeshBasicMaterial({ color: 0xef4444 }));
+      const hiTick = new THREE.Mesh(hiGeometry, hiMaterial);
+      g.add(hiTick);
+      const currentGeometry = ownGeometry(tickGeo.clone());
+      const currentMaterial = ownMaterial(new THREE.MeshBasicMaterial({ color: 0x2563eb }));
+      const curTick = new THREE.Mesh(currentGeometry, currentMaterial);
+      g.add(curTick);
+      const needleGeometry = ownGeometry(new THREE.BufferGeometry());
+      const needleMaterial = ownMaterial(new THREE.LineBasicMaterial({
+        color: 0x2563eb,
+        linewidth: 2,
+      }));
+      const needle = new THREE.Line(needleGeometry, needleMaterial);
+      g.add(needle);
+      // Keep every pre-publication host mutation inside the local rollback
+      // region. A hostile visible setter may stop the session or throw.
+      g.visible = false;
+      candidate = { group: g, arc, loTick, hiTick, curTick, needle };
+    } catch (error) {
+      try {
+        threeResourceDisposer.disposeObject3DResources(g, extras);
+      } catch (cleanupError) {
+        const errors: unknown[] = [];
+        appendCalibrationCleanupError(errors, error);
+        appendCalibrationCleanupError(errors, cleanupError);
+        throw new AggregateError(
+          errors,
+          "Calibration gizmo setup failed and rollback was incomplete",
+        );
+      }
+      throw error;
+    }
+    if (!authority.isCurrent()) {
+      // A constructor or g.add() may have synchronously stopped this session
+      // before its record could own the completed candidate.
+      threeResourceDisposer.disposeObject3DResources(g, extras);
       return;
     }
-    g.visible = false;
-    this._limitGroup = candidate;
-    world.add(g);
+    installReentrantSessionResource({
+      authority,
+      mark: () => { this._state(session).limitGroup = candidate; },
+      install: () => { world.add(g); },
+      // stop() may already have disposed candidate resources. A late host
+      // commit only needs its exact scene attachment removed a second time.
+      cleanupLate: () => { world.remove(g); },
+    });
   }
 
-  private _disposeLimitGizmo(): void {
-    // Relinquish the shared alias before detach/dispose dispatches synchronous
-    // Three.js events. A callback may install a successor that this release must
-    // neither clear nor dispose after it returns.
-    const owned = this._limitGroup;
-    this._limitGroup = null;
-    if (!owned) return;
-
+  private _disposeLimitGizmo(owned: CalibrationLimitGizmo): void {
     const errors: unknown[] = [];
     try {
       world.remove(owned.group);
@@ -5041,121 +5119,489 @@ class CalibManipulator {
     try {
       threeResourceDisposer.disposeObject3DResources(owned.group);
     } catch (error) {
-      if (error instanceof AggregateError) errors.push(...error.errors);
-      else errors.push(error);
+      appendCalibrationCleanupError(errors, error);
     }
     if (errors.length > 0) {
       throw new AggregateError(errors, "Failed to dispose calibration limit gizmo");
     }
   }
 
-  private _buildTags(session: PointerGestureSession): void {
+  private _buildTags(
+    session: CalibrationManipulatorSession,
+    authority: SessionSetupAuthority,
+  ): void {
     // Build off-DOM so a reentrant start cannot observe a half-built tag set.
     // Only the exact session may publish the fragment and its matching aliases.
-    if (!this._gestureOwner.isSessionCurrent(session)) return;
-    const context = this._ctx;
-    if (!context) return;
-    const jointMeta = this.jointMeta;
-    const angleUnit = this.angleUnit;
-    const fragment = document.createDocumentFragment();
-    const candidateTags = new Map<string, CalibrationHudTag>();
-    for (const name of Object.keys(jointMeta)) {
-      const meta = jointMeta[name];
-      const card = document.createElement("div");
-      card.className = "calib-hud-card";
-      card.dataset.joint = name;
-
-      const head = document.createElement("div");
-      head.className = "calib-hud-head calib-hud-drag-handle";
-      head.title = runtimeText("Drag the title bar to move the control", "拖动标题栏移动控件");
-      const grip = document.createElement("span");
-      grip.className = "calib-hud-grip";
-      grip.setAttribute("aria-hidden", "true");
-      grip.textContent = "⋮⋮";
-      const nameEl = document.createElement("span");
-      nameEl.className = "joint-name";
-      nameEl.textContent = name;
-      nameEl.title = name;
-      const unit = document.createElement("span");
-      unit.className = "joint-unit";
-      unit.textContent = angleUnit;
-      head.append(grip, nameEl, unit);
-
-      const limitRow = document.createElement("div");
-      limitRow.className = "calib-limit-row";
-      const loEl = document.createElement("span");
-      loEl.className = "limit-end limit-lo";
-      loEl.textContent = formatCalibrationAngle(meta.lower, angleUnit, 2);
-      const track = document.createElement("div");
-      track.className = "limit-track";
-      const fill = document.createElement("div");
-      fill.className = "limit-fill";
-      const thumb = document.createElement("div");
-      thumb.className = "limit-thumb";
-      track.appendChild(fill);
-      track.appendChild(thumb);
-      const hiEl = document.createElement("span");
-      hiEl.className = "limit-end limit-hi";
-      hiEl.textContent = formatCalibrationAngle(meta.upper, angleUnit, 2);
-      limitRow.append(loEl, track, hiEl);
-
-      const input = document.createElement("input");
-      input.type = "number";
-      input.className = "calib-angle-input";
-      input.step = angleUnit === "deg" ? "0.1" : "0.001";
-      input.value = "0.000";
-      input.min = String(angleForDisplay(meta.lower, angleUnit));
-      input.max = String(angleForDisplay(meta.upper, angleUnit));
-      input.addEventListener("input", () => {
-        this.context.jointChange(name, input.value, { from: "hud-input", live: true });
-      });
-      input.addEventListener("change", () => {
-        this.context.jointChange(name, input.value, { from: "hud-input" });
-      });
-      input.addEventListener("keydown", (ev) => {
-        if (ev.key === "Enter") input.blur();
-        ev.stopPropagation();
-      });
-      input.addEventListener("pointerdown", (ev) => ev.stopPropagation());
-
-      card.append(head, limitRow, input);
-      const tag: CalibrationHudTag = {
-        el: card,
-        input,
-        nameEl,
-        unitEl: unit,
-        loEl,
-        hiEl,
-        track,
-        thumb,
-        fill,
-      };
-      // DOM dispatch keeps its original event path after replacement. Capture
-      // the exact build owner so a detached A listener can never adopt B.
-      this._bindHudCardDrag(card, head, context, session);
-      this._bindHudTrackDrag(name, track, thumb, meta, tag, context, session);
-      fragment.appendChild(card);
-      candidateTags.set(name, tag);
+    if (!authority.isCurrent()) return;
+    const state = this._state(session);
+    const context = state.context;
+    if (!context) throw new Error("Reserved calibration context was released");
+    const jointMeta = state.jointMeta;
+    const angleUnit = state.angleUnit;
+    const root = document.createElement("div");
+    if (!authority.isCurrent()) {
+      root.remove();
+      return;
     }
-    if (!this._gestureOwner.isSessionCurrent(session)) return;
-    this.hud.replaceChildren(fragment);
-    if (!this._gestureOwner.isSessionCurrent(session)) return;
-    this._tags.clear();
-    for (const [name, tag] of candidateTags) this._tags.set(name, tag);
+    state.hudRoot = root;
+    const releaseLocalRoot = (): void => {
+      // Withdraw aliases before DOM removal: remove() may synchronously stop
+      // this session, whose cleanup must not remove the same root twice.
+      const ownedRoot = state.hudRoot === root;
+      if (ownedRoot) state.hudRoot = null;
+      state.tags.clear();
+      try {
+        root.remove();
+      } catch (error) {
+        // A still-current session must retain a retry obligation for lifecycle
+        // rollback. A reentrant successor owns a separate record.
+        if (ownedRoot && authority.isCurrent() && state.hudRoot === null) {
+          state.hudRoot = root;
+        }
+        throw error;
+      }
+    };
+    try {
+      root.className = "calib-hud-session";
+      root.dataset.workflow = session.value.owner;
+      for (const name of Object.keys(jointMeta)) {
+        const meta = jointMeta[name];
+        const card = document.createElement("div");
+        card.className = "calib-hud-card";
+        card.dataset.joint = name;
+
+        const head = document.createElement("div");
+        head.className = "calib-hud-head calib-hud-drag-handle";
+        head.title = runtimeText("Drag the title bar to move the control", "拖动标题栏移动控件");
+        const grip = document.createElement("span");
+        grip.className = "calib-hud-grip";
+        grip.setAttribute("aria-hidden", "true");
+        grip.textContent = "⋮⋮";
+        const nameEl = document.createElement("span");
+        nameEl.className = "joint-name";
+        nameEl.textContent = name;
+        nameEl.title = name;
+        const unit = document.createElement("span");
+        unit.className = "joint-unit";
+        unit.textContent = angleUnit;
+        head.append(grip, nameEl, unit);
+
+        const limitRow = document.createElement("div");
+        limitRow.className = "calib-limit-row";
+        const loEl = document.createElement("span");
+        loEl.className = "limit-end limit-lo";
+        loEl.textContent = formatCalibrationAngle(meta.lower, angleUnit, 2);
+        const track = document.createElement("div");
+        track.className = "limit-track";
+        const fill = document.createElement("div");
+        fill.className = "limit-fill";
+        const thumb = document.createElement("div");
+        thumb.className = "limit-thumb";
+        track.appendChild(fill);
+        track.appendChild(thumb);
+        const hiEl = document.createElement("span");
+        hiEl.className = "limit-end limit-hi";
+        hiEl.textContent = formatCalibrationAngle(meta.upper, angleUnit, 2);
+        limitRow.append(loEl, track, hiEl);
+
+        const input = document.createElement("input");
+        input.type = "number";
+        input.className = "calib-angle-input";
+        input.step = angleUnit === "deg" ? "0.1" : "0.001";
+        input.value = "0.000";
+        input.min = String(angleForDisplay(meta.lower, angleUnit));
+        input.max = String(angleForDisplay(meta.upper, angleUnit));
+        input.addEventListener("input", () => {
+          if (!this.isCurrent(session)) return;
+          context.jointChange(name, input.value, { from: "hud-input", live: true });
+        });
+        input.addEventListener("change", () => {
+          if (!this.isCurrent(session)) return;
+          context.jointChange(name, input.value, { from: "hud-input" });
+        });
+        input.addEventListener("keydown", (ev) => {
+          if (!this.isCurrent(session)) return;
+          if (ev.key === "Enter") input.blur();
+          ev.stopPropagation();
+        });
+        input.addEventListener("pointerdown", (ev) => {
+          if (this.isCurrent(session)) ev.stopPropagation();
+        });
+
+        card.append(head, limitRow, input);
+        const tag: CalibrationHudTag = {
+          el: card,
+          input,
+          nameEl,
+          unitEl: unit,
+          loEl,
+          hiEl,
+          track,
+          thumb,
+          fill,
+        };
+        // DOM dispatch keeps its original event path after replacement. Capture
+        // the exact build owner so a detached A listener can never adopt B.
+        this._bindHudCardDrag(card, head, context, session);
+        this._bindHudTrackDrag(name, track, thumb, meta, tag, context, session);
+        root.appendChild(card);
+        state.tags.set(name, tag);
+        if (!authority.isCurrent()) {
+          releaseLocalRoot();
+          return;
+        }
+      }
+      if (!authority.isCurrent()) {
+        releaseLocalRoot();
+        return;
+      }
+      // The predecessor's exact root was already removed. appendChild avoids
+      // a stale B late-commit deleting a reentrant C root wholesale.
+      this.hud.appendChild(root);
+      if (!authority.isCurrent()) {
+        releaseLocalRoot();
+        return;
+      }
+    } catch (error) {
+      try {
+        releaseLocalRoot();
+      } catch (cleanupError) {
+        const errors: unknown[] = [];
+        appendCalibrationCleanupError(errors, error);
+        appendCalibrationCleanupError(errors, cleanupError);
+        throw new AggregateError(
+          errors,
+          "Calibration HUD build failed and rollback was incomplete",
+        );
+      }
+      throw error;
+    }
   }
 
-  setAngleUnit(unit: CalibrationAngleUnit): void {
-    this.angleUnit = unit;
-    for (const [joint, tag] of this._tags) {
-      const meta = this.jointMeta[joint];
+  private _installSessionListeners(
+    session: CalibrationManipulatorSession,
+    authority: SessionSetupAuthority,
+  ): void {
+    const onDown = (event: Event): void => {
+      this._pointerDown(session, event as PointerEvent);
+    };
+    const onMove = (event: Event): void => {
+      this._pointerMove(session, event as PointerEvent);
+    };
+    const onUp = (event: Event): void => {
+      this._pointerUp(session, event as PointerEvent, "complete");
+    };
+    const onCancel = (event: Event): void => {
+      this._pointerUp(session, event as PointerEvent, "cancel");
+    };
+    const onLostPointerCapture = (event: Event): void => {
+      if (!this.isCurrent(session)) return;
+      const pointerEvent = event as PointerEvent;
+      // Pointer Events may dispatch a pending loss after release. If its target
+      // was disconnected, the spec retargets the event to its ownerDocument.
+      const owned = this._gestureOwner.capture;
+      const gesture = owned?.value;
+      if (
+        owned
+        && gesture?.session === session
+        && this._gestureOwner.capturePhaseOf(owned) === "installed"
+        && matchesOwnedPointerCaptureLoss(gesture, pointerEvent)
+      ) {
+        // A delayed loss for retired A can have the same browser identity as
+        // successor C. If C currently owns capture, this event is not C's
+        // terminal loss even though target + pointerId are indistinguishable.
+        if (gesture.captureTarget.hasPointerCapture(gesture.pointerId)) return;
+        if (
+          !this.isCurrent(session)
+          || this._gestureOwner.capture !== owned
+          || !this._isCurrentPointerGesture(owned)
+        ) return;
+        this._finishPointerGesture(owned, "lost-capture");
+      }
+    };
+    const registrations: CalibrationSessionListener[] = [
+      { target: this.canvas, type: "pointerdown", listener: onDown },
+      { target: window, type: "pointermove", listener: onMove },
+      { target: window, type: "pointerup", listener: onUp },
+      { target: window, type: "pointercancel", listener: onCancel },
+      { target: window, type: "lostpointercapture", listener: onLostPointerCapture },
+    ];
+
+    for (const registration of registrations) {
+      if (!authority.isCurrent()) return;
+      const state = this._state(session);
+      const disposition = installReentrantSessionResource({
+        authority,
+        // Reserve the exact removal obligation before the host can re-enter.
+        mark: () => { state.listeners.push(registration); },
+        install: () => {
+          registration.target.addEventListener(
+            registration.type,
+            registration.listener,
+          );
+        },
+        cleanupLate: () => {
+          // Ordinary cleanup may have removed the reserved entry before the
+          // host actually installed it. Always remove the exact wrapper again.
+          registration.target.removeEventListener(
+            registration.type,
+            registration.listener,
+          );
+        },
+      });
+      if (disposition === "superseded") return;
+    }
+  }
+
+  private _publishActiveSurface(
+    session: CalibrationManipulatorSession,
+    authority: SessionSetupAuthority,
+  ): void {
+    if (!authority.isCurrent()) return;
+    // The caller is still in phase "starting" until this returns, so pass the
+    // exact candidate as the only starting session allowed to project active.
+    this._reconcileSharedSurface(session);
+  }
+
+  private _surfaceProjection(
+    startingSession: CalibrationManipulatorSession | null = null,
+  ): CalibrationSurfaceProjection {
+    const current = this._sessions.current;
+    const phase = current?.value.phase;
+    const session = current && (
+      phase === "active"
+      || (current === startingSession && phase === "starting")
+    ) ? current : null;
+    if (!session) {
+      return {
+        session: null,
+        context: null,
+        selectedJoint: null,
+        selectedLink: null,
+        hoveredLink: null,
+        hoveredJoint: null,
+        gesture: null,
+        dragging: false,
+      };
+    }
+    const state = this._state(session);
+    const ownedGesture = this._gestureOwner.current;
+    const gesture = ownedGesture?.value.session === session
+      && ownedGesture.value.activated
+      ? ownedGesture
+      : null;
+    return {
+      session,
+      context: state.context,
+      selectedJoint: state.selected,
+      selectedLink: state.selected ? state.jointToLink[state.selected] ?? null : null,
+      hoveredLink: state.hoveredLink,
+      hoveredJoint: state.hoveredJoint,
+      gesture,
+      dragging: Boolean(gesture && gesture.value.kind !== "card"),
+    };
+  }
+
+  private _sameSurfaceProjection(
+    left: CalibrationSurfaceProjection,
+    right: CalibrationSurfaceProjection,
+  ): boolean {
+    return (
+      left.session === right.session
+      && left.context === right.context
+      && left.selectedJoint === right.selectedJoint
+      && left.selectedLink === right.selectedLink
+      && left.hoveredLink === right.hoveredLink
+      && left.hoveredJoint === right.hoveredJoint
+      && left.gesture === right.gesture
+      && left.dragging === right.dragging
+    );
+  }
+
+  /**
+   * Project shared DOM/renderer state from the latest lease, never by undoing
+   * an old session. Every host effect is followed by an identity check. If the
+   * host starts/stops C and only then commits the old mutation, the loop
+   * immediately reapplies C (or the inactive surface) before returning.
+   */
+  private _reconcileSharedSurface(
+    startingSession: CalibrationManipulatorSession | null = null,
+    retiredContext: CalibrationContext | null = null,
+  ): void {
+    const errors: unknown[] = [];
+    const capture = (effect: () => void): void => {
+      try {
+        effect();
+      } catch (error) {
+        appendCalibrationCleanupError(errors, error);
+      }
+    };
+
+    for (let pass = 0; pass < 64; pass += 1) {
+      const projection = this._surfaceProjection(startingSession);
+      const isStable = (): boolean => this._sameSurfaceProjection(
+        projection,
+        this._surfaceProjection(startingSession),
+      );
+      const currentContext = projection.context;
+
+      if (retiredContext && retiredContext !== currentContext) {
+        capture(() => retiredContext.robotView.setCalibHighlights({}));
+        if (!isStable()) continue;
+      }
+      if (currentContext) {
+        capture(() => currentContext.robotView.setCalibHighlights({
+          hover: projection.hoveredLink,
+          selected: projection.selectedLink,
+        }));
+        if (!isStable()) continue;
+      }
+
+      capture(() => this.hud.classList.toggle("hidden", !projection.session));
+      if (!isStable()) continue;
+      capture(() => this.hud.setAttribute(
+        "aria-hidden",
+        projection.session ? "false" : "true",
+      ));
+      if (!isStable()) continue;
+      capture(() => this.stage.classList.toggle(
+        "calib-pickable",
+        Boolean(projection.session),
+      ));
+      if (!isStable()) continue;
+      capture(() => this.stage.classList.toggle(
+        "calib-dragging",
+        projection.dragging,
+      ));
+      if (!isStable()) continue;
+      capture(() => this.stage.classList.toggle(
+        "calib-hover-joint",
+        Boolean(projection.hoveredJoint && !projection.dragging),
+      ));
+      if (!isStable()) continue;
+
+      const hint = document.getElementById("calib-hover-hint");
+      if (!isStable()) continue;
+      const showHint = Boolean(
+        projection.hoveredJoint
+        && projection.hoveredJoint !== projection.selectedJoint,
+      );
+      if (hint && showHint) {
+        capture(() => {
+          hint.textContent = projection.hoveredJoint;
+        });
+        if (!isStable()) continue;
+      }
+      if (hint) {
+        capture(() => hint.classList.toggle("show", showHint));
+        if (!isStable()) continue;
+      }
+
+      if (errors.length === 1) throw errors[0];
+      if (errors.length > 1) {
+        throw new AggregateError(errors, "Calibration surface projection failed");
+      }
+      return;
+    }
+    errors.push(new Error("Calibration surface did not reach a stable session"));
+    if (errors.length === 1) throw errors[0];
+    throw new AggregateError(errors, "Calibration surface projection failed");
+  }
+
+  private _cleanupSession(
+    session: CalibrationManipulatorSession,
+    authority: SessionCleanupAuthority,
+  ): void {
+    const state = this._state(session);
+
+    // Take every session-owned alias before the first DOM/Three.js callback.
+    // A reentrant successor can only publish into a different record.
+    const context = state.context;
+    state.context = null;
+    const listeners = state.listeners.splice(0);
+    const hudRoot = state.hudRoot;
+    state.hudRoot = null;
+    const externalRoots = state.externalRoots.splice(0);
+    const limitGroup = state.limitGroup;
+    state.limitGroup = null;
+    state.tags.clear();
+    state.selected = null;
+    state.hoveredLink = null;
+    state.hoveredJoint = null;
+    state.pickScreen = null;
+    state.pickAnchor = null;
+    state.hudPinned = null;
+    state.jointWorld = {};
+
+    const gesture = this._gestureOwner.current;
+    const gestureHandoff = gesture?.value.session === session
+      ? this._gestureOwner.finish(gesture)
+      : null;
+    const errors: unknown[] = [];
+    const capture = (cleanup: () => void): void => {
+      try {
+        cleanup();
+      } catch (error) {
+        appendCalibrationCleanupError(errors, error);
+      }
+    };
+
+    if (gesture && gestureHandoff) {
+      capture(() => this._cleanupPointerGesture(
+        gesture,
+        gestureHandoff,
+        () => authority.isHandoffCurrent(),
+      ));
+    }
+    for (const registration of listeners) {
+      capture(() => registration.target.removeEventListener(
+        registration.type,
+        registration.listener,
+      ));
+    }
+    if (hudRoot) capture(() => hudRoot.remove());
+    for (const root of externalRoots) capture(() => root.remove());
+    if (limitGroup) capture(() => this._disposeLimitGizmo(limitGroup));
+
+    // Shared state is recomputed from the latest owner after every effect.
+    // This is stronger than an effect-before authority check: a host override
+    // may install C and only then late-commit A's mutation as the call returns.
+    capture(() => this._reconcileSharedSurface(null, context));
+
+    if (errors.length > 0) {
+      throw new AggregateError(
+        errors,
+        "Failed to release every calibration manipulator session resource",
+      );
+    }
+  }
+
+  setAngleUnit(
+    session: CalibrationManipulatorSession,
+    unit: CalibrationAngleUnit,
+  ): void {
+    if (!this.isCurrent(session)) return;
+    const state = this._state(session);
+    state.angleUnit = unit;
+    for (const [joint, tag] of state.tags) {
+      if (!this.isCurrent(session)) return;
+      const meta = state.jointMeta[joint];
       if (!meta) continue;
       tag.unitEl.textContent = unit;
+      if (!this.isCurrent(session)) return;
       tag.loEl.textContent = formatCalibrationAngle(meta.lower, unit, 2);
+      if (!this.isCurrent(session)) return;
       tag.hiEl.textContent = formatCalibrationAngle(meta.upper, unit, 2);
+      if (!this.isCurrent(session)) return;
       tag.input.min = String(angleForDisplay(meta.lower, unit));
+      if (!this.isCurrent(session)) return;
       tag.input.max = String(angleForDisplay(meta.upper, unit));
+      if (!this.isCurrent(session)) return;
       tag.input.step = unit === "deg" ? "0.1" : "0.001";
-      this.updateHudValue(joint, this.context.getQ()[joint] ?? 0);
+      if (!this.isCurrent(session)) return;
+      const context = state.context;
+      if (!context) return;
+      this.updateHudValue(session, joint, context.getQ()[joint] ?? 0);
     }
   }
 
@@ -5174,62 +5620,118 @@ class CalibManipulator {
   }
 
   private _applyHudPin(
+    session: CalibrationManipulatorSession,
     el: HTMLElement,
     x: number,
     y: number,
     layout: HudLayout = this._hudLayout(),
     gesture: OwnedCalibrationPointerGesture | null = null,
   ): Point2D | null {
-    const gestureIsCurrent = (): boolean => (
-      !gesture || this._isCurrentPointerGesture(gesture)
+    const actionIsCurrent = (): boolean => (
+      this.isCurrent(session)
+      && (!gesture || (
+        gesture.value.session === session
+        && this._isCurrentPointerGesture(gesture)
+      ))
     );
-    if (!gestureIsCurrent()) return null;
+    if (!actionIsCurrent()) return null;
     const { w, h, cardW, cardH, pad } = layout;
     const clamped = this._clampHudCard(x, y, w, h, cardW, cardH, pad);
     el.classList.remove("screen-docked", "screen-pick");
-    if (!gestureIsCurrent()) return null;
+    if (!actionIsCurrent()) return null;
     el.classList.add("user-pinned", "visible");
-    if (!gestureIsCurrent()) return null;
+    if (!actionIsCurrent()) return null;
     el.style.left = `${clamped.x}px`;
-    if (!gestureIsCurrent()) return null;
+    if (!actionIsCurrent()) return null;
     el.style.top = `${clamped.y}px`;
-    if (!gestureIsCurrent()) return null;
+    if (!actionIsCurrent()) return null;
     return clamped;
+  }
+
+  private _isCanvasDragging(session: CalibrationManipulatorSession): boolean {
+    const owned = this._gestureOwner.current;
+    return Boolean(
+      owned
+      && owned.value.session === session
+      && owned.value.kind === "canvas"
+      && owned.value.activated
+      && this._isCurrentPointerGesture(owned),
+    );
+  }
+
+  private _isHudCardDragging(session: CalibrationManipulatorSession): boolean {
+    const owned = this._gestureOwner.current;
+    return Boolean(
+      owned
+      && owned.value.session === session
+      && owned.value.kind === "card"
+      && owned.value.activated
+      && this._isCurrentPointerGesture(owned),
+    );
   }
 
   private _isCurrentPointerGesture(owned: OwnedCalibrationPointerGesture): boolean {
     const gesture = owned.value;
+    const state = this._state(gesture.session);
     return (
       this._gestureOwner.isCurrent(owned)
-      && this._gestureOwner.isSessionCurrent(gesture.session)
-      && this.active
-      && this._ctx === gesture.context
+      && this.isCurrent(gesture.session)
+      && state.context === gesture.context
+    );
+  }
+
+  /** Preserve the triggering failure while still attempting exact rollback. */
+  private _throwAfterPointerGestureRollback(
+    owned: OwnedCalibrationPointerGesture,
+    primaryError: unknown,
+  ): never {
+    const errors: unknown[] = [];
+    appendCalibrationCleanupError(errors, primaryError);
+    const primaryErrorCount = errors.length;
+    try {
+      if (this._gestureOwner.isCurrent(owned)) {
+        this._finishPointerGesture(owned, "cancel");
+      } else {
+        this._releasePointerGestureCapture(owned);
+      }
+    } catch (cleanupError) {
+      appendCalibrationCleanupError(errors, cleanupError);
+    }
+    if (errors.length === primaryErrorCount) throw primaryError;
+    throw new AggregateError(
+      errors,
+      "Calibration pointer gesture failed and rollback was incomplete",
     );
   }
 
   /** Fail closed before publishing, then replace before releasing old capture. */
   private _beginPointerGesture(
     gesture: CalibrationPointerGesture,
-    expectedSession: PointerGestureSession,
+    expectedSession: CalibrationManipulatorSession,
   ): OwnedCalibrationPointerGesture | null {
     // Layout, picking, and DOM dispatch are host boundaries. A same-context
     // start may have replaced their session while the old handler was paused;
     // never let that stale handler publish and retire the newer gesture.
     if (
       gesture.session !== expectedSession
-      || !this.active
-      || this._ctx !== gesture.context
-      || !this._gestureOwner.isSessionCurrent(expectedSession)
+      || !this.isCurrent(expectedSession)
+      || this._state(expectedSession).context !== gesture.context
     ) return null;
     const replacement = this._gestureOwner.begin(gesture);
     const owned = replacement.current;
     gesture.orbitEnabledBefore = inheritedPointerGestureOrbitBaseline(
       replacement.previous?.value ?? null,
-      orbit.enabled,
+      this._state(expectedSession).orbitEnabledBaseline,
     );
-    if (replacement.previous) {
-      this._cleanupPointerGesture(replacement.previous, replacement.handoff);
-    }
+    cleanupReplacedPointerGestureOrRollback(
+      this._gestureOwner,
+      replacement,
+      (retired, handoff) => this._cleanupPointerGesture(
+        retired,
+        handoff,
+        () => this.isCurrent(expectedSession),
+      ),
+    );
     if (!this._isCurrentPointerGesture(owned)) {
       if (this._gestureOwner.isCurrent(owned)) {
         this._finishPointerGesture(owned, "cancel");
@@ -5241,20 +5743,14 @@ class CalibManipulator {
     try {
       if (gesture.kind === "card") {
         gesture.card.classList.add("user-pinned", "is-dragging");
-        if (!this._isCurrentPointerGesture(owned)) return null;
       } else if (gesture.kind === "track") {
         gesture.tag?.el.classList.add("track-dragging");
-        if (!this._isCurrentPointerGesture(owned)) return null;
-        this.stage.classList.add("calib-dragging");
-        if (!this._isCurrentPointerGesture(owned)) return null;
-      } else {
-        this.stage.classList.add("calib-dragging");
-        if (!this._isCurrentPointerGesture(owned)) return null;
       }
-      orbit.enabled = false;
+      this._reconcilePointerGestureClasses();
+      this._reconcileSharedSurface();
+      this._reconcileOrbit();
     } catch (error) {
-      this._finishPointerGesture(owned, "cancel");
-      throw error;
+      this._throwAfterPointerGestureRollback(owned, error);
     }
     if (!this._isCurrentPointerGesture(owned)) return null;
 
@@ -5264,17 +5760,11 @@ class CalibManipulator {
       this._finishPointerGesture(owned, "cancel");
       return null;
     }
-    try {
-      gesture.captureTarget.setPointerCapture(gesture.pointerId);
-    } catch {
+    const captureDisposition = this._requestPointerGestureCapture(owned);
+    if (captureDisposition === "superseded" || !this._isCurrentPointerGesture(owned)) {
       this._gestureOwner.takeCapture(owned);
-      // The stable window pointerup/cancel listeners still terminate the drag.
-    }
-    if (!this._isCurrentPointerGesture(owned)) {
       if (this._gestureOwner.isCurrent(owned)) {
         this._finishPointerGesture(owned, "cancel");
-      } else {
-        this._releasePointerGestureCapture(owned);
       }
       return null;
     }
@@ -5289,10 +5779,20 @@ class CalibManipulator {
   private _cleanupPointerGesture(
     owned: OwnedCalibrationPointerGesture,
     handoff: CalibrationPointerGestureTransition,
+    sessionAuthority: () => boolean = () => this.isCurrent(owned.value.session),
   ): void {
+    const errors: unknown[] = [];
+    const capture = (cleanup: () => void): void => {
+      try {
+        cleanup();
+      } catch (error) {
+        appendCalibrationCleanupError(errors, error);
+      }
+    };
     const gesture = owned.value;
     const handoffIsCurrent = (): boolean => (
       this._gestureOwner.isTransitionCurrent(handoff)
+      && sessionAuthority()
     );
     const wasActivated = gesture.activated;
     gesture.activated = false;
@@ -5307,7 +5807,7 @@ class CalibManipulator {
           && successor.card === gesture.card
         )
       ) {
-        runBestEffortCleanup("Calibration card drag cleanup failed", () => {
+        capture(() => {
           gesture.card.classList.remove("is-dragging");
         });
       } else if (gesture.kind === "track") {
@@ -5317,7 +5817,7 @@ class CalibManipulator {
           && successor.tag?.el === gesture.tag?.el,
         );
         if (handoffIsCurrent() && !successorOwnsTag) {
-          runBestEffortCleanup("Calibration track tag cleanup failed", () => {
+          capture(() => {
             gesture.tag?.el.classList.remove("track-dragging");
           });
         }
@@ -5327,55 +5827,251 @@ class CalibManipulator {
 
     // Projection, rather than inverse mutation, also terminalizes shared state
     // when an unactivated B is replaced by a nested C during A's DOM cleanup.
-    this._projectPointerGestureSharedState(handoff, gesture.orbitEnabledBefore);
+    capture(() => this._projectPointerGestureSharedState(
+      handoff,
+      gesture.orbitEnabledBefore,
+      sessionAuthority,
+    ));
 
     // Capture is record-private and must always be released, even after a
     // successor invalidates the shared cleanup handoff. Take before asking
     // for release: pending-capture processing may dispatch the loss later, and
     // this retired record must no longer appear capture-current.
-    this._releasePointerGestureCapture(owned);
+    capture(() => this._releasePointerGestureCapture(owned));
+    if (errors.length > 0) {
+      throw new AggregateError(errors, "Calibration pointer gesture cleanup failed");
+    }
   }
 
   private _projectPointerGestureSharedState(
     handoff: CalibrationPointerGestureTransition,
     orbitEnabledBefore: boolean,
+    sessionAuthority: () => boolean,
   ): void {
-    if (!this._gestureOwner.isTransitionCurrent(handoff)) return;
-    const current = handoff.current?.value ?? null;
-    const projection = projectPointerGestureSharedState(
-      current
-        ? {
-            activated: current.activated,
-            stageDragging: current.kind !== "card",
-          }
-        : null,
-      orbitEnabledBefore,
-    );
-    runBestEffortCleanup("Calibration stage drag projection failed", () => {
-      this.stage.classList.toggle("calib-dragging", projection.stageDragging);
-    });
-    if (!this._gestureOwner.isTransitionCurrent(handoff)) return;
-    runBestEffortCleanup("Calibration orbit projection failed", () => {
-      orbit.enabled = projection.orbitEnabled;
-    });
+    // Exact cleanup can outlive its publication authority. Shared projection
+    // always reads the latest owners, while the retired baseline is eligible
+    // only if both the gesture handoff and parent session handoff remain exact.
+    const errors: unknown[] = [];
+    const capture = (effect: () => void): void => {
+      try {
+        effect();
+      } catch (error) {
+        appendCalibrationCleanupError(errors, error);
+      }
+    };
+    // These projections own independent shared resources. A class/highlight
+    // failure must never prevent the exact orbit baseline from being restored.
+    capture(() => this._reconcilePointerGestureClasses());
+    capture(() => this._reconcileSharedSurface());
+    capture(() => this._reconcileOrbit({
+      isCurrent: () => (
+        this._gestureOwner.isTransitionCurrent(handoff)
+        && sessionAuthority()
+      ),
+      value: orbitEnabledBefore,
+    }));
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) {
+      throw new AggregateError(errors, "Calibration gesture projection failed");
+    }
+  }
+
+  private _reconcilePointerGestureClasses(): void {
+    for (let pass = 0; pass < 64; pass += 1) {
+      const session = this.currentSession;
+      const owned = this._gestureOwner.current;
+      const gesture = session && owned?.value.session === session && owned.value.activated
+        ? owned
+        : null;
+      const tags = session ? [...this._state(session).tags.values()] : [];
+      const stable = (): boolean => (
+        this.currentSession === session
+        && this._gestureOwner.current === owned
+        && (!owned || owned.value.activated === Boolean(gesture))
+      );
+      for (const tag of tags) {
+        tag.el.classList.toggle(
+          "is-dragging",
+          Boolean(gesture?.value.kind === "card" && gesture.value.card === tag.el),
+        );
+        if (!stable()) break;
+        tag.el.classList.toggle(
+          "track-dragging",
+          Boolean(gesture?.value.kind === "track" && gesture.value.tag?.el === tag.el),
+        );
+        if (!stable()) break;
+      }
+      if (stable()) return;
+    }
+    throw new Error("Calibration gesture classes did not reach a stable owner");
+  }
+
+  private _reconcileOrbit(
+    retiredBaseline: {
+      readonly isCurrent: () => boolean;
+      readonly value: boolean;
+    } | null = null,
+  ): void {
+    for (let pass = 0; pass < 64; pass += 1) {
+      const session = this.currentSession;
+      const owned = this._gestureOwner.current;
+      const gesture = session && owned?.value.session === session && owned.value.activated
+        ? owned
+        : null;
+      const usesRetiredBaseline = Boolean(
+        !gesture && !session && retiredBaseline?.isCurrent(),
+      );
+      const expected = gesture
+        ? false
+        : session
+          ? this._state(session).orbitEnabledBaseline
+          : usesRetiredBaseline
+            ? retiredBaseline!.value
+            : this._orbitProjection;
+      this._orbitProjection = expected;
+      orbit.enabled = expected;
+      const current = this._gestureOwner.current;
+      if (
+        this.currentSession === session
+        && current === owned
+        && (!current || current.value.activated === Boolean(gesture))
+        && (!usesRetiredBaseline || retiredBaseline?.isCurrent())
+        && this._orbitProjection === expected
+      ) return;
+    }
+    throw new Error("Calibration orbit did not reach a stable gesture owner");
   }
 
   private _releasePointerGestureCapture(owned: OwnedCalibrationPointerGesture): void {
-    if (!this._gestureOwner.takeCapture(owned)) return;
+    const phase = this._gestureOwner.takeCapturePhase(owned);
+    // A reserved request has not reached the host. An installing request owns
+    // its late-compensation obligation in installReentrantSessionResource, so
+    // synchronous stop must not issue a speculative release (or report a fake
+    // NotFoundError) before the host call commits.
+    if (phase !== "installed") return;
     const gesture = owned.value;
-    runBestEffortCleanup("Calibration pointer capture release failed", () => {
-      gesture.captureTarget.releasePointerCapture(gesture.pointerId);
-    });
+    this._pointerCaptureGate.run(
+      () => gesture.captureTarget.releasePointerCapture(gesture.pointerId),
+      () => this._flushDeferredPointerGestureCapture(),
+    );
+  }
+
+  /**
+   * A same-target/same-pointer successor adopts the browser's indistinguishable
+   * capture. Releasing the retired request would otherwise release C as well.
+   */
+  private _releaseLatePointerGestureCapture(
+    retired: OwnedCalibrationPointerGesture,
+    mayAdoptReturnedCapture: boolean,
+  ): void {
+    const successor = this._gestureOwner.capture;
+    if (
+      mayAdoptReturnedCapture
+      && successor
+      && successor !== retired
+      && this._isCurrentPointerGesture(successor)
+      && samePointerCaptureIdentity(retired.value, successor.value)
+    ) {
+      // The browser exposes only target + pointer id, so C adopts A's late
+      // physical capture instead of releasing and immediately reacquiring it.
+      this._gestureOwner.markCaptureInstalled(successor);
+      return;
+    }
+    this._pointerCaptureGate.run(
+      () => retired.value.captureTarget.releasePointerCapture(retired.value.pointerId),
+      () => this._flushDeferredPointerGestureCapture(),
+    );
+  }
+
+  private _requestPointerGestureCapture(
+    owned: OwnedCalibrationPointerGesture,
+  ): "installed" | "superseded" {
+    // "installed" means the logical request was accepted. The physical host
+    // capture may be deferred behind an older host frame, or unavailable while
+    // the stable window listeners provide the intentional fallback path.
+    if (!this._isCurrentPointerGesture(owned)) return "superseded";
+    const capturePhase = this._gestureOwner.capturePhaseOf(owned);
+    if (capturePhase === "installed") return "installed";
+    if (this._pointerCaptureGate.isInsideHostMutation) {
+      // Publish C's capture slot now, but let A's release/compensation finish
+      // before C mutates the generation-less browser capture identity.
+      this._pointerCaptureGate.deferUntilIdle();
+      return "installed";
+    }
+    if (!this._gestureOwner.beginCaptureInstall(owned)) return "superseded";
+
+    const gesture = owned.value;
+    try {
+      return this._pointerCaptureGate.run(
+        () => installReentrantSessionResource({
+          authority: { isCurrent: () => this._isCurrentPointerGesture(owned) },
+          // reserveCapture is the mark-before-install obligation.
+          mark: () => {},
+          install: () => {
+            gesture.captureTarget.setPointerCapture(gesture.pointerId);
+            this._gestureOwner.markCaptureInstalled(owned);
+          },
+          // Reentrant stop may have taken the slot before this request commits.
+          cleanupLate: (cause) => this._releaseLatePointerGestureCapture(
+            owned,
+            cause === "returned",
+          ),
+        }),
+        () => this._flushDeferredPointerGestureCapture(),
+      );
+    } catch (error) {
+      if (!this._isCurrentPointerGesture(owned)) throw error;
+      // setPointerCapture may attach and then throw. Treat that current slot as
+      // installed until an exact compensating release proves otherwise.
+      this._gestureOwner.markCaptureInstalled(owned);
+      // Withdraw before the host call. A release hook may synchronously stop A
+      // or start C; neither path may observe and release A's slot a second time.
+      this._gestureOwner.takeCapturePhase(owned);
+      try {
+        this._pointerCaptureGate.run(
+          () => gesture.captureTarget.releasePointerCapture(gesture.pointerId),
+          () => this._flushDeferredPointerGestureCapture(),
+        );
+      } catch (releaseError) {
+        // If A is still exact, restore its retry obligation. A reentrant C has
+        // its own slot and must never inherit A's ambiguous failed release.
+        let retryOwned = false;
+        if (this._isCurrentPointerGesture(owned) && !this._gestureOwner.capture) {
+          retryOwned = (
+            this._gestureOwner.reserveCapture(owned)
+            && this._gestureOwner.markCaptureInstalled(owned)
+          );
+        }
+        if (!retryOwned) {
+          const errors: unknown[] = [];
+          appendCalibrationCleanupError(errors, error);
+          appendCalibrationCleanupError(errors, releaseError);
+          throw new AggregateError(
+            errors,
+            "Pointer capture setup and stale compensation both failed",
+          );
+        }
+      }
+      // Unsupported capture falls back to the stable window listeners.
+      return "installed";
+    }
+  }
+
+  private _flushDeferredPointerGestureCapture(): void {
+    const current = this._gestureOwner.capture;
+    if (!current || !this._isCurrentPointerGesture(current)) return;
+    this._requestPointerGestureCapture(current);
   }
 
   private _finishPointerGesture(
     owned: OwnedCalibrationPointerGesture,
     reason: CalibrationPointerGestureEnd,
+    sessionAuthority: () => boolean = () => this.isCurrent(owned.value.session),
   ): CalibrationPointerGestureTransition | null {
     const handoff = this._gestureOwner.finish(owned);
     if (!handoff) return null;
     const gesture = owned.value;
-    this._cleanupPointerGesture(owned, handoff);
+    this._cleanupPointerGesture(owned, handoff, sessionAuthority);
 
     // A host override may re-enter while capture is released; the browser can
     // also report loss later. Only an uninterrupted normal completion may
@@ -5384,16 +6080,19 @@ class CalibManipulator {
       reason === "complete"
       && gesture.kind !== "card"
       && this._gestureOwner.isTransitionCurrent(handoff)
-      && this.active
-      && this._ctx === gesture.context
+      && this.isCurrent(gesture.session)
+      && this._state(gesture.session).context === gesture.context
     ) gesture.context.previewFk({ flush: true });
     return handoff;
   }
 
   /** Abort if capture release re-entry installed a newer gesture. */
-  private _finishPointerGestureForReplacement(): boolean {
+  private _finishPointerGestureForReplacement(
+    session: CalibrationManipulatorSession,
+  ): boolean {
     const owned = this._gestureOwner.current;
     if (!owned) return true;
+    if (owned.value.session !== session) return false;
     const handoff = this._finishPointerGesture(owned, "replacement");
     return Boolean(
       handoff && this._gestureOwner.isTransitionCurrent(handoff),
@@ -5404,13 +6103,12 @@ class CalibManipulator {
     card: HTMLElement,
     head: HTMLElement,
     context: CalibrationContext,
-    session: PointerGestureSession,
+    session: CalibrationManipulatorSession,
   ): void {
     const onDown = (e: PointerEvent): void => {
       const eventSessionIsCurrent = (): boolean => (
-        this.active
-        && this._ctx === context
-        && this._gestureOwner.isSessionCurrent(session)
+        this.isCurrent(session)
+        && this._state(session).context === context
       );
       if (!eventSessionIsCurrent() || e.button !== 0) return;
       if (!eventSessionIsCurrent()) return;
@@ -5434,7 +6132,7 @@ class CalibManipulator {
         context,
         session,
         activated: false,
-        orbitEnabledBefore: orbit.enabled,
+        orbitEnabledBefore: this._state(session).orbitEnabledBaseline,
         card,
         layout,
         start,
@@ -5450,13 +6148,12 @@ class CalibManipulator {
     meta: CalibrationJointMeta,
     tag: CalibrationHudTag,
     context: CalibrationContext,
-    session: PointerGestureSession,
+    session: CalibrationManipulatorSession,
   ): void {
     const onDown = (e: PointerEvent): void => {
       const eventSessionIsCurrent = (): boolean => (
-        this.active
-        && this._ctx === context
-        && this._gestureOwner.isSessionCurrent(session)
+        this.isCurrent(session)
+        && this._state(session).context === context
       );
       if (!eventSessionIsCurrent() || e.button !== 0) return;
       if (!eventSessionIsCurrent()) return;
@@ -5471,7 +6168,7 @@ class CalibManipulator {
         context,
         session,
         activated: false,
-        orbitEnabledBefore: orbit.enabled,
+        orbitEnabledBefore: this._state(session).orbitEnabledBaseline,
         joint: name,
         track,
         tag,
@@ -5480,13 +6177,12 @@ class CalibManipulator {
       const owned = this._beginPointerGesture(gesture, session);
       if (!owned) return;
       try {
-        this.setSelected(name, { gesture: owned });
+        this.setSelected(session, name, { gesture: owned });
         if (this._isCurrentPointerGesture(owned)) {
           this._moveTrackPointerGesture(owned, e.clientX);
         }
       } catch (error) {
-        this._finishPointerGesture(owned, "cancel");
-        throw error;
+        this._throwAfterPointerGestureRollback(owned, error);
       }
     };
     track.addEventListener("pointerdown", onDown);
@@ -5502,9 +6198,9 @@ class CalibManipulator {
     if (gesture.kind !== "card" || !this._isCurrentPointerGesture(owned)) return;
     const x = gesture.start.ax + (clientX - gesture.start.px);
     const y = gesture.start.ay + (clientY - gesture.start.py);
-    this._hudPinned = { x, y };
+    this._state(gesture.session).hudPinned = { x, y };
     if (!this._isCurrentPointerGesture(owned)) return;
-    this._applyHudPin(gesture.card, x, y, gesture.layout, owned);
+    this._applyHudPin(gesture.session, gesture.card, x, y, gesture.layout, owned);
     if (!this._isCurrentPointerGesture(owned)) return;
   }
 
@@ -5532,7 +6228,8 @@ class CalibManipulator {
   }
 
   setSelected(
-    jointName: string,
+    session: CalibrationManipulatorSession,
+    jointName: string | null,
     {
       scrollPanel = false,
       gesture = null,
@@ -5541,54 +6238,83 @@ class CalibManipulator {
       gesture?: OwnedCalibrationPointerGesture | null;
     } = {},
   ): void {
-    const gestureIsCurrent = (): boolean => (
-      !gesture || this._isCurrentPointerGesture(gesture)
+    const actionIsCurrent = (): boolean => (
+      this.isCurrent(session)
+      && (!gesture || (
+        gesture.value.session === session
+        && this._isCurrentPointerGesture(gesture)
+      ))
     );
-    if (!this.active || !gestureIsCurrent()) return;
-    const context = gesture?.value.context ?? this.context;
-    const tags = [...this._tags.entries()];
-    this.selected = jointName;
-    for (const [j, { el }] of tags) {
-      if (!gestureIsCurrent()) return;
-      el.classList.toggle("visible", j === jointName);
-      if (!gestureIsCurrent()) return;
-    }
+    if (!actionIsCurrent()) return;
+    const state = this._state(session);
+    const context = gesture?.value.context ?? state.context;
+    if (!context) return;
+    state.selected = jointName;
+    this._reconcileSelectionProjection(session, gesture);
+    if (!actionIsCurrent() || state.selected !== jointName) return;
     const sliderRows = context.getSliderRows();
-    if (!gestureIsCurrent()) return;
-    const sliderEntries = Object.entries(sliderRows);
-    if (!gestureIsCurrent()) return;
-    for (const [j, rowRec] of sliderEntries) {
-      if (!gestureIsCurrent()) return;
-      rowRec.row?.classList.toggle("selected", j === jointName);
-      if (!gestureIsCurrent()) return;
-    }
-    this._syncHighlights(gesture);
-    if (!gestureIsCurrent()) return;
-    this._updateLimitGizmo(gesture);
-    if (!gestureIsCurrent()) return;
+    if (!actionIsCurrent() || state.selected !== jointName) return;
+    this._syncHighlights(session, gesture);
+    if (!actionIsCurrent()) return;
+    this._updateLimitGizmo(session, gesture);
+    if (!actionIsCurrent()) return;
     if (scrollPanel && jointName && sliderRows[jointName]?.row) {
       sliderRows[jointName].row.scrollIntoView({ block: "nearest", behavior: "smooth" });
-      if (!gestureIsCurrent()) return;
+      if (!actionIsCurrent()) return;
     }
+  }
+
+  private _reconcileSelectionProjection(
+    session: CalibrationManipulatorSession,
+    gesture: OwnedCalibrationPointerGesture | null,
+  ): void {
+    for (let pass = 0; pass < 64; pass += 1) {
+      if (!this.isCurrent(session)) return;
+      if (gesture && !this._isCurrentPointerGesture(gesture)) return;
+      const state = this._state(session);
+      const selected = state.selected;
+      const context = gesture?.value.context ?? state.context;
+      if (!context) return;
+      const tags = [...state.tags.entries()];
+      const sliderRows = context.getSliderRows();
+      const stable = (): boolean => (
+        this.isCurrent(session)
+        && state.selected === selected
+        && (!gesture || this._isCurrentPointerGesture(gesture))
+      );
+      if (!stable()) continue;
+      for (const [joint, tag] of tags) {
+        tag.el.classList.toggle("visible", joint === selected);
+        if (!stable()) break;
+      }
+      if (!stable()) continue;
+      for (const [joint, row] of Object.entries(sliderRows)) {
+        row.row?.classList.toggle("selected", joint === selected);
+        if (!stable()) break;
+      }
+      if (stable()) return;
+    }
+    throw new Error("Calibration selection did not reach a stable session");
   }
 
   private _syncHighlights(
+    session: CalibrationManipulatorSession,
     gesture: OwnedCalibrationPointerGesture | null = null,
   ): void {
-    if (gesture && !this._isCurrentPointerGesture(gesture)) return;
-    const context = gesture?.value.context ?? this.context;
-    const selLink = this.selected ? this.jointToLink[this.selected] : null;
-    const hovLink = this.hoveredLink;
-    const hoveredJoint = this.hoveredJoint;
-    const dragging = gesture
-      ? gesture.value.kind === "canvas" && gesture.value.activated
-      : this.dragging;
-    context.robotView.setCalibHighlights({ hover: hovLink, selected: selLink });
-    if (gesture && !this._isCurrentPointerGesture(gesture)) return;
-    this.stage.classList.toggle("calib-hover-joint", !!(hoveredJoint && !dragging));
+    if (
+      !this.isCurrent(session)
+      || (gesture && (
+        gesture.value.session !== session
+        || !this._isCurrentPointerGesture(gesture)
+      ))
+    ) return;
+    const state = this._state(session);
+    if (!(gesture?.value.context ?? state.context)) return;
+    this._reconcileSharedSurface();
   }
 
   updateHudValue(
+    session: CalibrationManipulatorSession,
     jointName: string,
     value: string | number,
     {
@@ -5596,32 +6322,126 @@ class CalibManipulator {
       syncInput = true,
     }: { live?: boolean; syncInput?: boolean } = {},
   ): void {
-    const tag = this._tags.get(jointName);
+    if (!this.isCurrent(session)) return;
+    const state = this._state(session);
+    const tag = state.tags.get(jointName);
     if (!tag) return;
     const x = parseFloat(String(value));
     if (!Number.isFinite(x)) return;
-    const meta = this.jointMeta[jointName];
+    const meta = state.jointMeta[jointName];
     if (syncInput) {
-      tag.input.value = formatCalibrationAngle(x, this.angleUnit, live ? 4 : 3);
+      tag.input.value = formatCalibrationAngle(x, state.angleUnit, live ? 4 : 3);
+      if (!this.isCurrent(session)) return;
     }
     if (meta) {
       const span = meta.upper - meta.lower;
       const t = span > 1e-9 ? (x - meta.lower) / span : 0.5;
       const pct = `${Math.min(100, Math.max(0, t * 100)).toFixed(1)}%`;
       tag.thumb.style.left = pct;
+      if (!this.isCurrent(session)) return;
       tag.fill.style.width = pct;
+      if (!this.isCurrent(session)) return;
       const atLo = Math.abs(x - meta.lower) < 0.008;
       const atHi = Math.abs(x - meta.upper) < 0.008;
       tag.el.classList.toggle("at-limit-lo", atLo);
+      if (!this.isCurrent(session)) return;
       tag.el.classList.toggle("at-limit-hi", atHi);
+      if (!this.isCurrent(session)) return;
     }
-    if (jointName === this.selected) this._updateLimitGizmo();
+    if (jointName === state.selected) this._updateLimitGizmo(session);
   }
 
-  updateJointWorld(jointWorld: Record<string, CalibrationJointWorld> | null | undefined): void {
-    this.jointWorld = jointWorld || {};
-    this._positionTags();
-    if (this.selected) this._updateLimitGizmo();
+  updateJointWorld(
+    session: CalibrationManipulatorSession,
+    jointWorld: Record<string, CalibrationJointWorld> | null | undefined,
+  ): void {
+    if (!this.isCurrent(session)) return;
+    const state = this._state(session);
+    state.jointWorld = jointWorld || {};
+    this.positionTags(session);
+    if (!this.isCurrent(session)) return;
+    if (state.selected) this._updateLimitGizmo(session);
+  }
+
+  clearPointerPlacement(session: CalibrationManipulatorSession): void {
+    if (!this.isCurrent(session)) return;
+    const state = this._state(session);
+    state.pickScreen = null;
+    state.pickAnchor = null;
+    state.hudPinned = null;
+  }
+
+  clearExternalRoots(session: CalibrationManipulatorSession): void {
+    if (!this.isCurrent(session)) return;
+    const inventory = this._state(session).externalRoots;
+    const roots = [...inventory];
+    const errors: unknown[] = [];
+    for (const root of roots) {
+      const index = inventory.indexOf(root);
+      if (index < 0) continue;
+      // Take before the host call so synchronous stop cannot remove this exact
+      // element a second time. Restore only while the same lease stays current.
+      inventory.splice(index, 1);
+      try {
+        root.remove();
+      } catch (error) {
+        if (this.isCurrent(session) && !inventory.includes(root)) {
+          inventory.splice(Math.min(index, inventory.length), 0, root);
+        }
+        appendCalibrationCleanupError(errors, error);
+      }
+    }
+    if (errors.length > 0) {
+      throw new AggregateError(errors, "Calibration external root cleanup failed");
+    }
+  }
+
+  publishExternalRoot(
+    session: CalibrationManipulatorSession,
+    parent: HTMLElement,
+    root: HTMLElement,
+  ): boolean {
+    if (!this.isCurrent(session)) return false;
+    const roots = this._state(session).externalRoots;
+    try {
+      const disposition = installReentrantSessionResource({
+        authority: { isCurrent: () => this.isCurrent(session) },
+        // Mark before install so reentrant stop observes the obligation.
+        mark: () => { roots.push(root); },
+        install: () => { parent.appendChild(root); },
+        cleanupLate: () => { root.remove(); },
+      });
+      return disposition === "installed";
+    } catch (error) {
+      // A current host failure has not triggered lifecycle rollback yet. Take
+      // its local obligation here; stale failures were already compensated by
+      // installReentrantSessionResource.
+      if (this.isCurrent(session)) {
+        const cleanupErrors: unknown[] = [];
+        const index = roots.indexOf(root);
+        if (index >= 0) roots.splice(index, 1);
+        try {
+          root.remove();
+        } catch (cleanupError) {
+          if (this.isCurrent(session) && !roots.includes(root)) {
+            roots.splice(Math.max(0, index), 0, root);
+          }
+          appendCalibrationCleanupError(cleanupErrors, cleanupError);
+        }
+        if (cleanupErrors.length > 0) {
+          const errors: unknown[] = [];
+          appendCalibrationCleanupError(errors, error);
+          for (const cleanupError of cleanupErrors) {
+            appendCalibrationCleanupError(errors, cleanupError);
+          }
+          throw new AggregateError(
+            errors,
+            "Calibration external root install failed and rollback was incomplete",
+          );
+        }
+      }
+      throw error;
+    }
   }
 
   private _perpRef(axis: THREE.Vector3, pivot: THREE.Vector3): THREE.Vector3 {
@@ -5632,16 +6452,29 @@ class CalibManipulator {
   }
 
   private _updateLimitGizmo(
+    session: CalibrationManipulatorSession,
     gesture: OwnedCalibrationPointerGesture | null = null,
   ): void {
-    if (gesture && !this._isCurrentPointerGesture(gesture)) return;
-    const limitGroup = this._limitGroup;
-    const selected = this.selected;
-    const jointMeta = this.jointMeta;
-    const jointWorld = this.jointWorld;
-    const context = gesture?.value.context ?? this.context;
+    const actionIsCurrent = (): boolean => (
+      this.isCurrent(session)
+      && (!gesture || (
+        gesture.value.session === session
+        && this._isCurrentPointerGesture(gesture)
+      ))
+    );
+    if (!actionIsCurrent()) return;
+    const state = this._state(session);
+    const limitGroup = state.limitGroup;
+    const selected = state.selected;
+    const jointMeta = state.jointMeta;
+    const jointWorld = state.jointWorld;
+    const context = gesture?.value.context ?? state.context;
+    if (!context) return;
     if (!limitGroup || !selected) {
-      if (limitGroup) limitGroup.group.visible = false;
+      if (limitGroup) {
+        limitGroup.group.visible = false;
+        if (!actionIsCurrent()) return;
+      }
       return;
     }
     const joint = selected;
@@ -5649,10 +6482,11 @@ class CalibManipulator {
     const jw = jointWorld[joint];
     if (!meta || !jw?.pivot || !jw?.axis || meta.type === "prismatic") {
       limitGroup.group.visible = false;
+      if (!actionIsCurrent()) return;
       return;
     }
     const q = context.getQ()[joint] ?? 0;
-    if (gesture && !this._isCurrentPointerGesture(gesture)) return;
+    if (!actionIsCurrent()) return;
     const pivot = hhtoolsToWorldVec3(jw.pivot[0], jw.pivot[1], jw.pivot[2], new THREE.Vector3());
     const axis = hhtoolsToWorldVec3(jw.axis[0], jw.axis[1], jw.axis[2], _hhtoolsAxis).normalize();
     const ref = this._perpRef(axis, pivot);
@@ -5666,21 +6500,22 @@ class CalibManipulator {
       arcPts.push(arcPointWorld(pivot, axis, ref, ang, R));
     }
     limitGroup.arc.geometry.setFromPoints(arcPts);
-    if (gesture && !this._isCurrentPointerGesture(gesture)) return;
+    if (!actionIsCurrent()) return;
 
     const loP = arcPointWorld(pivot, axis, ref, meta.lower, R);
     const hiP = arcPointWorld(pivot, axis, ref, meta.upper, R);
     const curP = arcPointWorld(pivot, axis, ref, q, R);
     limitGroup.loTick.position.copy(loP);
-    if (gesture && !this._isCurrentPointerGesture(gesture)) return;
+    if (!actionIsCurrent()) return;
     limitGroup.hiTick.position.copy(hiP);
-    if (gesture && !this._isCurrentPointerGesture(gesture)) return;
+    if (!actionIsCurrent()) return;
     limitGroup.curTick.position.copy(curP);
-    if (gesture && !this._isCurrentPointerGesture(gesture)) return;
+    if (!actionIsCurrent()) return;
     limitGroup.needle.geometry.setFromPoints([pivot, curP]);
-    if (gesture && !this._isCurrentPointerGesture(gesture)) return;
+    if (!actionIsCurrent()) return;
 
     limitGroup.group.visible = true;
+    if (!actionIsCurrent()) return;
   }
 
   private _clampHudCard(
@@ -5714,35 +6549,41 @@ class CalibManipulator {
     };
   }
 
-  _positionTags(
+  positionTags(
+    session: CalibrationManipulatorSession,
     gesture: OwnedCalibrationPointerGesture | null = null,
   ): void {
-    const gestureIsCurrent = (): boolean => (
-      !gesture || this._isCurrentPointerGesture(gesture)
+    const actionIsCurrent = (): boolean => (
+      this.isCurrent(session)
+      && (!gesture || (
+        gesture.value.session === session
+        && this._isCurrentPointerGesture(gesture)
+      ))
     );
-    if (!this.active || !gestureIsCurrent() || this._hudCardDrag) return;
-    const selected = this.selected;
-    const tags = [...this._tags.entries()];
-    const jointWorld = this.jointWorld;
-    const hudPinned = this._hudPinned ? { ...this._hudPinned } : null;
-    const pickAnchor = this._pickAnchor?.clone() ?? null;
+    if (!actionIsCurrent() || this._isHudCardDragging(session)) return;
+    const state = this._state(session);
+    const selected = state.selected;
+    const tags = [...state.tags.entries()];
+    const jointWorld = state.jointWorld;
+    const hudPinned = state.hudPinned ? { ...state.hudPinned } : null;
+    const pickAnchor = state.pickAnchor?.clone() ?? null;
     const layout = this._hudLayout();
-    if (!gestureIsCurrent()) return;
+    if (!actionIsCurrent()) return;
     const { ox, oy, w, h } = layout;
     const _proj = new THREE.Vector3();
     for (const [name, { el }] of tags) {
-      if (!gestureIsCurrent()) return;
+      if (!actionIsCurrent()) return;
       if (!selected || name !== selected) {
         el.classList.remove("visible", "screen-docked", "screen-pick", "user-pinned", "is-dragging");
-        if (!gestureIsCurrent()) return;
+        if (!actionIsCurrent()) return;
         continue;
       }
       const jw = jointWorld[name];
       if (!jw?.pivot) continue;
 
       if (hudPinned) {
-        this._applyHudPin(el, hudPinned.x, hudPinned.y, layout, gesture);
-        if (!gestureIsCurrent()) return;
+        this._applyHudPin(session, el, hudPinned.x, hudPinned.y, layout, gesture);
+        if (!actionIsCurrent()) return;
         continue;
       }
 
@@ -5770,17 +6611,17 @@ class CalibManipulator {
 
       const clamped = this._clampHudCard(sx, sy, w, h, layout.cardW, layout.cardH, layout.pad);
       el.classList.remove("user-pinned");
-      if (!gestureIsCurrent()) return;
+      if (!actionIsCurrent()) return;
       el.classList.toggle("screen-docked", mode === "screen-docked");
-      if (!gestureIsCurrent()) return;
+      if (!actionIsCurrent()) return;
       el.classList.toggle("screen-pick", mode === "screen-pick");
-      if (!gestureIsCurrent()) return;
+      if (!actionIsCurrent()) return;
       el.style.left = `${clamped.x}px`;
-      if (!gestureIsCurrent()) return;
+      if (!actionIsCurrent()) return;
       el.style.top = `${clamped.y}px`;
-      if (!gestureIsCurrent()) return;
+      if (!actionIsCurrent()) return;
       el.classList.add("visible");
-      if (!gestureIsCurrent()) return;
+      if (!actionIsCurrent()) return;
     }
   }
 
@@ -5791,56 +6632,73 @@ class CalibManipulator {
   }
 
   private _pickMeshes(
+    session: CalibrationManipulatorSession,
     clientX: number,
     clientY: number,
-    context: CalibrationContext | null = this._ctx,
   ): THREE.Intersection<THREE.Object3D>[] {
+    if (!this.isCurrent(session)) return [];
+    const context = this._state(session).context;
+    if (!context) return [];
     this._pointerNdc(clientX, clientY);
+    if (!this.isCurrent(session)) return [];
     this.raycaster.setFromCamera(this.pointer, camera);
+    if (!this.isCurrent(session)) return [];
     const meshes: THREE.Object3D[] = [];
-    context?.robotView.group.traverse((node) => {
+    context.robotView.group.traverse((node) => {
+      if (!this.isCurrent(session)) return;
       const candidate = node as THREE.Mesh;
       if (candidate.isMesh && candidate.visible) meshes.push(candidate);
     });
+    if (!this.isCurrent(session)) return [];
     return this.raycaster.intersectObjects(meshes, false);
   }
 
-  private _pickLink(clientX: number, clientY: number): string | null {
-    const hits = this._pickMeshes(clientX, clientY);
+  private _pickLink(
+    session: CalibrationManipulatorSession,
+    clientX: number,
+    clientY: number,
+  ): string | null {
+    const hits = this._pickMeshes(session, clientX, clientY);
+    if (!this.isCurrent(session)) return null;
     if (!hits.length) return null;
-    return this._ctx?.robotView._linkForNode(hits[0].object) ?? null;
+    return this._state(session).context?.robotView._linkForNode(hits[0].object) ?? null;
   }
 
-  private _jointForLink(link: string | null): string | null {
+  private _jointForLink(
+    session: CalibrationManipulatorSession,
+    link: string | null,
+  ): string | null {
     if (!link) return null;
-    return this.linkToJoint[link] || null;
+    return this._state(session).linkToJoint[link] || null;
   }
 
-  private _updateHover(clientX: number, clientY: number): void {
-    const link = this._pickLink(clientX, clientY);
-    const joint = this._jointForLink(link);
-    this.hoveredLink = link;
-    this.hoveredJoint = joint;
-    this._syncHighlights();
-    if (joint && joint !== this.selected) {
-      const hint = document.getElementById("calib-hover-hint");
-      if (hint) {
-        hint.textContent = joint;
-        hint.classList.add("show");
-      }
-    } else {
-      document.getElementById("calib-hover-hint")?.classList.remove("show");
-    }
+  private _updateHover(
+    session: CalibrationManipulatorSession,
+    clientX: number,
+    clientY: number,
+  ): void {
+    if (!this.isCurrent(session)) return;
+    const link = this._pickLink(session, clientX, clientY);
+    if (!this.isCurrent(session)) return;
+    const joint = this._jointForLink(session, link);
+    if (!this.isCurrent(session)) return;
+    const state = this._state(session);
+    state.hoveredLink = link;
+    state.hoveredJoint = joint;
+    this._syncHighlights(session);
   }
 
-  private _pointerDown(e: PointerEvent): void {
-    const context = this._ctx;
-    const session = this._gestureOwner.currentSession;
-    if (!context || !session) return;
+  private _pointerDown(
+    session: CalibrationManipulatorSession,
+    e: PointerEvent,
+  ): void {
+    if (!this.isCurrent(session)) return;
+    const state = this._state(session);
+    const context = state.context;
+    if (!context) return;
     const eventSessionIsCurrent = (): boolean => (
-      this.active
-      && this._ctx === context
-      && this._gestureOwner.isSessionCurrent(session)
+      this.isCurrent(session)
+      && this._state(session).context === context
     );
     if (!eventSessionIsCurrent() || e.button !== 0) return;
     if (!eventSessionIsCurrent()) return;
@@ -5848,35 +6706,32 @@ class CalibManipulator {
       ? e.target.closest(".calib-hud-card")
       : null;
     if (!eventSessionIsCurrent() || hudCard) return;
-    const hits = this._pickMeshes(e.clientX, e.clientY, context);
+    const hits = this._pickMeshes(session, e.clientX, e.clientY);
     if (!eventSessionIsCurrent()) return;
     const link = hits.length
       ? context.robotView._linkForNode(hits[0].object)
       : null;
     if (!eventSessionIsCurrent()) return;
-    const joint = this._jointForLink(link);
+    const joint = this._jointForLink(session, link);
     if (!joint) {
-      if (!this._finishPointerGestureForReplacement()) return;
+      if (!this._finishPointerGestureForReplacement(session)) return;
       if (!eventSessionIsCurrent()) return;
-      this.selected = null;
-      for (const { el } of this._tags.values()) el.classList.remove("visible");
-      for (const rowRec of Object.values(this.context.getSliderRows())) {
-        rowRec.row?.classList.remove("selected");
-      }
-      this._updateLimitGizmo();
-      this._syncHighlights();
+      state.pickScreen = null;
+      state.pickAnchor = null;
+      state.hudPinned = null;
+      this.setSelected(session, null);
       return;
     }
     e.preventDefault();
     if (!eventSessionIsCurrent()) return;
-    const meta = this.jointMeta[joint];
+    const meta = state.jointMeta[joint];
     if (!meta || meta.type === "prismatic") {
-      if (!this._finishPointerGestureForReplacement()) return;
+      if (!this._finishPointerGestureForReplacement(session)) return;
       if (!eventSessionIsCurrent()) return;
-      this._pickScreen = { x: e.clientX, y: e.clientY };
-      this._pickAnchor = hits[0].point.clone();
-      this._hudPinned = null;
-      this.setSelected(joint, { scrollPanel: true });
+      state.pickScreen = { x: e.clientX, y: e.clientY };
+      state.pickAnchor = hits[0].point.clone();
+      state.hudPinned = null;
+      this.setSelected(session, joint, { scrollPanel: true });
       return;
     }
     const dragStartQ = context.getQ()[joint] ?? 0;
@@ -5888,7 +6743,7 @@ class CalibManipulator {
       context,
       session,
       activated: false,
-      orbitEnabledBefore: orbit.enabled,
+      orbitEnabledBefore: state.orbitEnabledBaseline,
       joint,
       dragRef: null,
       dragStartQ,
@@ -5896,21 +6751,24 @@ class CalibManipulator {
     const owned = this._beginPointerGesture(gesture, session);
     if (!owned) return;
     try {
-      this._pickScreen = { x: e.clientX, y: e.clientY };
-      this._pickAnchor = hits[0].point.clone();
-      this._hudPinned = null;
-      this.setSelected(joint, { scrollPanel: true, gesture: owned });
+      state.pickScreen = { x: e.clientX, y: e.clientY };
+      state.pickAnchor = hits[0].point.clone();
+      state.hudPinned = null;
+      this.setSelected(session, joint, { scrollPanel: true, gesture: owned });
     } catch (error) {
-      this._finishPointerGesture(owned, "cancel");
-      throw error;
+      this._throwAfterPointerGestureRollback(owned, error);
     }
   }
 
-  private _pointerMove(e: PointerEvent): void {
-    if (!this.active) return;
+  private _pointerMove(
+    session: CalibrationManipulatorSession,
+    e: PointerEvent,
+  ): void {
+    if (!this.isCurrent(session)) return;
     const owned = this._gestureOwner.current;
     if (owned) {
       const gesture = owned.value;
+      if (gesture.session !== session) return;
       if (e.pointerId !== gesture.pointerId) return;
       try {
         if (gesture.kind === "card") {
@@ -5920,23 +6778,28 @@ class CalibManipulator {
         } else {
           this._applyDrag(owned, e.clientX, e.clientY);
         }
-        if (this._isCurrentPointerGesture(owned)) this._positionTags(owned);
+        if (this._isCurrentPointerGesture(owned)) this.positionTags(session, owned);
       } catch (error) {
-        this._finishPointerGesture(owned, "cancel");
-        throw error;
+        this._throwAfterPointerGestureRollback(owned, error);
       }
       return;
     }
-    this._updateHover(e.clientX, e.clientY);
-    this._positionTags();
+    this._updateHover(session, e.clientX, e.clientY);
+    if (this.isCurrent(session)) this.positionTags(session);
   }
 
   private _pointerUp(
+    session: CalibrationManipulatorSession,
     event: PointerEvent,
     reason: Extract<CalibrationPointerGestureEnd, "complete" | "cancel">,
   ): void {
+    if (!this.isCurrent(session)) return;
     const owned = this._gestureOwner.current;
-    if (!owned || event.pointerId !== owned.value.pointerId) return;
+    if (
+      !owned
+      || owned.value.session !== session
+      || event.pointerId !== owned.value.pointerId
+    ) return;
     this._finishPointerGesture(owned, reason);
   }
 
@@ -5947,9 +6810,10 @@ class CalibManipulator {
   ): void {
     const gesture = owned.value;
     if (gesture.kind !== "canvas" || !this._isCurrentPointerGesture(owned)) return;
+    const state = this._state(gesture.session);
     const joint = gesture.joint;
-    const jw = this.jointWorld[joint];
-    const meta = this.jointMeta[joint];
+    const jw = state.jointWorld[joint];
+    const meta = state.jointMeta[joint];
     if (!jw?.pivot || !jw?.axis || !meta) return;
 
     const pivot = hhtoolsToWorldVec3(jw.pivot[0], jw.pivot[1], jw.pivot[2], new THREE.Vector3());
@@ -5985,6 +6849,108 @@ const calibManip = new CalibManipulator({
   hudEl: document.getElementById("calib-hud"),
   stageEl: document.getElementById("stage"),
 });
+
+// Workflow aliases are published before start() crosses its first host
+// boundary. Callers therefore capture one exact lease instead of inferring
+// ownership from mutable global calibration booleans.
+let h2rCalibrationManipulatorSession: CalibrationManipulatorSession | null = null;
+let r2rCalibrationManipulatorSession: CalibrationManipulatorSession | null = null;
+
+function calibrationManipulatorAlias(
+  workflow: WorkflowId,
+): CalibrationManipulatorSession | null {
+  return workflow === "h2r"
+    ? h2rCalibrationManipulatorSession
+    : r2rCalibrationManipulatorSession;
+}
+
+function setCalibrationManipulatorAlias(
+  workflow: WorkflowId,
+  session: CalibrationManipulatorSession | null,
+): void {
+  if (workflow === "h2r") h2rCalibrationManipulatorSession = session;
+  else r2rCalibrationManipulatorSession = session;
+}
+
+function activeCalibrationManipulatorSession(
+  workflow: WorkflowId,
+): CalibrationManipulatorSession | null {
+  const session = calibrationManipulatorAlias(workflow);
+  return session && calibrationSessionIsCurrent(workflow, session)
+    ? session
+    : null;
+}
+
+/** Guard both the lifecycle generation and its workflow-scoped public alias. */
+function calibrationSessionIsCurrent(
+  workflow: WorkflowId,
+  session: CalibrationManipulatorSession,
+): boolean {
+  return (
+    session.value.owner === workflow
+    && calibrationManipulatorAlias(workflow) === session
+    && calibManip.isCurrent(session)
+  );
+}
+
+function startCalibrationManipulatorSession(
+  workflow: WorkflowId,
+  limits: RobotJointLimit[],
+  createContext: (session: CalibrationManipulatorSession) => CalibrationContext,
+  angleUnit: CalibrationAngleUnit,
+): CalibrationManipulatorSession | null {
+  const reservation = calibManip.reserve(workflow, limits, angleUnit);
+  if (reservation.kind === "busy") {
+    throw new Error(
+      `Calibration manipulator is owned by the ${reservation.owner} workflow`,
+    );
+  }
+  const session = reservation.session;
+  setCalibrationManipulatorAlias(workflow, session);
+  try {
+    if (calibManip.start(session, createContext)) return session;
+  } catch (error) {
+    if (calibrationManipulatorAlias(workflow) === session) {
+      setCalibrationManipulatorAlias(workflow, null);
+    }
+    throw error;
+  }
+  if (calibrationManipulatorAlias(workflow) === session) {
+    setCalibrationManipulatorAlias(workflow, null);
+  }
+  return null;
+}
+
+function stopCalibrationManipulatorSession(
+  workflow: WorkflowId,
+  expected: CalibrationManipulatorSession | null,
+): boolean {
+  if (!expected) return false;
+  if (expected.value.owner !== workflow) {
+    throw new Error("Calibration manipulator lease belongs to another workflow");
+  }
+  // Withdraw the public workflow alias before cleanup can synchronously start C.
+  if (calibrationManipulatorAlias(workflow) === expected) {
+    setCalibrationManipulatorAlias(workflow, null);
+  }
+  // Exact stale stop is deliberately harmless, so always drain the captured
+  // lease even when a reentrant successor has already replaced its alias.
+  return calibManip.stop(expected);
+}
+
+function h2rCalibrationContext(
+  session: CalibrationManipulatorSession,
+): CalibrationContext {
+  return {
+    robotView: robot,
+    getQ: () => state.calibQ,
+    getSliderRows: () => state.calibSliderRows,
+    jointChange: (name, value, options) => {
+      setCalibJointValue(session, name, value, options);
+    },
+    previewFk: (options) => previewCalibPose(session, options),
+  };
+}
 
 // =================================================================  RETARGET / CALIBRATION
 function setCalChip(text: unknown, cls = ""): void {
@@ -6138,12 +7104,26 @@ function h2rCalibrationStatusUrl(
 function rollbackH2rCalibrationBootstrap(
   attempt: LatestAsyncAttempt<H2rCalibrationBootstrapIdentity>,
   error: unknown,
+  manipulatorSession: CalibrationManipulatorSession | null,
 ): boolean {
   if (!h2rCalibrationBootstrapAttempts.isCurrent(attempt)) return false;
+  if (h2rCalibrationManipulatorSession === manipulatorSession) {
+    h2rCalibrationManipulatorSession = null;
+  }
   const visibilitySnapshot = state.calibRestore;
   const orbitSnapshot = state.calibOrbitSaved;
 
-  h2rCalibrationFkPreview.stop();
+  runBestEffortCleanup(
+    "calibration bootstrap: manipulator cleanup failed",
+    () => {
+      if (manipulatorSession) calibManip.stop(manipulatorSession);
+    },
+  );
+  if (!h2rCalibrationBootstrapAttempts.isCurrent(attempt)) return false;
+  runBestEffortCleanup(
+    "calibration bootstrap: FK owner cleanup failed",
+    () => h2rCalibrationFkPreview.stop(),
+  );
   if (!h2rCalibrationBootstrapAttempts.isCurrent(attempt)) return false;
 
   // Canonical aliases become terminal before fallible renderer/DOM cleanup.
@@ -6168,12 +7148,10 @@ function rollbackH2rCalibrationBootstrap(
     orbit.maxDistance = orbitSnapshot.maxDistance;
     orbit.zoomSpeed = orbitSnapshot.zoomSpeed;
   })) return false;
-  if (!cleanup("calibration bootstrap: manipulator cleanup failed", () => calibManip.stop())) return false;
   if (!cleanup("calibration bootstrap: robot opacity restore failed", () => robot.setOpacity(1))) return false;
   if (!cleanup("calibration bootstrap: editor cleanup failed", () => {
     const card = document.getElementById("calib-card");
     if (card) card.style.display = "none";
-    document.getElementById("calib-sliders")?.replaceChildren();
     document.getElementById("calib-banner")?.classList.add("hidden");
   })) return false;
   if (!cleanup("calibration bootstrap: visibility restore failed", () => {
@@ -6236,6 +7214,11 @@ async function enterCalibrationMode(
   );
   const isCurrent = (): boolean =>
     h2rCalibrationBootstrapAttempts.isCurrent(attempt);
+  // Only a lease acquired by this attempt belongs in its finally cleanup.
+  // A stale attempt must never stop the pre-existing session used by a newer
+  // attempt that has not reserved its replacement yet.
+  let manipulatorSession: CalibrationManipulatorSession | null = null;
+  let manipulatorCommitted = false;
 
   try {
     if (enteringFresh) {
@@ -6310,26 +7293,51 @@ async function enterCalibrationMode(
     calibrationEditorUi.h2r.comparison = "current";
     updateCalibRestoreButton();
     if (!isCurrent()) return "stale";
-    calibManip.start(state.calibLimits);
-    if (!isCurrent()) return "stale";
-    buildCalibSliders(q, state.calibLimits);
-    if (!isCurrent()) return "stale";
-    applyCalibrationVisualization("h2r");
-    if (!isCurrent()) return "stale";
+    manipulatorSession = startCalibrationManipulatorSession(
+      "h2r",
+      state.calibLimits,
+      h2rCalibrationContext,
+      calibrationEditorUi.h2r.unit,
+    );
+    if (!manipulatorSession) return "stale";
+    const manipulatorIsCurrent = (): boolean => Boolean(
+      isCurrent()
+      && manipulatorSession
+      && calibrationSessionIsCurrent("h2r", manipulatorSession)
+    );
+    if (!manipulatorIsCurrent()) return "stale";
+    if (!buildCalibSliders(
+      manipulatorSession,
+      q,
+      state.calibLimits,
+      isCurrent,
+    )) return "stale";
+    if (!manipulatorIsCurrent()) return "stale";
+    applyCalibrationVisualization("h2r", manipulatorSession);
+    if (!manipulatorIsCurrent()) return "stale";
     updateH2rCalibrationValidation();
-    if (!isCurrent()) return "stale";
+    if (!manipulatorIsCurrent()) return "stale";
     publishH2rWorkflowState();
-    if (!isCurrent()) return "stale";
+    if (!manipulatorIsCurrent()) return "stale";
     calCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
-    if (!isCurrent()) return "stale";
-    return h2rCalibrationBootstrapAttempts.finish(attempt)
-      ? "entered"
-      : "stale";
+    if (!manipulatorIsCurrent()) return "stale";
+    const entered = h2rCalibrationBootstrapAttempts.finish(attempt);
+    if (entered) manipulatorCommitted = true;
+    return entered ? "entered" : "stale";
   } catch (error) {
     if (!isCurrent()) return "stale";
-    return rollbackH2rCalibrationBootstrap(attempt, error)
+    const rollbackSession = manipulatorSession
+      ?? activeCalibrationManipulatorSession("h2r");
+    return rollbackH2rCalibrationBootstrap(attempt, error, rollbackSession)
       ? "failed"
       : "stale";
+  } finally {
+    if (manipulatorSession && !manipulatorCommitted) {
+      runBestEffortCleanup(
+        "calibration bootstrap: uncommitted manipulator cleanup failed",
+        () => stopCalibrationManipulatorSession("h2r", manipulatorSession),
+      );
+    }
   }
 }
 
@@ -6348,41 +7356,64 @@ function updateCalibRestoreButton(): void {
 function exitCalibrationMode(): void {
   h2rCalibrationBootstrapAttempts.invalidate();
   h2rCalibrationStatusAttempts.invalidate();
-  h2rCalibrationFkPreview.stop();
+  const manipulatorSession = h2rCalibrationManipulatorSession;
+  h2rCalibrationManipulatorSession = null;
+  const orbitSnapshot = state.calibOrbitSaved;
+  const visibilitySnapshot = state.calibRestore;
+
+  // Canonical state is terminal before the first fallible cleanup boundary.
   state.calibrationMode = false;
   state.calibNeedsCameraFocus = false;
-  if (state.calibOrbitSaved) {
-    orbit.minDistance = state.calibOrbitSaved.minDistance;
-    orbit.maxDistance = state.calibOrbitSaved.maxDistance;
-    orbit.zoomSpeed = state.calibOrbitSaved.zoomSpeed ?? orbit.zoomSpeed;
-    state.calibOrbitSaved = null;
-  }
-  calibManip.stop();
-  robot.setOpacity(1);
+  state.calibOrbitSaved = null;
+  state.calibRestore = null;
   state.calibSliderRows = {};
-  document.getElementById("calib-banner")?.classList.add("hidden");
   state.calibLimits = null;
   state.calibBaselineQ = null;
   state.calibDraftQ = null;
   state.calibHasSaved = false;
   calibrationEditorUi.h2r.comparison = "current";
-  const snap = state.calibRestore;
-  state.calibRestore = null;
-  _restoreVis(snap);
-  if (robot.trajectory) {
-    robot.setFrame(0);
-  } else {
-    robot.applyStatic();
+
+  const errors: unknown[] = [];
+  const cleanup = (action: () => void): void => {
+    try {
+      action();
+    } catch (error) {
+      appendCalibrationCleanupError(errors, error);
+    }
+  };
+  cleanup(() => h2rCalibrationFkPreview.stop());
+  if (orbitSnapshot) cleanup(() => {
+    orbit.minDistance = orbitSnapshot.minDistance;
+    orbit.maxDistance = orbitSnapshot.maxDistance;
+    orbit.zoomSpeed = orbitSnapshot.zoomSpeed ?? orbit.zoomSpeed;
+  });
+  if (manipulatorSession) cleanup(() => calibManip.stop(manipulatorSession));
+  cleanup(() => robot.setOpacity(1));
+  cleanup(() => document.getElementById("calib-banner")?.classList.add("hidden"));
+  cleanup(() => _restoreVis(visibilitySnapshot));
+  cleanup(() => {
+    if (robot.trajectory) robot.setFrame(0);
+    else robot.applyStatic();
+  });
+  cleanup(() => publishH2rWorkflowState());
+  cleanup(() => emitCalibrationEditorState("h2r"));
+  if (errors.length > 0) {
+    throw new AggregateError(errors, "H2R calibration exit cleanup failed");
   }
-  publishH2rWorkflowState();
-  emitCalibrationEditorState("h2r");
 }
 
 function setCalibJointValue(
+  session: CalibrationManipulatorSession,
   jointName: string,
   value: string | number,
   { from, live = false }: CalibrationChangeOptions,
 ): void {
+  // Detached slider/HUD closures must fail before their first canonical Q or
+  // DOM write; workflow booleans are not an ownership substitute.
+  const sessionIsCurrent = (): boolean => (
+    calibrationSessionIsCurrent("h2r", session)
+  );
+  if (!sessionIsCurrent()) return;
   const limByName: Record<string, RobotJointLimit> = {};
   for (const L of state.calibLimits || []) limByName[L.name] = L;
   const lim = limByName[jointName];
@@ -6395,44 +7426,73 @@ function setCalibJointValue(
     x = angleFromDisplay(x, calibrationEditorUi.h2r.unit);
   }
   x = Math.min(hi, Math.max(lo, x));
+  if (!sessionIsCurrent()) return;
   state.calibQ[jointName] = x;
 
   const row = state.calibSliderRows[jointName];
   const prec = live ? 4 : 3;
   if (row) {
+    if (!sessionIsCurrent()) return;
     if (from === "slider") {
       row.range.value = String(x);
+      if (!sessionIsCurrent()) return;
       row.num.value = formatCalibrationAngle(x, calibrationEditorUi.h2r.unit, prec);
     } else if (from === "number") {
       row.range.value = String(x);
+      if (!sessionIsCurrent()) return;
       if (!live) row.num.value = formatCalibrationAngle(x, calibrationEditorUi.h2r.unit, prec);
     } else if (from !== "hud-input") {
       row.range.value = String(x);
+      if (!sessionIsCurrent()) return;
       row.num.value = formatCalibrationAngle(x, calibrationEditorUi.h2r.unit, prec);
     }
+    if (!sessionIsCurrent()) return;
     const span = hi - lo;
     row.row.classList.toggle("near-limit", span > 0 && (x - lo < span * 0.03 || hi - x < span * 0.03));
   }
+  if (!sessionIsCurrent()) return;
   if (from === "hud-input") {
-    calibManip.updateHudValue(jointName, x, { live, syncInput: false });
+    calibManip.updateHudValue(session, jointName, x, { live, syncInput: false });
   } else {
-    calibManip.updateHudValue(jointName, x, { live });
+    calibManip.updateHudValue(session, jointName, x, { live });
   }
-  if (from === "slider" || from === "number") calibManip.setSelected(jointName);
+  if (!sessionIsCurrent()) return;
+  if (from === "slider" || from === "number") {
+    calibManip.setSelected(session, jointName);
+  }
+  if (!sessionIsCurrent()) return;
   markCalibrationEdited("h2r");
+  if (!sessionIsCurrent()) return;
   updateH2rCalibrationValidation();
-  previewCalibPose({ live });
+  if (!sessionIsCurrent()) return;
+  previewCalibPose(session, { live });
 }
 
 function buildCalibSliders(
+  session: CalibrationManipulatorSession,
   initialQ: Record<string, number>,
   limitsList: RobotJointLimit[] | null,
-): void {
+  isCurrent: () => boolean = () => true,
+): boolean {
+  const leaseIsCurrent = (): boolean => (
+    calibrationSessionIsCurrent("h2r", session)
+  );
+  const sessionIsCurrent = (): boolean => (
+    isCurrent() && leaseIsCurrent()
+  );
+  if (!sessionIsCurrent()) return false;
   const box = document.getElementById("calib-sliders");
-  box.replaceChildren();
-  state.calibQ = {};
-  state.calibSliderRows = {};
-  if (!state.robot) return;
+  if (!sessionIsCurrent()) return false;
+  const root = document.createElement("div");
+  root.className = "calib-slider-session";
+  root.dataset.workflow = "h2r";
+  root.style.display = "contents";
+  if (!sessionIsCurrent()) return false;
+  calibManip.clearExternalRoots(session);
+  if (!sessionIsCurrent()) return false;
+  const nextQ: Record<string, number> = {};
+  const nextRows: Record<string, CalibrationSliderRow> = {};
+  if (!state.robot) return false;
 
   const limByName: Record<string, RobotJointLimit> = {};
   for (const L of limitsList || []) limByName[L.name] = L;
@@ -6444,6 +7504,7 @@ function buildCalibSliders(
 
   const seen = new Set<string>();
   for (const j of joints) {
+    if (!sessionIsCurrent()) return false;
     if (seen.has(j)) continue;
     seen.add(j);
     const lim = limByName[j];
@@ -6452,7 +7513,7 @@ function buildCalibSliders(
     if (hi <= lo) { lo = -Math.PI; hi = Math.PI; }
     let v = q[j] != null ? Number(q[j]) : 0;
     v = Math.min(hi, Math.max(lo, v));
-    state.calibQ[j] = v;
+    nextQ[j] = v;
 
     const row = document.createElement("div");
     row.className = "slider-row";
@@ -6474,34 +7535,52 @@ function buildCalibSliders(
     num.step = calibrationEditorUi.h2r.unit === "deg" ? "0.1" : "0.001";
     num.value = formatCalibrationAngle(v, calibrationEditorUi.h2r.unit);
     row.append(label, range, num);
+    if (!sessionIsCurrent()) return false;
 
-    state.calibSliderRows[j] = { row, range, num, lo, hi, region };
+    nextRows[j] = { row, range, num, lo, hi, region };
     const span = hi - lo;
     row.classList.toggle("near-limit", span > 0 && (v - lo < span * 0.03 || hi - v < span * 0.03));
-    calibManip.updateHudValue(j, v);
+    if (!sessionIsCurrent()) return false;
+    calibManip.updateHudValue(session, j, v);
+    if (!sessionIsCurrent()) return false;
 
-    range.oninput = () => setCalibJointValue(j, range.value, { from: "slider", live: true });
-    num.oninput = () => setCalibJointValue(j, num.value, { from: "number", live: true });
-    num.onchange = () => setCalibJointValue(j, num.value, { from: "number" });
+    range.oninput = () => setCalibJointValue(session, j, range.value, { from: "slider", live: true });
+    num.oninput = () => setCalibJointValue(session, j, num.value, { from: "number", live: true });
+    num.onchange = () => setCalibJointValue(session, j, num.value, { from: "number" });
     num.onkeydown = (ev: KeyboardEvent) => {
-      if (ev.key === "Enter") { setCalibJointValue(j, num.value, { from: "number" }); num.blur(); }
+      if (ev.key === "Enter" && leaseIsCurrent()) {
+        setCalibJointValue(session, j, num.value, { from: "number" });
+        if (leaseIsCurrent()) num.blur();
+      }
     };
     row.onclick = () => {
-      calibManip._pickScreen = null;
-      calibManip._pickAnchor = null;
-      calibManip._hudPinned = null;
-      calibManip.setSelected(j);
+      if (!leaseIsCurrent()) return;
+      calibManip.clearPointerPlacement(session);
+      calibManip.setSelected(session, j);
     };
-    box.appendChild(row);
+    if (!sessionIsCurrent()) return false;
+    root.appendChild(row);
+    if (!sessionIsCurrent()) return false;
   }
-  if (calibrationEditorUi.h2r.comparison === "current") state.calibDraftQ = { ...state.calibQ };
-  syncCalibrationNumberInputs("h2r");
+  if (!sessionIsCurrent()) return false;
+  // Publish canonical maps together only after the off-DOM tree is complete.
+  state.calibQ = nextQ;
+  state.calibSliderRows = nextRows;
+  if (!calibManip.publishExternalRoot(session, box, root)) return false;
+  if (!sessionIsCurrent()) return false;
+  if (calibrationEditorUi.h2r.comparison === "current") state.calibDraftQ = { ...nextQ };
+  syncCalibrationNumberInputs("h2r", session);
+  if (!sessionIsCurrent()) return false;
   applyCalibrationRowFilter("h2r");
+  if (!sessionIsCurrent()) return false;
   updateH2rCalibrationValidation();
-  previewCalibPose();
+  if (!sessionIsCurrent()) return false;
+  previewCalibPose(session);
+  return sessionIsCurrent();
 }
 
 interface H2rCalibrationFkResult {
+  readonly manipulatorSession: CalibrationManipulatorSession;
   readonly activeRobot: RobotPayload;
   readonly activeMotion: MotionPayload | null;
   readonly reference: string;
@@ -6518,19 +7597,27 @@ const h2rCalibrationFkPreview = new CoalescedAsyncFrameTask<
     cancelFrame: (handle) => cancelAnimationFrame(handle),
   },
   execute: async () => {
+    const manipulatorSession = activeCalibrationManipulatorSession("h2r");
     const activeRobot = state.robot;
     const activeMotion = state.motion;
     const reference = state.reference;
-    if (!activeRobot || !reference || !state.calibrationMode) return null;
+    if (
+      !manipulatorSession
+      || !activeRobot
+      || !reference
+      || !state.calibrationMode
+    ) return null;
+    if (!calibrationSessionIsCurrent("h2r", manipulatorSession)) return null;
     const response = await API.post("/api/robot/fk_preview", {
       robot: activeRobot.name,
       joint_q: { ...state.calibQ },
     });
-    return { activeRobot, activeMotion, reference, response };
+    return { manipulatorSession, activeRobot, activeMotion, reference, response };
   },
   commit: (result) => {
     if (
       !result
+      || !calibrationSessionIsCurrent("h2r", result.manipulatorSession)
       || !state.calibrationMode
       || state.robot !== result.activeRobot
       || state.motion !== result.activeMotion
@@ -6538,16 +7625,23 @@ const h2rCalibrationFkPreview = new CoalescedAsyncFrameTask<
     ) return;
 
     const { response } = result;
+    // FK publication authority is checked at the commit edge, immediately
+    // before the first robot pose mutation.
+    if (!calibrationSessionIsCurrent("h2r", result.manipulatorSession)) return;
     robot.applyCalibPose(response.link_transforms, response.ground_offset_z);
+    if (!calibrationSessionIsCurrent("h2r", result.manipulatorSession)) return;
     refSkel.updateOverlay(robot);
-    if (calibManip.active) {
-      calibManip.updateJointWorld(response.joint_world);
-    }
+    if (!calibrationSessionIsCurrent("h2r", result.manipulatorSession)) return;
+    calibManip.updateJointWorld(result.manipulatorSession, response.joint_world);
+    if (!calibrationSessionIsCurrent("h2r", result.manipulatorSession)) return;
     updateH2rCalibrationValidation();
+    if (!calibrationSessionIsCurrent("h2r", result.manipulatorSession)) return;
     if (state.calibNeedsCameraFocus) {
       state.calibNeedsCameraFocus = false;
       applyCalibOrbitLimits({ snapCamera: true });
+      if (!calibrationSessionIsCurrent("h2r", result.manipulatorSession)) return;
       focusRobotView({ resetOffset: true });
+      if (!calibrationSessionIsCurrent("h2r", result.manipulatorSession)) return;
     }
   },
   reportError: (error) => {
@@ -6556,9 +7650,14 @@ const h2rCalibrationFkPreview = new CoalescedAsyncFrameTask<
 });
 
 function previewCalibPose(
+  session: CalibrationManipulatorSession,
   { live = false, flush = false }: CalibrationPreviewOptions = {},
 ): void {
-  if (!state.robot || !state.calibrationMode) return;
+  if (
+    !calibrationSessionIsCurrent("h2r", session)
+    || !state.robot
+    || !state.calibrationMode
+  ) return;
   if (flush) h2rCalibrationFkPreview.flush();
   else h2rCalibrationFkPreview.schedule();
 }
@@ -8072,10 +9171,15 @@ function applyCalibrationRowFilter(workflow: WorkflowId): void {
   emitCalibrationEditorState(workflow);
 }
 
-function syncCalibrationNumberInputs(workflow: WorkflowId): void {
+function syncCalibrationNumberInputs(
+  workflow: WorkflowId,
+  expectedSession: CalibrationManipulatorSession | null = activeCalibrationManipulatorSession(workflow),
+): void {
+  if (!expectedSession || !calibrationSessionIsCurrent(workflow, expectedSession)) return;
   const unit = calibrationEditorUi[workflow].unit;
   const q = calibrationQ(workflow);
   for (const [joint, row] of Object.entries(calibrationRows(workflow))) {
+    if (!calibrationSessionIsCurrent(workflow, expectedSession)) return;
     row.num.min = String(angleForDisplay(row.lo, unit));
     row.num.max = String(angleForDisplay(row.hi, unit));
     row.num.step = unit === "deg" ? "0.1" : "0.001";
@@ -8084,11 +9188,18 @@ function syncCalibrationNumberInputs(workflow: WorkflowId): void {
       ? runtimeText("Angle (degrees); stored internally in radians", "角度（度）；内部仍以弧度保存")
       : runtimeText("Angle (radians)", "角度（弧度）");
   }
-  calibManip.setAngleUnit(unit);
+  calibManip.setAngleUnit(expectedSession, unit);
 }
 
-function applyCalibrationVisualization(workflow: WorkflowId): void {
-  if (!calibrationActive(workflow)) return;
+function applyCalibrationVisualization(
+  workflow: WorkflowId,
+  session: CalibrationManipulatorSession,
+): void {
+  const sessionIsCurrent = (): boolean => (
+    calibrationSessionIsCurrent(workflow, session)
+    && calibrationActive(workflow)
+  );
+  if (!sessionIsCurrent()) return;
   const ui = calibrationEditorUi[workflow];
   refSkel.setDisplayOptions({
     mappedOnly: ui.mappedOnly,
@@ -8096,9 +9207,12 @@ function applyCalibrationVisualization(workflow: WorkflowId): void {
     mappingLines: ui.mappingLines,
     sourceOpacity: ui.sourceOpacity,
   });
+  if (!sessionIsCurrent()) return;
   const robotView = calibrationRobotView(workflow);
   robotView.setOpacity(ui.robotOpacity);
+  if (!sessionIsCurrent()) return;
   refSkel.updateOverlay(robotView);
+  if (!sessionIsCurrent()) return;
   emitCalibrationEditorState(workflow);
 }
 
@@ -8139,8 +9253,16 @@ async function applyCalibrationComparison(
   if (!target) target = { ...current };
 
   ui.comparison = comparison;
-  if (workflow === "h2r") buildCalibSliders({ ...target }, state.calibLimits);
-  else r2rBuildSliders({ ...target }, r2r.calibLimits);
+  if (workflow === "h2r") {
+    const session = activeCalibrationManipulatorSession("h2r");
+    if (!session) return;
+    if (!buildCalibSliders(session, { ...target }, state.calibLimits)) return;
+  }
+  else {
+    const session = activeCalibrationManipulatorSession("r2r");
+    if (!session) return;
+    if (!r2rBuildSliders(session, { ...target }, r2r.calibLimits)) return;
+  }
   emitCalibrationEditorState(workflow);
 }
 
@@ -8156,10 +9278,14 @@ async function resetCalibrationRegion(workflow: WorkflowId): Promise<void> {
   ui.comparison = "current";
   if (workflow === "h2r") {
     state.calibDraftQ = { ...next };
-    buildCalibSliders(next, state.calibLimits);
+    const session = activeCalibrationManipulatorSession("h2r");
+    if (!session) return;
+    if (!buildCalibSliders(session, next, state.calibLimits)) return;
   } else {
     r2r.calibDraftQ = { ...next };
-    r2rBuildSliders(next, r2r.calibLimits);
+    const session = activeCalibrationManipulatorSession("r2r");
+    if (!session) return;
+    if (!r2rBuildSliders(session, next, r2r.calibLimits)) return;
   }
   toast(changed > 0
     ? runtimeText(
@@ -8198,7 +9324,8 @@ async function handleCalibrationEditorCommand(
 
   if (command === "search" || command === "region") applyCalibrationRowFilter(workflow);
   else if (["mapped-only", "labels", "mapping-lines", "source-opacity", "robot-opacity"].includes(command)) {
-    applyCalibrationVisualization(workflow);
+    const session = activeCalibrationManipulatorSession(workflow);
+    if (session) applyCalibrationVisualization(workflow, session);
   } else {
     emitCalibrationEditorState(workflow);
   }
@@ -8728,15 +9855,17 @@ function r2rEnterPanel(): void {
 function r2rLeavePanel(): void {
   if (!r2r.active) return;
   // Leaving owns teardown even when bootstrap has not reached `calibrating` yet.
-  invalidateR2rCalibrationAttempts();
-  r2rCalibrationFkPreview.stop();
   r2r.active = false;
   if (
     r2r.calibrating
     || r2rCalibrationResourcesOwned
     || r2r.calibOrbitSaved !== null
+    || r2rCalibrationManipulatorSession !== null
   ) {
     r2rExitCalib({ publishStageDisplay: false });
+  } else {
+    invalidateR2rCalibrationAttempts();
+    r2rCalibrationFkPreview.stop();
   }
   r2rApplyStage({ publishStageDisplay: false });
   const s = _r2rMainSnap;
@@ -8902,22 +10031,31 @@ function syncR2rRobotSelects(kind: "source" | "target", name: string): void {
 
 /** Withdraw calibration ownership before a robot-selection intent can await. */
 function prepareR2rRobotReplacement(): void {
-  invalidateR2rCalibrationAttempts();
-  r2rCalibrationFkPreview.stop();
   if (
     r2r.calibrating
     || r2rCalibrationResourcesOwned
     || r2r.calibOrbitSaved !== null
-  ) r2rExitCalib();
+    || r2rCalibrationManipulatorSession !== null
+  ) {
+    r2rExitCalib();
+  } else {
+    invalidateR2rCalibrationAttempts();
+    r2rCalibrationFkPreview.stop();
+  }
 }
 
 /** Invalidate calibration aliases even when interactive teardown reports a warning. */
 function clearR2rCalibrationAfterViewLoss(context: string): void {
   invalidateR2rCalibrationAttempts();
+  const manipulatorSession = r2rCalibrationManipulatorSession;
+  r2rCalibrationManipulatorSession = null;
   const targetGroundOffset = r2rCalibrationRestoreGroundOffset;
   // Renderer-loss cleanup is a terminal calibration path even if the
   // manipulator or later best-effort cleanup reports an error.
-  r2rCalibrationFkPreview.stop();
+  runBestEffortCleanup(
+    `${context}: calibration FK owner cleanup failed`,
+    () => r2rCalibrationFkPreview.stop(),
+  );
   if (r2r.calibOrbitSaved) {
     const saved = r2r.calibOrbitSaved;
     runBestEffortCleanup(`${context}: calibration orbit restore failed`, () => {
@@ -8937,7 +10075,12 @@ function clearR2rCalibrationAfterViewLoss(context: string): void {
   r2r.calibNeedsCameraFocus = false;
   r2r.calibOrbitSaved = null;
   calibrationEditorUi.r2r.comparison = "current";
-  runBestEffortCleanup(`${context}: calibration manipulator cleanup failed`, () => calibManip.stop());
+  runBestEffortCleanup(
+    `${context}: calibration manipulator cleanup failed`,
+    () => {
+      if (manipulatorSession) calibManip.stop(manipulatorSession);
+    },
+  );
   runBestEffortCleanup(`${context}: target opacity restore failed`, () => r2rTgt.setOpacity(1));
   if (targetGroundOffset !== null) {
     runBestEffortCleanup(`${context}: target ground offset restore failed`, () => {
@@ -9144,6 +10287,7 @@ async function r2rLoadTargetRobot(name: string): Promise<void> {
 
 // --------------------------------------------------------------- calibration
 interface R2rCalibrationFkResult {
+  readonly manipulatorSession: CalibrationManipulatorSession;
   readonly sourceName: string;
   readonly sourcePayload: RobotPayload | null;
   readonly targetName: string;
@@ -9159,20 +10303,35 @@ const r2rCalibrationFkPreview = new CoalescedAsyncFrameTask<
     cancelFrame: (handle) => cancelAnimationFrame(handle),
   },
   execute: async () => {
+    const manipulatorSession = activeCalibrationManipulatorSession("r2r");
     const sourceName = r2r.sourceName;
     const sourcePayload = r2r.sourcePayload;
     const targetName = r2r.targetName;
     const targetPayload = r2r.targetPayload;
-    if (!r2r.calibrating || !sourceName || !targetName) return null;
+    if (
+      !manipulatorSession
+      || !calibrationSessionIsCurrent("r2r", manipulatorSession)
+      || !r2r.calibrating
+      || !sourceName
+      || !targetName
+    ) return null;
     const response = await API.post("/api/robot/fk_preview", {
       robot: targetName,
       joint_q: { ...r2r.calibQ },
     });
-    return { sourceName, sourcePayload, targetName, targetPayload, response };
+    return {
+      manipulatorSession,
+      sourceName,
+      sourcePayload,
+      targetName,
+      targetPayload,
+      response,
+    };
   },
   commit: (result) => {
     if (
       !result
+      || !calibrationSessionIsCurrent("r2r", result.manipulatorSession)
       || !r2r.calibrating
       || r2r.sourceName !== result.sourceName
       || r2r.sourcePayload !== result.sourcePayload
@@ -9181,14 +10340,21 @@ const r2rCalibrationFkPreview = new CoalescedAsyncFrameTask<
     ) return;
 
     const { response } = result;
+    if (!calibrationSessionIsCurrent("r2r", result.manipulatorSession)) return;
     r2rTgt.applyCalibPose(response.link_transforms, response.ground_offset_z);
+    if (!calibrationSessionIsCurrent("r2r", result.manipulatorSession)) return;
     refSkel.updateOverlay(r2rTgt);
-    if (calibManip.active) calibManip.updateJointWorld(response.joint_world);
+    if (!calibrationSessionIsCurrent("r2r", result.manipulatorSession)) return;
+    calibManip.updateJointWorld(result.manipulatorSession, response.joint_world);
+    if (!calibrationSessionIsCurrent("r2r", result.manipulatorSession)) return;
     updateR2rCalibrationValidation();
+    if (!calibrationSessionIsCurrent("r2r", result.manipulatorSession)) return;
     if (r2r.calibNeedsCameraFocus) {
       r2r.calibNeedsCameraFocus = false;
       applyCalibOrbitLimits({ snapCamera: true });
+      if (!calibrationSessionIsCurrent("r2r", result.manipulatorSession)) return;
       focusRobotView({ resetOffset: true });
+      if (!calibrationSessionIsCurrent("r2r", result.manipulatorSession)) return;
     }
   },
   reportError: (error) => {
@@ -9196,29 +10362,41 @@ const r2rCalibrationFkPreview = new CoalescedAsyncFrameTask<
   },
 });
 
-function r2rCalibCtx(): CalibrationContext {
+function r2rCalibCtx(
+  session: CalibrationManipulatorSession,
+): CalibrationContext {
   return {
     robotView: r2rTgt,
     getQ: () => r2r.calibQ,
     getSliderRows: () => r2r.calibRows,
-    jointChange: (name, val, opts) => r2rSetCalibJointValue(name, val, opts),
-    previewFk: (opts) => r2rPreviewCalibPose(opts),
+    jointChange: (name, val, opts) => r2rSetCalibJointValue(session, name, val, opts),
+    previewFk: (opts) => r2rPreviewCalibPose(session, opts),
   };
 }
 
 function r2rPreviewCalibPose(
+  session: CalibrationManipulatorSession,
   { flush = false }: CalibrationPreviewOptions = {},
 ): void {
-  if (!r2r.calibrating || !r2r.targetName) return;
+  if (
+    !calibrationSessionIsCurrent("r2r", session)
+    || !r2r.calibrating
+    || !r2r.targetName
+  ) return;
   if (flush) r2rCalibrationFkPreview.flush();
   else r2rCalibrationFkPreview.schedule();
 }
 
 function r2rSetCalibJointValue(
+  session: CalibrationManipulatorSession,
   jointName: string,
   value: string | number,
   { from, live = false }: CalibrationChangeOptions,
 ): void {
+  const sessionIsCurrent = (): boolean => (
+    calibrationSessionIsCurrent("r2r", session)
+  );
+  if (!sessionIsCurrent()) return;
   const limByName: Record<string, RobotJointLimit> = {};
   for (const limit of r2r.calibLimits) limByName[limit.name] = limit;
   const lim = limByName[jointName];
@@ -9231,46 +10409,72 @@ function r2rSetCalibJointValue(
     x = angleFromDisplay(x, calibrationEditorUi.r2r.unit);
   }
   x = Math.min(hi, Math.max(lo, x));
+  if (!sessionIsCurrent()) return;
   r2r.calibQ[jointName] = x;
 
   const row = r2r.calibRows[jointName];
   const prec = live ? 4 : 3;
   if (row) {
+    if (!sessionIsCurrent()) return;
     if (from === "slider") {
       row.range.value = String(x);
+      if (!sessionIsCurrent()) return;
       row.num.value = formatCalibrationAngle(x, calibrationEditorUi.r2r.unit, prec);
     } else if (from === "number") {
       row.range.value = String(x);
+      if (!sessionIsCurrent()) return;
       if (!live) row.num.value = formatCalibrationAngle(x, calibrationEditorUi.r2r.unit, prec);
     } else if (from !== "hud-input") {
       row.range.value = String(x);
+      if (!sessionIsCurrent()) return;
       row.num.value = formatCalibrationAngle(x, calibrationEditorUi.r2r.unit, prec);
     }
+    if (!sessionIsCurrent()) return;
     const span = hi - lo;
     row.row.classList.toggle("near-limit", span > 0 && (x - lo < span * 0.03 || hi - x < span * 0.03));
   }
+  if (!sessionIsCurrent()) return;
   if (from === "hud-input") {
-    calibManip.updateHudValue(jointName, x, { live, syncInput: false });
+    calibManip.updateHudValue(session, jointName, x, { live, syncInput: false });
   } else {
-    calibManip.updateHudValue(jointName, x, { live });
+    calibManip.updateHudValue(session, jointName, x, { live });
   }
-  if (from === "slider" || from === "number") calibManip.setSelected(jointName);
+  if (!sessionIsCurrent()) return;
+  if (from === "slider" || from === "number") {
+    calibManip.setSelected(session, jointName);
+  }
+  if (!sessionIsCurrent()) return;
   markCalibrationEdited("r2r");
+  if (!sessionIsCurrent()) return;
   updateR2rCalibrationValidation();
-  r2rPreviewCalibPose({ live });
+  if (!sessionIsCurrent()) return;
+  r2rPreviewCalibPose(session, { live });
 }
 
 function r2rBuildSliders(
+  session: CalibrationManipulatorSession,
   initialQ: Record<string, number>,
   limits: RobotJointLimit[],
   isCurrent: () => boolean = () => true,
 ): boolean {
+  const leaseIsCurrent = (): boolean => (
+    calibrationSessionIsCurrent("r2r", session)
+  );
+  const sessionIsCurrent = (): boolean => (
+    isCurrent() && leaseIsCurrent()
+  );
+  if (!sessionIsCurrent()) return false;
   const box = document.getElementById("r2r-calib-sliders");
   if (!box) return true;
-  box.replaceChildren();
-  if (!isCurrent()) return false;
-  r2r.calibQ = {};
-  r2r.calibRows = {};
+  const root = document.createElement("div");
+  root.className = "calib-slider-session";
+  root.dataset.workflow = "r2r";
+  root.style.display = "contents";
+  if (!sessionIsCurrent()) return false;
+  calibManip.clearExternalRoots(session);
+  if (!sessionIsCurrent()) return false;
+  const nextQ: Record<string, number> = {};
+  const nextRows: Record<string, CalibrationSliderRow> = {};
   const limByName: Record<string, RobotJointLimit> = {};
   for (const limit of limits) limByName[limit.name] = limit;
   const joints = limits.map((limit) => limit.name).filter(Boolean);
@@ -9279,7 +10483,7 @@ function r2rBuildSliders(
   }
   const seen = new Set<string>();
   for (const j of joints) {
-    if (!isCurrent()) return false;
+    if (!sessionIsCurrent()) return false;
     if (seen.has(j)) continue;
     seen.add(j);
     const lim = limByName[j];
@@ -9288,7 +10492,7 @@ function r2rBuildSliders(
     if (hi <= lo) { lo = -Math.PI; hi = Math.PI; }
     let v = initialQ[j] ?? 0;
     v = Math.min(hi, Math.max(lo, v));
-    r2r.calibQ[j] = v;
+    nextQ[j] = v;
     const rowEl = document.createElement("div");
     rowEl.className = "slider-row";
     const region = classifyCalibrationJoint(j);
@@ -9309,35 +10513,41 @@ function r2rBuildSliders(
     num.step = calibrationEditorUi.r2r.unit === "deg" ? "0.1" : "0.001";
     num.value = formatCalibrationAngle(v, calibrationEditorUi.r2r.unit);
     rowEl.append(label, range, num);
-    r2r.calibRows[j] = { row: rowEl, range, num, lo, hi, region };
+    nextRows[j] = { row: rowEl, range, num, lo, hi, region };
     const span = hi - lo;
     rowEl.classList.toggle("near-limit", span > 0 && (v - lo < span * 0.03 || hi - v < span * 0.03));
-    calibManip.updateHudValue(j, v);
-    if (!isCurrent()) return false;
-    range.oninput = () => r2rSetCalibJointValue(j, range.value, { from: "slider", live: true });
-    num.oninput = () => r2rSetCalibJointValue(j, num.value, { from: "number", live: true });
-    num.onchange = () => r2rSetCalibJointValue(j, num.value, { from: "number" });
+    calibManip.updateHudValue(session, j, v);
+    if (!sessionIsCurrent()) return false;
+    range.oninput = () => r2rSetCalibJointValue(session, j, range.value, { from: "slider", live: true });
+    num.oninput = () => r2rSetCalibJointValue(session, j, num.value, { from: "number", live: true });
+    num.onchange = () => r2rSetCalibJointValue(session, j, num.value, { from: "number" });
     num.onkeydown = (ev: KeyboardEvent) => {
-      if (ev.key === "Enter") { r2rSetCalibJointValue(j, num.value, { from: "number" }); num.blur(); }
+      if (ev.key === "Enter" && leaseIsCurrent()) {
+        r2rSetCalibJointValue(session, j, num.value, { from: "number" });
+        if (leaseIsCurrent()) num.blur();
+      }
     };
     rowEl.onclick = () => {
-      calibManip._pickScreen = null;
-      calibManip._pickAnchor = null;
-      calibManip._hudPinned = null;
-      calibManip.setSelected(j, { scrollPanel: true });
+      if (!leaseIsCurrent()) return;
+      calibManip.clearPointerPlacement(session);
+      calibManip.setSelected(session, j, { scrollPanel: true });
     };
-    box.appendChild(rowEl);
-    if (!isCurrent()) return false;
+    root.appendChild(rowEl);
+    if (!sessionIsCurrent()) return false;
   }
-  if (calibrationEditorUi.r2r.comparison === "current") r2r.calibDraftQ = { ...r2r.calibQ };
-  syncCalibrationNumberInputs("r2r");
-  if (!isCurrent()) return false;
+  r2r.calibQ = nextQ;
+  r2r.calibRows = nextRows;
+  if (!calibManip.publishExternalRoot(session, box, root)) return false;
+  if (!sessionIsCurrent()) return false;
+  if (calibrationEditorUi.r2r.comparison === "current") r2r.calibDraftQ = { ...nextQ };
+  syncCalibrationNumberInputs("r2r", session);
+  if (!sessionIsCurrent()) return false;
   applyCalibrationRowFilter("r2r");
-  if (!isCurrent()) return false;
+  if (!sessionIsCurrent()) return false;
   updateR2rCalibrationValidation();
-  if (!isCurrent()) return false;
-  r2rPreviewCalibPose();
-  return isCurrent();
+  if (!sessionIsCurrent()) return false;
+  r2rPreviewCalibPose(session);
+  return sessionIsCurrent();
 }
 
 function rollbackR2rCalibrationBootstrap(
@@ -9345,12 +10555,26 @@ function rollbackR2rCalibrationBootstrap(
   error: unknown,
   targetGroundOffset: number,
   calibrationResourcesOwned: boolean,
+  manipulatorSession: CalibrationManipulatorSession | null,
   { targetViewLost = false }: { targetViewLost?: boolean } = {},
 ): boolean {
   if (!r2rCalibrationBootstrapAttempts.isCurrent(attempt)) return false;
+  if (r2rCalibrationManipulatorSession === manipulatorSession) {
+    r2rCalibrationManipulatorSession = null;
+  }
   const orbitSnapshot = r2r.calibOrbitSaved;
 
-  r2rCalibrationFkPreview.stop();
+  runBestEffortCleanup(
+    "R2R calibration bootstrap: manipulator cleanup failed",
+    () => {
+      if (manipulatorSession) calibManip.stop(manipulatorSession);
+    },
+  );
+  if (!r2rCalibrationBootstrapAttempts.isCurrent(attempt)) return false;
+  runBestEffortCleanup(
+    "R2R calibration bootstrap: FK owner cleanup failed",
+    () => r2rCalibrationFkPreview.stop(),
+  );
   if (!r2rCalibrationBootstrapAttempts.isCurrent(attempt)) return false;
 
   if (targetViewLost) {
@@ -9413,7 +10637,6 @@ function rollbackR2rCalibrationBootstrap(
     })) return false;
   }
   if (calibrationResourcesOwned) {
-    if (!cleanup("R2R calibration bootstrap: manipulator cleanup failed", () => calibManip.stop())) return false;
     if (!cleanup("R2R calibration bootstrap: target opacity restore failed", () => r2rTgt.setOpacity(1))) return false;
     if (!cleanup("R2R calibration bootstrap: reference cleanup failed", () => refSkel.clear())) return false;
     if (!cleanup("R2R calibration bootstrap: reference visibility cleanup failed", () => {
@@ -9495,18 +10718,6 @@ function rollbackR2rCalibrationBootstrap(
       currentEditor.style.display = "none";
     })) return false;
   }
-  const slidersLookup = readForCleanup(
-    "R2R calibration bootstrap: slider lookup failed",
-    () => document.getElementById("r2r-calib-sliders"),
-  );
-  if (!slidersLookup.current) return false;
-  const sliders = slidersLookup.value;
-  if (sliders) {
-    const currentSliders = sliders;
-    if (!cleanup("R2R calibration bootstrap: slider cleanup failed", () => {
-      currentSliders.replaceChildren();
-    })) return false;
-  }
   if (calibrationResourcesOwned) {
     const bannerLookup = readForCleanup(
       "R2R calibration bootstrap: banner lookup failed",
@@ -9545,7 +10756,9 @@ function rollbackR2rCalibrationBootstrap(
 async function r2rStartCalib(
   { auto = false }: { auto?: boolean } = {},
 ): Promise<R2rCalibrationBootstrapResult> {
-  if (r2r.calibrating) return "entered";
+  if (r2r.calibrating && activeCalibrationManipulatorSession("r2r")) {
+    return "entered";
+  }
   r2rCalibrationStatusAttempts.invalidate();
   const capturedIdentity = captureR2rCalibrationIdentity();
   if (!capturedIdentity) {
@@ -9565,6 +10778,8 @@ async function r2rStartCalib(
     r2rCalibrationRestoreGroundOffset ?? r2rTgt.groundOffset
   );
   let calibrationResourcesOwned = r2rCalibrationResourcesOwned;
+  let manipulatorSession: CalibrationManipulatorSession | null = null;
+  let manipulatorCommitted = false;
   const isCurrent = (): boolean => (
     r2rCalibrationBootstrapAttempts.isCurrent(attempt)
     && (
@@ -9631,6 +10846,7 @@ async function r2rStartCalib(
         error,
         targetGroundOffset,
         calibrationResourcesOwned,
+        manipulatorSession,
         { targetViewLost: true },
       );
       return rolledBack ? "failed" : "stale";
@@ -9700,16 +10916,32 @@ async function r2rStartCalib(
     if (!isCurrent()) return "stale";
     r2rApplyStage();
     if (!isCurrent()) return "stale";
-    calibManip.start(r2r.calibLimits, r2rCalibCtx());
-    if (!isCurrent()) return "stale";
-    if (!r2rBuildSliders(initialQ, r2r.calibLimits, isCurrent)) return "stale";
-    if (!isCurrent()) return "stale";
-    applyCalibrationVisualization("r2r");
-    if (!isCurrent()) return "stale";
+    manipulatorSession = startCalibrationManipulatorSession(
+      "r2r",
+      r2r.calibLimits,
+      r2rCalibCtx,
+      calibrationEditorUi.r2r.unit,
+    );
+    if (!manipulatorSession) return "stale";
+    const manipulatorIsCurrent = (): boolean => Boolean(
+      isCurrent()
+      && manipulatorSession
+      && calibrationSessionIsCurrent("r2r", manipulatorSession)
+    );
+    if (!manipulatorIsCurrent()) return "stale";
+    if (!r2rBuildSliders(
+      manipulatorSession,
+      initialQ,
+      r2r.calibLimits,
+      isCurrent,
+    )) return "stale";
+    if (!manipulatorIsCurrent()) return "stale";
+    applyCalibrationVisualization("r2r", manipulatorSession);
+    if (!manipulatorIsCurrent()) return "stale";
     editor.scrollIntoView({ behavior: "smooth", block: "nearest" });
-    if (!isCurrent()) return "stale";
+    if (!manipulatorIsCurrent()) return "stale";
     r2rFocus(r2rTgt);
-    if (!isCurrent()) return "stale";
+    if (!manipulatorIsCurrent()) return "stale";
     toast(auto
       ? runtimeText(
         "The target robot is not calibrated. Calibration mode opened automatically; drag joints or use the right-side sliders.",
@@ -9719,10 +10951,10 @@ async function r2rStartCalib(
         "Calibration started. Align the target robot to the blue source reference pose.",
         "已进入标定：把目标机器人对齐到蓝色源参考姿态",
       ));
-    if (!isCurrent()) return "stale";
-    return finishR2rCalibrationBootstrapAttempt(attempt)
-      ? "entered"
-      : "stale";
+    if (!manipulatorIsCurrent()) return "stale";
+    const entered = finishR2rCalibrationBootstrapAttempt(attempt);
+    if (entered) manipulatorCommitted = true;
+    return entered ? "entered" : "stale";
   } catch (error) {
     if (!isCurrent()) return "stale";
     return rollbackR2rCalibrationBootstrap(
@@ -9730,9 +10962,17 @@ async function r2rStartCalib(
       error,
       targetGroundOffset,
       calibrationResourcesOwned,
+      manipulatorSession,
     )
       ? "failed"
       : "stale";
+  } finally {
+    if (manipulatorSession && !manipulatorCommitted) {
+      runBestEffortCleanup(
+        "R2R calibration bootstrap: uncommitted manipulator cleanup failed",
+        () => stopCalibrationManipulatorSession("r2r", manipulatorSession),
+      );
+    }
   }
 }
 
@@ -9740,9 +10980,10 @@ function r2rExitCalib(
   { publishStageDisplay = true }: R2rStageApplyOptions = {},
 ): void {
   invalidateR2rCalibrationAttempts();
+  const manipulatorSession = r2rCalibrationManipulatorSession;
+  r2rCalibrationManipulatorSession = null;
   const orbitSnapshot = r2r.calibOrbitSaved;
   const targetGroundOffset = r2rCalibrationRestoreGroundOffset;
-  r2rCalibrationFkPreview.stop();
   r2r.calibrating = false;
   r2r.calibNeedsCameraFocus = false;
   r2r.calibQ = {};
@@ -9753,6 +10994,10 @@ function r2rExitCalib(
   r2r.calibHasSaved = false;
   calibrationEditorUi.r2r.comparison = "current";
 
+  runBestEffortCleanup(
+    "R2R calibration exit: FK owner cleanup failed",
+    () => r2rCalibrationFkPreview.stop(),
+  );
   if (orbitSnapshot) {
     runBestEffortCleanup("R2R calibration exit: orbit restore failed", () => {
       orbit.minDistance = orbitSnapshot.minDistance;
@@ -9760,7 +11005,12 @@ function r2rExitCalib(
       orbit.zoomSpeed = orbitSnapshot.zoomSpeed;
     });
   }
-  runBestEffortCleanup("R2R calibration exit: manipulator cleanup failed", () => calibManip.stop());
+  runBestEffortCleanup(
+    "R2R calibration exit: manipulator cleanup failed",
+    () => {
+      if (manipulatorSession) calibManip.stop(manipulatorSession);
+    },
+  );
   runBestEffortCleanup("R2R calibration exit: target opacity restore failed", () => r2rTgt.setOpacity(1));
   if (targetGroundOffset !== null) {
     runBestEffortCleanup("R2R calibration exit: target ground offset restore failed", () => {
@@ -9774,7 +11024,6 @@ function r2rExitCalib(
   runBestEffortCleanup("R2R calibration exit: editor cleanup failed", () => {
     const editor = document.getElementById("r2r-calib-edit");
     if (editor) editor.style.display = "none";
-    document.getElementById("r2r-calib-sliders")?.replaceChildren();
     document.getElementById("calib-banner")?.classList.add("hidden");
   });
   runBestEffortCleanup("R2R calibration exit: reference cleanup failed", () => {

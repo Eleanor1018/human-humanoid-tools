@@ -6,7 +6,6 @@ export interface OwnedPointerGesture<Value> {
 export interface PointerGestureTransition<Value> {
   readonly generation: number;
   readonly current: OwnedPointerGesture<Value> | null;
-  readonly session: PointerGestureSession | null;
 }
 
 export interface PointerGestureReplacement<Value> {
@@ -15,8 +14,56 @@ export interface PointerGestureReplacement<Value> {
   readonly handoff: PointerGestureTransition<Value>;
 }
 
-export interface PointerGestureSession {
-  readonly generation: number;
+export type PointerCapturePhase = "reserved" | "installing" | "installed";
+
+interface PointerCaptureOwnership<Value> {
+  readonly gesture: OwnedPointerGesture<Value>;
+  phase: PointerCapturePhase;
+}
+
+function appendPointerCleanupError(errors: unknown[], error: unknown): void {
+  if (error instanceof AggregateError) {
+    for (const nested of error.errors) appendPointerCleanupError(errors, nested);
+    return;
+  }
+  errors.push(error);
+}
+
+/**
+ * Retire the predecessor of a just-published gesture transactionally.
+ *
+ * A predecessor host cleanup may fail after the successor has already become
+ * current. Roll that exact successor back so callers never observe a current
+ * but half-initialized gesture. If cleanup re-entered and published generation
+ * D, `finish(current)` is stale and deliberately leaves D untouched.
+ */
+export function cleanupReplacedPointerGestureOrRollback<Value>(
+  owner: LatestPointerGestureOwner<Value>,
+  replacement: PointerGestureReplacement<Value>,
+  cleanup: (
+    gesture: OwnedPointerGesture<Value>,
+    handoff: PointerGestureTransition<Value>,
+  ) => void,
+): void {
+  if (!replacement.previous) return;
+  try {
+    cleanup(replacement.previous, replacement.handoff);
+  } catch (primaryError) {
+    const rollback = owner.finish(replacement.current);
+    if (!rollback) throw primaryError;
+    try {
+      cleanup(replacement.current, rollback);
+    } catch (rollbackError) {
+      const errors: unknown[] = [];
+      appendPointerCleanupError(errors, primaryError);
+      appendPointerCleanupError(errors, rollbackError);
+      throw new AggregateError(
+        errors,
+        "Pointer gesture predecessor cleanup and successor rollback failed",
+      );
+    }
+    throw primaryError;
+  }
 }
 
 export interface PointerCaptureTargetIdentity {
@@ -32,6 +79,17 @@ export interface OwnedPointerCaptureIdentity {
 export interface PointerCaptureLossIdentity {
   readonly pointerId: number;
   readonly target: unknown;
+}
+
+/** Browser pointer capture has no generation beyond this physical identity. */
+export function samePointerCaptureIdentity(
+  left: OwnedPointerCaptureIdentity,
+  right: OwnedPointerCaptureIdentity,
+): boolean {
+  return (
+    left.pointerId === right.pointerId
+    && left.captureTarget === right.captureTarget
+  );
 }
 
 export interface PointerGestureOrbitLineage {
@@ -95,35 +153,14 @@ export function projectPointerGestureSharedState(
 export class LatestPointerGestureOwner<Value> {
   #generation = 0;
   #current: OwnedPointerGesture<Value> | null = null;
-  #capture: OwnedPointerGesture<Value> | null = null;
-  #sessionGeneration = 0;
-  #session: PointerGestureSession | null = null;
+  #capture: PointerCaptureOwnership<Value> | null = null;
 
   get current(): OwnedPointerGesture<Value> | null {
     return this.#current;
   }
 
   get capture(): OwnedPointerGesture<Value> | null {
-    return this.#capture;
-  }
-
-  /** Exact session token captured by newly installed event owners. */
-  get currentSession(): PointerGestureSession | null {
-    return this.#session;
-  }
-
-  /** Start an exact manipulator session/stop operation ownership boundary. */
-  beginSession(): PointerGestureSession {
-    const session = Object.freeze({ generation: ++this.#sessionGeneration });
-    this.#session = session;
-    return session;
-  }
-
-  isSessionCurrent(session: PointerGestureSession): boolean {
-    return (
-      this.#session === session
-      && this.#sessionGeneration === session.generation
-    );
+    return this.#capture?.gesture ?? null;
   }
 
   begin(value: Value): PointerGestureReplacement<Value> {
@@ -139,7 +176,6 @@ export class LatestPointerGestureOwner<Value> {
       handoff: Object.freeze({
         generation: current.generation,
         current,
-        session: this.#session,
       }),
     };
   }
@@ -153,7 +189,6 @@ export class LatestPointerGestureOwner<Value> {
     return Object.freeze({
       generation,
       current: null,
-      session: this.#session,
     });
   }
 
@@ -168,22 +203,46 @@ export class LatestPointerGestureOwner<Value> {
     return (
       this.#generation === handoff.generation
       && this.#current === handoff.current
-      && this.#session === handoff.session
     );
   }
 
   reserveCapture(gesture: OwnedPointerGesture<Value>): boolean {
     if (
       !this.isCurrent(gesture)
-      || (this.#capture !== null && this.#capture !== gesture)
+      || (this.#capture !== null && this.#capture.gesture !== gesture)
     ) return false;
-    this.#capture = gesture;
+    this.#capture ??= { gesture, phase: "reserved" };
     return true;
   }
 
-  takeCapture(gesture: OwnedPointerGesture<Value>): boolean {
-    if (this.#capture !== gesture) return false;
-    this.#capture = null;
+  capturePhaseOf(gesture: OwnedPointerGesture<Value>): PointerCapturePhase | null {
+    return this.#capture?.gesture === gesture ? this.#capture.phase : null;
+  }
+
+  /** Mark the exact slot before invoking the generation-less host API. */
+  beginCaptureInstall(gesture: OwnedPointerGesture<Value>): boolean {
+    if (this.#capture?.gesture !== gesture || this.#capture.phase !== "reserved") {
+      return false;
+    }
+    this.#capture.phase = "installing";
     return true;
+  }
+
+  /** Commit a returned install, or let an identical successor adopt it. */
+  markCaptureInstalled(gesture: OwnedPointerGesture<Value>): boolean {
+    if (this.#capture?.gesture !== gesture) return false;
+    this.#capture.phase = "installed";
+    return true;
+  }
+
+  takeCapturePhase(gesture: OwnedPointerGesture<Value>): PointerCapturePhase | null {
+    if (this.#capture?.gesture !== gesture) return null;
+    const phase = this.#capture.phase;
+    this.#capture = null;
+    return phase;
+  }
+
+  takeCapture(gesture: OwnedPointerGesture<Value>): boolean {
+    return this.takeCapturePhase(gesture) !== null;
   }
 }

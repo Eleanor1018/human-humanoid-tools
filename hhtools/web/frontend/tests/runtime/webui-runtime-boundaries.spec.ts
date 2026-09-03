@@ -2,11 +2,92 @@ import { describe, expect, it } from "vitest";
 
 import asyncFrameTaskSource from "../../src/runtime/stage/coalesced-async-frame-task.ts?raw";
 import latestAttemptOwnerSource from "../../src/runtime/stage/latest-async-attempt-owner.ts?raw";
+import latestSessionLifecycleSource from "../../src/runtime/stage/latest-session-lifecycle.ts?raw";
+import reentrantSessionInstallSource from "../../src/runtime/stage/reentrant-session-install.ts?raw";
 import runtimeSource from "../../src/runtime/webui-runtime.ts?raw";
 import commandRegistrySource from "../../src/runtime/command-registry.ts?raw";
 import robotViewSource from "../../src/runtime/stage/robot-view.ts?raw";
 
+function expectTokensInOrder(source: string, tokens: readonly string[]): void {
+  let cursor = 0;
+  for (const token of tokens) {
+    const next = source.indexOf(token, cursor);
+    expect(next, `missing ordered token: ${token}`).toBeGreaterThanOrEqual(0);
+    cursor = next + token.length;
+  }
+}
+
 describe("legacy runtime ownership boundaries", () => {
+  it("wires DOM-free session primitives through an explicit manipulator lease API", () => {
+    for (const primitive of [latestSessionLifecycleSource, reentrantSessionInstallSource]) {
+      expect(primitive).not.toMatch(/\b(?:document|window|HTMLElement|THREE)\b/);
+    }
+    expect(latestSessionLifecycleSource).toContain("export class LatestSessionLifecycle");
+    expect(latestSessionLifecycleSource).toContain("get currentCleanup()");
+    expect(reentrantSessionInstallSource).toContain(
+      "export function installReentrantSessionResource",
+    );
+    expect(reentrantSessionInstallSource).toContain(
+      "export class ReentrantHostMutationGate",
+    );
+    expect(runtimeSource).toContain('from "./stage/latest-session-lifecycle"');
+    expect(runtimeSource).toContain('"./stage/reentrant-session-install"');
+
+    const publicCalls = [...runtimeSource.matchAll(/\bcalibManip\.([A-Za-z][A-Za-z0-9]*)\s*\(/g)]
+      .map((match) => match[1]);
+    expect([...new Set(publicCalls)].sort()).toEqual([
+      "clearExternalRoots",
+      "clearPointerPlacement",
+      "isCurrent",
+      "positionTags",
+      "publishExternalRoot",
+      "reserve",
+      "setAngleUnit",
+      "setSelected",
+      "start",
+      "stop",
+      "updateHudValue",
+      "updateJointWorld",
+    ]);
+    expect(runtimeSource).not.toMatch(/\bcalibManip\._/);
+    expect(runtimeSource).not.toMatch(/\bcalibManip\.stop\(\s*\)/);
+    expect(runtimeSource).not.toMatch(
+      /stopCalibrationManipulatorSession\(\s*["'](?:h2r|r2r)["']\s*\)/,
+    );
+
+    const startAdapter = runtimeSource.slice(
+      runtimeSource.indexOf("function startCalibrationManipulatorSession"),
+      runtimeSource.indexOf("function stopCalibrationManipulatorSession"),
+    );
+    expect(startAdapter.indexOf("calibManip.reserve(workflow"))
+      .toBeLessThan(startAdapter.indexOf("setCalibrationManipulatorAlias(workflow, session)"));
+    expect(startAdapter.indexOf("setCalibrationManipulatorAlias(workflow, session)"))
+      .toBeLessThan(startAdapter.indexOf("calibManip.start(session, createContext)"));
+
+    const stopAdapter = runtimeSource.slice(
+      runtimeSource.indexOf("function stopCalibrationManipulatorSession"),
+      runtimeSource.indexOf("function h2rCalibrationContext"),
+    );
+    expect(stopAdapter).toContain("expected.value.owner !== workflow");
+    expect(stopAdapter.indexOf("setCalibrationManipulatorAlias(workflow, null)"))
+      .toBeLessThan(stopAdapter.indexOf("return calibManip.stop(expected)"));
+    expect(stopAdapter).not.toContain("expected = calibrationManipulatorAlias");
+
+    const manipulatorSource = runtimeSource.slice(
+      runtimeSource.indexOf("class CalibManipulator"),
+      runtimeSource.indexOf("const calibManip = new CalibManipulator"),
+    );
+    expect(manipulatorSource).toContain(
+      "this._sessions.current ?? this._sessions.currentCleanup",
+    );
+    expect(manipulatorSource).toContain(
+      "this._state(expectedSession).orbitEnabledBaseline",
+    );
+    expect(manipulatorSource).not.toContain(
+      "this._state(owned).orbitEnabledBaseline = orbit.enabled",
+    );
+  });
+
   it("composes the extracted inert Robot Views explicitly", () => {
     expect(runtimeSource).toContain(
       'import { RobotView } from "./stage/robot-view"',
@@ -49,6 +130,49 @@ describe("legacy runtime ownership boundaries", () => {
     expect(h2rPreview).toContain("new CoalescedAsyncFrameTask<");
     expect(h2rPreview).toContain("h2rCalibrationFkPreview.flush()");
     expect(h2rPreview).toContain("h2rCalibrationFkPreview.schedule()");
+    expect(h2rPreview).toContain(
+      "readonly manipulatorSession: CalibrationManipulatorSession",
+    );
+    expect(h2rPreview).toContain(
+      'calibrationSessionIsCurrent("h2r", result.manipulatorSession)',
+    );
+    expect(h2rPreview).toContain(
+      "calibManip.updateJointWorld(result.manipulatorSession",
+    );
+    const h2rCommit = h2rPreview.slice(
+      h2rPreview.indexOf("commit: (result) =>"),
+      h2rPreview.indexOf("reportError:"),
+    );
+    expectTokensInOrder(h2rCommit, [
+      'calibrationSessionIsCurrent("h2r", result.manipulatorSession)',
+      "robot.applyCalibPose(",
+      'calibrationSessionIsCurrent("h2r", result.manipulatorSession)',
+      "refSkel.updateOverlay(robot)",
+      'calibrationSessionIsCurrent("h2r", result.manipulatorSession)',
+      "calibManip.updateJointWorld(",
+      'calibrationSessionIsCurrent("h2r", result.manipulatorSession)',
+      "updateH2rCalibrationValidation()",
+      'calibrationSessionIsCurrent("h2r", result.manipulatorSession)',
+    ]);
+    for (const effect of [
+      "robot.applyCalibPose(",
+      "refSkel.updateOverlay(robot)",
+      "calibManip.updateJointWorld(",
+      "updateH2rCalibrationValidation()",
+      "applyCalibOrbitLimits({ snapCamera: true })",
+      "focusRobotView({ resetOffset: true })",
+    ]) {
+      const effectAt = h2rPreview.indexOf(effect);
+      expect(effectAt, `H2R FK boundary: ${effect}`).toBeGreaterThanOrEqual(0);
+      expect(h2rPreview.lastIndexOf(
+        'calibrationSessionIsCurrent("h2r", result.manipulatorSession)',
+        effectAt,
+      )).toBeGreaterThanOrEqual(0);
+      expect(h2rPreview.indexOf(
+        'calibrationSessionIsCurrent("h2r", result.manipulatorSession)',
+        effectAt,
+      )).toBeGreaterThan(effectAt);
+    }
     expect(h2rPreview).toContain("state.robot !== result.activeRobot");
     expect(h2rPreview).toContain("state.motion !== result.activeMotion");
     expect(h2rPreview).toContain("state.reference !== result.reference");
@@ -57,8 +181,10 @@ describe("legacy runtime ownership boundaries", () => {
       runtimeSource.indexOf("function exitCalibrationMode"),
       runtimeSource.indexOf("function setCalibJointValue"),
     );
-    expect(h2rExit.indexOf("h2rCalibrationFkPreview.stop()"))
+    expect(h2rExit.indexOf("h2rCalibrationManipulatorSession = null"))
       .toBeLessThan(h2rExit.indexOf("state.calibrationMode = false"));
+    expect(h2rExit.indexOf("state.calibrationMode = false"))
+      .toBeLessThan(h2rExit.indexOf("h2rCalibrationFkPreview.stop()"));
     const h2rLoss = runtimeSource.slice(
       runtimeSource.indexOf("function clearH2rRobotAfterViewLoss"),
       runtimeSource.indexOf("async function refreshScaledPreview"),
@@ -73,14 +199,72 @@ describe("legacy runtime ownership boundaries", () => {
     expect(r2rPreview).toContain("new CoalescedAsyncFrameTask<");
     expect(r2rPreview).toContain("r2rCalibrationFkPreview.flush()");
     expect(r2rPreview).toContain("r2rCalibrationFkPreview.schedule()");
+    expect(r2rPreview).toContain(
+      "readonly manipulatorSession: CalibrationManipulatorSession",
+    );
+    expect(r2rPreview).toContain(
+      'calibrationSessionIsCurrent("r2r", result.manipulatorSession)',
+    );
+    expect(r2rPreview).toContain(
+      "calibManip.updateJointWorld(result.manipulatorSession",
+    );
+    const r2rCommit = r2rPreview.slice(
+      r2rPreview.indexOf("commit: (result) =>"),
+      r2rPreview.indexOf("reportError:"),
+    );
+    expectTokensInOrder(r2rCommit, [
+      'calibrationSessionIsCurrent("r2r", result.manipulatorSession)',
+      "r2rTgt.applyCalibPose(",
+      'calibrationSessionIsCurrent("r2r", result.manipulatorSession)',
+      "refSkel.updateOverlay(r2rTgt)",
+      'calibrationSessionIsCurrent("r2r", result.manipulatorSession)',
+      "calibManip.updateJointWorld(",
+      'calibrationSessionIsCurrent("r2r", result.manipulatorSession)',
+      "updateR2rCalibrationValidation()",
+      'calibrationSessionIsCurrent("r2r", result.manipulatorSession)',
+    ]);
+    for (const effect of [
+      "r2rTgt.applyCalibPose(",
+      "refSkel.updateOverlay(r2rTgt)",
+      "calibManip.updateJointWorld(",
+      "updateR2rCalibrationValidation()",
+      "applyCalibOrbitLimits({ snapCamera: true })",
+      "focusRobotView({ resetOffset: true })",
+    ]) {
+      const effectAt = r2rPreview.indexOf(effect);
+      expect(effectAt, `R2R FK boundary: ${effect}`).toBeGreaterThanOrEqual(0);
+      expect(r2rPreview.lastIndexOf(
+        'calibrationSessionIsCurrent("r2r", result.manipulatorSession)',
+        effectAt,
+      )).toBeGreaterThanOrEqual(0);
+      expect(r2rPreview.indexOf(
+        'calibrationSessionIsCurrent("r2r", result.manipulatorSession)',
+        effectAt,
+      )).toBeGreaterThan(effectAt);
+    }
     expect(r2rPreview).toContain("r2r.sourceName !== result.sourceName");
     expect(r2rPreview).toContain("r2r.sourcePayload !== result.sourcePayload");
     expect(r2rPreview).toContain("r2r.targetName !== result.targetName");
     expect(r2rPreview).toContain("r2r.targetPayload !== result.targetPayload");
 
+    const renderOwnershipLoop = runtimeSource.slice(
+      runtimeSource.indexOf("function animate("),
+      runtimeSource.indexOf("resize();", runtimeSource.indexOf("function animate(")),
+    );
+    expectTokensInOrder(renderOwnershipLoop, [
+      "const manipulatorSession = calibManip.currentSession",
+      "calibrationManipulatorAlias(calibrationWorkflow) === manipulatorSession",
+      "calibManip.positionTags(manipulatorSession)",
+      "calibrationSessionIsCurrent(calibrationWorkflow, manipulatorSession)",
+      "refSkel.updateOverlay(",
+    ]);
+
     const r2rEntry = runtimeSource.slice(
       runtimeSource.indexOf("async function r2rStartCalib"),
       runtimeSource.indexOf("function r2rExitCalib"),
+    );
+    expect(r2rEntry).toContain(
+      'r2r.calibrating && activeCalibrationManipulatorSession("r2r")',
     );
     expect(r2rEntry.indexOf("r2rCalibrationFkPreview.start()"))
       .toBeLessThan(r2rEntry.indexOf("r2r.calibrating = true"));
@@ -88,8 +272,10 @@ describe("legacy runtime ownership boundaries", () => {
       runtimeSource.indexOf("function r2rExitCalib"),
       runtimeSource.indexOf("async function r2rMaybeAutoCalib"),
     );
-    expect(r2rExit.indexOf("r2rCalibrationFkPreview.stop()"))
+    expect(r2rExit.indexOf("r2rCalibrationManipulatorSession = null"))
       .toBeLessThan(r2rExit.indexOf("r2r.calibrating = false"));
+    expect(r2rExit.indexOf("r2r.calibrating = false"))
+      .toBeLessThan(r2rExit.indexOf("r2rCalibrationFkPreview.stop()"));
     const r2rLoss = runtimeSource.slice(
       runtimeSource.indexOf("function clearR2rCalibrationAfterViewLoss"),
       runtimeSource.indexOf("function clearR2rDerivedTargetAfterViewLoss"),
@@ -100,6 +286,16 @@ describe("legacy runtime ownership boundaries", () => {
     expect(asyncFrameTaskSource).not.toMatch(/\b(?:document|window)\b/);
     expect(asyncFrameTaskSource).toContain("this.#session = null");
     expect(asyncFrameTaskSource).toContain("if (!this.#isCurrent(session)) return");
+
+    const renderLoop = runtimeSource.slice(
+      runtimeSource.indexOf("function animate()"),
+      runtimeSource.indexOf("// =================================================================  SKELETON"),
+    );
+    expect(renderLoop).toContain("const manipulatorSession = calibManip.currentSession");
+    expect(renderLoop).toContain("calibManip.positionTags(manipulatorSession)");
+    expect(renderLoop).toContain(
+      "calibrationSessionIsCurrent(calibrationWorkflow, manipulatorSession)",
+    );
   });
 
   it("guards H2R calibration bootstrap and status publication by attempt identity", () => {
@@ -150,7 +346,7 @@ describe("legacy runtime ownership boundaries", () => {
     expect(entry).toContain("if (enteringFresh) {");
     const catchStart = entry.lastIndexOf("} catch (error) {");
     const staleCatchGuard = entry.indexOf('if (!isCurrent()) return "stale"', catchStart);
-    const rollbackCall = entry.indexOf("rollbackH2rCalibrationBootstrap(attempt, error)", catchStart);
+    const rollbackCall = entry.indexOf("rollbackH2rCalibrationBootstrap(", catchStart);
     expect(staleCatchGuard).toBeGreaterThan(catchStart);
     expect(rollbackCall).toBeGreaterThan(staleCatchGuard);
 
@@ -161,8 +357,12 @@ describe("legacy runtime ownership boundaries", () => {
     expect(rollback).toContain("): boolean {");
     expect(rollback.indexOf("h2rCalibrationBootstrapAttempts.isCurrent(attempt)"))
       .toBeLessThan(rollback.indexOf("h2rCalibrationFkPreview.stop()"));
+    expect(rollback.indexOf("h2rCalibrationManipulatorSession = null"))
+      .toBeLessThan(rollback.indexOf("calibManip.stop(manipulatorSession)"));
+    expect(rollback.indexOf("calibManip.stop(manipulatorSession)"))
+      .toBeLessThan(rollback.indexOf("h2rCalibrationFkPreview.stop()"));
     expect(rollback).toContain("state.calibrationMode = false");
-    expect(rollback).toContain("calibManip.stop()");
+    expect(rollback).toContain("calibManip.stop(manipulatorSession)");
     expect(rollback).toContain("_restoreVis(visibilitySnapshot)");
     expect(rollback).toContain("robot.groundOffset = attempt.identity.robotGroundOffset");
     expect(rollback).toContain("toast(errorMessage(error), true)");
@@ -174,9 +374,37 @@ describe("legacy runtime ownership boundaries", () => {
       .toBeGreaterThan(rollbackFinish);
     expect(rollback.indexOf("state.calibRestore = null"))
       .toBeGreaterThan(rollbackFinish);
-    expect(entry).toContain("rollbackH2rCalibrationBootstrap(attempt, error)");
+    expect(entry).toContain("rollbackH2rCalibrationBootstrap(");
     expect(entry).toContain('? "failed"');
     expect(entry).toContain(': "stale"');
+    expect(entry).toContain(
+      "let manipulatorSession: CalibrationManipulatorSession | null = null",
+    );
+    expect(entry).toContain(
+      '?? activeCalibrationManipulatorSession("h2r")',
+    );
+    expect(entry).toContain(
+      'stopCalibrationManipulatorSession("h2r", manipulatorSession)',
+    );
+    expect(entry).toContain("if (!buildCalibSliders(");
+    expect(entry).toContain("const manipulatorIsCurrent = (): boolean");
+    expect(entry).toContain(
+      'applyCalibrationVisualization("h2r", manipulatorSession)',
+    );
+
+    const sliders = runtimeSource.slice(
+      runtimeSource.indexOf("function buildCalibSliders("),
+      runtimeSource.indexOf("interface H2rCalibrationFkResult"),
+    );
+    expect(sliders).toContain("): boolean {");
+    expect(sliders).toContain(
+      'calibrationSessionIsCurrent("h2r", session)',
+    );
+    expect(sliders).toContain("isCurrent() && leaseIsCurrent()");
+    expect(sliders).toContain('if (!leaseIsCurrent()) return');
+    expect(sliders).toContain('root.className = "calib-slider-session"');
+    expect(sliders).toContain("calibManip.publishExternalRoot(session, box, root)");
+    expect(sliders).not.toContain("box.replaceChildren");
 
     const exit = runtimeSource.slice(
       runtimeSource.indexOf("function exitCalibrationMode"),
@@ -427,7 +655,7 @@ describe("legacy runtime ownership boundaries", () => {
       "refSkel.configureMappings(",
       'editor.style.display = "block"',
       "r2rApplyStage()",
-      "calibManip.start(",
+      "startCalibrationManipulatorSession(",
       "applyCalibrationVisualization(",
       "editor.scrollIntoView(",
       "r2rFocus(r2rTgt)",
@@ -439,20 +667,30 @@ describe("legacy runtime ownership boundaries", () => {
       expect(effectAt, `bootstrap effect: ${effect}`).toBeGreaterThanOrEqual(0);
       expect(guardAt, `bootstrap guard: ${effect}`).toBeGreaterThan(effectAt);
     }
-    expect(entry).toContain(
-      "if (!r2rBuildSliders(initialQ, r2r.calibLimits, isCurrent)) return \"stale\"",
-    );
+    expect(entry).toContain("if (!r2rBuildSliders(");
+    expect(entry).toContain("manipulatorSession,");
 
     const sliders = runtimeSource.slice(
       runtimeSource.indexOf("function r2rBuildSliders"),
       runtimeSource.indexOf("function rollbackR2rCalibrationBootstrap"),
     );
     expect(sliders).toContain("isCurrent: () => boolean");
-    expect(sliders).toContain("box.replaceChildren()");
-    expect(sliders.match(/if \(!isCurrent\(\)\) return false/g)?.length ?? 0)
-      .toBeGreaterThanOrEqual(6);
-    expect(sliders.indexOf("if (!isCurrent()) return false", sliders.indexOf("calibManip.updateHudValue")))
-      .toBeGreaterThan(sliders.indexOf("calibManip.updateHudValue"));
+    expect(sliders).toContain('root.className = "calib-slider-session"');
+    expect(sliders).toContain("calibManip.publishExternalRoot(session, box, root)");
+    expect(sliders).not.toContain("box.replaceChildren()");
+    for (const boundary of [
+      "rowEl.append(label, range, num)",
+      "calibManip.updateHudValue(session, j, v)",
+      "root.appendChild(rowEl)",
+      "calibManip.publishExternalRoot(session, box, root)",
+      'applyCalibrationRowFilter("r2r")',
+      "updateR2rCalibrationValidation()",
+    ]) {
+      const boundaryAt = sliders.indexOf(boundary);
+      expect(boundaryAt, `R2R slider boundary: ${boundary}`).toBeGreaterThanOrEqual(0);
+      expect(sliders.indexOf("if (!sessionIsCurrent()) return false", boundaryAt))
+        .toBeGreaterThan(boundaryAt);
+    }
 
     const rollback = runtimeSource.slice(
       runtimeSource.indexOf("function rollbackR2rCalibrationBootstrap"),
@@ -470,6 +708,10 @@ describe("legacy runtime ownership boundaries", () => {
     );
     expect(rollback).toContain("if (!r2rCalibrationBootstrapAttempts.isCurrent(attempt)) return false");
     expect(rollback).toContain("runBestEffortCleanup(context, action)");
+    expect(rollback.indexOf("r2rCalibrationManipulatorSession = null"))
+      .toBeLessThan(rollback.indexOf("calibManip.stop(manipulatorSession)"));
+    expect(rollback.indexOf("calibManip.stop(manipulatorSession)"))
+      .toBeLessThan(rollback.indexOf("r2rCalibrationFkPreview.stop()"));
     const rollbackFinish = rollback.indexOf(
       "finishR2rCalibrationBootstrapAttempt(attempt)",
     );
@@ -496,14 +738,14 @@ describe("legacy runtime ownership boundaries", () => {
     );
     expect(exit.indexOf("invalidateR2rCalibrationAttempts()"))
       .toBeLessThan(exit.indexOf("r2rCalibrationFkPreview.stop()"));
-    expect(exit.indexOf("r2rCalibrationFkPreview.stop()"))
-      .toBeLessThan(exit.indexOf("r2r.calibrating = false"));
+    expect(exit.indexOf("r2rCalibrationManipulatorSession = null"))
+      .toBeLessThan(exit.indexOf("r2rCalibrationFkPreview.stop()"));
+    expect(exit.indexOf("r2r.calibrating = false"))
+      .toBeLessThan(exit.indexOf("r2rCalibrationFkPreview.stop()"));
     const leave = runtimeSource.slice(
       runtimeSource.indexOf("function r2rLeavePanel"),
       runtimeSource.indexOf("function r2rSetCalChip"),
     );
-    expect(leave.indexOf("invalidateR2rCalibrationAttempts()"))
-      .toBeLessThan(leave.indexOf("r2r.active = false"));
     expect(leave).toContain("|| r2rCalibrationResourcesOwned");
     expect(leave).toContain("|| r2r.calibOrbitSaved !== null");
     expect(leave.indexOf("r2r.active = false"))
@@ -512,8 +754,8 @@ describe("legacy runtime ownership boundaries", () => {
       runtimeSource.indexOf("function prepareR2rRobotReplacement"),
       runtimeSource.indexOf("function clearR2rCalibrationAfterViewLoss"),
     );
-    expect(replacement.indexOf("invalidateR2rCalibrationAttempts()"))
-      .toBeLessThan(replacement.indexOf("r2rExitCalib()"));
+    expect(replacement.indexOf("r2rExitCalib()"))
+      .toBeLessThan(replacement.indexOf("r2rCalibrationFkPreview.stop()"));
     expect(replacement).toContain("r2rCalibrationResourcesOwned");
     for (const functionName of [
       "clearR2rCalibrationAfterViewLoss",
@@ -851,7 +1093,7 @@ describe("legacy runtime ownership boundaries", () => {
       runtimeSource.indexOf("const calibManip = new CalibManipulator"),
     );
     const initStart = manipulatorSource.indexOf("private _initLimitGizmo(");
-    const disposeStart = manipulatorSource.indexOf("private _disposeLimitGizmo(): void");
+    const disposeStart = manipulatorSource.indexOf("private _disposeLimitGizmo(");
     const buildTagsStart = manipulatorSource.indexOf("private _buildTags(");
     const initSource = manipulatorSource.slice(initStart, disposeStart);
     const disposeSource = manipulatorSource.slice(disposeStart, buildTagsStart);
@@ -862,8 +1104,6 @@ describe("legacy runtime ownership boundaries", () => {
     expect(initSource.match(/new THREE\.(?:LineBasic|MeshBasic)Material/g))
       .toHaveLength(5);
 
-    const take = disposeSource.indexOf("const owned = this._limitGroup");
-    const releaseAlias = disposeSource.indexOf("this._limitGroup = null");
     const detach = disposeSource.indexOf("world.remove(owned.group)");
     const disposeResources = disposeSource.indexOf(
       "threeResourceDisposer.disposeObject3DResources(owned.group)",
@@ -871,15 +1111,14 @@ describe("legacy runtime ownership boundaries", () => {
     const reportErrors = disposeSource.indexOf(
       'throw new AggregateError(errors, "Failed to dispose calibration limit gizmo")',
     );
-    expect(take).toBeGreaterThanOrEqual(0);
-    expect(releaseAlias).toBeGreaterThan(take);
-    expect(detach).toBeGreaterThan(releaseAlias);
+    expect(initSource).toContain("ownGeometry(");
+    expect(initSource).toContain("ownMaterial(");
+    expect(initSource).toContain("disposeObject3DResources(g, extras)");
+    expect(initSource).toContain("installReentrantSessionResource({");
+    expect(detach).toBeGreaterThanOrEqual(0);
     expect(disposeResources).toBeGreaterThan(detach);
     expect(reportErrors).toBeGreaterThan(disposeResources);
 
-    // The old generation is captured once and never reaches back through the
-    // shared alias after a detach/dispose callback can synchronously re-enter.
-    expect(disposeSource.slice(disposeResources)).not.toContain("this._limitGroup");
     expect(disposeSource).not.toContain(".geometry.dispose()");
     expect(disposeSource).not.toContain(".material.dispose()");
   });
@@ -896,64 +1135,64 @@ describe("legacy runtime ownership boundaries", () => {
       "readonly pointerId: number",
       "readonly captureTarget: HTMLElement",
       "readonly context: CalibrationContext",
-      "readonly session: PointerGestureSession",
+      "readonly session: CalibrationManipulatorSession",
       "orbitEnabledBefore: boolean",
       "new LatestPointerGestureOwner<CalibrationPointerGesture>()",
     ]) expect(manipulatorSource).toContain(ownedField);
 
     const lostCaptureSource = manipulatorSource.slice(
-      manipulatorSource.indexOf("this._onLostPointerCapture ="),
-      manipulatorSource.indexOf("get dragging():"),
+      manipulatorSource.indexOf("const onLostPointerCapture ="),
+      manipulatorSource.indexOf("const registrations:"),
     );
     expect(lostCaptureSource).toContain("this._gestureOwner.capture");
-    expect(lostCaptureSource).not.toContain("this._gestureOwner.current");
-    expect(lostCaptureSource).toContain("matchesOwnedPointerCaptureLoss(gesture, event)");
+    expect(lostCaptureSource).toContain("matchesOwnedPointerCaptureLoss(gesture, pointerEvent)");
     expect(lostCaptureSource).toContain("retargets the event to its ownerDocument");
+    expect(lostCaptureSource).toContain(
+      "gesture.captureTarget.hasPointerCapture(gesture.pointerId)",
+    );
 
     const startSource = manipulatorSource.slice(
-      manipulatorSource.indexOf("start(limitsList:"),
-      manipulatorSource.indexOf("stop(): void"),
+      manipulatorSource.indexOf("reserve("),
+      manipulatorSource.indexOf("private _state("),
     );
-    expect(startSource.indexOf("this._gestureOwner.beginSession()"))
-      .toBeLessThan(startSource.indexOf("_finishPointerGestureForReplacement()"));
-    expect(startSource.indexOf("_finishPointerGestureForReplacement()"))
-      .toBeLessThan(startSource.indexOf("this._ctx ="));
-    expect(startSource).toContain("this._initLimitGizmo(session)");
-    expect(startSource).toContain("this._buildTags(session)");
-    expect(startSource.match(/if \(!sessionIsCurrent\(\)\) return/g)?.length)
-      .toBeGreaterThanOrEqual(10);
-    for (const listener of [
-      'window.addEventListener("pointermove", this._onMove)',
-      'window.addEventListener("pointerup", this._onUp)',
-      'window.addEventListener("pointercancel", this._onCancel)',
-      'window.addEventListener("lostpointercapture", this._onLostPointerCapture)',
-    ]) expect(startSource).toContain(listener);
+    expect(startSource).toContain("this._sessions.reserve(workflow");
+    expect(startSource).toContain("createContext(owned)");
+    expect(startSource).toContain("this._initLimitGizmo(owned, authority)");
+    expect(startSource).toContain("this._buildTags(owned, authority)");
+    expect(startSource).toContain("this._installSessionListeners(owned, authority)");
+    expect(manipulatorSource).not.toContain("beginSession()");
+    expect(manipulatorSource).toContain("installReentrantSessionResource({");
+    expect(manipulatorSource).toContain("new ReentrantHostMutationGate()");
+    expect(manipulatorSource).toContain("reserveCapture(owned)");
+    expect(manipulatorSource).toContain("cause === \"returned\"");
 
     const stopSource = manipulatorSource.slice(
-      manipulatorSource.indexOf("stop(): void"),
+      manipulatorSource.indexOf("stop(session: CalibrationManipulatorSession)"),
       manipulatorSource.indexOf("private _initLimitGizmo"),
     );
-    const deactivate = stopSource.indexOf("this.active = false");
-    const finishGesture = stopSource.indexOf('_finishPointerGesture(gesture, "stop")');
-    const firstSessionGuard = stopSource.indexOf("if (!sessionIsCurrent()) return");
-    const destroyHud = stopSource.indexOf('this.hud.innerHTML = ""');
-    const disposeGizmo = stopSource.indexOf("this._disposeLimitGizmo()");
-    const clearHighlights = stopSource.indexOf("setCalibHighlights({})");
-    const clearContext = stopSource.indexOf("this._ctx = null");
-    expect(finishGesture).toBeGreaterThan(deactivate);
-    expect(firstSessionGuard).toBeGreaterThan(finishGesture);
-    expect(destroyHud).toBeGreaterThan(finishGesture);
-    expect(stopSource.indexOf("if (!sessionIsCurrent()) return", disposeGizmo))
-      .toBeGreaterThan(disposeGizmo);
-    expect(stopSource.indexOf("if (!sessionIsCurrent()) return", clearHighlights))
-      .toBeGreaterThan(clearHighlights);
-    expect(clearContext).toBeGreaterThan(destroyHud);
-    for (const listener of [
-      'window.removeEventListener("pointermove", this._onMove)',
-      'window.removeEventListener("pointerup", this._onUp)',
-      'window.removeEventListener("pointercancel", this._onCancel)',
-      'window.removeEventListener("lostpointercapture", this._onLostPointerCapture)',
-    ]) expect(stopSource).toContain(listener);
+    expect(stopSource).toContain("return this._sessions.stop(session) === \"stopped\"");
+    expect(stopSource).not.toContain("stop():");
+
+    const sessionCleanup = manipulatorSource.slice(
+      manipulatorSource.indexOf("private _cleanupSession("),
+      manipulatorSource.indexOf("\n  setAngleUnit("),
+    );
+    const takeContext = sessionCleanup.indexOf("state.context = null");
+    const finishGesture = sessionCleanup.indexOf("this._gestureOwner.finish(gesture)");
+    const removeListeners = sessionCleanup.indexOf("registration.target.removeEventListener(");
+    const removeHud = sessionCleanup.indexOf("hudRoot.remove()");
+    const removeExternalRoots = sessionCleanup.indexOf("root.remove()");
+    const disposeGizmo = sessionCleanup.indexOf("this._disposeLimitGizmo(limitGroup)");
+    const reconcileSurface = sessionCleanup.indexOf("this._reconcileSharedSurface(null, context)");
+    expect(takeContext).toBeGreaterThanOrEqual(0);
+    expect(finishGesture).toBeGreaterThan(takeContext);
+    expect(removeListeners).toBeGreaterThan(finishGesture);
+    expect(removeHud).toBeGreaterThan(removeListeners);
+    expect(removeExternalRoots).toBeGreaterThan(removeHud);
+    expect(disposeGizmo).toBeGreaterThan(removeExternalRoots);
+    expect(reconcileSurface).toBeGreaterThan(disposeGizmo);
+    expect(sessionCleanup).toContain("authority.isHandoffCurrent()");
+    expect(sessionCleanup).toContain("throw new AggregateError(");
 
     const beginSource = manipulatorSource.slice(
       manipulatorSource.indexOf("private _beginPointerGesture"),
@@ -961,24 +1200,25 @@ describe("legacy runtime ownership boundaries", () => {
     );
     const publishGesture = beginSource.indexOf("this._gestureOwner.begin(gesture)");
     const validateExpectedSession = beginSource.indexOf(
-      "this._gestureOwner.isSessionCurrent(expectedSession)",
+      "gesture.session !== expectedSession",
     );
     const inheritOrbit = beginSource.indexOf("inheritedPointerGestureOrbitBaseline(");
     const cleanupPrevious = beginSource.indexOf("this._cleanupPointerGesture(");
-    const disableOrbit = beginSource.indexOf("orbit.enabled = false");
+    const reconcileOrbit = beginSource.indexOf("this._reconcileOrbit()");
     const reserveCapture = beginSource.indexOf("this._gestureOwner.reserveCapture(owned)");
-    const requestCapture = beginSource.indexOf("gesture.captureTarget.setPointerCapture");
+    const requestCapture = beginSource.indexOf("this._requestPointerGestureCapture(owned)");
     expect(validateExpectedSession).toBeGreaterThanOrEqual(0);
     expect(validateExpectedSession).toBeLessThan(publishGesture);
-    expect(beginSource).toContain("gesture.session !== expectedSession");
-    expect(beginSource).toContain("this._ctx !== gesture.context");
+    expect(beginSource).toContain("this._state(expectedSession).context !== gesture.context");
     expect(inheritOrbit).toBeGreaterThan(publishGesture);
     expect(inheritOrbit).toBeLessThan(cleanupPrevious);
     expect(cleanupPrevious).toBeGreaterThan(publishGesture);
-    expect(disableOrbit).toBeGreaterThan(cleanupPrevious);
-    expect(reserveCapture).toBeGreaterThan(disableOrbit);
-    expect(requestCapture).toBeGreaterThan(disableOrbit);
-    expect(beginSource).toContain("The stable window pointerup/cancel listeners still terminate");
+    expect(beginSource).toContain("cleanupReplacedPointerGestureOrRollback(");
+    expect(reconcileOrbit).toBeGreaterThan(cleanupPrevious);
+    expect(reserveCapture).toBeGreaterThan(reconcileOrbit);
+    expect(requestCapture).toBeGreaterThan(reserveCapture);
+    expect(manipulatorSource).toContain("installReentrantSessionResource({");
+    expect(manipulatorSource).toContain("cause === \"returned\"");
     expect(beginSource).toContain("if (!this._isCurrentPointerGesture(owned))");
     expect(beginSource).toContain("this._gestureOwner.takeCapture(owned)");
 
@@ -991,28 +1231,47 @@ describe("legacy runtime ownership boundaries", () => {
       'classList.remove("track-dragging")',
       "successor.card === gesture.card",
       "successor.tag?.el === gesture.tag?.el",
-      "this._projectPointerGestureSharedState(handoff, gesture.orbitEnabledBefore)",
-      'classList.toggle("calib-dragging", projection.stageDragging)',
-      "orbit.enabled = projection.orbitEnabled",
+      "this._projectPointerGestureSharedState(",
+      "this._reconcilePointerGestureClasses()",
+      "this._reconcileSharedSurface()",
+      "this._reconcileOrbit({",
       "this._gestureOwner.isTransitionCurrent(handoff)",
-      "this._gestureOwner.takeCapture(owned)",
+      "this._gestureOwner.takeCapturePhase(owned)",
       "gesture.captureTarget.releasePointerCapture(gesture.pointerId)",
     ]) expect(cleanupSource).toContain(cleanup);
     const projectShared = cleanupSource.indexOf(
-      "this._projectPointerGestureSharedState(handoff, gesture.orbitEnabledBefore)",
+      "this._projectPointerGestureSharedState(",
     );
-    const takeCapture = cleanupSource.indexOf("this._gestureOwner.takeCapture(owned)");
+    const takeCapture = cleanupSource.indexOf("this._gestureOwner.takeCapturePhase(owned)");
     const releaseCapture = cleanupSource.indexOf("releasePointerCapture");
     expect(projectShared).toBeGreaterThanOrEqual(0);
     expect(takeCapture).toBeGreaterThan(projectShared);
     expect(releaseCapture).toBeGreaterThan(takeCapture);
+
+    const requestCaptureSource = manipulatorSource.slice(
+      manipulatorSource.indexOf("private _releasePointerGestureCapture"),
+      manipulatorSource.indexOf("private _finishPointerGesture("),
+    );
+    for (const captureContract of [
+      'phase !== "installed"',
+      "samePointerCaptureIdentity(retired.value, successor.value)",
+      "mayAdoptReturnedCapture",
+      "this._gestureOwner.markCaptureInstalled(successor)",
+      "this._gestureOwner.capturePhaseOf(owned)",
+      "this._pointerCaptureGate.isInsideHostMutation",
+      "this._pointerCaptureGate.deferUntilIdle()",
+      "this._gestureOwner.beginCaptureInstall(owned)",
+      "this._gestureOwner.markCaptureInstalled(owned)",
+      "this._pointerCaptureGate.run(",
+      "this._flushDeferredPointerGestureCapture()",
+    ]) expect(requestCaptureSource).toContain(captureContract);
 
     const finishSource = manipulatorSource.slice(
       manipulatorSource.indexOf("private _finishPointerGesture("),
       manipulatorSource.indexOf("private _finishPointerGestureForReplacement"),
     );
     const takeGesture = finishSource.indexOf("this._gestureOwner.finish(owned)");
-    const cleanupGesture = finishSource.indexOf("this._cleanupPointerGesture(owned, handoff)");
+    const cleanupGesture = finishSource.indexOf("this._cleanupPointerGesture(owned, handoff, sessionAuthority)");
     const completeOnly = finishSource.indexOf('reason === "complete"');
     const flush = finishSource.indexOf("gesture.context.previewFk({ flush: true })");
     expect(cleanupGesture).toBeGreaterThan(takeGesture);
@@ -1020,7 +1279,7 @@ describe("legacy runtime ownership boundaries", () => {
     expect(flush).toBeGreaterThan(completeOnly);
     expect(finishSource).toContain('gesture.kind !== "card"');
     expect(finishSource).toContain("this._gestureOwner.isTransitionCurrent(handoff)");
-    expect(finishSource).toContain("this._ctx === gesture.context");
+    expect(finishSource).toContain("this._state(gesture.session).context === gesture.context");
 
     const hudBindings = manipulatorSource.slice(
       manipulatorSource.indexOf("private _bindHudCardDrag"),
@@ -1030,54 +1289,79 @@ describe("legacy runtime ownership boundaries", () => {
     expect(hudBindings).not.toContain('addEventListener("pointerup"');
     expect(hudBindings).not.toContain('addEventListener("pointercancel"');
     expect(hudBindings.match(/e\.button !== 0/g)).toHaveLength(2);
-    expect(hudBindings).toContain("this.setSelected(name, { gesture: owned })");
+    expect(hudBindings).toContain("this.setSelected(session, name, { gesture: owned })");
     expect(hudBindings.match(/context: CalibrationContext/g)).toHaveLength(2);
-    expect(hudBindings.match(/session: PointerGestureSession/g)).toHaveLength(2);
-    expect(hudBindings.match(/this\._ctx === context/g)).toHaveLength(2);
-    expect(hudBindings.match(/this\._gestureOwner\.isSessionCurrent\(session\)/g))
-      .toHaveLength(2);
-    expect(hudBindings).not.toContain("const context = this._ctx");
-    expect(hudBindings).not.toContain("this._tags.get(name)");
+    expect(hudBindings.match(/session: CalibrationManipulatorSession/g)).toHaveLength(2);
+    expect(hudBindings).toContain("this._state(session).context === context");
+    expect(hudBindings).toContain("this.isCurrent(session)");
 
     const buildTagsSource = manipulatorSource.slice(
       manipulatorSource.indexOf("private _buildTags("),
       manipulatorSource.indexOf("\n  setAngleUnit("),
     );
-    expect(buildTagsSource).toContain("const context = this._ctx");
+    expect(buildTagsSource).toContain("const state = this._state(session)");
+    expect(buildTagsSource).toContain("const context = state.context");
+    expect(buildTagsSource).toContain("state.hudRoot = root");
+    expect(buildTagsSource).toContain("this.hud.appendChild(root)");
+    expect(buildTagsSource).not.toContain("replaceChildren");
     expect(buildTagsSource).toContain(
       "this._bindHudCardDrag(card, head, context, session)",
     );
     expect(buildTagsSource).toContain(
       "this._bindHudTrackDrag(name, track, thumb, meta, tag, context, session)",
     );
+    const releaseLocalRoot = buildTagsSource.slice(
+      buildTagsSource.indexOf("const releaseLocalRoot ="),
+      buildTagsSource.indexOf("\n    try {", buildTagsSource.indexOf("const releaseLocalRoot =")),
+    );
+    expect(releaseLocalRoot.indexOf("state.hudRoot = null"))
+      .toBeLessThan(releaseLocalRoot.indexOf("root.remove()"));
+
+    const externalRootsSource = manipulatorSource.slice(
+      manipulatorSource.indexOf("clearExternalRoots("),
+      manipulatorSource.indexOf("private _perpRef("),
+    );
+    const clearRootsSource = externalRootsSource.slice(
+      0,
+      externalRootsSource.indexOf("publishExternalRoot("),
+    );
+    expect(clearRootsSource.indexOf("inventory.splice(index, 1)"))
+      .toBeLessThan(clearRootsSource.indexOf("root.remove()"));
+    const publishRootSource = externalRootsSource.slice(
+      externalRootsSource.indexOf("publishExternalRoot("),
+    );
+    const publishRootCatch = publishRootSource.slice(
+      publishRootSource.indexOf("} catch (error) {"),
+    );
+    expect(publishRootCatch.indexOf("roots.splice(index, 1)"))
+      .toBeLessThan(publishRootCatch.indexOf("root.remove()"));
 
     const setSelectedSource = manipulatorSource.slice(
       manipulatorSource.indexOf("\n  setSelected("),
       manipulatorSource.indexOf("private _syncHighlights"),
     );
+    expect(setSelectedSource).toContain("session: CalibrationManipulatorSession");
     expect(setSelectedSource).toContain("gesture?: OwnedCalibrationPointerGesture | null");
-    expect(setSelectedSource).toContain("const context = gesture?.value.context ?? this.context");
-    expect(setSelectedSource).toContain("const tags = [...this._tags.entries()]");
+    expect(setSelectedSource).toContain("const context = gesture?.value.context ?? state.context");
+    expect(setSelectedSource).toContain("const tags = [...state.tags.entries()]");
     expect(setSelectedSource).toContain("const sliderRows = context.getSliderRows()");
-    expect(setSelectedSource.match(/if \(!gestureIsCurrent\(\)\) return/g)?.length)
-      .toBeGreaterThanOrEqual(8);
+    expect(setSelectedSource).toContain("this._reconcileSelectionProjection(session, gesture)");
 
     const positionTagsSource = manipulatorSource.slice(
-      manipulatorSource.indexOf("\n  _positionTags("),
+      manipulatorSource.indexOf("\n  positionTags("),
       manipulatorSource.indexOf("private _pointerNdc"),
     );
     for (const snapshot of [
-      "const selected = this.selected",
-      "const tags = [...this._tags.entries()]",
-      "const jointWorld = this.jointWorld",
-      "const hudPinned = this._hudPinned",
-      "const pickAnchor = this._pickAnchor?.clone()",
+      "const selected = state.selected",
+      "const tags = [...state.tags.entries()]",
+      "const jointWorld = state.jointWorld",
+      "const hudPinned = state.hudPinned",
+      "const pickAnchor = state.pickAnchor?.clone()",
     ]) expect(positionTagsSource).toContain(snapshot);
     expect(positionTagsSource).toContain(
-      "this._applyHudPin(el, hudPinned.x, hudPinned.y, layout, gesture)",
+      "this._applyHudPin(session, el, hudPinned.x, hudPinned.y, layout, gesture)",
     );
-    expect(positionTagsSource.match(/if \(!gestureIsCurrent\(\)\) return/g)?.length)
-      .toBeGreaterThanOrEqual(8);
+    expect(positionTagsSource).toContain("const actionIsCurrent = (): boolean");
 
     const canvasPointers = manipulatorSource.slice(
       manipulatorSource.indexOf("private _pointerDown"),
@@ -1086,18 +1370,16 @@ describe("legacy runtime ownership boundaries", () => {
     expect(canvasPointers).toContain(
       "if (!eventSessionIsCurrent() || e.button !== 0) return",
     );
-    expect(canvasPointers).toContain("const session = this._gestureOwner.currentSession");
-    expect(canvasPointers).toContain("this._gestureOwner.isSessionCurrent(session)");
     expect(canvasPointers).toContain(
-      "this._pickMeshes(e.clientX, e.clientY, context)",
+      "this._pickMeshes(session, e.clientX, e.clientY)",
     );
     expect(canvasPointers).toContain("this._beginPointerGesture(gesture, session)");
     expect(canvasPointers).toContain("if (e.pointerId !== gesture.pointerId) return");
     expect(canvasPointers).toContain("event.pointerId !== owned.value.pointerId");
     expect(canvasPointers).toContain(
-      "this.setSelected(joint, { scrollPanel: true, gesture: owned })",
+      "this.setSelected(session, joint, { scrollPanel: true, gesture: owned })",
     );
-    expect(canvasPointers).toContain("this._positionTags(owned)");
+    expect(canvasPointers).toContain("this.positionTags(session, owned)");
     const prismaticStart = canvasPointers.indexOf('meta.type === "prismatic"');
     const prismaticEnd = canvasPointers.indexOf("return;", prismaticStart);
     expect(prismaticStart).toBeGreaterThanOrEqual(0);
@@ -1726,7 +2008,7 @@ describe("legacy runtime ownership boundaries", () => {
     ]) {
       expect(h2rCleanup, `H2R cleanup: ${reset}`).toContain(reset);
     }
-    expect(h2rCleanup).toContain("calibManip.stop()");
+    expect(h2rCleanup).toContain("calibManip.stop(manipulatorSession)");
     expect(h2rCleanup).toContain("_restoreVis(calibrationRestore)");
     expect(h2rCleanup).not.toContain("robot.clear()");
 
