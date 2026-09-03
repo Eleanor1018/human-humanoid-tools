@@ -19,6 +19,7 @@ import {
 } from "../../src/workbench/common/contribution";
 import { createLegacyRuntimeContribution } from "../../src/workbench/contrib/legacy-runtime/browser/legacy-runtime-contribution";
 import { WorkbenchCommandIds } from "../../src/workbench/common/command-ids";
+import type { WorkbenchPanelContribution } from "../../src/workbench/common/panel-contribution";
 import { createVideoToMotionPanelContribution } from "../../src/workbench/contrib/video-to-motion/browser/video-to-motion-contribution";
 import { createBrowserWorkbenchServices } from "../../src/workbench/services/browser/browser-workbench-services";
 import type {
@@ -49,7 +50,9 @@ function mockWorkbenchGetRequests(
     });
 }
 
-function renderWorkbench() {
+function renderWorkbench(
+  contributions?: readonly WorkbenchPanelContribution[],
+) {
   const services = createBrowserWorkbenchServices(vi.fn());
   mockWorkbenchGetRequests(services);
   const lifecycle = new WorkbenchContributionLifecycle(services, [], vi.fn());
@@ -63,13 +66,52 @@ function renderWorkbench() {
   });
   const view = render(
     <WorkbenchServicesProvider services={services} lifecycle={lifecycle}>
-      <Workbench panelContributions={[panelContribution]} />
+      <Workbench panelContributions={contributions ?? [panelContribution]} />
     </WorkbenchServicesProvider>,
   );
   return { ...view, services };
 }
 
 describe("Workbench DOM contract", () => {
+  it("routes user navigation through the shared panel request boundary", () => {
+    const requestedPanels: string[] = [];
+    const onPanelRequest = (event: Event) => {
+      requestedPanels.push((event as CustomEvent<string>).detail);
+    };
+    window.addEventListener("hhtools:panel-request", onPanelRequest);
+
+    try {
+      const requestingContribution: WorkbenchPanelContribution = {
+        id: "video-to-motion",
+        component: ({ requestPanel }) => (
+          <button type="button" onClick={() => requestPanel("motion")}>
+            Request motion panel
+          </button>
+        ),
+      };
+      renderWorkbench([requestingContribution]);
+      const r2rNavigation = document.querySelector<HTMLButtonElement>(
+        '.nav-item[data-panel="r2r"]',
+      );
+      expect(r2rNavigation).not.toBeNull();
+
+      fireEvent.click(r2rNavigation!);
+
+      expect(requestedPanels).toEqual(["r2r"]);
+      expect(document.querySelector('[data-panel="r2r"].panel')).toHaveClass(
+        "active",
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Request motion panel" }));
+      expect(requestedPanels).toEqual(["r2r", "motion"]);
+      expect(document.querySelector('[data-panel="motion"].panel')).toHaveClass(
+        "active",
+      );
+    } finally {
+      window.removeEventListener("hhtools:panel-request", onPanelRequest);
+    }
+  });
+
   it("commits every runtime DOM port before startup and display attachment", async () => {
     const ids = [
       "three-canvas",

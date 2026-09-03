@@ -144,6 +144,16 @@ export function Workbench({ panelContributions }: WorkbenchProps) {
     setActivePanelState(panel);
     updateWorkspacePreferences({ activePanel: panel });
   }, []);
+  /**
+   * User-facing navigation must cross the compatibility boundary exactly once.
+   * React consumes this event to update the panel, while the legacy runtime
+   * uses the same event to transfer shared Stage ownership to or from R2R.
+   * Runtime-originated navigation calls `setActivePanel` through `__hhUi`
+   * directly, which prevents this request path from recursing.
+   */
+  const requestPanel = useCallback((panel: string) => {
+    windowEventBus.emit("hhtools:panel-request", panel);
+  }, []);
   const setLocale = (next: WorkspaceLocale) => {
     setLocaleState(next);
     document.documentElement.lang = next;
@@ -244,8 +254,7 @@ export function Workbench({ panelContributions }: WorkbenchProps) {
     document.documentElement.dataset.theme = theme;
     window.__hhUi = {
       setActivePanel,
-      requestPanel: (panel) =>
-        windowEventBus.emit("hhtools:panel-request", panel),
+      requestPanel,
     };
     const panelSubscription = windowEventBus.on(
       "hhtools:panel-request",
@@ -262,8 +271,9 @@ export function Workbench({ panelContributions }: WorkbenchProps) {
         }
         if (event.detail.target === "video-file") {
           // The contributed V2M view stays mounted and owns this command.
-          // Select the panel first, then invoke intent without knowing its DOM.
-          setActivePanel("video-to-motion");
+          // Request the panel first so leaving R2R also returns Stage ownership,
+          // then invoke intent without knowing the contributed View's DOM.
+          requestPanel("video-to-motion");
           void commandService
             .executeCommand(WorkbenchCommandIds.pickVideoToMotionSource)
             .catch(() =>
@@ -283,7 +293,7 @@ export function Workbench({ panelContributions }: WorkbenchProps) {
             "hhtools:motion-profile-request",
             target.motionProfile,
           );
-        setActivePanel(target.panel);
+        requestPanel(target.panel);
         requestAnimationFrame(() => {
           const button = document.querySelector<HTMLButtonElement>(
             target.selector,
@@ -309,7 +319,15 @@ export function Workbench({ panelContributions }: WorkbenchProps) {
       importSubscription.dispose();
       delete window.__hhUi;
     };
-  }, [commandService, locale, setActivePanel, settingsService, text, theme]);
+  }, [
+    commandService,
+    locale,
+    requestPanel,
+    setActivePanel,
+    settingsService,
+    text,
+    theme,
+  ]);
 
   const applicationChrome = {
     activePanel,
@@ -368,7 +386,7 @@ export function Workbench({ panelContributions }: WorkbenchProps) {
             <SidebarNavigation
               activePanel={activePanel}
               locale={locale}
-              onRequest={setActivePanel}
+              onRequest={requestPanel}
             />
           </div>
         </nav>
@@ -434,7 +452,7 @@ export function Workbench({ panelContributions }: WorkbenchProps) {
                 )}
                 data-panel={id}
               >
-                <Panel locale={locale} requestPanel={setActivePanel} />
+                <Panel locale={locale} requestPanel={requestPanel} />
               </section>
             ))}
             <section
@@ -457,7 +475,7 @@ export function Workbench({ panelContributions }: WorkbenchProps) {
               >
                 <HumanToRobotWorkflow
                   locale={locale}
-                  onRequestPanel={setActivePanel}
+                  onRequestPanel={requestPanel}
                 />
               </div>
             </section>
@@ -469,7 +487,7 @@ export function Workbench({ panelContributions }: WorkbenchProps) {
                 mode={batchMode}
                 onModeChange={setBatchMode}
                 locale={locale}
-                onRequestPanel={setActivePanel}
+                onRequestPanel={requestPanel}
                 videoBatch={videoBatch}
               />
             </section>
@@ -479,7 +497,7 @@ export function Workbench({ panelContributions }: WorkbenchProps) {
             >
               <RobotToRobotWorkflow
                 locale={locale}
-                onRequestPanel={setActivePanel}
+                onRequestPanel={requestPanel}
               />
             </section>
             <section
