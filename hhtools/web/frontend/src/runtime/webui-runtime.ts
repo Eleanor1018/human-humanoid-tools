@@ -7361,6 +7361,131 @@ const r2r: R2rState = {
   tgtScaledScene: null,
 };
 
+interface R2rCalibrationIdentity {
+  readonly sourceName: string;
+  readonly sourcePayload: RobotPayload | null;
+  readonly sourceToken: string | null;
+  readonly sourceViewGeneration: number;
+  readonly targetName: string;
+  /** Target payload selected when the attempt began. */
+  readonly targetPayload: RobotPayload | null;
+  /** Locally resolved fallback accepted only by this attempt. */
+  readonly resolvedTargetPayload: RobotPayload | null;
+  /** Null while bootstrap itself owns the target load that will reserve it. */
+  readonly targetViewGeneration: number | null;
+  readonly calibratedBefore: boolean;
+  /** Rollback may atomically withdraw a failed target View before cleanup. */
+  readonly targetCapabilityWithdrawn: boolean;
+}
+
+type R2rCalibrationBootstrapResult = "entered" | "stale" | "failed";
+interface R2rCalibrationStatusReceipt {
+  readonly attempt: LatestAsyncAttempt<R2rCalibrationIdentity>;
+  readonly calibrated: boolean;
+}
+type R2rCalibrationStatusResult =
+  | { readonly kind: "current"; readonly receipt: R2rCalibrationStatusReceipt | null }
+  | { readonly kind: "stale"; readonly receipt: null };
+
+function r2rCalibrationIdentityIsCurrent(
+  identity: R2rCalibrationIdentity,
+): boolean {
+  const targetSelectionIsCurrent = (
+    r2r.targetPayload === identity.targetPayload
+    || (
+      identity.resolvedTargetPayload !== null
+      && r2r.targetPayload === identity.resolvedTargetPayload
+    )
+  );
+  const targetCapabilityIsCurrent = (
+    r2r.targetName === identity.targetName
+    && targetSelectionIsCurrent
+  ) || (
+    identity.targetCapabilityWithdrawn
+    && r2r.targetName === null
+    && r2r.targetPayload === null
+  );
+  return (
+    r2r.sourceName === identity.sourceName
+    && r2r.sourcePayload === identity.sourcePayload
+    && r2r.sourceToken === identity.sourceToken
+    && r2rSrc.isLoadGenerationCurrent(identity.sourceViewGeneration)
+    && targetCapabilityIsCurrent
+    && (
+      identity.targetViewGeneration === null
+      || r2rTgt.isLoadGenerationCurrent(identity.targetViewGeneration)
+    )
+  );
+}
+
+const r2rCalibrationBootstrapAttempts = new LatestAsyncAttemptOwner<
+  R2rCalibrationIdentity
+>(r2rCalibrationIdentityIsCurrent);
+
+const r2rCalibrationStatusAttempts = new LatestAsyncAttemptOwner<
+  R2rCalibrationIdentity
+>(r2rCalibrationIdentityIsCurrent);
+
+let r2rCalibrationPendingAttempt: LatestAsyncAttempt<R2rCalibrationIdentity> | null = null;
+
+function beginR2rCalibrationBootstrapAttempt(
+  identity: R2rCalibrationIdentity,
+): LatestAsyncAttempt<R2rCalibrationIdentity> {
+  const attempt = r2rCalibrationBootstrapAttempts.begin(identity);
+  r2rCalibrationPendingAttempt = attempt;
+  return attempt;
+}
+
+/** A stale A cannot clear the pending claim installed by successor B. */
+function finishR2rCalibrationBootstrapAttempt(
+  attempt: LatestAsyncAttempt<R2rCalibrationIdentity>,
+): boolean {
+  if (!r2rCalibrationBootstrapAttempts.finish(attempt)) return false;
+  if (r2rCalibrationPendingAttempt === attempt) {
+    r2rCalibrationPendingAttempt = null;
+  }
+  return true;
+}
+
+function r2rCalibrationBootstrapIsPending(): boolean {
+  const attempt = r2rCalibrationPendingAttempt;
+  return attempt !== null && r2rCalibrationBootstrapAttempts.isCurrent(attempt);
+}
+
+function invalidateR2rCalibrationBootstrapAttempt(): void {
+  const claimedAttempt = r2rCalibrationPendingAttempt;
+  r2rCalibrationBootstrapAttempts.invalidate();
+  if (r2rCalibrationPendingAttempt === claimedAttempt) {
+    r2rCalibrationPendingAttempt = null;
+  }
+}
+
+// A same-pair successor may take over while A is rolling back. Keep the
+// shared renderer/session baseline alive until one owner completes teardown.
+let r2rCalibrationResourcesOwned = false;
+let r2rCalibrationRestoreGroundOffset: number | null = null;
+
+function captureR2rCalibrationIdentity(): R2rCalibrationIdentity | null {
+  if (!r2r.sourceName || !r2r.targetName) return null;
+  return {
+    sourceName: r2r.sourceName,
+    sourcePayload: r2r.sourcePayload,
+    sourceToken: r2r.sourceToken,
+    sourceViewGeneration: r2rSrc.loadGeneration,
+    targetName: r2r.targetName,
+    targetPayload: r2r.targetPayload,
+    resolvedTargetPayload: r2r.targetPayload,
+    targetViewGeneration: r2rTgt.loadGeneration,
+    calibratedBefore: r2r.calibrated,
+    targetCapabilityWithdrawn: false,
+  };
+}
+
+function invalidateR2rCalibrationAttempts(): void {
+  invalidateR2rCalibrationBootstrapAttempt();
+  r2rCalibrationStatusAttempts.invalidate();
+}
+
 function calibrationRows(workflow: WorkflowId): Record<string, CalibrationSliderRow> {
   return workflow === "h2r" ? state.calibSliderRows : r2r.calibRows;
 }
@@ -8059,8 +8184,15 @@ function r2rEnterPanel(): void {
 
 function r2rLeavePanel(): void {
   if (!r2r.active) return;
+  // Leaving owns teardown even when bootstrap has not reached `calibrating` yet.
+  invalidateR2rCalibrationAttempts();
+  r2rCalibrationFkPreview.stop();
   r2r.active = false;
-  if (r2r.calibrating) {
+  if (
+    r2r.calibrating
+    || r2rCalibrationResourcesOwned
+    || r2r.calibOrbitSaved !== null
+  ) {
     r2rExitCalib({ publishStageDisplay: false });
   }
   r2rApplyStage({ publishStageDisplay: false });
@@ -8097,38 +8229,73 @@ function r2rSetCalChip(text: unknown, cls = ""): void {
   renderStatusChip(el, text, cls);
 }
 
-async function r2rUpdateRetargetBtn(): Promise<void> {
+async function r2rUpdateRetargetBtn(): Promise<R2rCalibrationStatusResult> {
   const calBtn = document.getElementById("r2r-calib-btn");
   const rtBtn = document.getElementById("r2r-retarget-btn");
   if (calBtn) calBtn.disabled = !(r2r.targetName && r2r.sourceName);
-  let calibrated = false;
-  if (r2r.targetName && r2r.sourceName) {
-    try {
-      const st = await API.get(
-        `/api/r2r/calibration/status?target=${encodeURIComponent(r2r.targetName)}&source=${encodeURIComponent(r2r.sourceName)}`
-      );
-      calibrated = !!st.calibrated;
-    } catch { /* treat as uncalibrated */ }
+  if (r2r.calibrating || r2rCalibrationBootstrapIsPending()) {
+    r2rCalibrationStatusAttempts.invalidate();
+    if (rtBtn) rtBtn.disabled = true;
+    publishR2rWorkflowState();
+    return { kind: "current", receipt: null };
   }
+
+  const identity = captureR2rCalibrationIdentity();
+  if (!identity) {
+    r2rCalibrationStatusAttempts.invalidate();
+    r2r.calibrated = false;
+    r2rSetCalChip("—", "");
+    const batchCalibrationStatus = document.getElementById("r2r-batch-calibration-status");
+    if (batchCalibrationStatus) batchCalibrationStatus.textContent = "";
+    if (rtBtn) rtBtn.disabled = true;
+    r2rRenderBasket();
+    publishR2rWorkflowState();
+    return { kind: "current", receipt: null };
+  }
+
+  const statusAttempt = r2rCalibrationStatusAttempts.begin(identity);
+  const statusIsCurrent = (): boolean => (
+    !r2r.calibrating
+    && !r2rCalibrationBootstrapIsPending()
+    && r2rCalibrationStatusAttempts.isCurrent(statusAttempt)
+  );
+  let calibrated = false;
+  try {
+    const st = await API.get(
+      `/api/r2r/calibration/status?target=${encodeURIComponent(identity.targetName)}&source=${encodeURIComponent(identity.sourceName)}`
+    );
+    if (!statusIsCurrent()) return { kind: "stale", receipt: null };
+    calibrated = !!st.calibrated;
+  } catch {
+    if (!statusIsCurrent()) return { kind: "stale", receipt: null };
+    // A current request failure is equivalent to an unavailable calibration.
+  }
+
   r2r.calibrated = calibrated;
-  if (!r2r.targetName || !r2r.sourceName) r2rSetCalChip("—", "");
-  else r2rSetCalChip(
+  r2rSetCalChip(
     calibrated
       ? runtimeText("Calibrated", "已标定")
       : runtimeText("Not calibrated — calibration required", "未标定 — 请先标定"),
     calibrated ? "ok" : "warn",
   );
+  if (!statusIsCurrent()) return { kind: "stale", receipt: null };
   const batchCalibrationStatus = document.getElementById("r2r-batch-calibration-status");
   if (batchCalibrationStatus) {
-    batchCalibrationStatus.textContent = !r2r.targetName || !r2r.sourceName
-      ? ""
-      : (calibrated
-        ? runtimeText("Calibration ready", "标定已就绪")
-        : runtimeText("Calibration required in Robot → Robot", "需要先在“机器人 → 机器人”中完成标定"));
+    batchCalibrationStatus.textContent = calibrated
+      ? runtimeText("Calibration ready", "标定已就绪")
+      : runtimeText("Calibration required in Robot → Robot", "需要先在“机器人 → 机器人”中完成标定");
   }
   if (rtBtn) rtBtn.disabled = !(r2r.sourceToken && r2r.targetName && calibrated);
   r2rRenderBasket();
+  if (!statusIsCurrent()) return { kind: "stale", receipt: null };
   publishR2rWorkflowState();
+  if (!statusIsCurrent()) return { kind: "stale", receipt: null };
+  // Keep the status claim live across the caller's await continuation. Ensure
+  // consumes it synchronously; exit, replacement, or B invalidates it first.
+  return {
+    kind: "current",
+    receipt: { attempt: statusAttempt, calibrated },
+  };
 }
 
 // --------------------------------------------------------------- robot pickers
@@ -8190,8 +8357,21 @@ function syncR2rRobotSelects(kind: "source" | "target", name: string): void {
   }
 }
 
+/** Withdraw calibration ownership before a robot-selection intent can await. */
+function prepareR2rRobotReplacement(): void {
+  invalidateR2rCalibrationAttempts();
+  r2rCalibrationFkPreview.stop();
+  if (
+    r2r.calibrating
+    || r2rCalibrationResourcesOwned
+    || r2r.calibOrbitSaved !== null
+  ) r2rExitCalib();
+}
+
 /** Invalidate calibration aliases even when interactive teardown reports a warning. */
 function clearR2rCalibrationAfterViewLoss(context: string): void {
+  invalidateR2rCalibrationAttempts();
+  const targetGroundOffset = r2rCalibrationRestoreGroundOffset;
   // Renderer-loss cleanup is a terminal calibration path even if the
   // manipulator or later best-effort cleanup reports an error.
   r2rCalibrationFkPreview.stop();
@@ -8216,11 +8396,22 @@ function clearR2rCalibrationAfterViewLoss(context: string): void {
   calibrationEditorUi.r2r.comparison = "current";
   runBestEffortCleanup(`${context}: calibration manipulator cleanup failed`, () => calibManip.stop());
   runBestEffortCleanup(`${context}: target opacity restore failed`, () => r2rTgt.setOpacity(1));
+  if (targetGroundOffset !== null) {
+    runBestEffortCleanup(`${context}: target ground offset restore failed`, () => {
+      r2rTgt.groundOffset = targetGroundOffset;
+    });
+    runBestEffortCleanup(`${context}: target pose restore failed`, () => {
+      if (r2rTgt.trajectory) r2rTgt.setFrame(0);
+      else r2rTgt.applyStatic();
+    });
+  }
   runBestEffortCleanup(`${context}: reference cleanup failed`, () => refSkel.clear());
   refSkel.group.visible = false;
   const editor = document.getElementById("r2r-calib-edit");
   if (editor) editor.style.display = "none";
   document.getElementById("calib-banner")?.classList.add("hidden");
+  r2rCalibrationResourcesOwned = false;
+  r2rCalibrationRestoreGroundOffset = null;
 }
 
 /** Clear every result derived from the current R2R source/target pair. */
@@ -8261,6 +8452,7 @@ function clearR2rDerivedTargetAfterViewLoss(
 
 /** Terminal compensation for a current-generation R2R source load failure. */
 function clearR2rSourceAfterViewLoss(context: string): void {
+  invalidateR2rCalibrationAttempts();
   r2r.sourceName = null;
   r2r.sourcePayload = null;
   r2r.sourceToken = null;
@@ -8299,6 +8491,7 @@ function clearR2rSourceAfterViewLoss(context: string): void {
 
 /** Terminal compensation for a current-generation R2R target load failure. */
 function clearR2rTargetAfterViewLoss(context: string): void {
+  invalidateR2rCalibrationAttempts();
   r2r.targetName = null;
   r2r.targetPayload = null;
   clearR2rCalibrationAfterViewLoss(context);
@@ -8323,9 +8516,11 @@ async function r2rLoadSourceRobot(
   { activateWorkspace = true }: { activateWorkspace?: boolean } = {},
 ): Promise<void> {
   if (!name) return;
+  prepareR2rRobotReplacement();
   toast(runtimeText("Loading source robot…", "加载源机器人…"));
   try {
     const sourcePayload = await API.post("/api/robot/select", { name });
+    prepareR2rRobotReplacement();
     const attempt = startRobotViewLoad(r2rSrc, sourcePayload);
     let loadResult: AsyncStageViewLoadResult;
     try {
@@ -8339,6 +8534,7 @@ async function r2rLoadSourceRobot(
       loadResult === "stale"
       || !r2rSrc.isLoadGenerationCurrent(attempt.generation)
     ) return;
+    prepareR2rRobotReplacement();
     if (r2r.sourceName !== name) {
       r2r.sourceToken = null;
       r2r.sourceStem = null;
@@ -8376,9 +8572,11 @@ async function r2rLoadSourceRobot(
 
 async function r2rLoadTargetRobot(name: string): Promise<void> {
   if (!name) return;
+  prepareR2rRobotReplacement();
   toast(runtimeText("Loading target robot…", "加载目标机器人…"));
   try {
     const targetPayload = await API.post("/api/robot/select", { name });
+    prepareR2rRobotReplacement();
     r2r.calibrated = false;
     r2r.targetPayload = targetPayload;
     r2r.targetName = name;
@@ -8522,10 +8720,12 @@ function r2rSetCalibJointValue(
 function r2rBuildSliders(
   initialQ: Record<string, number>,
   limits: RobotJointLimit[],
-): void {
+  isCurrent: () => boolean = () => true,
+): boolean {
   const box = document.getElementById("r2r-calib-sliders");
-  if (!box) return;
+  if (!box) return true;
   box.replaceChildren();
+  if (!isCurrent()) return false;
   r2r.calibQ = {};
   r2r.calibRows = {};
   const limByName: Record<string, RobotJointLimit> = {};
@@ -8536,6 +8736,7 @@ function r2rBuildSliders(
   }
   const seen = new Set<string>();
   for (const j of joints) {
+    if (!isCurrent()) return false;
     if (seen.has(j)) continue;
     seen.add(j);
     const lim = limByName[j];
@@ -8569,6 +8770,7 @@ function r2rBuildSliders(
     const span = hi - lo;
     rowEl.classList.toggle("near-limit", span > 0 && (v - lo < span * 0.03 || hi - v < span * 0.03));
     calibManip.updateHudValue(j, v);
+    if (!isCurrent()) return false;
     range.oninput = () => r2rSetCalibJointValue(j, range.value, { from: "slider", live: true });
     num.oninput = () => r2rSetCalibJointValue(j, num.value, { from: "number", live: true });
     num.onchange = () => r2rSetCalibJointValue(j, num.value, { from: "number" });
@@ -8582,140 +8784,504 @@ function r2rBuildSliders(
       calibManip.setSelected(j, { scrollPanel: true });
     };
     box.appendChild(rowEl);
+    if (!isCurrent()) return false;
   }
   if (calibrationEditorUi.r2r.comparison === "current") r2r.calibDraftQ = { ...r2r.calibQ };
   syncCalibrationNumberInputs("r2r");
+  if (!isCurrent()) return false;
   applyCalibrationRowFilter("r2r");
+  if (!isCurrent()) return false;
   updateR2rCalibrationValidation();
+  if (!isCurrent()) return false;
   r2rPreviewCalibPose();
+  return isCurrent();
+}
+
+function rollbackR2rCalibrationBootstrap(
+  attempt: LatestAsyncAttempt<R2rCalibrationIdentity>,
+  error: unknown,
+  targetGroundOffset: number,
+  calibrationResourcesOwned: boolean,
+  { targetViewLost = false }: { targetViewLost?: boolean } = {},
+): boolean {
+  if (!r2rCalibrationBootstrapAttempts.isCurrent(attempt)) return false;
+  const orbitSnapshot = r2r.calibOrbitSaved;
+
+  r2rCalibrationFkPreview.stop();
+  if (!r2rCalibrationBootstrapAttempts.isCurrent(attempt)) return false;
+
+  if (targetViewLost) {
+    // Keep terminal target withdrawal under an owned token until every
+    // destructive cleanup step is done; a reentrant replacement supersedes it.
+    attempt = beginR2rCalibrationBootstrapAttempt({
+      ...attempt.identity,
+      targetCapabilityWithdrawn: true,
+    });
+    r2r.targetName = null;
+    r2r.targetPayload = null;
+    r2r.exportToken = null;
+    r2r.exportHasScene = false;
+    r2r.resultStem = null;
+    r2r.tgtScaledScene = null;
+    r2rRunState = "idle";
+  }
+
+  // Canonical editor aliases become terminal before fallible renderer cleanup.
+  r2r.calibrating = false;
+  r2r.calibrated = targetViewLost ? false : attempt.identity.calibratedBefore;
+  r2r.calibNeedsCameraFocus = false;
+  r2r.calibQ = {};
+  r2r.calibBaselineQ = null;
+  r2r.calibDraftQ = null;
+  r2r.calibHasSaved = false;
+  r2r.calibLimits = [];
+  r2r.calibRows = {};
+  calibrationEditorUi.r2r.comparison = "current";
+
+  const cleanup = (context: string, action: () => void): boolean => {
+    if (!r2rCalibrationBootstrapAttempts.isCurrent(attempt)) return false;
+    runBestEffortCleanup(context, action);
+    return r2rCalibrationBootstrapAttempts.isCurrent(attempt);
+  };
+  const readForCleanup = <Value>(
+    context: string,
+    read: () => Value | null,
+  ): { readonly current: boolean; readonly value: Value | null } => {
+    if (!r2rCalibrationBootstrapAttempts.isCurrent(attempt)) {
+      return { current: false, value: null };
+    }
+    let value: Value | null = null;
+    runBestEffortCleanup(context, () => { value = read(); });
+    return {
+      current: r2rCalibrationBootstrapAttempts.isCurrent(attempt),
+      value,
+    };
+  };
+
+  if (orbitSnapshot) {
+    if (!cleanup("R2R calibration bootstrap: minimum orbit restore failed", () => {
+      orbit.minDistance = orbitSnapshot.minDistance;
+    })) return false;
+    if (!cleanup("R2R calibration bootstrap: maximum orbit restore failed", () => {
+      orbit.maxDistance = orbitSnapshot.maxDistance;
+    })) return false;
+    if (!cleanup("R2R calibration bootstrap: orbit speed restore failed", () => {
+      orbit.zoomSpeed = orbitSnapshot.zoomSpeed;
+    })) return false;
+  }
+  if (calibrationResourcesOwned) {
+    if (!cleanup("R2R calibration bootstrap: manipulator cleanup failed", () => calibManip.stop())) return false;
+    if (!cleanup("R2R calibration bootstrap: target opacity restore failed", () => r2rTgt.setOpacity(1))) return false;
+    if (!cleanup("R2R calibration bootstrap: reference cleanup failed", () => refSkel.clear())) return false;
+    if (!cleanup("R2R calibration bootstrap: reference visibility cleanup failed", () => {
+      refSkel.group.visible = false;
+    })) return false;
+    if (!cleanup("R2R calibration bootstrap: target ground offset restore failed", () => {
+      r2rTgt.groundOffset = targetGroundOffset;
+    })) return false;
+    if (!cleanup("R2R calibration bootstrap: target pose restore failed", () => {
+      if (r2rTgt.trajectory) r2rTgt.setFrame(0);
+      else r2rTgt.applyStatic();
+    })) return false;
+  }
+  if (targetViewLost) {
+    if (!cleanup("R2R calibration bootstrap: target skeleton cleanup failed", () => r2rTgtSkel.clear())) return false;
+    if (!cleanup("R2R calibration bootstrap: target environment cleanup failed", () => r2rTgtEnv.clear())) return false;
+    // Plain aliases can move together; every DOM/renderer publication below is
+    // its own guarded boundary so reentrant B stops A immediately.
+    r2rTgt.trajectory = null;
+    r2rTgt.frameIndices = null;
+    r2rTgt.clipDuration = 1;
+    r2rVis.tgtRobot = false;
+    r2rVis.tgtSkel = false;
+    r2rVis.tgtEnv = false;
+    if (!cleanup("R2R calibration bootstrap: result diagnostics cleanup failed", () => {
+      clearResultDiagnostics("r2r");
+    })) return false;
+    const exportCardLookup = readForCleanup(
+      "R2R calibration bootstrap: export card lookup failed",
+      () => document.getElementById("r2r-export-card"),
+    );
+    if (!exportCardLookup.current) return false;
+    const exportCard = exportCardLookup.value;
+    if (exportCard) {
+      const currentExportCard = exportCard;
+      if (!cleanup("R2R calibration bootstrap: export card cleanup failed", () => {
+        currentExportCard.style.display = "none";
+      })) return false;
+    }
+    const targetStatusText = runtimeText("Target robot: not loaded", "目标机器人：未加载");
+    for (const id of ["r2r-target-status", "r2r-batch-target-status"]) {
+      const statusLookup = readForCleanup(
+        "R2R calibration bootstrap: target status lookup failed",
+        () => document.getElementById(id),
+      );
+      if (!statusLookup.current) return false;
+      const status = statusLookup.value;
+      if (status) {
+        const currentStatus = status;
+        if (!cleanup("R2R calibration bootstrap: target status cleanup failed", () => {
+          currentStatus.textContent = targetStatusText;
+        })) return false;
+      }
+    }
+    for (const id of ["r2r-tg-tgt-robot", "r2r-tg-tgt-skel", "r2r-tg-tgt-env"]) {
+      const buttonLookup = readForCleanup(
+        "R2R calibration bootstrap: target toggle lookup failed",
+        () => document.getElementById(id) as HTMLButtonElement | null,
+      );
+      if (!buttonLookup.current) return false;
+      const button = buttonLookup.value;
+      if (button) {
+        const currentButton = button;
+        if (!cleanup("R2R calibration bootstrap: target toggle cleanup failed", () => {
+          currentButton.disabled = true;
+        })) return false;
+      }
+    }
+  }
+  const editorLookup = readForCleanup(
+    "R2R calibration bootstrap: editor lookup failed",
+    () => document.getElementById("r2r-calib-edit"),
+  );
+  if (!editorLookup.current) return false;
+  const editor = editorLookup.value;
+  if (editor) {
+    const currentEditor = editor;
+    if (!cleanup("R2R calibration bootstrap: editor cleanup failed", () => {
+      currentEditor.style.display = "none";
+    })) return false;
+  }
+  const slidersLookup = readForCleanup(
+    "R2R calibration bootstrap: slider lookup failed",
+    () => document.getElementById("r2r-calib-sliders"),
+  );
+  if (!slidersLookup.current) return false;
+  const sliders = slidersLookup.value;
+  if (sliders) {
+    const currentSliders = sliders;
+    if (!cleanup("R2R calibration bootstrap: slider cleanup failed", () => {
+      currentSliders.replaceChildren();
+    })) return false;
+  }
+  if (calibrationResourcesOwned) {
+    const bannerLookup = readForCleanup(
+      "R2R calibration bootstrap: banner lookup failed",
+      () => document.getElementById("calib-banner"),
+    );
+    if (!bannerLookup.current) return false;
+    const banner = bannerLookup.value;
+    if (banner) {
+      const currentBanner = banner;
+      if (!cleanup("R2R calibration bootstrap: banner cleanup failed", () => {
+        currentBanner.classList.add("hidden");
+      })) return false;
+    }
+  }
+  if ((calibrationResourcesOwned || targetViewLost) && !cleanup(
+    "R2R calibration bootstrap: Stage restore failed",
+    () => r2rApplyStage(),
+  )) return false;
+  if (!cleanup("R2R calibration bootstrap: workflow publication failed", () => {
+    publishR2rWorkflowState();
+  })) return false;
+  if (!cleanup("R2R calibration bootstrap: editor publication failed", () => {
+    emitCalibrationEditorState("r2r");
+  })) return false;
+  if (!cleanup("R2R calibration bootstrap: error notification failed", () => {
+    toast(errorMessage(error), true);
+  })) return false;
+  if (!finishR2rCalibrationBootstrapAttempt(attempt)) return false;
+  // Keep the original orbit baseline available to a reentrant same-pair owner.
+  r2r.calibOrbitSaved = null;
+  r2rCalibrationResourcesOwned = false;
+  r2rCalibrationRestoreGroundOffset = null;
+  return true;
 }
 
 async function r2rStartCalib(
   { auto = false }: { auto?: boolean } = {},
-): Promise<void> {
-  if (!r2r.targetName || !r2r.sourceName) {
+): Promise<R2rCalibrationBootstrapResult> {
+  if (r2r.calibrating) return "entered";
+  r2rCalibrationStatusAttempts.invalidate();
+  const capturedIdentity = captureR2rCalibrationIdentity();
+  if (!capturedIdentity) {
+    // Missing selection is not itself an ownership transfer. In particular,
+    // target-loss rollback temporarily publishes a missing target while it
+    // still owns terminal cleanup; explicit exit/replacement paths invalidate.
     toast(runtimeText(
       "Load both the source and target robots first",
       "请先加载源机器人与目标机器人",
     ), true);
-    return;
+    return "failed";
   }
-  if (!auto) toast(runtimeText("Preparing calibration…", "准备标定…"));
-  let session: ApiPostResponse<"/api/r2r/calibration/session">;
-  try {
-    session = await API.post("/api/r2r/calibration/session", {
-      target: r2r.targetName,
-      source: r2r.sourceName,
-    });
-  } catch (e) { toast(errorMessage(e), true); return; }
-  let targetPayload = r2r.targetPayload;
-  if (!targetPayload) {
-    try { targetPayload = await API.post("/api/robot/select", { name: r2r.targetName }); }
-    catch (e) { toast(errorMessage(e), true); return; }
-  }
-  const reference = session.reference ?? session.reference_pose;
-  if (!targetPayload || !reference) {
-    toast(runtimeText(
-      "The calibration session is missing the target robot or reference pose",
-      "标定会话缺少目标机器人或参考姿态",
-    ), true);
-    return;
-  }
-  const attempt = startRobotViewLoad(r2rTgt, targetPayload);
-  let targetLoadResult: AsyncStageViewLoadResult;
-  try {
-    targetLoadResult = await attempt.completion;
-  } catch (error) {
-    if (!r2rTgt.isLoadGenerationCurrent(attempt.generation)) return;
-    clearR2rTargetAfterViewLoss("R2R calibration target load");
-    toast(errorMessage(error), true);
-    return;
-  }
-  if (
-    targetLoadResult === "stale"
-    || !r2rTgt.isLoadGenerationCurrent(attempt.generation)
-  ) return;
 
-  // Enter calibration only after the target renderer generation commits.
-  r2r.targetPayload = targetPayload;
-  switchInspectorPanel("r2r");
-  if (!r2r.active) r2rEnterPanel();
-  r2rCalibrationFkPreview.start();
-  r2r.calibrating = true;
-  r2r.calibNeedsCameraFocus = true;
-  r2r.calibOrbitSaved = {
-    minDistance: orbit.minDistance,
-    maxDistance: orbit.maxDistance,
-    zoomSpeed: orbit.zoomSpeed,
-  };
-  orbit.zoomSpeed = 0.022;
-  applyCalibOrbitLimits();
-  updateR2rCalibBanner();
-  document.getElementById("calib-banner")?.classList.remove("hidden");
-  r2rSetCalChip(runtimeText("Calibrating…", "标定中…"), "warn");
-  document.getElementById("r2r-retarget-btn").disabled = true;
-  publishR2rWorkflowState();
-
-  r2r.calibLimits = session.joint_limits ?? session.limits ?? [];
-  r2rTgt.groundOffset = session.ground_offset_z ?? r2rTgt.groundOffset;
-  refSkel.load(reference);
-  refSkel.configureMappings(targetPayload.ik_map ?? {});
-  const initialQ = { ...(session.joint_q || {}) };
-  r2r.calibHasSaved = !!session.has_saved_calibration;
-  r2r.calibBaselineQ = r2r.calibHasSaved ? { ...initialQ } : null;
-  r2r.calibDraftQ = { ...initialQ };
-  calibrationEditorUi.r2r.comparison = "current";
-  document.getElementById("r2r-calib-edit").style.display = "block";
-  r2rApplyStage();
-  calibManip.start(r2r.calibLimits, r2rCalibCtx());
-  r2rBuildSliders(initialQ, r2r.calibLimits);
-  applyCalibrationVisualization("r2r");
-  document.getElementById("r2r-calib-edit")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-  r2rFocus(r2rTgt);
-  toast(auto
-    ? runtimeText(
-      "The target robot is not calibrated. Calibration mode opened automatically; drag joints or use the right-side sliders.",
-      "目标机器人尚未标定：已自动进入标定模式（点击关节拖动或右侧滑块）",
+  let attempt = beginR2rCalibrationBootstrapAttempt(capturedIdentity);
+  let targetLoadGeneration: number | null = null;
+  let targetGroundOffset = (
+    r2rCalibrationRestoreGroundOffset ?? r2rTgt.groundOffset
+  );
+  let calibrationResourcesOwned = r2rCalibrationResourcesOwned;
+  const isCurrent = (): boolean => (
+    r2rCalibrationBootstrapAttempts.isCurrent(attempt)
+    && (
+      targetLoadGeneration === null
+      || r2rTgt.isLoadGenerationCurrent(targetLoadGeneration)
     )
-    : runtimeText(
-      "Calibration started. Align the target robot to the blue source reference pose.",
-      "已进入标定：把目标机器人对齐到蓝色源参考姿态",
-    ));
+  );
+
+  try {
+    // A replacement attempt owns FK publication as soon as it starts, even
+    // while its session and renderer are still pending.
+    r2rCalibrationFkPreview.stop();
+    if (!isCurrent()) return "stale";
+    if (!auto) {
+      toast(runtimeText("Preparing calibration…", "准备标定…"));
+      if (!isCurrent()) return "stale";
+    }
+
+    const session = await API.post("/api/r2r/calibration/session", {
+      target: attempt.identity.targetName,
+      source: attempt.identity.sourceName,
+    });
+    if (!isCurrent()) return "stale";
+
+    let targetPayload = attempt.identity.resolvedTargetPayload;
+    if (!targetPayload) {
+      targetPayload = await API.post("/api/robot/select", {
+        name: attempt.identity.targetName,
+      });
+      if (!isCurrent()) return "stale";
+    }
+    const reference = session.reference ?? session.reference_pose;
+    if (!targetPayload || !reference) {
+      throw new Error(runtimeText(
+        "The calibration session is missing the target robot or reference pose",
+        "标定会话缺少目标机器人或参考姿态",
+      ));
+    }
+
+    // Rebase the same logical attempt with its locally resolved payload before
+    // RobotView reserves the exact generation guarded below.
+    if (!isCurrent()) return "stale";
+    attempt = beginR2rCalibrationBootstrapAttempt({
+      ...attempt.identity,
+      resolvedTargetPayload: targetPayload,
+      targetViewGeneration: null,
+    });
+    const targetLoadAttempt = startRobotViewLoad(r2rTgt, targetPayload);
+    targetLoadGeneration = targetLoadAttempt.generation;
+    if (!isCurrent()) return "stale";
+    attempt = beginR2rCalibrationBootstrapAttempt({
+      ...attempt.identity,
+      targetViewGeneration: targetLoadGeneration,
+    });
+    if (!isCurrent()) return "stale";
+
+    let targetLoadResult: AsyncStageViewLoadResult;
+    try {
+      targetLoadResult = await targetLoadAttempt.completion;
+    } catch (error) {
+      if (!isCurrent()) return "stale";
+      const rolledBack = rollbackR2rCalibrationBootstrap(
+        attempt,
+        error,
+        targetGroundOffset,
+        calibrationResourcesOwned,
+        { targetViewLost: true },
+      );
+      return rolledBack ? "failed" : "stale";
+    }
+    if (targetLoadResult === "stale" || !isCurrent()) return "stale";
+    if (!r2rCalibrationResourcesOwned) {
+      r2rCalibrationRestoreGroundOffset = r2rTgt.groundOffset;
+    }
+    targetGroundOffset = (
+      r2rCalibrationRestoreGroundOffset ?? r2rTgt.groundOffset
+    );
+    r2rCalibrationResourcesOwned = true;
+    calibrationResourcesOwned = true;
+
+    // Enter calibration only after the target renderer generation commits.
+    r2r.targetPayload = targetPayload;
+    if (!isCurrent()) return "stale";
+    switchInspectorPanel("r2r");
+    if (!isCurrent()) return "stale";
+    if (!r2r.active) r2rEnterPanel();
+    if (!isCurrent()) return "stale";
+    r2rCalibrationFkPreview.start();
+    if (!isCurrent()) return "stale";
+
+    const enteringFresh = !r2r.calibrating && r2r.calibOrbitSaved === null;
+    if (enteringFresh) {
+      r2r.calibOrbitSaved = {
+        minDistance: orbit.minDistance,
+        maxDistance: orbit.maxDistance,
+        zoomSpeed: orbit.zoomSpeed,
+      };
+    }
+    // Status may have started while this bootstrap awaited its session/View.
+    // Entering calibration terminalizes that receipt before active is visible.
+    r2rCalibrationStatusAttempts.invalidate();
+    r2r.calibrating = true;
+    r2r.calibNeedsCameraFocus = true;
+    orbit.zoomSpeed = 0.022;
+    applyCalibOrbitLimits();
+    if (!isCurrent()) return "stale";
+    updateR2rCalibBanner();
+    if (!isCurrent()) return "stale";
+    document.getElementById("calib-banner")?.classList.remove("hidden");
+    if (!isCurrent()) return "stale";
+    r2rSetCalChip(runtimeText("Calibrating…", "标定中…"), "warn");
+    if (!isCurrent()) return "stale";
+    const retargetButton = document.getElementById("r2r-retarget-btn") as HTMLButtonElement | null;
+    if (retargetButton) retargetButton.disabled = true;
+    if (!isCurrent()) return "stale";
+    publishR2rWorkflowState();
+    if (!isCurrent()) return "stale";
+
+    r2r.calibLimits = session.joint_limits ?? session.limits ?? [];
+    r2rTgt.groundOffset = session.ground_offset_z ?? r2rTgt.groundOffset;
+    refSkel.load(reference);
+    if (!isCurrent()) return "stale";
+    refSkel.configureMappings(targetPayload.ik_map ?? {});
+    if (!isCurrent()) return "stale";
+    const initialQ = { ...(session.joint_q || {}) };
+    r2r.calibHasSaved = !!session.has_saved_calibration;
+    r2r.calibBaselineQ = r2r.calibHasSaved ? { ...initialQ } : null;
+    r2r.calibDraftQ = { ...initialQ };
+    calibrationEditorUi.r2r.comparison = "current";
+    const editor = document.getElementById("r2r-calib-edit");
+    if (!editor) throw new Error("R2R calibration editor is unavailable");
+    editor.style.display = "block";
+    if (!isCurrent()) return "stale";
+    r2rApplyStage();
+    if (!isCurrent()) return "stale";
+    calibManip.start(r2r.calibLimits, r2rCalibCtx());
+    if (!isCurrent()) return "stale";
+    if (!r2rBuildSliders(initialQ, r2r.calibLimits, isCurrent)) return "stale";
+    if (!isCurrent()) return "stale";
+    applyCalibrationVisualization("r2r");
+    if (!isCurrent()) return "stale";
+    editor.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    if (!isCurrent()) return "stale";
+    r2rFocus(r2rTgt);
+    if (!isCurrent()) return "stale";
+    toast(auto
+      ? runtimeText(
+        "The target robot is not calibrated. Calibration mode opened automatically; drag joints or use the right-side sliders.",
+        "目标机器人尚未标定：已自动进入标定模式（点击关节拖动或右侧滑块）",
+      )
+      : runtimeText(
+        "Calibration started. Align the target robot to the blue source reference pose.",
+        "已进入标定：把目标机器人对齐到蓝色源参考姿态",
+      ));
+    if (!isCurrent()) return "stale";
+    return finishR2rCalibrationBootstrapAttempt(attempt)
+      ? "entered"
+      : "stale";
+  } catch (error) {
+    if (!isCurrent()) return "stale";
+    return rollbackR2rCalibrationBootstrap(
+      attempt,
+      error,
+      targetGroundOffset,
+      calibrationResourcesOwned,
+    )
+      ? "failed"
+      : "stale";
+  }
 }
 
 function r2rExitCalib(
   { publishStageDisplay = true }: R2rStageApplyOptions = {},
 ): void {
+  invalidateR2rCalibrationAttempts();
+  const orbitSnapshot = r2r.calibOrbitSaved;
+  const targetGroundOffset = r2rCalibrationRestoreGroundOffset;
   r2rCalibrationFkPreview.stop();
   r2r.calibrating = false;
   r2r.calibNeedsCameraFocus = false;
-  if (r2r.calibOrbitSaved) {
-    orbit.minDistance = r2r.calibOrbitSaved.minDistance;
-    orbit.maxDistance = r2r.calibOrbitSaved.maxDistance;
-    orbit.zoomSpeed = r2r.calibOrbitSaved.zoomSpeed ?? orbit.zoomSpeed;
-    r2r.calibOrbitSaved = null;
-  }
-  calibManip.stop();
-  r2rTgt.setOpacity(1);
+  r2r.calibQ = {};
   r2r.calibRows = {};
+  r2r.calibLimits = [];
   r2r.calibBaselineQ = null;
   r2r.calibDraftQ = null;
   r2r.calibHasSaved = false;
   calibrationEditorUi.r2r.comparison = "current";
-  document.getElementById("r2r-calib-edit").style.display = "none";
-  document.getElementById("calib-banner")?.classList.add("hidden");
-  refSkel.clear();
-  refSkel.group.visible = false;
-  r2rApplyStage({ publishStageDisplay });
-  publishR2rWorkflowState();
-  emitCalibrationEditorState("r2r");
+
+  if (orbitSnapshot) {
+    runBestEffortCleanup("R2R calibration exit: orbit restore failed", () => {
+      orbit.minDistance = orbitSnapshot.minDistance;
+      orbit.maxDistance = orbitSnapshot.maxDistance;
+      orbit.zoomSpeed = orbitSnapshot.zoomSpeed;
+    });
+  }
+  runBestEffortCleanup("R2R calibration exit: manipulator cleanup failed", () => calibManip.stop());
+  runBestEffortCleanup("R2R calibration exit: target opacity restore failed", () => r2rTgt.setOpacity(1));
+  if (targetGroundOffset !== null) {
+    runBestEffortCleanup("R2R calibration exit: target ground offset restore failed", () => {
+      r2rTgt.groundOffset = targetGroundOffset;
+    });
+    runBestEffortCleanup("R2R calibration exit: target pose restore failed", () => {
+      if (r2rTgt.trajectory) r2rTgt.setFrame(0);
+      else r2rTgt.applyStatic();
+    });
+  }
+  runBestEffortCleanup("R2R calibration exit: editor cleanup failed", () => {
+    const editor = document.getElementById("r2r-calib-edit");
+    if (editor) editor.style.display = "none";
+    document.getElementById("r2r-calib-sliders")?.replaceChildren();
+    document.getElementById("calib-banner")?.classList.add("hidden");
+  });
+  runBestEffortCleanup("R2R calibration exit: reference cleanup failed", () => {
+    refSkel.clear();
+    refSkel.group.visible = false;
+  });
+  runBestEffortCleanup(
+    "R2R calibration exit: Stage restore failed",
+    () => r2rApplyStage({ publishStageDisplay }),
+  );
+  runBestEffortCleanup("R2R calibration exit: workflow publication failed", () => {
+    publishR2rWorkflowState();
+    emitCalibrationEditorState("r2r");
+  });
+  r2r.calibOrbitSaved = null;
+  r2rCalibrationResourcesOwned = false;
+  r2rCalibrationRestoreGroundOffset = null;
+}
+
+type R2rEnsureCalibrationResult = R2rCalibrationBootstrapResult | "ready";
+
+async function r2rEnsureCalibration(
+  { auto = true }: { auto?: boolean } = {},
+): Promise<R2rEnsureCalibrationResult> {
+  const statusResult = await r2rUpdateRetargetBtn();
+  if (statusResult.kind === "stale") return "stale";
+  const receipt = statusResult.receipt;
+  if (!receipt) {
+    return r2r.calibrating || r2rCalibrationBootstrapIsPending()
+      ? "entered"
+      : "failed";
+  }
+  // A bootstrap can enter after the producer's final guard but before this
+  // continuation. Active calibration always wins and retarget stays closed.
+  if (r2r.calibrating || r2rCalibrationBootstrapIsPending()) return "entered";
+  if (!r2rCalibrationStatusAttempts.isCurrent(receipt.attempt)) return "stale";
+  if (receipt.calibrated) {
+    return r2rCalibrationStatusAttempts.finish(receipt.attempt)
+      ? "ready"
+      : "stale";
+  }
+  // r2rStartCalib invalidates the receipt synchronously before its first await,
+  // closing the gap where exit/replacement could otherwise revive old status.
+  return r2rStartCalib({ auto });
 }
 
 async function r2rMaybeAutoCalib(): Promise<void> {
   publishR2rWorkflowState();
   if (!r2r.targetName || !r2r.sourceName || r2r.calibrating) return;
-  await r2rUpdateRetargetBtn();
-  if (!r2r.calibrated) await r2rStartCalib({ auto: true });
+  await r2rEnsureCalibration({ auto: true });
 }
 
 async function r2rSaveCalib(): Promise<void> {
@@ -8752,9 +9318,11 @@ async function r2rEnsureSourceLoaded(): Promise<boolean> {
     ), true);
     return false;
   }
+  prepareR2rRobotReplacement();
   toast(runtimeText("Loading source robot automatically…", "自动加载源机器人…"));
   try {
     const sourcePayload = await API.post("/api/robot/select", { name });
+    prepareR2rRobotReplacement();
     const attempt = startRobotViewLoad(r2rSrc, sourcePayload);
     let loadResult: AsyncStageViewLoadResult;
     try {
@@ -8768,6 +9336,7 @@ async function r2rEnsureSourceLoaded(): Promise<boolean> {
       loadResult === "stale"
       || !r2rSrc.isLoadGenerationCurrent(attempt.generation)
     ) return false;
+    prepareR2rRobotReplacement();
     r2r.sourcePayload = sourcePayload;
     r2r.sourceName = name;
     r2r.calibrated = false;
@@ -8864,6 +9433,9 @@ async function r2rApplySourceTrajectoryResult(
   const bar = progress?.querySelector<HTMLElement>(".bar");
   const sourceStem = data.name || fallbackStem || "source";
 
+  // Replacing the source View changes calibration identity even when the robot
+  // name stays the same, so pending bootstrap/status continuations lose ownership.
+  prepareR2rRobotReplacement();
   const attempt = startRobotViewLoad(r2rSrc, sourcePayload);
   let loadResult: AsyncStageViewLoadResult;
   try {
@@ -8878,6 +9450,7 @@ async function r2rApplySourceTrajectoryResult(
     || !r2rSrc.isLoadGenerationCurrent(attempt.generation)
   ) return "stale";
 
+  prepareR2rRobotReplacement();
   r2r.sourceToken = data.token;
   r2rTrajectoryState = "idle";
   r2r.sourceStem = sourceStem;
@@ -9020,15 +9593,8 @@ async function r2rRunRetarget(): Promise<void> {
     ), true);
     return;
   }
-  await r2rUpdateRetargetBtn();
-  if (!r2r.calibrated) {
-    toast(runtimeText(
-      "The target robot is not calibrated for this source robot. Complete calibration first.",
-      "目标机器人尚未针对此源机器人标定，请先完成标定",
-    ), true);
-    await r2rStartCalib({ auto: true });
-    return;
-  }
+  const calibrationResult = await r2rEnsureCalibration({ auto: true });
+  if (calibrationResult !== "ready") return;
   const prog = document.getElementById("r2r-progress");
   const bar = prog.querySelector<HTMLElement>(".bar");
   const status = document.getElementById("r2r-status");
@@ -9064,6 +9630,7 @@ async function r2rRunRetarget(): Promise<void> {
       targetPayload = await API.post("/api/robot/select", { name: r2r.targetName });
     }
     if (!targetPayload) throw new Error("Target robot payload is missing");
+    prepareR2rRobotReplacement();
     const attempt = startRobotViewLoad(r2rTgt, targetPayload);
     let targetLoadResult: AsyncStageViewLoadResult;
     try {
@@ -9078,6 +9645,7 @@ async function r2rRunRetarget(): Promise<void> {
       targetLoadResult === "stale"
       || !r2rTgt.isLoadGenerationCurrent(attempt.generation)
     ) return;
+    prepareR2rRobotReplacement();
     r2r.targetPayload = targetPayload;
     prog.classList.remove("indet");
     bar.style.width = "100%";

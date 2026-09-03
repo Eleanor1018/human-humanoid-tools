@@ -249,6 +249,332 @@ describe("legacy runtime ownership boundaries", () => {
     expect(runtimeSource).not.toContain("await exitCalibrationMode()");
   });
 
+  it("terminalizes R2R calibration status and bootstrap under one pair identity", () => {
+    const definitions = runtimeSource.slice(
+      runtimeSource.indexOf("interface R2rCalibrationIdentity"),
+      runtimeSource.indexOf("function calibrationRows"),
+    );
+    for (const identityCheck of [
+      "r2r.sourceName === identity.sourceName",
+      "r2r.sourcePayload === identity.sourcePayload",
+      "r2r.sourceToken === identity.sourceToken",
+      "r2rSrc.isLoadGenerationCurrent(identity.sourceViewGeneration)",
+      "r2r.targetName === identity.targetName",
+      "r2r.targetPayload === identity.targetPayload",
+      "r2r.targetPayload === identity.resolvedTargetPayload",
+      "r2rTgt.isLoadGenerationCurrent(identity.targetViewGeneration)",
+    ]) {
+      expect(definitions).toContain(identityCheck);
+    }
+    expect(definitions).toContain("sourceViewGeneration: r2rSrc.loadGeneration");
+    expect(definitions).toContain("targetViewGeneration: r2rTgt.loadGeneration");
+    expect(definitions).toContain("let r2rCalibrationResourcesOwned = false");
+    expect(definitions).toContain("let r2rCalibrationRestoreGroundOffset: number | null = null");
+    expect(definitions).toContain("let r2rCalibrationPendingAttempt:");
+    expect(definitions).toContain("function beginR2rCalibrationBootstrapAttempt(");
+    expect(definitions).toContain("r2rCalibrationPendingAttempt = attempt");
+    expect(definitions).toContain("function finishR2rCalibrationBootstrapAttempt(");
+    expect(definitions).toContain("if (r2rCalibrationPendingAttempt === attempt)");
+    expect(definitions).toContain("function r2rCalibrationBootstrapIsPending()");
+    expect(definitions).toContain("r2rCalibrationBootstrapAttempts.isCurrent(attempt)");
+
+    const status = runtimeSource.slice(
+      runtimeSource.indexOf("async function r2rUpdateRetargetBtn"),
+      runtimeSource.indexOf("// --------------------------------------------------------------- robot pickers"),
+    );
+    const statusRequest = status.indexOf("const st = await API.get(");
+    const statusGuard = status.indexOf("if (!statusIsCurrent())", statusRequest);
+    const statusCommit = status.indexOf("r2r.calibrated = calibrated", statusGuard);
+    expect(statusRequest).toBeGreaterThanOrEqual(0);
+    expect(statusGuard).toBeGreaterThan(statusRequest);
+    expect(statusCommit).toBeGreaterThan(statusGuard);
+    expect(status).toContain("!r2r.calibrating");
+    const producerPendingGate = status.indexOf(
+      "r2r.calibrating || r2rCalibrationBootstrapIsPending()",
+    );
+    expect(producerPendingGate).toBeGreaterThanOrEqual(0);
+    expect(producerPendingGate).toBeLessThan(statusRequest);
+    expect(status).toContain("&& !r2rCalibrationBootstrapIsPending()");
+    expect(status).toContain("identity.targetName");
+    expect(status).toContain("identity.sourceName");
+    expect(status).toContain("receipt: { attempt: statusAttempt, calibrated }");
+    // The caller consumes this still-live receipt; finishing here would reopen
+    // a microtask gap where an exit or replacement could auto-start old state.
+    expect(status).not.toContain("finish(statusAttempt)");
+    for (const effect of [
+      "r2rSetCalChip(",
+      "r2rRenderBasket()",
+      "publishR2rWorkflowState()",
+    ]) {
+      const effectAt = status.indexOf(effect, statusCommit);
+      const guardAt = status.indexOf("if (!statusIsCurrent())", effectAt);
+      expect(effectAt, `status effect: ${effect}`).toBeGreaterThanOrEqual(0);
+      expect(guardAt, `status guard: ${effect}`).toBeGreaterThan(effectAt);
+    }
+
+    const ensure = runtimeSource.slice(
+      runtimeSource.indexOf("async function r2rEnsureCalibration"),
+      runtimeSource.indexOf("async function r2rMaybeAutoCalib"),
+    );
+    const statusAwait = ensure.indexOf("await r2rUpdateRetargetBtn()");
+    const activeConsumerGuard = ensure.indexOf(
+      'if (r2r.calibrating || r2rCalibrationBootstrapIsPending()) return "entered"',
+      statusAwait,
+    );
+    const receiptCheck = ensure.indexOf(
+      "r2rCalibrationStatusAttempts.isCurrent(receipt.attempt)",
+      statusAwait,
+    );
+    const bootstrapHandoff = ensure.indexOf("return r2rStartCalib({ auto })", receiptCheck);
+    expect(statusAwait).toBeGreaterThanOrEqual(0);
+    expect(activeConsumerGuard).toBeGreaterThan(statusAwait);
+    expect(receiptCheck).toBeGreaterThan(activeConsumerGuard);
+    expect(bootstrapHandoff).toBeGreaterThan(receiptCheck);
+
+    const entry = runtimeSource.slice(
+      runtimeSource.indexOf("async function r2rStartCalib"),
+      runtimeSource.indexOf("function r2rExitCalib"),
+    );
+    const missingPair = entry.slice(
+      entry.indexOf("if (!capturedIdentity)"),
+      entry.indexOf("let attempt ="),
+    );
+    expect(missingPair).not.toContain("r2rCalibrationBootstrapAttempts.invalidate()");
+    expect(missingPair).not.toContain("invalidateR2rCalibrationBootstrapAttempt()");
+    const firstBegin = entry.indexOf(
+      "beginR2rCalibrationBootstrapAttempt(capturedIdentity)",
+    );
+    const sessionAwait = entry.indexOf(
+      'await API.post("/api/r2r/calibration/session"',
+      firstBegin,
+    );
+    const sessionGuard = entry.indexOf(
+      'if (!isCurrent()) return "stale"',
+      sessionAwait,
+    );
+    const selectAwait = entry.indexOf(
+      'targetPayload = await API.post("/api/robot/select"',
+      sessionGuard,
+    );
+    const selectGuard = entry.indexOf(
+      'if (!isCurrent()) return "stale"',
+      selectAwait,
+    );
+    expect(firstBegin).toBeGreaterThanOrEqual(0);
+    expect(sessionAwait).toBeGreaterThan(firstBegin);
+    expect(sessionGuard).toBeGreaterThan(sessionAwait);
+    expect(selectAwait).toBeGreaterThan(sessionGuard);
+    expect(selectGuard).toBeGreaterThan(selectAwait);
+    expect(entry).toContain("target: attempt.identity.targetName");
+    expect(entry).toContain("source: attempt.identity.sourceName");
+
+    const wildcardBegin = entry.indexOf("targetViewGeneration: null", selectGuard);
+    const targetLoadStart = entry.indexOf(
+      "const targetLoadAttempt = startRobotViewLoad(r2rTgt, targetPayload)",
+      wildcardBegin,
+    );
+    const actualGeneration = entry.indexOf(
+      "targetLoadGeneration = targetLoadAttempt.generation",
+      targetLoadStart,
+    );
+    const postStartGuard = entry.indexOf(
+      'if (!isCurrent()) return "stale"',
+      actualGeneration,
+    );
+    const exactBegin = entry.indexOf(
+      "targetViewGeneration: targetLoadGeneration",
+      postStartGuard,
+    );
+    const targetLoadAwait = entry.indexOf(
+      "await targetLoadAttempt.completion",
+      exactBegin,
+    );
+    expect(wildcardBegin).toBeGreaterThan(selectGuard);
+    expect(targetLoadStart).toBeGreaterThan(wildcardBegin);
+    expect(actualGeneration).toBeGreaterThan(targetLoadStart);
+    expect(postStartGuard).toBeGreaterThan(actualGeneration);
+    expect(exactBegin).toBeGreaterThan(postStartGuard);
+    expect(targetLoadAwait).toBeGreaterThan(exactBegin);
+    expect(entry.slice(wildcardBegin, exactBegin)).not.toContain("await ");
+    const targetLoadCatch = entry.indexOf("} catch (error) {", targetLoadAwait);
+    const targetLossRollback = entry.indexOf("{ targetViewLost: true }", targetLoadCatch);
+    expect(targetLossRollback).toBeGreaterThan(targetLoadCatch);
+    expect(entry).not.toContain("clearR2rTargetAfterViewLoss(");
+    expect(entry).toContain("let calibrationResourcesOwned = r2rCalibrationResourcesOwned");
+    expect(entry).toContain("r2rCalibrationRestoreGroundOffset ?? r2rTgt.groundOffset");
+    expect(entry).toContain("r2rCalibrationResourcesOwned = true");
+    const activeTransition = entry.indexOf("r2r.calibrating = true");
+    const transitionStatusInvalidation = entry.lastIndexOf(
+      "r2rCalibrationStatusAttempts.invalidate()",
+      activeTransition,
+    );
+    expect(transitionStatusInvalidation).toBeGreaterThan(
+      entry.indexOf("const enteringFresh"),
+    );
+    expect(transitionStatusInvalidation).toBeLessThan(activeTransition);
+
+    const guardedEffects = [
+      "r2rCalibrationFkPreview.stop()",
+      'switchInspectorPanel("r2r")',
+      "r2rEnterPanel()",
+      "r2rCalibrationFkPreview.start()",
+      "applyCalibOrbitLimits()",
+      "updateR2rCalibBanner()",
+      'classList.remove("hidden")',
+      "r2rSetCalChip(",
+      "publishR2rWorkflowState()",
+      "refSkel.load(reference)",
+      "refSkel.configureMappings(",
+      'editor.style.display = "block"',
+      "r2rApplyStage()",
+      "calibManip.start(",
+      "applyCalibrationVisualization(",
+      "editor.scrollIntoView(",
+      "r2rFocus(r2rTgt)",
+      "toast(auto",
+    ];
+    for (const effect of guardedEffects) {
+      const effectAt = entry.indexOf(effect);
+      const guardAt = entry.indexOf('if (!isCurrent()) return "stale"', effectAt);
+      expect(effectAt, `bootstrap effect: ${effect}`).toBeGreaterThanOrEqual(0);
+      expect(guardAt, `bootstrap guard: ${effect}`).toBeGreaterThan(effectAt);
+    }
+    expect(entry).toContain(
+      "if (!r2rBuildSliders(initialQ, r2r.calibLimits, isCurrent)) return \"stale\"",
+    );
+
+    const sliders = runtimeSource.slice(
+      runtimeSource.indexOf("function r2rBuildSliders"),
+      runtimeSource.indexOf("function rollbackR2rCalibrationBootstrap"),
+    );
+    expect(sliders).toContain("isCurrent: () => boolean");
+    expect(sliders).toContain("box.replaceChildren()");
+    expect(sliders.match(/if \(!isCurrent\(\)\) return false/g)?.length ?? 0)
+      .toBeGreaterThanOrEqual(6);
+    expect(sliders.indexOf("if (!isCurrent()) return false", sliders.indexOf("calibManip.updateHudValue")))
+      .toBeGreaterThan(sliders.indexOf("calibManip.updateHudValue"));
+
+    const rollback = runtimeSource.slice(
+      runtimeSource.indexOf("function rollbackR2rCalibrationBootstrap"),
+      runtimeSource.indexOf("async function r2rStartCalib"),
+    );
+    const withdrawal = rollback.slice(
+      rollback.indexOf("if (targetViewLost)"),
+      rollback.indexOf("// Canonical editor aliases"),
+    );
+    expect(withdrawal.indexOf("beginR2rCalibrationBootstrapAttempt({"))
+      .toBeLessThan(withdrawal.indexOf("r2r.targetName = null"));
+    expect(withdrawal).toContain("targetCapabilityWithdrawn: true");
+    expect(rollback).toContain(
+      "r2r.calibrated = targetViewLost ? false : attempt.identity.calibratedBefore",
+    );
+    expect(rollback).toContain("if (!r2rCalibrationBootstrapAttempts.isCurrent(attempt)) return false");
+    expect(rollback).toContain("runBestEffortCleanup(context, action)");
+    const rollbackFinish = rollback.indexOf(
+      "finishR2rCalibrationBootstrapAttempt(attempt)",
+    );
+    expect(rollbackFinish).toBeGreaterThan(rollback.indexOf("toast(errorMessage(error), true)"));
+    expect(rollback.indexOf("r2r.calibOrbitSaved = null")).toBeGreaterThan(rollbackFinish);
+    expect(rollback.indexOf("r2rCalibrationResourcesOwned = false")).toBeGreaterThan(rollbackFinish);
+    expect(rollback.indexOf("r2rCalibrationRestoreGroundOffset = null")).toBeGreaterThan(rollbackFinish);
+    expect(rollback).not.toContain("clearR2rTargetAfterViewLoss(");
+    expect(rollback).not.toContain("setR2rRobotStatus(");
+    for (const guardedCleanup of [
+      "reference visibility cleanup failed",
+      "result diagnostics cleanup failed",
+      "export card cleanup failed",
+      "target status cleanup failed",
+      "target toggle cleanup failed",
+      "editor publication failed",
+    ]) {
+      expect(rollback).toContain(guardedCleanup);
+    }
+
+    const exit = runtimeSource.slice(
+      runtimeSource.indexOf("function r2rExitCalib"),
+      runtimeSource.indexOf("type R2rEnsureCalibrationResult"),
+    );
+    expect(exit.indexOf("invalidateR2rCalibrationAttempts()"))
+      .toBeLessThan(exit.indexOf("r2rCalibrationFkPreview.stop()"));
+    expect(exit.indexOf("r2rCalibrationFkPreview.stop()"))
+      .toBeLessThan(exit.indexOf("r2r.calibrating = false"));
+    const leave = runtimeSource.slice(
+      runtimeSource.indexOf("function r2rLeavePanel"),
+      runtimeSource.indexOf("function r2rSetCalChip"),
+    );
+    expect(leave.indexOf("invalidateR2rCalibrationAttempts()"))
+      .toBeLessThan(leave.indexOf("r2r.active = false"));
+    expect(leave).toContain("|| r2rCalibrationResourcesOwned");
+    expect(leave).toContain("|| r2r.calibOrbitSaved !== null");
+    expect(leave.indexOf("r2r.active = false"))
+      .toBeLessThan(leave.indexOf("r2rExitCalib({ publishStageDisplay: false })"));
+    const replacement = runtimeSource.slice(
+      runtimeSource.indexOf("function prepareR2rRobotReplacement"),
+      runtimeSource.indexOf("function clearR2rCalibrationAfterViewLoss"),
+    );
+    expect(replacement.indexOf("invalidateR2rCalibrationAttempts()"))
+      .toBeLessThan(replacement.indexOf("r2rExitCalib()"));
+    expect(replacement).toContain("r2rCalibrationResourcesOwned");
+    for (const functionName of [
+      "clearR2rCalibrationAfterViewLoss",
+      "clearR2rSourceAfterViewLoss",
+      "clearR2rTargetAfterViewLoss",
+    ]) {
+      const start = runtimeSource.indexOf(`function ${functionName}`);
+      const body = runtimeSource.slice(start, runtimeSource.indexOf("\n}", start) + 2);
+      expect(body).toContain("invalidateR2rCalibrationAttempts()");
+    }
+
+    const replacementLoads = [
+      {
+        name: "selected source",
+        source: runtimeSource.slice(
+          runtimeSource.indexOf("async function r2rLoadSourceRobot"),
+          runtimeSource.indexOf("async function r2rLoadTargetRobot"),
+        ),
+        start: "const attempt = startRobotViewLoad(r2rSrc, sourcePayload)",
+        commit: "r2r.sourcePayload = sourcePayload",
+      },
+      {
+        name: "automatic source",
+        source: runtimeSource.slice(
+          runtimeSource.indexOf("async function r2rEnsureSourceLoaded"),
+          runtimeSource.indexOf("async function r2rUploadTraj"),
+        ),
+        start: "const attempt = startRobotViewLoad(r2rSrc, sourcePayload)",
+        commit: "r2r.sourcePayload = sourcePayload",
+      },
+      {
+        name: "trajectory source",
+        source: runtimeSource.slice(
+          runtimeSource.indexOf("async function r2rApplySourceTrajectoryResult"),
+          runtimeSource.indexOf("async function loadR2rLibraryEntry"),
+        ),
+        start: "const attempt = startRobotViewLoad(r2rSrc, sourcePayload)",
+        commit: "r2r.sourceToken = data.token",
+      },
+      {
+        name: "retarget target",
+        source: runtimeSource.slice(
+          runtimeSource.indexOf("async function r2rRunRetarget"),
+          runtimeSource.indexOf("// --------------------------------------------------------------- batch"),
+        ),
+        start: "const attempt = startRobotViewLoad(r2rTgt, targetPayload)",
+        commit: "r2r.targetPayload = targetPayload",
+      },
+    ] as const;
+    for (const load of replacementLoads) {
+      const start = load.source.indexOf(load.start);
+      const before = load.source.lastIndexOf("prepareR2rRobotReplacement()", start);
+      const commit = load.source.indexOf(load.commit, start);
+      const after = load.source.lastIndexOf("prepareR2rRobotReplacement()", commit);
+      expect(before, `${load.name}: pre-load invalidation`).toBeGreaterThanOrEqual(0);
+      expect(start, `${load.name}: view load`).toBeGreaterThan(before);
+      expect(after, `${load.name}: post-load invalidation`).toBeGreaterThan(start);
+      expect(commit, `${load.name}: commit`).toBeGreaterThan(after);
+    }
+  });
+
   it("invalidates async environment loads and disposes stale GLTF scenes", () => {
     const terrainBuilder = runtimeSource.slice(
       runtimeSource.indexOf("function buildTerrainMesh"),
@@ -1041,11 +1367,10 @@ describe("legacy runtime ownership boundaries", () => {
           runtimeSource.indexOf("async function r2rStartCalib"),
           runtimeSource.indexOf("function r2rExitCalib"),
         ),
-        start: "const attempt = startRobotViewLoad(r2rTgt, targetPayload)",
-        load: "targetLoadResult = await attempt.completion",
+        start: "const targetLoadAttempt = startRobotViewLoad(r2rTgt, targetPayload)",
+        load: "targetLoadResult = await targetLoadAttempt.completion",
         staleCheck: 'targetLoadResult === "stale"',
-        generationCheck:
-          "!r2rTgt.isLoadGenerationCurrent(attempt.generation)",
+        generationCheck: "!isCurrent()",
         commit: "r2rTgt.groundOffset =",
       },
       {
@@ -1211,9 +1536,8 @@ describe("legacy runtime ownership boundaries", () => {
           runtimeSource.indexOf("async function r2rStartCalib"),
           runtimeSource.indexOf("function r2rExitCalib"),
         ),
-        generationGuard:
-          "if (!r2rTgt.isLoadGenerationCurrent(attempt.generation)) return",
-        cleanup: 'clearR2rTargetAfterViewLoss("R2R calibration target load")',
+        generationGuard: 'if (!isCurrent()) return "stale"',
+        cleanup: "rollbackR2rCalibrationBootstrap(",
       },
       {
         name: "R2R automatic source",
