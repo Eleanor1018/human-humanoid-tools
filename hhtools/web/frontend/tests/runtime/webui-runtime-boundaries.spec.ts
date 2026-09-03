@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import asyncFrameTaskSource from "../../src/runtime/stage/coalesced-async-frame-task.ts?raw";
 import runtimeSource from "../../src/runtime/webui-runtime.ts?raw";
 import commandRegistrySource from "../../src/runtime/command-registry.ts?raw";
 import robotViewSource from "../../src/runtime/stage/robot-view.ts?raw";
@@ -14,6 +15,92 @@ describe("legacy runtime ownership boundaries", () => {
     expect(robotViewSource).not.toContain("world.add(");
     expect(runtimeSource.match(/world\.add\((?:robot|r2rSrc|r2rTgt)\.group\)/g))
       .toHaveLength(3);
+  });
+
+  it("routes both calibration FK loops through terminal session owners", () => {
+    expect(runtimeSource).toContain(
+      'import { CoalescedAsyncFrameTask } from "./stage/coalesced-async-frame-task"',
+    );
+    for (const legacyAlias of [
+      "calibFkRaf",
+      "calibFkInFlight",
+      "calibFkQueued",
+      "_runCalibFk",
+      "_r2rFkRaf",
+      "_r2rFkInFlight",
+      "_r2rFkQueued",
+      "_r2rRunFk",
+    ]) {
+      expect(runtimeSource).not.toContain(legacyAlias);
+    }
+
+    const h2rEntry = runtimeSource.slice(
+      runtimeSource.indexOf("async function enterCalibrationMode"),
+      runtimeSource.indexOf("function updateCalibRestoreButton"),
+    );
+    expect(h2rEntry.indexOf("h2rCalibrationFkPreview.start()"))
+      .toBeLessThan(h2rEntry.indexOf("state.calibrationMode = true"));
+    expect(h2rEntry.lastIndexOf("h2rCalibrationFkPreview.stop()"))
+      .toBeLessThan(h2rEntry.lastIndexOf("state.calibrationMode = false"));
+
+    const h2rPreview = runtimeSource.slice(
+      runtimeSource.indexOf("interface H2rCalibrationFkResult"),
+      runtimeSource.indexOf("async function refreshRetargetPanel"),
+    );
+    expect(h2rPreview).toContain("new CoalescedAsyncFrameTask<");
+    expect(h2rPreview).toContain("h2rCalibrationFkPreview.flush()");
+    expect(h2rPreview).toContain("h2rCalibrationFkPreview.schedule()");
+    expect(h2rPreview).toContain("state.robot !== result.activeRobot");
+    expect(h2rPreview).toContain("state.motion !== result.activeMotion");
+    expect(h2rPreview).toContain("state.reference !== result.reference");
+
+    const h2rExit = runtimeSource.slice(
+      runtimeSource.indexOf("async function exitCalibrationMode"),
+      runtimeSource.indexOf("function setCalibJointValue"),
+    );
+    expect(h2rExit.indexOf("h2rCalibrationFkPreview.stop()"))
+      .toBeLessThan(h2rExit.indexOf("state.calibrationMode = false"));
+    const h2rLoss = runtimeSource.slice(
+      runtimeSource.indexOf("function clearH2rRobotAfterViewLoss"),
+      runtimeSource.indexOf("async function refreshScaledPreview"),
+    );
+    expect(h2rLoss.indexOf("h2rCalibrationFkPreview.stop()"))
+      .toBeLessThan(h2rLoss.indexOf("state.robot = null"));
+
+    const r2rPreview = runtimeSource.slice(
+      runtimeSource.indexOf("interface R2rCalibrationFkResult"),
+      runtimeSource.indexOf("function r2rSetCalibJointValue"),
+    );
+    expect(r2rPreview).toContain("new CoalescedAsyncFrameTask<");
+    expect(r2rPreview).toContain("r2rCalibrationFkPreview.flush()");
+    expect(r2rPreview).toContain("r2rCalibrationFkPreview.schedule()");
+    expect(r2rPreview).toContain("r2r.sourceName !== result.sourceName");
+    expect(r2rPreview).toContain("r2r.sourcePayload !== result.sourcePayload");
+    expect(r2rPreview).toContain("r2r.targetName !== result.targetName");
+    expect(r2rPreview).toContain("r2r.targetPayload !== result.targetPayload");
+
+    const r2rEntry = runtimeSource.slice(
+      runtimeSource.indexOf("async function r2rStartCalib"),
+      runtimeSource.indexOf("function r2rExitCalib"),
+    );
+    expect(r2rEntry.indexOf("r2rCalibrationFkPreview.start()"))
+      .toBeLessThan(r2rEntry.indexOf("r2r.calibrating = true"));
+    const r2rExit = runtimeSource.slice(
+      runtimeSource.indexOf("function r2rExitCalib"),
+      runtimeSource.indexOf("async function r2rMaybeAutoCalib"),
+    );
+    expect(r2rExit.indexOf("r2rCalibrationFkPreview.stop()"))
+      .toBeLessThan(r2rExit.indexOf("r2r.calibrating = false"));
+    const r2rLoss = runtimeSource.slice(
+      runtimeSource.indexOf("function clearR2rCalibrationAfterViewLoss"),
+      runtimeSource.indexOf("function clearR2rDerivedTargetAfterViewLoss"),
+    );
+    expect(r2rLoss.indexOf("r2rCalibrationFkPreview.stop()"))
+      .toBeLessThan(r2rLoss.indexOf("r2r.calibrating = false"));
+
+    expect(asyncFrameTaskSource).not.toMatch(/\b(?:document|window)\b/);
+    expect(asyncFrameTaskSource).toContain("this.#session = null");
+    expect(asyncFrameTaskSource).toContain("if (!this.#isCurrent(session)) return");
   });
 
   it("invalidates async environment loads and disposes stale GLTF scenes", () => {

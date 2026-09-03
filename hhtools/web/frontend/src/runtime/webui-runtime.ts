@@ -168,6 +168,7 @@ import type {
 import { ThreeResourceDisposer } from "@/platform/graphics/common/three-resource-disposer";
 import type { AsyncStageViewLoadResult } from "./stage/async-stage-view-load-result";
 import { BakedMeshView } from "./stage/baked-mesh-view";
+import { CoalescedAsyncFrameTask } from "./stage/coalesced-async-frame-task";
 import {
   effectivePlaybackDuration,
   resolvePlaybackFrame,
@@ -2469,6 +2470,10 @@ function startRobotViewLoad(
  */
 function clearH2rRobotAfterViewLoss(context: string): void {
   const calibrationRestore = state.calibRestore;
+
+  // FK Promises cannot be cancelled, so withdraw their publication owner
+  // before any robot or calibration aliases are released.
+  h2rCalibrationFkPreview.stop();
 
   // If calibration teardown stopped part-way through, restore orbit ownership
   // before releasing its saved snapshot.
@@ -5492,6 +5497,7 @@ async function enterCalibrationMode(
 
   if (!state.calibrationMode) {
     state.calibRestore = _snapshotVis();
+    h2rCalibrationFkPreview.start();
   }
   state.calibrationMode = true;
   state.calibNeedsCameraFocus = true;
@@ -5520,6 +5526,7 @@ async function enterCalibrationMode(
       motion_token: state.motion?.token || null,
     });
   } catch (e) {
+    h2rCalibrationFkPreview.stop();
     state.calibrationMode = false;
     state.calibNeedsCameraFocus = false;
     if (state.calibOrbitSaved) {
@@ -5577,6 +5584,7 @@ function updateCalibRestoreButton(): void {
 }
 
 async function exitCalibrationMode(): Promise<void> {
+  h2rCalibrationFkPreview.stop();
   state.calibrationMode = false;
   state.calibNeedsCameraFocus = false;
   if (state.calibOrbitSaved) {
@@ -5729,60 +5737,66 @@ async function buildCalibSliders(
   previewCalibPose();
 }
 
-// Coalesce rapid slider/pointer edits to one FK request per animation frame. If
-// a request is already in flight, retain one follow-up that reads the latest q.
-let calibFkRaf = 0;
-let calibFkInFlight = false;
-let calibFkQueued = false;
+interface H2rCalibrationFkResult {
+  readonly activeRobot: RobotPayload;
+  readonly activeMotion: MotionPayload | null;
+  readonly reference: string;
+  readonly response: ApiPostResponse<"/api/robot/fk_preview">;
+}
+
+// One task session belongs to one active calibration lifetime. The owner keeps
+// late HTTP settlements outside any calibration session that replaces it.
+const h2rCalibrationFkPreview = new CoalescedAsyncFrameTask<
+  H2rCalibrationFkResult | null
+>({
+  scheduler: {
+    requestFrame: (callback) => requestAnimationFrame(callback),
+    cancelFrame: (handle) => cancelAnimationFrame(handle),
+  },
+  execute: async () => {
+    const activeRobot = state.robot;
+    const activeMotion = state.motion;
+    const reference = state.reference;
+    if (!activeRobot || !reference || !state.calibrationMode) return null;
+    const response = await API.post("/api/robot/fk_preview", {
+      robot: activeRobot.name,
+      joint_q: { ...state.calibQ },
+    });
+    return { activeRobot, activeMotion, reference, response };
+  },
+  commit: (result) => {
+    if (
+      !result
+      || !state.calibrationMode
+      || state.robot !== result.activeRobot
+      || state.motion !== result.activeMotion
+      || state.reference !== result.reference
+    ) return;
+
+    const { response } = result;
+    robot.applyCalibPose(response.link_transforms, response.ground_offset_z);
+    refSkel.updateOverlay(robot);
+    if (calibManip.active) {
+      calibManip.updateJointWorld(response.joint_world);
+    }
+    updateH2rCalibrationValidation();
+    if (state.calibNeedsCameraFocus) {
+      state.calibNeedsCameraFocus = false;
+      applyCalibOrbitLimits({ snapCamera: true });
+      focusRobotView({ resetOffset: true });
+    }
+  },
+  reportError: (error) => {
+    console.warn("calib FK preview", errorMessage(error));
+  },
+});
 
 function previewCalibPose(
   { live = false, flush = false }: CalibrationPreviewOptions = {},
 ): void {
   if (!state.robot || !state.calibrationMode) return;
-  if (flush) {
-    if (calibFkRaf) cancelAnimationFrame(calibFkRaf);
-    calibFkRaf = 0;
-    _runCalibFk();
-    return;
-  }
-  if (calibFkRaf) return;
-  calibFkRaf = requestAnimationFrame(() => {
-    calibFkRaf = 0;
-    _runCalibFk();
-  });
-}
-
-async function _runCalibFk(): Promise<void> {
-  const activeRobot = state.robot;
-  if (!activeRobot || !state.calibrationMode) return;
-  if (calibFkInFlight) {
-    calibFkQueued = true;
-    return;
-  }
-  calibFkInFlight = true;
-  calibFkQueued = false;
-  try {
-    const data = await API.post("/api/robot/fk_preview", {
-      robot: activeRobot.name,
-      joint_q: state.calibQ,
-    });
-    robot.applyCalibPose(data.link_transforms, data.ground_offset_z);
-    refSkel.updateOverlay(robot);
-    if (calibManip.active) {
-      calibManip.updateJointWorld(data.joint_world);
-    }
-    updateH2rCalibrationValidation();
-    if (state.calibrationMode && state.calibNeedsCameraFocus) {
-      state.calibNeedsCameraFocus = false;
-      applyCalibOrbitLimits({ snapCamera: true });
-      focusRobotView({ resetOffset: true });
-    }
-  } catch (e) {
-    console.warn("calib FK preview", errorMessage(e));
-  } finally {
-    calibFkInFlight = false;
-    if (calibFkQueued) previewCalibPose();
-  }
+  if (flush) h2rCalibrationFkPreview.flush();
+  else h2rCalibrationFkPreview.schedule();
 }
 
 /**
@@ -7909,6 +7923,9 @@ function syncR2rRobotSelects(kind: "source" | "target", name: string): void {
 
 /** Invalidate calibration aliases even when interactive teardown reports a warning. */
 function clearR2rCalibrationAfterViewLoss(context: string): void {
+  // Renderer-loss cleanup is a terminal calibration path even if the
+  // manipulator or later best-effort cleanup reports an error.
+  r2rCalibrationFkPreview.stop();
   if (r2r.calibOrbitSaved) {
     const saved = r2r.calibOrbitSaved;
     runBestEffortCleanup(`${context}: calibration orbit restore failed`, () => {
@@ -8116,9 +8133,58 @@ async function r2rLoadTargetRobot(name: string): Promise<void> {
 }
 
 // --------------------------------------------------------------- calibration
-let _r2rFkRaf = 0;
-let _r2rFkInFlight = false;
-let _r2rFkQueued = false;
+interface R2rCalibrationFkResult {
+  readonly sourceName: string;
+  readonly sourcePayload: RobotPayload | null;
+  readonly targetName: string;
+  readonly targetPayload: RobotPayload | null;
+  readonly response: ApiPostResponse<"/api/robot/fk_preview">;
+}
+
+const r2rCalibrationFkPreview = new CoalescedAsyncFrameTask<
+  R2rCalibrationFkResult | null
+>({
+  scheduler: {
+    requestFrame: (callback) => requestAnimationFrame(callback),
+    cancelFrame: (handle) => cancelAnimationFrame(handle),
+  },
+  execute: async () => {
+    const sourceName = r2r.sourceName;
+    const sourcePayload = r2r.sourcePayload;
+    const targetName = r2r.targetName;
+    const targetPayload = r2r.targetPayload;
+    if (!r2r.calibrating || !sourceName || !targetName) return null;
+    const response = await API.post("/api/robot/fk_preview", {
+      robot: targetName,
+      joint_q: { ...r2r.calibQ },
+    });
+    return { sourceName, sourcePayload, targetName, targetPayload, response };
+  },
+  commit: (result) => {
+    if (
+      !result
+      || !r2r.calibrating
+      || r2r.sourceName !== result.sourceName
+      || r2r.sourcePayload !== result.sourcePayload
+      || r2r.targetName !== result.targetName
+      || r2r.targetPayload !== result.targetPayload
+    ) return;
+
+    const { response } = result;
+    r2rTgt.applyCalibPose(response.link_transforms, response.ground_offset_z);
+    refSkel.updateOverlay(r2rTgt);
+    if (calibManip.active) calibManip.updateJointWorld(response.joint_world);
+    updateR2rCalibrationValidation();
+    if (r2r.calibNeedsCameraFocus) {
+      r2r.calibNeedsCameraFocus = false;
+      applyCalibOrbitLimits({ snapCamera: true });
+      focusRobotView({ resetOffset: true });
+    }
+  },
+  reportError: (error) => {
+    console.warn("r2r fk preview", errorMessage(error));
+  },
+});
 
 function r2rCalibCtx(): CalibrationContext {
   return {
@@ -8130,49 +8196,12 @@ function r2rCalibCtx(): CalibrationContext {
   };
 }
 
-// R2R mirrors the H2R FK coalescing contract: at most one request plus one
-// latest-state follow-up may be pending during continuous manipulation.
 function r2rPreviewCalibPose(
   { flush = false }: CalibrationPreviewOptions = {},
 ): void {
   if (!r2r.calibrating || !r2r.targetName) return;
-  if (flush) {
-    if (_r2rFkRaf) cancelAnimationFrame(_r2rFkRaf);
-    _r2rFkRaf = 0;
-    void _r2rRunFk();
-    return;
-  }
-  if (_r2rFkRaf) return;
-  _r2rFkRaf = requestAnimationFrame(() => {
-    _r2rFkRaf = 0;
-    void _r2rRunFk();
-  });
-}
-
-async function _r2rRunFk(): Promise<void> {
-  if (_r2rFkInFlight) { _r2rFkQueued = true; return; }
-  _r2rFkInFlight = true;
-  _r2rFkQueued = false;
-  try {
-    const data = await API.post("/api/robot/fk_preview", {
-      robot: r2r.targetName,
-      joint_q: r2r.calibQ,
-    });
-    r2rTgt.applyCalibPose(data.link_transforms, data.ground_offset_z);
-    refSkel.updateOverlay(r2rTgt);
-    if (calibManip.active) calibManip.updateJointWorld(data.joint_world);
-    updateR2rCalibrationValidation();
-    if (r2r.calibrating && r2r.calibNeedsCameraFocus) {
-      r2r.calibNeedsCameraFocus = false;
-      applyCalibOrbitLimits({ snapCamera: true });
-      focusRobotView({ resetOffset: true });
-    }
-  } catch (e) {
-    console.warn("r2r fk preview", errorMessage(e));
-  } finally {
-    _r2rFkInFlight = false;
-    if (_r2rFkQueued) r2rPreviewCalibPose();
-  }
+  if (flush) r2rCalibrationFkPreview.flush();
+  else r2rCalibrationFkPreview.schedule();
 }
 
 function r2rSetCalibJointValue(
@@ -8342,6 +8371,7 @@ async function r2rStartCalib(
   r2r.targetPayload = targetPayload;
   switchInspectorPanel("r2r");
   if (!r2r.active) r2rEnterPanel();
+  r2rCalibrationFkPreview.start();
   r2r.calibrating = true;
   r2r.calibNeedsCameraFocus = true;
   r2r.calibOrbitSaved = {
@@ -8387,6 +8417,7 @@ async function r2rStartCalib(
 function r2rExitCalib(
   { publishStageDisplay = true }: R2rStageApplyOptions = {},
 ): void {
+  r2rCalibrationFkPreview.stop();
   r2r.calibrating = false;
   r2r.calibNeedsCameraFocus = false;
   if (r2r.calibOrbitSaved) {
