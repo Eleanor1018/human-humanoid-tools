@@ -29,6 +29,7 @@ export interface StageStateUpdate {
   readonly robotIdentity?: StageContentIdentity | null;
   readonly playback?: Readonly<Partial<StagePlaybackState>>;
   readonly display?: Readonly<{
+    owner?: StageDisplayState["owner"];
     empty?: boolean;
     canResetView?: boolean;
     layers?: StageLayerPatch;
@@ -184,6 +185,7 @@ function stateEquals(left: StageState, right: StageState): boolean {
     identityEquals(left.motionIdentity, right.motionIdentity) &&
     identityEquals(left.robotIdentity, right.robotIdentity) &&
     left.playback === right.playback &&
+    left.display.owner === right.display.owner &&
     left.display.empty === right.display.empty &&
     left.display.canResetView === right.display.canResetView &&
     left.display.layers === right.display.layers
@@ -202,6 +204,7 @@ function createInitialState(): StageState {
     speed: 1,
   });
   const display: StageDisplayState = Object.freeze({
+    owner: "h2r",
     empty: true,
     canResetView: false,
     layers: createInitialLayers(),
@@ -252,15 +255,18 @@ export class StageModel implements IStageModelService {
       : this.#state.robotIdentity;
     const playback = updatePlayback(this.#state.playback, update.playback);
     const layers = updateLayers(this.#state.display.layers, update.display?.layers);
+    const owner = update.display?.owner ?? this.#state.display.owner;
     const empty = update.display?.empty ?? this.#state.display.empty;
     const requestedCanResetView =
       update.display?.canResetView ?? this.#state.display.canResetView;
     const display: StageDisplayState =
+      owner === this.#state.display.owner &&
       empty === this.#state.display.empty &&
       (!empty && requestedCanResetView) === this.#state.display.canResetView &&
       layers === this.#state.display.layers
         ? this.#state.display
         : Object.freeze({
+            owner,
             empty,
             // Resetting an empty scene has no user-visible meaning.
             canResetView: !empty && requestedCanResetView,

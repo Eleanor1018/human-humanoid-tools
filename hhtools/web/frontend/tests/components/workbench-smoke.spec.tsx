@@ -212,6 +212,7 @@ describe("Workbench DOM contract", () => {
     );
     expect(missingAtSubscription).toEqual([]);
     expect(services.stageModelService.state.display).toEqual({
+      owner: "h2r",
       empty: initialDisplay.empty,
       canResetView: initialDisplay.canResetView,
       layers: initialDisplay.layers,

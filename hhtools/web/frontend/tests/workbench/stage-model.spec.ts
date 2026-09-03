@@ -33,7 +33,7 @@ describe("StageModel", () => {
         previewSourceDuration: null,
         speed: 1,
       },
-      display: { empty: true, canResetView: false },
+      display: { owner: "h2r", empty: true, canResetView: false },
     });
     expect(Object.keys(model.state.display.layers)).toEqual(STAGE_LAYER_IDS);
     expect(
@@ -69,6 +69,7 @@ describe("StageModel", () => {
         previewSourceDuration: 12,
       },
       display: {
+        owner: "r2r",
         empty: false,
         canResetView: true,
         layers: {
@@ -96,6 +97,7 @@ describe("StageModel", () => {
         previewSourceDuration: 12,
       },
       display: {
+        owner: "r2r",
         empty: false,
         canResetView: true,
         layers: {
@@ -115,6 +117,7 @@ describe("StageModel", () => {
     expect(previous.motionIdentity).toBeNull();
     expect(previous.playback.active).toBe(false);
     expect(previous.display.empty).toBe(true);
+    expect(previous.display.owner).toBe("h2r");
   });
 
   it("can explicitly clear nullable preview duration metadata", () => {

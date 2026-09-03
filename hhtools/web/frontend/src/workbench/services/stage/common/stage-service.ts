@@ -66,7 +66,11 @@ export interface StagePlaybackState {
   readonly speed: number;
 }
 
+/** Workflow that currently owns the shared canvas and playback surface. */
+export type StageRendererOwner = "h2r" | "r2r";
+
 export interface StageDisplayState {
+  readonly owner: StageRendererOwner;
   readonly empty: boolean;
   readonly canResetView: boolean;
   readonly layers: StageLayerStates;

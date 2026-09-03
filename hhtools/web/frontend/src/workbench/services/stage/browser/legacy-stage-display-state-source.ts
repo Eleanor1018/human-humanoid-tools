@@ -5,10 +5,11 @@ import type { StageDisplayState } from "@/workbench/services/stage/common/stage-
  * Complete H2R display snapshot produced by the compatibility renderer.
  *
  * `ownsStage` prevents R2R's temporary physical hiding of H2R Three.js groups
- * from being mistaken for a user visibility change. The flag remains a
- * browser-only migration concern and therefore does not enter StageState.
+ * from being mistaken for a user visibility change. The browser adapter maps
+ * that legacy boolean onto the semantic Stage renderer owner.
  */
-export interface LegacyH2rStageDisplaySnapshot extends StageDisplayState {
+export interface LegacyH2rStageDisplaySnapshot
+  extends Omit<StageDisplayState, "owner"> {
   readonly ownsStage: boolean;
 }
 

@@ -80,6 +80,7 @@ describe("BrowserLegacyStageDisplayStateAdapter", () => {
 
     expect(listener).toHaveBeenCalledOnce();
     expect(model.state.display).toEqual({
+      owner: "h2r",
       empty: current.empty,
       canResetView: current.canResetView,
       layers: current.layers,
@@ -88,9 +89,11 @@ describe("BrowserLegacyStageDisplayStateAdapter", () => {
     model.dispose();
   });
 
-  it("holds the last H2R state while R2R owns the shared Stage", async () => {
+  it("projects R2R ownership while holding the last H2R display facts", async () => {
     const model = new StageModel(vi.fn());
     const legacy = controlledSource();
+    const listener = vi.fn();
+    model.onDidChangeState(listener);
     const adapter = new BrowserLegacyStageDisplayStateAdapter(
       model,
       legacy.source,
@@ -105,12 +108,17 @@ describe("BrowserLegacyStageDisplayStateAdapter", () => {
     legacy.publish(h2r);
 
     legacy.publish(snapshot({ ownsStage: false, empty: true }));
+    legacy.publish(snapshot({ ownsStage: false, empty: true }));
 
     expect(model.state.display).toEqual({
+      owner: "r2r",
       empty: h2r.empty,
       canResetView: h2r.canResetView,
       layers: h2r.layers,
     });
+    // Repeated inactive snapshots carry no new H2R facts and must not create a
+    // second ownership transition.
+    expect(listener).toHaveBeenCalledTimes(2);
 
     const restored = snapshot({
       layers: {
@@ -119,6 +127,8 @@ describe("BrowserLegacyStageDisplayStateAdapter", () => {
       },
     });
     legacy.publish(restored);
+    expect(listener).toHaveBeenCalledTimes(3);
+    expect(model.state.display.owner).toBe("h2r");
     expect(model.state.display.layers.sourceBody.visible).toBe(true);
 
     adapter.dispose();

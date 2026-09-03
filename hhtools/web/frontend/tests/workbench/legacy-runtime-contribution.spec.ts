@@ -120,6 +120,7 @@ describe("legacy runtime contribution", () => {
 
     expect(subscribe).toHaveBeenCalledOnce();
     expect(stageOwner.state.display).toEqual({
+      owner: "h2r",
       empty: current.empty,
       canResetView: current.canResetView,
       layers: current.layers,

@@ -51,13 +51,20 @@ export class BrowserLegacyStageDisplayStateAdapter implements IDisposable {
   readonly #acceptSnapshot = (
     snapshot: LegacyH2rStageDisplaySnapshot,
   ): void => {
-    if (this.#disposed || !snapshot.ownsStage) return;
+    if (this.#disposed) return;
 
-    // Copy only semantic state. `ownsStage` belongs to this migration adapter,
-    // and the model performs the final normalization/freezing atomically.
+    // Ownership changes are meaningful even while H2R is inactive: React will
+    // use them to select the matching HUD. H2R layer and surface facts stay at
+    // their last confirmed values until the renderer returns the canvas and
+    // publishes a complete active snapshot.
     try {
+      if (!snapshot.ownsStage) {
+        this.#stageOwner.updateState({ display: { owner: "r2r" } });
+        return;
+      }
       this.#stageOwner.updateState({
         display: {
+          owner: "h2r",
           empty: snapshot.empty,
           canResetView: snapshot.canResetView,
           layers: snapshot.layers,
