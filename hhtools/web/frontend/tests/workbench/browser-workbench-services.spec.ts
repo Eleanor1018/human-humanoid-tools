@@ -28,32 +28,33 @@ describe("browser workbench service graph", () => {
     expect(disposeStage).toHaveBeenCalledOnce();
   });
 
-  it("routes Reset through the attached compatibility View", async () => {
+  it("keeps the compatibility View detached until its contribution starts", async () => {
     const services = createBrowserWorkbenchServices(vi.fn());
     const resetStageView = vi
       .spyOn(services.legacyRuntimeService, "resetStageView")
       .mockResolvedValue(undefined);
 
     services.stageDisplayCommands.resetView();
+    expect(resetStageView).not.toHaveBeenCalled();
+
+    const attachment = services.stageViewService.attachView(
+      services.legacyStageView,
+    );
+    services.stageDisplayCommands.resetView();
 
     await vi.waitFor(() => expect(resetStageView).toHaveBeenCalledOnce());
+    attachment.dispose();
     services.dispose();
     services.stageDisplayCommands.resetView();
     expect(resetStageView).toHaveBeenCalledOnce();
   });
 
-  it("detaches the Stage View before disposing its service and runtime", () => {
+  it("disposes the Stage View service before the compatibility runtime", () => {
     const services = createBrowserWorkbenchServices(vi.fn());
     const order: string[] = [];
-    const resetStageView = vi
-      .spyOn(services.legacyRuntimeService, "resetStageView")
-      .mockResolvedValue(undefined);
     const disposeStageViewService =
       services.stageViewService.dispose.bind(services.stageViewService);
     vi.spyOn(services.stageViewService, "dispose").mockImplementation(() => {
-      // The attachment lease is registered after the service, so reverse
-      // disposal must make this command a no-op before the service itself dies.
-      services.stageViewService.resetView();
       order.push("stage-view-service");
       disposeStageViewService();
     });
@@ -66,7 +67,6 @@ describe("browser workbench service graph", () => {
 
     services.dispose();
 
-    expect(resetStageView).not.toHaveBeenCalled();
     expect(order).toEqual(["stage-view-service", "legacy-runtime"]);
   });
 

@@ -203,6 +203,7 @@ describe("Workbench DOM contract", () => {
       .spyOn(services.stageLayerCommands, "toggleLayer")
       .mockImplementation(() => undefined);
     let missingAtStartup: string[] | undefined;
+    let missingAtViewAttachment: string[] | undefined;
     let missingAtSubscription: string[] | undefined;
     let publishDisplay:
       | ((snapshot: LegacyH2rStageDisplaySnapshot) => void)
@@ -214,6 +215,19 @@ describe("Workbench DOM contract", () => {
         );
       },
     );
+    const attachStageView =
+      services.stageViewService.attachView.bind(services.stageViewService);
+    const stageViewAttachment = vi
+      .spyOn(services.stageViewService, "attachView")
+      .mockImplementation((view) => {
+        missingAtViewAttachment = ids.filter(
+          (id) => document.getElementById(id) === null,
+        );
+        return attachStageView(view);
+      });
+    const resetStageView = vi
+      .spyOn(services.legacyRuntimeService, "resetStageView")
+      .mockResolvedValue(undefined);
     const initialDisplay: LegacyH2rStageDisplaySnapshot = {
       ownsStage: true,
       empty: false,
@@ -252,6 +266,8 @@ describe("Workbench DOM contract", () => {
           runtimeService: services.legacyRuntimeService,
           displayStateSource,
           stageOwner: services.stageModelService,
+          stageView: services.legacyStageView,
+          stageViewAttachment: services.stageViewService,
         }),
       ],
       vi.fn(),
@@ -265,7 +281,7 @@ describe("Workbench DOM contract", () => {
       reportError: vi.fn(),
     });
 
-    render(
+    const rendered = render(
       <WorkbenchServicesProvider services={services} lifecycle={lifecycle}>
         <Workbench panelContributions={[panelContribution]} />
       </WorkbenchServicesProvider>,
@@ -278,6 +294,9 @@ describe("Workbench DOM contract", () => {
         displayStateSource.subscribeH2rStageDisplayState,
       ).toHaveBeenCalledOnce(),
     );
+    expect(stageViewAttachment).toHaveBeenCalledWith(services.legacyStageView);
+    expect(stageViewAttachment).toHaveBeenCalledOnce();
+    expect(missingAtViewAttachment).toEqual([]);
     expect(missingAtSubscription).toEqual([]);
     expect(services.stageModelService.state.display).toEqual({
       owner: "h2r",
@@ -298,6 +317,8 @@ describe("Workbench DOM contract", () => {
       expect(resetView).not.toHaveClass("hidden");
       expect(resetView).toBeEnabled();
     });
+    fireEvent.click(resetView);
+    expect(resetStageView).toHaveBeenCalledOnce();
     const skeleton = document.getElementById(
       "tg-skeleton",
     ) as HTMLButtonElement;
@@ -361,6 +382,10 @@ describe("Workbench DOM contract", () => {
       expect(resetView).not.toHaveClass("hidden");
       expect(resetView).toBeEnabled();
     });
+
+    rendered.unmount();
+    services.stageDisplayCommands.resetView();
+    expect(resetStageView).toHaveBeenCalledOnce();
   });
 
   it("preserves every literal element id consumed by the existing runtime", () => {

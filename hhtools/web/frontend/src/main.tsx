@@ -41,6 +41,8 @@ const contributionLifecycle = new WorkbenchContributionLifecycle(
       runtimeService: services.legacyRuntimeService,
       displayStateSource: services.legacyRuntimeService,
       stageOwner: services.stageModelService,
+      stageView: services.legacyStageView,
+      stageViewAttachment: services.stageViewService,
     }),
   ],
   reportWorkbenchError,

@@ -12,6 +12,10 @@ import type {
   LegacyH2rStageDisplaySnapshot,
 } from "../../src/workbench/services/stage/browser/legacy-stage-display-state-source";
 import { StageModel } from "../../src/workbench/services/stage/common/stage-model";
+import type {
+  IStageView,
+  IStageViewAttachment,
+} from "../../src/workbench/services/stage/common/stage-view";
 
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -56,9 +60,18 @@ function createLifecycle(
   start: () => Promise<void>,
   subscribe: ILegacyStageDisplayStateSource["subscribeH2rStageDisplayState"],
   reportError = vi.fn(),
+  overrides: {
+    stageView?: IStageView;
+    stageViewAttachment?: IStageViewAttachment;
+  } = {},
 ) {
   const stageOwner = new StageModel(reportError);
   const runtime = runtimeService(start);
+  const detachStageView = vi.fn();
+  const stageView = overrides.stageView ?? { resetView: vi.fn() };
+  const stageViewAttachment = overrides.stageViewAttachment ?? {
+    attachView: vi.fn(() => toDisposable(detachStageView)),
+  };
   const displayStateSource: ILegacyStageDisplayStateSource = {
     subscribeH2rStageDisplayState: subscribe,
   };
@@ -69,11 +82,22 @@ function createLifecycle(
         runtimeService: runtime,
         displayStateSource,
         stageOwner,
+        stageView,
+        stageViewAttachment,
       }),
     ],
     reportError,
   );
-  return { lifecycle, stageOwner, runtime, displayStateSource, reportError };
+  return {
+    lifecycle,
+    stageOwner,
+    stageView,
+    stageViewAttachment,
+    detachStageView,
+    runtime,
+    displayStateSource,
+    reportError,
+  };
 }
 
 async function flushStartup(): Promise<void> {
@@ -105,19 +129,29 @@ describe("legacy runtime contribution", () => {
         return toDisposable(unsubscribe);
       },
     );
-    const { lifecycle, stageOwner } = createLifecycle(start, subscribe);
+    const {
+      lifecycle,
+      stageOwner,
+      stageView,
+      stageViewAttachment,
+      detachStageView,
+    } = createLifecycle(start, subscribe);
 
     lifecycle.advanceTo(WorkbenchLifecyclePhase.Ready);
     expect(start).not.toHaveBeenCalled();
     expect(subscribe).not.toHaveBeenCalled();
+    expect(stageViewAttachment.attachView).not.toHaveBeenCalled();
 
     lifecycle.advanceTo(WorkbenchLifecyclePhase.Restored);
     expect(start).toHaveBeenCalledOnce();
     expect(subscribe).not.toHaveBeenCalled();
+    expect(stageViewAttachment.attachView).not.toHaveBeenCalled();
 
     startup.resolve();
     await flushStartup();
 
+    expect(stageViewAttachment.attachView).toHaveBeenCalledWith(stageView);
+    expect(stageViewAttachment.attachView).toHaveBeenCalledOnce();
     expect(subscribe).toHaveBeenCalledOnce();
     expect(stageOwner.state.display).toEqual({
       owner: "h2r",
@@ -128,13 +162,14 @@ describe("legacy runtime contribution", () => {
 
     lifecycle.dispose();
     expect(unsubscribe).toHaveBeenCalledOnce();
+    expect(detachStageView).toHaveBeenCalledOnce();
   });
 
   it("does not attach when teardown wins the startup race", async () => {
     const startup = deferred<void>();
     const subscribe = vi.fn(async () => toDisposable(vi.fn()));
     const reportError = vi.fn();
-    const { lifecycle } = createLifecycle(
+    const { lifecycle, stageViewAttachment } = createLifecycle(
       vi.fn(() => startup.promise),
       subscribe,
       reportError,
@@ -147,14 +182,33 @@ describe("legacy runtime contribution", () => {
     vi.advanceTimersByTime(4_000);
 
     expect(subscribe).not.toHaveBeenCalled();
+    expect(stageViewAttachment.attachView).not.toHaveBeenCalled();
     expect(reportError).not.toHaveBeenCalled();
+  });
+
+  it("does not attach when teardown wins after startup resolves", async () => {
+    const startup = deferred<void>();
+    const subscribe = vi.fn(async () => toDisposable(vi.fn()));
+    const { lifecycle, stageViewAttachment } = createLifecycle(
+      vi.fn(() => startup.promise),
+      subscribe,
+    );
+
+    lifecycle.advanceTo(WorkbenchLifecyclePhase.Restored);
+    startup.resolve();
+    // Promise fulfillment is queued, so synchronous teardown must still win.
+    lifecycle.dispose();
+    await flushStartup();
+
+    expect(stageViewAttachment.attachView).not.toHaveBeenCalled();
+    expect(subscribe).not.toHaveBeenCalled();
   });
 
   it("contains a synchronous startup throw without creating a watchdog", () => {
     const failure = new Error("startup threw synchronously");
     const subscribe = vi.fn(async () => toDisposable(vi.fn()));
     const reportError = vi.fn();
-    const { lifecycle } = createLifecycle(
+    const { lifecycle, stageViewAttachment } = createLifecycle(
       vi.fn(() => {
         throw failure;
       }),
@@ -170,6 +224,7 @@ describe("legacy runtime contribution", () => {
     expect(reportError).toHaveBeenCalledWith(failure);
     expect(reportError).toHaveBeenCalledOnce();
     expect(subscribe).not.toHaveBeenCalled();
+    expect(stageViewAttachment.attachView).not.toHaveBeenCalled();
     lifecycle.dispose();
   });
 
@@ -186,7 +241,7 @@ describe("legacy runtime contribution", () => {
         return pendingSubscription.promise;
       },
     );
-    const { lifecycle, stageOwner } = createLifecycle(
+    const { lifecycle, stageOwner, detachStageView } = createLifecycle(
       vi.fn(async () => undefined),
       subscribe,
       reportError,
@@ -198,6 +253,7 @@ describe("legacy runtime contribution", () => {
     expect(subscribe).toHaveBeenCalledOnce();
 
     lifecycle.dispose();
+    expect(detachStageView).toHaveBeenCalledOnce();
     publish?.(snapshot());
     pendingSubscription.resolve(toDisposable(disposeSubscription));
     await flushStartup();
@@ -211,7 +267,7 @@ describe("legacy runtime contribution", () => {
     const failure = new Error("module failed to load");
     const subscribe = vi.fn(async () => toDisposable(vi.fn()));
     const reportError = vi.fn();
-    const { lifecycle } = createLifecycle(
+    const { lifecycle, stageViewAttachment } = createLifecycle(
       vi.fn(() => Promise.reject(failure)),
       subscribe,
       reportError,
@@ -224,13 +280,42 @@ describe("legacy runtime contribution", () => {
     expect(reportError).toHaveBeenCalledWith(failure);
     expect(reportError).toHaveBeenCalledOnce();
     expect(subscribe).not.toHaveBeenCalled();
+    expect(stageViewAttachment.attachView).not.toHaveBeenCalled();
+    lifecycle.dispose();
+  });
+
+  it("rolls back and reports a Stage View attachment failure", async () => {
+    const failure = new Error("Stage View already attached");
+    const reportError = vi.fn();
+    const attachView = vi.fn(() => {
+      throw failure;
+    });
+    const subscribe = vi.fn(async () => toDisposable(vi.fn()));
+    const { lifecycle } = createLifecycle(
+      vi.fn(async () => undefined),
+      subscribe,
+      reportError,
+      { stageViewAttachment: { attachView } },
+    );
+
+    lifecycle.advanceTo(WorkbenchLifecyclePhase.Restored);
+    await flushStartup();
+
+    expect(attachView).toHaveBeenCalledOnce();
+    expect(subscribe).not.toHaveBeenCalled();
+    expect(reportError).toHaveBeenCalledWith(failure);
+    expect(reportError).toHaveBeenCalledOnce();
     lifecycle.dispose();
   });
 
   it("reports a post-start display subscription failure only once", async () => {
     const failure = new Error("display source failed");
     const reportError = vi.fn();
-    const { lifecycle } = createLifecycle(
+    const {
+      lifecycle,
+      stageViewAttachment,
+      detachStageView,
+    } = createLifecycle(
       vi.fn(async () => undefined),
       vi.fn(async () => {
         throw failure;
@@ -243,7 +328,10 @@ describe("legacy runtime contribution", () => {
 
     expect(reportError).toHaveBeenCalledWith(failure);
     expect(reportError).toHaveBeenCalledOnce();
+    expect(stageViewAttachment.attachView).toHaveBeenCalledOnce();
+    expect(detachStageView).not.toHaveBeenCalled();
     lifecycle.dispose();
+    expect(detachStageView).toHaveBeenCalledOnce();
   });
 
   it("reports readiness timeout and cancels it when disposed", async () => {
@@ -290,6 +378,12 @@ describe("legacy runtime contribution", () => {
       subscribeH2rStageDisplayState: vi.fn(async () =>
         toDisposable(() => order.push("display"))),
     };
+    const stageView: IStageView = { resetView: vi.fn() };
+    const stageViewAttachment: IStageViewAttachment = {
+      attachView: vi.fn(() =>
+        toDisposable(() => order.push("stage-view")),
+      ),
+    };
     const serviceGraph = toDisposable(() => {
       order.push("services");
       runtime.dispose();
@@ -302,6 +396,8 @@ describe("legacy runtime contribution", () => {
           runtimeService: runtime,
           displayStateSource,
           stageOwner,
+          stageView,
+          stageViewAttachment,
         }),
       ],
       vi.fn(),
@@ -316,6 +412,7 @@ describe("legacy runtime contribution", () => {
     expect(
       displayStateSource.subscribeH2rStageDisplayState,
     ).toHaveBeenCalledOnce();
-    expect(order).toEqual(["display", "services"]);
+    expect(stageViewAttachment.attachView).toHaveBeenCalledWith(stageView);
+    expect(order).toEqual(["display", "stage-view", "services"]);
   });
 });

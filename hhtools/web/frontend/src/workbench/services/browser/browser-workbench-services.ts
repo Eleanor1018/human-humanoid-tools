@@ -19,6 +19,8 @@ export interface BrowserWorkbenchServices extends IWorkbenchServices {
   readonly stageModelService: StageModel;
   /** Composition-only owner used to attach the eventual React Stage View. */
   readonly stageViewService: BrowserStageViewService;
+  /** Temporary View attached only after the Restored runtime is ready. */
+  readonly legacyStageView: BrowserLegacyStageView;
   readonly legacyRuntimeService: BrowserLegacyRuntimeService;
 }
 
@@ -46,9 +48,6 @@ export function createBrowserWorkbenchServices(
     new BrowserStageViewService(reportError),
   );
   const legacyStageView = new BrowserLegacyStageView(legacyRuntimeService);
-  // This is the explicit migration seam. A later atomic renderer-ownership
-  // commit will detach this adapter and let ThreeStage attach its own View.
-  ownedServices.add(stageViewService.attachView(legacyStageView));
   // This migration adapter is deliberately registered after both endpoints.
   // Reverse disposal removes its window listener before either endpoint dies.
   ownedServices.add(new BrowserLegacyStageStateAdapter(stageModelService));
@@ -73,6 +72,7 @@ export function createBrowserWorkbenchServices(
     stageModelService,
     stageViewService,
     stagePlaybackCommands,
+    legacyStageView,
     legacyRuntimeService,
     dispose: () => ownedServices.dispose(),
   };

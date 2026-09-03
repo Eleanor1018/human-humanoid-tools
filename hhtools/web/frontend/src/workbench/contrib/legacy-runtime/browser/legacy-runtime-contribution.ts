@@ -7,6 +7,10 @@ import type { ILegacyRuntimeService } from "@/workbench/services/runtime/common/
 import { BrowserLegacyStageDisplayStateAdapter } from "@/workbench/services/stage/browser/browser-legacy-stage-display-state-adapter";
 import type { ILegacyStageDisplayStateSource } from "@/workbench/services/stage/browser/legacy-stage-display-state-source";
 import type { StageModel } from "@/workbench/services/stage/common/stage-model";
+import type {
+  IStageView,
+  IStageViewAttachment,
+} from "@/workbench/services/stage/common/stage-view";
 
 const READINESS_TIMEOUT_MS = 4_000;
 
@@ -14,6 +18,8 @@ export interface LegacyRuntimeContributionDependencies {
   readonly runtimeService: ILegacyRuntimeService;
   readonly displayStateSource: ILegacyStageDisplayStateSource;
   readonly stageOwner: StageModel;
+  readonly stageView: IStageView;
+  readonly stageViewAttachment: IStageViewAttachment;
 }
 
 /**
@@ -44,13 +50,38 @@ export function createLegacyRuntimeContribution(
           // Runtime readiness and React's Restored phase are both prerequisites
           // for touching the compatibility publisher. Teardown wins this race.
           if (disposed) return;
-          owned.add(
-            new BrowserLegacyStageDisplayStateAdapter(
-              dependencies.stageOwner,
-              dependencies.displayStateSource,
-              context.reportError,
-            ),
-          );
+          const restored = new DisposableStore();
+          try {
+            // Attach before subscribing: a synchronous first state snapshot can
+            // make Reset available, so its command target must already exist.
+            restored.add(
+              dependencies.stageViewAttachment.attachView(
+                dependencies.stageView,
+              ),
+            );
+            restored.add(
+              new BrowserLegacyStageDisplayStateAdapter(
+                dependencies.stageOwner,
+                dependencies.displayStateSource,
+                context.reportError,
+              ),
+            );
+            owned.add(restored);
+          } catch (error) {
+            // Roll back any lease acquired before synchronous Restored
+            // bookkeeping fails. Subscription failures are observed inside the
+            // display adapter and do not imply that the renderer View vanished.
+            let reportable = error;
+            try {
+              restored.dispose();
+            } catch (cleanupError) {
+              reportable = new AggregateError(
+                [error, cleanupError],
+                "Failed to initialize and roll back the legacy Stage View",
+              );
+            }
+            context.reportError(reportable);
+          }
         },
         (error) => {
           if (disposed) return;
@@ -62,13 +93,14 @@ export function createLegacyRuntimeContribution(
       );
 
       // BrowserLegacyRuntimeService is still a module singleton with a no-op
-      // dispose. The Stage/V2M migrations will transfer its listeners, RAF and
-      // GPU resources into real view-owned disposables.
+      // dispose. This contribution now owns its temporary View attachment; the
+      // next renderer slices will move listeners, RAF and GPU resources behind
+      // the same View-owned lifecycle.
       return toDisposable(() => {
         disposed = true;
-        // Reverse order releases the display adapter and any attached
-        // subscription before the watchdog. A pending handle is reclaimed by
-        // the disposed adapter when it eventually arrives; the outer lifecycle
+        // The nested Restored store releases display state before the View
+        // attachment. A pending subscription handle is reclaimed by the
+        // disposed adapter when it eventually arrives; the outer lifecycle
         // still disposes the underlying service graph last.
         owned.dispose();
       });
