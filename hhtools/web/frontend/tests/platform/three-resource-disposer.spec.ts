@@ -116,16 +116,24 @@ describe("ThreeResourceDisposer", () => {
     const owner = new Group();
     const unattached = new MeshBasicMaterial();
     const disposeUnattached = vi.spyOn(unattached, "dispose");
-    const hidden = new Mesh(new BoxGeometry(), new MeshBasicMaterial());
+    const hiddenGeometry = new BoxGeometry();
+    const hiddenMaterial = new MeshBasicMaterial();
+    const hidden = new Mesh(hiddenGeometry, hiddenMaterial);
     hidden.visible = false;
-    const disposeHiddenGeometry = vi.spyOn(hidden.geometry, "dispose");
+    const disposeHiddenGeometry = vi.spyOn(hiddenGeometry, "dispose");
+    const disposeHiddenMaterial = vi.spyOn(hiddenMaterial, "dispose");
     parent.add(owner);
     owner.add(hidden, new Group());
     const ownerDispose = vi.fn();
     Object.assign(owner, { dispose: ownerDispose });
     const disposer = new ThreeResourceDisposer();
 
-    disposer.disposeObject3DChildren(owner, { materials: [unattached] });
+    // Runtime Views keep aliases to resources that are usually also reachable
+    // from the Group. One disposal pass must deduplicate graph and extras.
+    disposer.disposeObject3DChildren(owner, {
+      geometries: [hiddenGeometry],
+      materials: [hiddenMaterial, unattached],
+    });
     disposer.disposeObject3DChildren(owner);
 
     const replacement = new Mesh(
@@ -142,6 +150,7 @@ describe("ThreeResourceDisposer", () => {
     expect(owner.parent).toBe(parent);
     expect(owner.children).toHaveLength(0);
     expect(disposeHiddenGeometry).toHaveBeenCalledOnce();
+    expect(disposeHiddenMaterial).toHaveBeenCalledOnce();
     expect(disposeUnattached).toHaveBeenCalledOnce();
     expect(disposeReplacementGeometry).toHaveBeenCalledOnce();
     expect(ownerDispose).not.toHaveBeenCalled();

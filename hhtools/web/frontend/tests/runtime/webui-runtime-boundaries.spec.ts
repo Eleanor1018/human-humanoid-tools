@@ -4,6 +4,164 @@ import runtimeSource from "../../src/runtime/webui-runtime.ts?raw";
 import commandRegistrySource from "../../src/runtime/command-registry.ts?raw";
 
 describe("legacy runtime ownership boundaries", () => {
+  it("terminally disposes synchronous Stage View children before clearing aliases", () => {
+    expect(runtimeSource).toContain(
+      'import { ThreeResourceDisposer } from "@/platform/graphics/common/three-resource-disposer"',
+    );
+    expect(runtimeSource).toContain(
+      "const threeResourceDisposer = new ThreeResourceDisposer()",
+    );
+
+    const synchronousViews = [
+      {
+        className: "SkeletonView",
+        nextClassName: "ReferenceSkeletonView",
+        inventory: [
+          "...this.spheres.map((sphere) => sphere.geometry)",
+          "...(this.lineGeom ? [this.lineGeom] : [])",
+          "...this.spheres.map((sphere) => sphere.material)",
+          "...(this.lines ? [this.lines.material] : [])",
+        ],
+        cleanup: ["this.group.clear()"],
+        aliasReleases: [
+          "this.lineGeom = null",
+          "this.lines = null",
+          "this.spheres = []",
+          "this.joints = null",
+          "this.parents = []",
+          "this.frameIndices = null",
+          "this.exclude = new Set()",
+        ],
+      },
+      {
+        className: "ReferenceSkeletonView",
+        nextClassName: "EnvView",
+        inventory: [
+          "...this.spheres.map((sphere) => sphere.geometry)",
+          "...(this.lineGeom ? [this.lineGeom] : [])",
+          "...this.spheres.map((sphere) => sphere.material)",
+          "...(this.lines ? [this.lines.material] : [])",
+          "...(this.mappedMaterial ? [this.mappedMaterial] : [])",
+          "...(this.contextMaterial ? [this.contextMaterial] : [])",
+        ],
+        cleanup: [
+          "this.group.clear()",
+          "this.labelRoot.replaceChildren()",
+          "this.lineRoot.replaceChildren()",
+        ],
+        aliasReleases: [
+          "this.lineGeom = null",
+          "this.lines = null",
+          "this.mappedMaterial = null",
+          "this.contextMaterial = null",
+          "this.spheres = []",
+          "this.parents = []",
+          "this.boneNames = []",
+          "this.canonicalNames = []",
+          "this.referenceQuaternions = []",
+          "this.exclude = new Set()",
+          "this.mappings = []",
+          "this.group.visible = false",
+        ],
+      },
+      {
+        className: "CapsuleMeshView",
+        nextClassName: "ScaledSkeletonView",
+        inventory: [
+          "geometries: this.mesh ? [this.mesh.geometry] : []",
+          "materials: this.mesh ? [this.mesh.material] : []",
+        ],
+        cleanup: ["this.group.clear()"],
+        aliasReleases: [
+          "this.mesh = null",
+          "this.joints = null",
+          "this.frameIndices = null",
+          "this.edges = []",
+          "this.visibleJoints = []",
+          "this.numJoints = 0",
+          "this.positions = new Float32Array()",
+        ],
+      },
+      {
+        className: "ScaledSkeletonView",
+        nextClassName: "BakedMeshView",
+        inventory: [
+          "...this.spheres.map((sphere) => sphere.geometry)",
+          "...(this.lineGeom ? [this.lineGeom] : [])",
+          "...this.spheres.map((sphere) => sphere.material)",
+          "...(this.lines ? [this.lines.material] : [])",
+        ],
+        cleanup: ["this.group.clear()"],
+        aliasReleases: [
+          "this.lineGeom = null",
+          "this.lines = null",
+          "this.spheres = []",
+          "this.joints = null",
+          "this.parents = []",
+          "this.frameIndices = null",
+        ],
+      },
+    ] as const;
+
+    for (const {
+      className,
+      nextClassName,
+      inventory,
+      cleanup,
+      aliasReleases,
+    } of synchronousViews) {
+      const classStart = runtimeSource.indexOf(`class ${className}`);
+      const classEnd = runtimeSource.indexOf(
+        `class ${nextClassName}`,
+        classStart,
+      );
+      const classSource = runtimeSource.slice(classStart, classEnd);
+      const clearStart = classSource.indexOf("clear(): void {");
+      const clearEnd = classSource.indexOf("\n  load(", clearStart);
+      const clearSource = classSource.slice(clearStart, clearEnd);
+
+      expect(classStart, `${className} start`).toBeGreaterThanOrEqual(0);
+      expect(classEnd, `${className} end`).toBeGreaterThan(classStart);
+      expect(clearStart, `${className}.clear start`).toBeGreaterThanOrEqual(0);
+      expect(clearEnd, `${className}.clear end`).toBeGreaterThan(clearStart);
+      const disposal = clearSource.indexOf(
+        "threeResourceDisposer.disposeObject3DChildren(this.group",
+      );
+      const finallyBlock = clearSource.indexOf("finally {");
+      expect(disposal, `${className} disposal`).toBeGreaterThanOrEqual(0);
+      expect(finallyBlock, `${className} finally`).toBeGreaterThan(disposal);
+      expect(clearSource).not.toContain("while (this.group.children.length)");
+
+      const disposalSource = clearSource.slice(disposal, finallyBlock);
+      for (const ownedResource of inventory) {
+        expect(disposalSource, `${className}: ${ownedResource}`).toContain(
+          ownedResource,
+        );
+      }
+
+      // One outer finally enters cleanup; one nested finally per fallible
+      // cleanup guarantees the alias-release block remains reachable.
+      expect(clearSource.match(/finally \{/g)).toHaveLength(cleanup.length + 1);
+      let previousCleanup = finallyBlock;
+      for (const cleanupCall of cleanup) {
+        const cleanupIndex = clearSource.indexOf(
+          cleanupCall,
+          previousCleanup + 1,
+        );
+        expect(cleanupIndex, `${className}: ${cleanupCall}`).toBeGreaterThan(
+          previousCleanup,
+        );
+        previousCleanup = cleanupIndex;
+      }
+      for (const aliasRelease of aliasReleases) {
+        expect(
+          clearSource.indexOf(aliasRelease, previousCleanup + 1),
+          `${className}: ${aliasRelease}`,
+        ).toBeGreaterThan(previousCleanup);
+      }
+    }
+  });
+
   it("exposes Stage reset without installing a DOM click owner", () => {
     expect(runtimeSource).toContain("export function resetStageView");
     expect(runtimeSource).not.toContain(

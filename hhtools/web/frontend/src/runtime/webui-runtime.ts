@@ -209,6 +209,7 @@ import type {
   TerrainPayload,
   Vec3,
 } from "@/domain/motion/common/motion";
+import { ThreeResourceDisposer } from "@/platform/graphics/common/three-resource-disposer";
 import type {
   ApiClient,
   ApiGetResponse,
@@ -247,6 +248,11 @@ import type {
   WorkflowStateDetail,
   WorkflowId,
 } from "./types";
+
+// Synchronous legacy Views share one stateless disposal policy. Their Groups
+// remain stable scene anchors, while every replaced child GPU resource is
+// terminally released before the View drops its aliases.
+const threeResourceDisposer = new ThreeResourceDisposer();
 
 type ProgressCallback = (fraction: number | null, loaded: number, total: number) => void;
 type JobProgressCallback = (fraction: number, message: string) => void;
@@ -1077,9 +1083,32 @@ class SkeletonView implements PlaybackView {
     world.add(this.group);
   }
   clear(): void {
-    while (this.group.children.length) this.group.remove(this.group.children[0]);
-    this.spheres = [];
-    this.joints = null;
+    try {
+      threeResourceDisposer.disposeObject3DChildren(this.group, {
+        geometries: [
+          ...this.spheres.map((sphere) => sphere.geometry),
+          ...(this.lineGeom ? [this.lineGeom] : []),
+        ],
+        materials: [
+          ...this.spheres.map((sphere) => sphere.material),
+          ...(this.lines ? [this.lines.material] : []),
+        ],
+      });
+    } finally {
+      // Aliases must never retain disposed resources, even when one resource's
+      // dispose listener throws and the aggregate is rethrown to the caller.
+      try {
+        this.group.clear();
+      } finally {
+        this.spheres = [];
+        this.joints = null;
+        this.parents = [];
+        this.lineGeom = null;
+        this.lines = null;
+        this.frameIndices = null;
+        this.exclude = new Set();
+      }
+    }
   }
   load(motion: MotionPayload, color = 0x0a84ff): void {
     this.clear();
@@ -1240,21 +1269,47 @@ class ReferenceSkeletonView {
   }
 
   clear(): void {
-    while (this.group.children.length) this.group.remove(this.group.children[0]);
-    this.labelRoot.replaceChildren();
-    this.lineRoot.replaceChildren();
-    this.spheres = [];
-    this.parents = [];
-    this.boneNames = [];
-    this.canonicalNames = [];
-    this.referenceQuaternions = [];
-    this.exclude = new Set();
-    this.mappings = [];
-    this.lineGeom = null;
-    this.lines = null;
-    this.mappedMaterial = null;
-    this.contextMaterial = null;
-    this.group.visible = false;
+    try {
+      threeResourceDisposer.disposeObject3DChildren(this.group, {
+        geometries: [
+          ...this.spheres.map((sphere) => sphere.geometry),
+          ...(this.lineGeom ? [this.lineGeom] : []),
+        ],
+        materials: [
+          ...this.spheres.map((sphere) => sphere.material),
+          ...(this.lines ? [this.lines.material] : []),
+          ...(this.mappedMaterial ? [this.mappedMaterial] : []),
+          ...(this.contextMaterial ? [this.contextMaterial] : []),
+        ],
+      });
+    } finally {
+      // DOM overlays and aliases describe the same resource generation as the
+      // Group, so a failed disposer must not leave either generation reachable.
+      try {
+        this.group.clear();
+      } finally {
+        try {
+          this.labelRoot.replaceChildren();
+        } finally {
+          try {
+            this.lineRoot.replaceChildren();
+          } finally {
+            this.spheres = [];
+            this.parents = [];
+            this.boneNames = [];
+            this.canonicalNames = [];
+            this.referenceQuaternions = [];
+            this.exclude = new Set();
+            this.mappings = [];
+            this.lineGeom = null;
+            this.lines = null;
+            this.mappedMaterial = null;
+            this.contextMaterial = null;
+            this.group.visible = false;
+          }
+        }
+      }
+    }
   }
 
   load(ref: CalibrationReferencePayload | null | undefined): void {
@@ -1762,9 +1817,24 @@ class CapsuleMeshView {
   }
   get ready(): boolean { return this.mesh != null && this.joints != null; }
   clear(): void {
-    if (this.mesh) { this.group.remove(this.mesh); this.mesh.geometry.dispose(); this.mesh = null; }
-    this.joints = null;
-    this.frameIndices = null;
+    try {
+      threeResourceDisposer.disposeObject3DChildren(this.group, {
+        geometries: this.mesh ? [this.mesh.geometry] : [],
+        materials: this.mesh ? [this.mesh.material] : [],
+      });
+    } finally {
+      try {
+        this.group.clear();
+      } finally {
+        this.mesh = null;
+        this.joints = null;
+        this.frameIndices = null;
+        this.edges = [];
+        this.visibleJoints = [];
+        this.numJoints = 0;
+        this.positions = new Float32Array();
+      }
+    }
   }
   load(motion: MotionPayload): void {
     this.clear();
@@ -1883,10 +1953,29 @@ class ScaledSkeletonView {
     world.add(this.group);
   }
   clear(): void {
-    while (this.group.children.length) this.group.remove(this.group.children[0]);
-    this.spheres = [];
-    this.joints = null;
-    this.frameIndices = null;
+    try {
+      threeResourceDisposer.disposeObject3DChildren(this.group, {
+        geometries: [
+          ...this.spheres.map((sphere) => sphere.geometry),
+          ...(this.lineGeom ? [this.lineGeom] : []),
+        ],
+        materials: [
+          ...this.spheres.map((sphere) => sphere.material),
+          ...(this.lines ? [this.lines.material] : []),
+        ],
+      });
+    } finally {
+      try {
+        this.group.clear();
+      } finally {
+        this.spheres = [];
+        this.joints = null;
+        this.parents = [];
+        this.frameIndices = null;
+        this.lineGeom = null;
+        this.lines = null;
+      }
+    }
   }
   load(motion: MotionPayload): void {
     this.clear();
