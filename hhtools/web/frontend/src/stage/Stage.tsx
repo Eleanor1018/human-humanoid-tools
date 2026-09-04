@@ -8,7 +8,7 @@ export function Stage() {
 
   return (
     <main
-      className="app-content @container relative col-start-2 row-start-2 min-h-0 min-w-0 overflow-hidden bg-canvas"
+      className="app-content @container relative col-start-2 row-start-2 min-h-0 min-w-0 overflow-hidden bg-canvas max-[780px]:hidden"
       aria-label="Workspace content"
     >
       <StageViewMenu

@@ -18,7 +18,7 @@ export function Sidebar({ activeView, onSelect }: SidebarProps) {
       className="col-start-1 row-start-2 min-h-0 min-w-0 overflow-hidden border-r border-border-subtle bg-surface"
       aria-label="Workspace navigation"
     >
-      <nav className="h-full min-h-0 min-w-0 overflow-y-auto px-3 py-3.5">
+      <nav className="h-full min-h-0 min-w-0 overflow-y-auto px-3 py-3.5 max-[900px]:px-2">
         <div className="flex flex-col gap-3.5">
           {navigationGroups.map((group) => (
             <section
@@ -31,11 +31,12 @@ export function Sidebar({ activeView, onSelect }: SidebarProps) {
                   key={item.id}
                   type="button"
                   className={cn(
-                    "flex w-full cursor-pointer items-center gap-3 rounded-md border-0 bg-transparent px-[13px] py-2.5 text-left text-sm font-medium tracking-normal text-muted-foreground hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring",
+                    "flex w-full cursor-pointer items-center gap-3 rounded-md border-0 bg-transparent px-[13px] py-2.5 text-left text-sm font-medium tracking-normal text-muted-foreground hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring max-[900px]:justify-center max-[900px]:gap-0 max-[900px]:px-0",
                     activeView === item.id &&
                       "bg-accent text-accent-foreground",
                   )}
                   aria-current={activeView === item.id ? "page" : undefined}
+                  title={item.label}
                   onClick={() => onSelect(item.id)}
                 >
                   <span
@@ -47,7 +48,9 @@ export function Sidebar({ activeView, onSelect }: SidebarProps) {
                     }
                     aria-hidden="true"
                   />
-                  <span className="min-w-0 truncate">{item.label}</span>
+                  <span className="min-w-0 truncate max-[900px]:sr-only">
+                    {item.label}
+                  </span>
                 </button>
               ))}
             </section>

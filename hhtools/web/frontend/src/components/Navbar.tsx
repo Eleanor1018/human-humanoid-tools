@@ -83,19 +83,19 @@ export function Navbar() {
   return (
     <header
       id="topbar"
-      className="col-span-full row-start-1 z-[200] flex items-center border-b border-border-subtle bg-surface py-0 pr-3 pl-[25px]"
+      className="col-span-full row-start-1 z-[200] flex min-w-0 items-center border-b border-border-subtle bg-surface py-0 pr-3 pl-[25px] max-[600px]:pl-3"
     >
       <div
-        className="flex basis-[201px] shrink-0 items-center gap-2 text-lg font-bold tracking-normal text-foreground"
+        className="flex basis-[201px] shrink-0 items-center gap-2 text-lg font-bold tracking-normal text-foreground max-[600px]:basis-[39px]"
         aria-label="HHTOOLS"
       >
         <img className="size-6 object-contain" src="/hhtools-robot.svg" alt="" />
-        <span>HHTOOLS</span>
+        <span className="max-[600px]:sr-only">HHTOOLS</span>
       </div>
 
       <nav
         ref={root}
-        className="flex self-stretch items-stretch gap-2"
+        className="flex min-w-0 self-stretch items-stretch gap-2 max-[600px]:overflow-x-auto"
         aria-label="Application menu"
       >
         {menus.map((menu) => (
@@ -116,7 +116,7 @@ export function Navbar() {
             </button>
             {openMenu === menu.id && (
               <div
-                className="absolute top-[calc(100%+3px)] left-0 z-[120] min-w-[286px] max-w-[340px] rounded-lg border border-border-subtle bg-surface p-[5px] shadow-[var(--shadow-menu)]"
+                className="absolute top-[calc(100%+3px)] left-0 z-[120] min-w-[286px] max-w-[340px] rounded-lg border border-border-subtle bg-surface p-[5px] shadow-[0_8px_24px_rgba(2,18,46,0.1)] max-[600px]:fixed max-[600px]:top-10 max-[600px]:right-2 max-[600px]:left-2 max-[600px]:min-w-0 max-[600px]:max-w-none"
                 role="menu"
                 aria-label={menu.label}
               >
