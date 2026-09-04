@@ -735,9 +735,6 @@ def write_retarget_export_bundle(
             clip_dir, source_motion, stem, smpl_scale=smpl_scale, z_terrain=z_terrain,
         )
 
-    if not has_scene and fmt == "csv":
-        return clip_dir / f"{stem}.csv"
-
     if not has_scene:
         return clip_dir / (f"{stem}.pkl" if fmt == "pkl" else f"{stem}.csv")
 

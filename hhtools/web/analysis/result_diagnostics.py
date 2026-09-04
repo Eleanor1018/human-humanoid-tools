@@ -88,8 +88,6 @@ def _frame_pairs(
     for index, robot_frame in enumerate(robot_frames):
         frame_index = int(robot_indices[index]) if index < len(robot_indices) else index
         scaled_frame = scaled_by_index.get(frame_index)
-        if scaled_frame is None and index < len(scaled_frames):
-            scaled_frame = scaled_frames[index]
         if scaled_frame is not None:
             pairs.append((frame_index, scaled_frame, robot_frame))
     return pairs

@@ -19,7 +19,6 @@ from typing import Any
 import numpy as np
 
 from hhtools.web.output.export_bundle import (
-    OBJECT_CSV_HEADER,
     _bake_export_joint_q,
     _robot_pkl_blob,
     _save_object_track_csv,
@@ -234,20 +233,17 @@ def _copy_r2r_scene_meshes(
         if key not in seen_mesh:
             seen_mesh.add(key)
             mesh_srcs.append(src)
-    try:
-        from hhtools.web.output.r2r_scene import resolve_object_mesh_path
-    except Exception:  # noqa: BLE001
-        resolve_object_mesh_path = None  # type: ignore[assignment]
-    if resolve_object_mesh_path is not None:
-        for csv_path in sorted(source_clip_dir.glob("object_*.csv")):
-            mesh = resolve_object_mesh_path(csv_path)
-            if mesh is None or not mesh.is_file():
-                continue
-            key = str(mesh.resolve())
-            if key in seen_mesh:
-                continue
-            seen_mesh.add(key)
-            mesh_srcs.append(mesh)
+    from hhtools.web.output.r2r_scene import resolve_object_mesh_path
+
+    for csv_path in sorted(source_clip_dir.glob("object_*.csv")):
+        mesh = resolve_object_mesh_path(csv_path)
+        if mesh is None or not mesh.is_file():
+            continue
+        key = str(mesh.resolve())
+        if key in seen_mesh:
+            continue
+        seen_mesh.add(key)
+        mesh_srcs.append(mesh)
 
     for src in mesh_srcs:
         dst = clip_dir / src.name
@@ -385,9 +381,6 @@ def write_r2r_export_bundle(
         mesh_names = _copy_r2r_scene_meshes(
             clip_dir, source_clip_dir, stem, ratio=ratio,
         )
-
-    if not has_scene and fmt == "csv":
-        return clip_dir / f"{stem}.csv"
 
     if not has_scene:
         return clip_dir / (f"{stem}.pkl" if fmt == "pkl" else f"{stem}.csv")

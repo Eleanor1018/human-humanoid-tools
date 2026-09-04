@@ -15,14 +15,11 @@ Profiles mirror the human-motion basket layout:
 
 from __future__ import annotations
 
-import logging
 import pickle
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-
-_log = logging.getLogger(__name__)
 
 _ROBOT_TRAJ_EXTS = (".csv", ".pkl", ".npz")
 
@@ -173,7 +170,7 @@ def _is_robot_export_trajectory(path: Path) -> bool:
         return False
     if ext == ".csv":
         return _sniff_robot_csv(path)
-    if ext in (".pkl", ".pickle"):
+    if ext == ".pkl":
         return _sniff_robot_pkl(path)
     if ext == ".npz":
         return _sniff_robot_npz(path)
@@ -195,7 +192,7 @@ def _robot_traj_rank(path: Path) -> tuple[int, int, str]:
                     break
         except (OSError, UnicodeDecodeError):
             pass
-    elif ext in (".pkl", ".pickle"):
+    elif ext == ".pkl":
         score = _joint_q_width_from_pkl(path)
     elif ext == ".npz":
         score = _joint_q_width_from_npz(path)

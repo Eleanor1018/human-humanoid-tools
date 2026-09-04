@@ -185,39 +185,6 @@ def _endpoint_overlay_z_correction(
     return 0.0
 
 
-def _uniform_overlay_z_correction(
-    motion: Motion,
-    scaler,
-    ratio: float,
-) -> float:
-    """Legacy pelvis-height delta (soma scaler minus uniform overlay).
-
-    Deprecated for display: aligning pelvis breaks foot-endpoint grounding.
-    Kept for diagnostics / tests only.
-    """
-    root_name = str(scaler.config.root_joint)
-    try:
-        j_root = list(scaler.joint_names).index(root_name)
-    except ValueError:
-        return 0.0
-    bone_names = motion.hierarchy.bone_names
-    if root_name not in bone_names:
-        return 0.0
-    hi = bone_names.index(root_name)
-    z_floor = float(human_source_floor_z_world(motion))
-    uniform_z = float((motion.positions[0, hi, 2] - z_floor) * ratio)
-    import dataclasses
-
-    motion_f0 = dataclasses.replace(
-        motion,
-        positions=motion.positions[:1],
-        quaternions=motion.quaternions[:1],
-    )
-    eff = scaler.apply(motion_f0)
-    scaler_z = float(eff.transforms[0, j_root, 2])
-    return scaler_z - uniform_z
-
-
 def _snap_scaled_overlay_positions_to_foot_floor(
     positions: np.ndarray,
     joint_names: tuple[str, ...] | list[str],

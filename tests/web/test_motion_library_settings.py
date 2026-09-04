@@ -58,15 +58,14 @@ def test_settings_store_round_trips_null_as_follow_default(tmp_path: Path) -> No
         {"schema_version": 1, "root": 7},
     ],
 )
-def test_settings_store_falls_back_for_invalid_content(
+def test_settings_store_uses_defaults_for_invalid_content(
     tmp_path: Path,
     payload: object,
 ) -> None:
     settings_path = tmp_path / "motion-library-settings.json"
     settings_path.write_text(json.dumps(payload), encoding="utf-8")
-    fallback = MotionLibrarySettings(root=(tmp_path / "fallback").resolve())
 
-    assert MotionLibrarySettingsStore(settings_path).load(fallback=fallback) == fallback
+    assert MotionLibrarySettingsStore(settings_path).load() == MotionLibrarySettings()
 
 
 @pytest.mark.parametrize(

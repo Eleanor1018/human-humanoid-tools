@@ -181,12 +181,8 @@ class MotionLibrarySettingsStore:
         self.path = Path(path).expanduser().resolve(strict=False)
         self._lock = threading.RLock()
 
-    def load(
-        self,
-        *,
-        fallback: MotionLibrarySettings | None = None,
-    ) -> MotionLibrarySettings:
-        default = fallback or MotionLibrarySettings()
+    def load(self) -> MotionLibrarySettings:
+        default = MotionLibrarySettings()
         with self._lock:
             if not self.path.is_file():
                 return default

@@ -26,12 +26,11 @@ def test_settings_store_round_trips_atomically(tmp_path: Path) -> None:
     assert not list(path.parent.glob("*.tmp"))
 
 
-def test_settings_store_falls_back_for_invalid_content(tmp_path: Path) -> None:
+def test_settings_store_uses_defaults_for_invalid_content(tmp_path: Path) -> None:
     path = tmp_path / "web-settings.json"
     path.write_text('{"schema_version": 1, "max_running_jobs": -1}', encoding="utf-8")
-    fallback = JobAdmissionSettings(max_running_jobs=4, max_queued_jobs=8)
 
-    assert JobAdmissionSettingsStore(path).load(fallback=fallback) == fallback
+    assert JobAdmissionSettingsStore(path).load() == JobAdmissionSettings()
 
 
 def test_settings_patch_is_partial_but_strict() -> None:

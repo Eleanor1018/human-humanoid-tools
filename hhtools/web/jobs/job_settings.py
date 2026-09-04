@@ -83,12 +83,8 @@ class JobAdmissionSettingsStore:
         self.path = Path(path).expanduser().resolve()
         self._lock = threading.RLock()
 
-    def load(
-        self,
-        *,
-        fallback: JobAdmissionSettings | None = None,
-    ) -> JobAdmissionSettings:
-        default = fallback or JobAdmissionSettings()
+    def load(self) -> JobAdmissionSettings:
+        default = JobAdmissionSettings()
         with self._lock:
             if not self.path.is_file():
                 return default

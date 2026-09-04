@@ -165,6 +165,21 @@ def test_known_offset_is_reported_in_metres() -> None:
     assert diagnostics["tracking"]["max_error_m"] == pytest.approx(0.1)
 
 
+def test_diagnostics_do_not_pair_different_source_frame_indices() -> None:
+    trajectory, scaled, ik_map, feet = _payloads()
+    trajectory["frame_indices"] = [10, 11, 12, 13]
+
+    diagnostics = build_result_diagnostics(
+        trajectory,
+        scaled,
+        ik_map=ik_map,
+        feet=feet,
+    )
+
+    assert diagnostics["available"] is False
+    assert diagnostics["reason"] == "no mapped target frames are available for comparison"
+
+
 def test_contact_diagnostics_report_result_foot_sliding() -> None:
     trajectory, scaled, ik_map, feet = _payloads(slide_per_frame=0.01)
 

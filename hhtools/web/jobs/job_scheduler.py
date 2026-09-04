@@ -115,8 +115,6 @@ class JobScheduler:
         self._condition = threading.Condition(threading.Lock())
         self._pending: deque[_ScheduledCall] = deque()
         self._reservations: set[int] = set()
-        self._running_tokens: set[int] = set()
-        self._threads: set[threading.Thread] = set()
         self._next_token = 1
         self._running = 0
         self._cancelling = 0
@@ -201,7 +199,6 @@ class JobScheduler:
                 call = self._pending.popleft()
                 promoted.append(call)
                 self._running += 1
-                self._running_tokens.add(call.token)
             self._condition.notify_all()
 
         # Starting threads outside the scheduler lock keeps submit/snapshot
@@ -281,7 +278,6 @@ class JobScheduler:
             starts_now = self.max_running_jobs == 0 or self._running < self.max_running_jobs
             if starts_now:
                 self._running += 1
-                self._running_tokens.add(token)
             else:
                 self._pending.append(call)
 
@@ -342,12 +338,10 @@ class JobScheduler:
                     # just before shutdown closes admission.  Return its slot and
                     # cancel it instead of starting new work after that boundary.
                     self._running -= 1
-                    self._running_tokens.discard(current.token)
                     self._cancelling += 1
                     cancelled_by_shutdown = True
                     self._condition.notify_all()
                 else:
-                    self._threads.add(thread)
                     try:
                         # Starting while holding the condition linearizes this
                         # transition against shutdown.  The new worker can run
@@ -356,9 +350,7 @@ class JobScheduler:
                         thread.start()
                     except BaseException as err:
                         start_error = err
-                        self._threads.discard(thread)
                         self._running -= 1
-                        self._running_tokens.discard(current.token)
                         # Terminal persistence performed by on_cancel is part of
                         # shutdown.  Track it before exposing running == 0 so a
                         # concurrent cleanup cannot delete files beneath it.
@@ -412,9 +404,7 @@ class JobScheduler:
             call.run()
         finally:
             with self._condition:
-                self._threads.discard(threading.current_thread())
                 self._running -= 1
-                self._running_tokens.discard(call.token)
                 next_call = self._take_next_locked()
                 self._condition.notify_all()
             if next_call is not None:
@@ -427,7 +417,6 @@ class JobScheduler:
             return None
         call = self._pending.popleft()
         self._running += 1
-        self._running_tokens.add(call.token)
         return call
 
     def _cancel_pending(self, pending: list[_ScheduledCall]) -> None:

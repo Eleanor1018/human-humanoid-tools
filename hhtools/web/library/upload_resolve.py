@@ -12,11 +12,8 @@ Three UI profiles mirror ``assets/motions`` layout:
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-
-_log = logging.getLogger(__name__)
 
 _MOTION_EXTS = (".bvh", ".glb", ".gltf", ".npz", ".npy", ".pkl", ".pt")
 _MIMIC_PRIORITY = (".npz", ".bvh", ".glb", ".gltf", ".npy", ".pkl", ".pt")
@@ -363,8 +360,6 @@ def detect_upload_profile(drop_dir: Path) -> str:
     if _find_omnicontact_bvhs(drop_dir):
         return "intermimic"
     inter = _find_intermimic_pkls(drop_dir)
-    if inter and any(_is_omomo_pkl(p) for p in inter):
-        return "intermimic"
     if inter:
         return "intermimic"
     return "mimic"
@@ -420,17 +415,6 @@ def enumerate_upload_clips(drop_dir: Path, profile: str = "auto") -> list[Upload
                 dataset=_infer_dataset_from_path(path, prof, clip_kind=kind),
             )
         )
-
-    if profile == "auto":
-        for kind, path in _find_meshmimic_primaries(drop_dir):
-            _add(path, "meshmimic", kind)
-        for bvh in _find_omnicontact_bvhs(drop_dir):
-            _add(bvh, "intermimic", "bvh")
-        for pkl in _find_intermimic_pkls(drop_dir):
-            _add(pkl, "intermimic", "pkl")
-        for path in _find_mimic_primaries(drop_dir):
-            _add(path, "mimic")
-        return out
 
     if profile == "intermimic":
         for bvh in _find_omnicontact_bvhs(drop_dir):
