@@ -48,6 +48,11 @@ export class LatestAsyncResultOwner<Identity, Value> {
     return this.#attempts.isCurrent(attempt);
   }
 
+  /** Token-only ownership for exact terminal compensation after identity loss. */
+  owns(attempt: LatestAsyncAttempt<Identity>): boolean {
+    return this.#attempts.owns(attempt);
+  }
+
   /**
    * Atomically retire the current request and publish its presentation receipt.
    * A stale attempt cannot replace a newer request or result.
@@ -66,6 +71,11 @@ export class LatestAsyncResultOwner<Identity, Value> {
   /** Retire a current failed/cancelled request without publishing a result. */
   finish(attempt: LatestAsyncAttempt<Identity>): boolean {
     return this.#attempts.finish(attempt);
+  }
+
+  /** Retire an exact request after one of its captured capabilities vanished. */
+  abandon(attempt: LatestAsyncAttempt<Identity>): boolean {
+    return this.#attempts.abandon(attempt);
   }
 
   /** Revoke the current request and any hidden result waiting for presentation. */

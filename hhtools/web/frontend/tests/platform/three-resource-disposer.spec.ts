@@ -41,6 +41,46 @@ describe("ThreeResourceDisposer", () => {
     expect(root.children).toHaveLength(2);
   });
 
+  it("disposes a terminal forest once while preserving successor-shared resources", () => {
+    const sharedGeometry = new BoxGeometry();
+    const sharedTexture = new Texture();
+    const sharedMaterial = new MeshBasicMaterial({ map: sharedTexture });
+    const terminalGeometry = new BoxGeometry();
+    const terminalTexture = new Texture();
+    const terminalMaterial = new MeshBasicMaterial({ map: terminalTexture });
+    const disposeSharedGeometry = vi.spyOn(sharedGeometry, "dispose");
+    const disposeSharedTexture = vi.spyOn(sharedTexture, "dispose");
+    const disposeSharedMaterial = vi.spyOn(sharedMaterial, "dispose");
+    const disposeTerminalGeometry = vi.spyOn(terminalGeometry, "dispose");
+    const disposeTerminalTexture = vi.spyOn(terminalTexture, "dispose");
+    const disposeTerminalMaterial = vi.spyOn(terminalMaterial, "dispose");
+    const firstRetiredRoot = new Group();
+    const secondRetiredRoot = new Group();
+    const successorRoot = new Group();
+    firstRetiredRoot.add(
+      new Mesh(sharedGeometry, sharedMaterial),
+      new Mesh(terminalGeometry, terminalMaterial),
+    );
+    // A terminal identity reachable through multiple detached roots still has
+    // one disposal owner for this transaction.
+    secondRetiredRoot.add(new Mesh(terminalGeometry, terminalMaterial));
+    // The successor may legitimately share identities with the retired graph.
+    // Its reachability subtracts the entire material/texture chain.
+    successorRoot.add(new Mesh(sharedGeometry, sharedMaterial));
+
+    new ThreeResourceDisposer().disposeObject3DForest(
+      [firstRetiredRoot, secondRetiredRoot],
+      { preserveRoots: [successorRoot] },
+    );
+
+    expect(disposeSharedGeometry).not.toHaveBeenCalled();
+    expect(disposeSharedTexture).not.toHaveBeenCalled();
+    expect(disposeSharedMaterial).not.toHaveBeenCalled();
+    expect(disposeTerminalGeometry).toHaveBeenCalledOnce();
+    expect(disposeTerminalTexture).toHaveBeenCalledOnce();
+    expect(disposeTerminalMaterial).toHaveBeenCalledOnce();
+  });
+
   it("finds textures in cyclic ShaderMaterial uniform structures", () => {
     const direct = new Texture();
     const nested = new Texture();

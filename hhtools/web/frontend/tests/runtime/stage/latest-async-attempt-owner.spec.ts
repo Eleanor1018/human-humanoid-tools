@@ -161,6 +161,31 @@ describe("LatestAsyncAttemptOwner", () => {
     expect(owner.isCurrent(second)).toBe(false);
   });
 
+  it("abandons an owned token after its identity capability disappears", () => {
+    let activeName = "A";
+    const owner = new LatestAsyncAttemptOwner<Identity>(
+      (identity) => identity.name === activeName,
+    );
+    const lostCapability = owner.begin({ name: "A" });
+    activeName = "B";
+
+    expect(owner.isCurrent(lostCapability)).toBe(false);
+    expect(owner.owns(lostCapability)).toBe(true);
+    expect(owner.finish(lostCapability)).toBe(false);
+    expect(owner.abandon(lostCapability)).toBe(true);
+    expect(owner.owns(lostCapability)).toBe(false);
+    expect(owner.abandon(lostCapability)).toBe(false);
+  });
+
+  it("never abandons a successor through an older token", () => {
+    const owner = new LatestAsyncAttemptOwner<Identity>(() => true);
+    const first = owner.begin({ name: "A" });
+    const second = owner.begin({ name: "B" });
+
+    expect(owner.abandon(first)).toBe(false);
+    expect(owner.isCurrent(second)).toBe(true);
+  });
+
   it("reports rollback as incomplete when cleanup starts a same-identity successor", () => {
     const owner = new LatestAsyncAttemptOwner<Identity>(() => true);
     const first = owner.begin({ name: "same" });

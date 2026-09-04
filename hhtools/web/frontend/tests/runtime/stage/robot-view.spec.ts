@@ -257,6 +257,26 @@ describe("RobotView", () => {
     expect(view.linkMeshes).toEqual({});
   });
 
+  it("retires an attached candidate invalidated by a claim-only successor", async () => {
+    const parsed = gltfWithMesh();
+    const disposeGeometry = vi.spyOn(parsed.geometry, "dispose");
+    const disposeMaterial = vi.spyOn(parsed.material, "dispose");
+    const view = new RobotView({ parseGltf: async () => parsed.gltf });
+    const claimOnAttach = (): void => {
+      view.group.removeEventListener("childadded", claimOnAttach);
+      view.claimLoadGeneration();
+    };
+    view.group.addEventListener("childadded", claimOnAttach);
+
+    await expect(view.load(robotPayload("claimed"))).resolves.toBe("stale");
+
+    expect(disposeGeometry).toHaveBeenCalledOnce();
+    expect(disposeMaterial).toHaveBeenCalledOnce();
+    expect(view.group.children).toHaveLength(0);
+    expect(view.links).toEqual([]);
+    expect(view.linkMeshes).toEqual({});
+  });
+
   it("disposes mapped, residual, replaced, and shared GLTF resources once", async () => {
     const sharedGeometry = new THREE.BufferGeometry();
     sharedGeometry.setAttribute(

@@ -51,9 +51,32 @@ export class LatestAsyncAttemptOwner<Identity> {
     return identityIsCurrent && this.#owns(attempt);
   }
 
+  /**
+   * Whether this exact token is still active, without consulting its identity.
+   *
+   * Callers normally want `isCurrent`. `owns` is reserved for terminal
+   * compensation after an external capability in the captured identity has
+   * already disappeared: the losing task must still retire its own spinner,
+   * but must never touch a newer task.
+   */
+  owns(attempt: LatestAsyncAttempt<Identity>): boolean {
+    return this.#owns(attempt);
+  }
+
   /** Retire one successful or rolled-back attempt without touching a successor. */
   finish(attempt: LatestAsyncAttempt<Identity>): boolean {
     if (!this.isCurrent(attempt)) return false;
+    if (!this.#owns(attempt)) return false;
+    this.#generation += 1;
+    this.#current = null;
+    return true;
+  }
+
+  /**
+   * Retire an exact active token whose captured capability is no longer valid.
+   * Unlike `finish`, this deliberately skips identity validation.
+   */
+  abandon(attempt: LatestAsyncAttempt<Identity>): boolean {
     if (!this.#owns(attempt)) return false;
     this.#generation += 1;
     this.#current = null;

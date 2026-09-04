@@ -276,6 +276,16 @@ export class RobotView {
     return this.#loadGeneration;
   }
 
+  /**
+   * Claim the current committed content for a new outer intent while making
+   * every in-flight parser stale. Unlike clear(), this does not dispose the
+   * stable content; the claimant may reuse it when its robot identity matches.
+   */
+  claimLoadGeneration(): number {
+    this.#loadGeneration += 1;
+    return this.#loadGeneration;
+  }
+
   /** Prevent an older rejection from clearing state owned by a newer load. */
   isLoadGenerationCurrent(generation: number): boolean {
     return this.#isCurrent(generation);
@@ -659,7 +669,20 @@ export class RobotView {
       this.group.scale.set(1, 1, 1);
       this.group.add(resources.liveRoot);
       this.group.updateMatrixWorld(true);
-      if (!this.#isCurrent(generation)) return "stale";
+      if (!this.#isCurrent(generation)) {
+        // A claim-only successor can invalidate A after attachment without
+        // calling clear(). Retire only A's exact resource record; a successor
+        // installed reentrantly has already replaced #resources and survives.
+        if (this.#resources === resources) {
+          this.#resources = null;
+          this.#disposeResourcesSafely(
+            resources,
+            "stale robot commit cleanup failed",
+          );
+          if (this.#resources === null) this.#resetAliasesAndTransform();
+        }
+        return "stale";
+      }
     } catch (error) {
       const stillCurrent = this.#isCurrent(generation);
       if (this.#resources === resources) {

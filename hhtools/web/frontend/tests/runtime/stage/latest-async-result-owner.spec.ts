@@ -64,6 +64,21 @@ describe("LatestAsyncResultOwner", () => {
     expect(owner.finish(second)).toBe(false);
   });
 
+  it("abandons only the owned request after identity loss", () => {
+    let activeName = "A";
+    const owner = new LatestAsyncResultOwner<Identity, ResultValue>(
+      (identity) => identity.name === activeName,
+    );
+    const lostCapability = owner.begin({ name: "A" });
+    activeName = "B";
+
+    expect(owner.isCurrent(lostCapability)).toBe(false);
+    expect(owner.owns(lostCapability)).toBe(true);
+    expect(owner.abandon(lostCapability)).toBe(true);
+    expect(owner.owns(lostCapability)).toBe(false);
+    expect(owner.pendingPresentation).toBeNull();
+  });
+
   it("consumes an exact presentation receipt once", () => {
     const owner = new LatestAsyncResultOwner<Identity, ResultValue>(() => true);
     const attempt = owner.begin({ name: "A" });

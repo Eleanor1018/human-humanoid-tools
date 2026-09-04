@@ -10,6 +10,8 @@ import type {
 export interface ThreeResourceExtras {
   readonly geometries?: readonly BufferGeometry[];
   readonly materials?: readonly Material[];
+  /** Resources reachable from transferred roots must remain live. */
+  readonly preserveRoots?: readonly Object3D[];
   readonly textures?: readonly Texture[];
 }
 
@@ -95,9 +97,23 @@ export class ThreeResourceDisposer {
     root: Object3D,
     extras: ThreeResourceExtras = {},
   ): void {
+    this.disposeObject3DForest([root], extras);
+  }
+
+  /**
+   * Dispose a detached forest as one identity-deduplicated transaction.
+   * `preserveRoots` subtracts resources still reachable from nodes transferred
+   * to another owner, including material/texture identities shared with the
+   * retired forest.
+   */
+  disposeObject3DForest(
+    roots: readonly Object3D[],
+    extras: ThreeResourceExtras = {},
+  ): void {
     const resources = emptyCollection();
-    this.#collectObject3D(root, resources);
+    for (const root of roots) this.#collectObject3D(root, resources);
     this.#collectExtras(extras, resources);
+    this.#subtractPreservedRoots(extras.preserveRoots ?? [], resources);
     this.#disposeCollected(resources);
   }
 
@@ -114,6 +130,7 @@ export class ThreeResourceDisposer {
       this.#collectObject3D(child, resources);
     }
     this.#collectExtras(extras, resources);
+    this.#subtractPreservedRoots(extras.preserveRoots ?? [], resources);
 
     try {
       this.#disposeCollected(resources);
@@ -188,6 +205,19 @@ export class ThreeResourceDisposer {
     for (const texture of extras.textures ?? []) {
       this.#collectTexture(texture, resources);
     }
+  }
+
+  #subtractPreservedRoots(
+    roots: readonly Object3D[],
+    resources: CollectedThreeResources,
+  ): void {
+    if (roots.length === 0) return;
+    const preserved = emptyCollection();
+    for (const root of roots) this.#collectObject3D(root, preserved);
+    for (const geometry of preserved.geometries) resources.geometries.delete(geometry);
+    for (const material of preserved.materials) resources.materials.delete(material);
+    for (const skeleton of preserved.skeletons) resources.skeletons.delete(skeleton);
+    for (const texture of preserved.textures) resources.textures.delete(texture);
   }
 
   #collectMaterialValue(
