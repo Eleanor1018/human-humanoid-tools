@@ -71,7 +71,7 @@ export class OptionalComponentStore {
       .map((candidate) => resolve(candidate))
       .find(isGvhmrCheckout)
     const python = this.resolveGvhmrPython(root, env)
-    const runtime = this.platform === 'win32' ? 'docker' : 'local'
+    const runtime = this.platform === 'linux' ? 'local' : 'docker'
 
     return {
       gvhmr: {
@@ -104,7 +104,7 @@ export class OptionalComponentStore {
       throw new Error(`This folder is not an official GVHMR checkout: ${resolved}`)
     }
     const resolvedPython = python ? resolve(python) : this.resolveGvhmrPython(resolved, {})
-    if (this.platform !== 'win32' && !resolvedPython) {
+    if (this.platform === 'linux' && !resolvedPython) {
       throw new Error('Choose the Python executable from the installed GVHMR environment')
     }
     if (resolvedPython && !existsSync(resolvedPython)) {
@@ -123,7 +123,7 @@ export class OptionalComponentStore {
     root: string | undefined,
     env: NodeJS.ProcessEnv,
   ): string | undefined {
-    if (this.platform === 'win32') return undefined
+    if (this.platform !== 'linux') return undefined
     const home = env.HOME
     const candidates = [
       env.HHTOOLS_GVHMR_PYTHON,
