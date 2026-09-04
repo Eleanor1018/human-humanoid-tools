@@ -12,7 +12,7 @@ export interface SharedStagePlayerSnapshot {
   readonly playbarVisible: boolean;
 }
 
-/** Exact shared-player target owned by one committed R2R trajectory result. */
+/** Exact shared-player target owned by one committed R2R domain result. */
 export interface R2rPlaybackPresentation extends SharedStagePlayerSnapshot {
   readonly active: true;
 }

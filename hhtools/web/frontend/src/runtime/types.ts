@@ -760,7 +760,7 @@ export interface HhAppBridge {
   previewRobotClip: (
     entry: LibraryEntry,
     robotName?: string,
-  ) => Promise<RobotExportPreviewResult>
+  ) => Promise<RobotExportPreviewResult | null>
   populateDvRobotSelect: (preferred?: string) => Promise<string>
   addToBasket: (entries: LibraryEntry[], options?: { silent?: boolean }) => void
   switchInspectorPanel: (panelId: string) => void

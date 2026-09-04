@@ -57,11 +57,21 @@ function runtimeText(en: string, zh: string): string {
   return document.documentElement.lang.toLowerCase().startsWith("zh") ? zh : en;
 }
 
-function renderSpinnerStatus(container: HTMLElement | null, message: unknown): void {
-  if (!container) return;
+function renderSpinnerStatus(
+  container: HTMLElement | null,
+  message: unknown,
+  isCurrent: () => boolean = () => true,
+): boolean {
+  if (!isCurrent()) return false;
+  if (!container) return true;
   const spinner = document.createElement("span");
+  if (!isCurrent()) return false;
   spinner.className = "spin";
-  container.replaceChildren(spinner, document.createTextNode(` ${String(message ?? "")}`));
+  if (!isCurrent()) return false;
+  const messageNode = document.createTextNode(` ${String(message ?? "")}`);
+  if (!isCurrent()) return false;
+  container.replaceChildren(spinner, messageNode);
+  return isCurrent();
 }
 
 function renderMetaRows(
@@ -78,12 +88,26 @@ function renderMetaRows(
   container.replaceChildren(...elements);
 }
 
-function renderStatusChip(container: HTMLElement | null, text: unknown, className = ""): void {
-  if (!container) return;
+function renderStatusChip(
+  container: HTMLElement | null,
+  text: unknown,
+  className = "",
+  isCurrent: () => boolean = () => true,
+): boolean {
+  if (!isCurrent()) return false;
+  if (!container) return true;
   const chip = document.createElement("span");
+  if (!isCurrent()) return false;
   chip.className = `status-chip ${className}`.trim();
-  chip.append(textElement("span", "dot", ""), document.createTextNode(String(text ?? "")));
+  if (!isCurrent()) return false;
+  const dot = textElement("span", "dot", "");
+  if (!isCurrent()) return false;
+  const messageNode = document.createTextNode(String(text ?? ""));
+  if (!isCurrent()) return false;
+  chip.append(dot, messageNode);
+  if (!isCurrent()) return false;
   container.replaceChildren(chip);
+  return isCurrent();
 }
 
 type ValidationTone = "ok" | "warn" | "error";
@@ -92,11 +116,18 @@ type ValidationTone = "ok" | "warn" | "error";
 function renderValidationSummary(
   container: HTMLElement | null,
   rows: ReadonlyArray<readonly [ValidationTone, string]>,
-): void {
-  if (!container) return;
-  container.replaceChildren(
-    ...rows.map(([tone, message]) => textElement("div", `validation-line ${tone}`, message)),
-  );
+  isCurrent: () => boolean = () => true,
+): boolean {
+  if (!isCurrent()) return false;
+  if (!container) return true;
+  const elements: HTMLElement[] = [];
+  for (const [tone, message] of rows) {
+    const element = textElement("div", `validation-line ${tone}`, message);
+    if (!isCurrent()) return false;
+    elements.push(element);
+  }
+  container.replaceChildren(...elements);
+  return isCurrent();
 }
 
 function isPlaybackPreview(payload: PlaybackPayload | null | undefined): boolean {
@@ -309,6 +340,183 @@ function disposeDetachedThreeObject(
     threeResourceDisposer.disposeObject3DResources(object);
   } catch (error) {
     console.warn(context, errorMessage(error));
+  }
+}
+
+/**
+ * Detach one retired node despite a synchronous listener adding it back to the
+ * same owner. A foreign final parent is an ownership transfer and is preserved.
+ * After two public removals, a same-owner re-add is detached without another
+ * event so a hostile listener cannot create an infinite retirement loop.
+ */
+function detachRetiredThreeObject(
+  owner: THREE.Object3D,
+  object: THREE.Object3D,
+  errors: unknown[],
+): void {
+  for (let attempt = 0; attempt < 2 && object.parent === owner; attempt++) {
+    try {
+      owner.remove(object);
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (object.parent !== owner) return;
+
+  forceDetachRetiredThreeObject(owner, object);
+}
+
+/** Final no-event detach after the bounded public removal opportunity. */
+function forceDetachRetiredThreeObject(
+  owner: THREE.Object3D,
+  object: THREE.Object3D,
+): void {
+  if (object.parent !== owner) return;
+  const index = owner.children.indexOf(object);
+  if (index >= 0) owner.children.splice(index, 1);
+  object.parent = null;
+}
+
+/** Whether `node` is currently inside the stable View owner's scene realm. */
+function isInThreeOwnerRealm(
+  node: THREE.Object3D,
+  stableOwner: THREE.Object3D,
+): boolean {
+  let current: THREE.Object3D | null = node;
+  const seen = new Set<THREE.Object3D>();
+  while (current && !seen.has(current)) {
+    if (current === stableOwner) return true;
+    seen.add(current);
+    current = current.parent;
+  }
+  return false;
+}
+
+/**
+ * Terminally retire one detached View generation without touching a successor
+ * installed under the stable scene owner from a Three.js callback.
+ *
+ * Ownership is classified only after every fallible remove(): a node adopted
+ * by another parent is preserved, while a null-parented or still-retired child
+ * remains this generation's disposal obligation. Direct same-owner re-adds are
+ * not adoption and are force-detached with the bounded helper above.
+ */
+function retireThreeContentRoot(
+  stableOwner: THREE.Object3D,
+  retiredRoot: THREE.Object3D,
+  context: string,
+  markTerminal: (child: THREE.Object3D) => void = () => {},
+  childrenKnownBeforeAdoption: readonly THREE.Object3D[] = [],
+  terminalExtras: ThreeResourceExtras = {},
+): void {
+  const errors: unknown[] = [];
+  const originalChildren = [
+    ...new Set([...childrenKnownBeforeAdoption, ...retiredRoot.children]),
+  ];
+  const originalSet = new Set<THREE.Object3D>(originalChildren);
+
+  detachRetiredThreeObject(stableOwner, retiredRoot, errors);
+  // Removal callbacks may move an original child directly onto the stable
+  // owner and may re-add the root. Give each case a bounded public removal
+  // opportunity before the final no-event ownership classification.
+  for (let pass = 0; pass < 3; pass++) {
+    detachRetiredThreeObject(stableOwner, retiredRoot, errors);
+    for (const child of originalChildren) {
+      if (child.parent === stableOwner) {
+        detachRetiredThreeObject(stableOwner, child, errors);
+      }
+    }
+  }
+
+  // Moving an old node into a successor subtree under the same stable owner is
+  // not a foreign transfer. Detach from that exact immediate parent so A can
+  // terminally release it without relying on cross-generation tombstones.
+  if (
+    retiredRoot.parent
+    && isInThreeOwnerRealm(retiredRoot, stableOwner)
+  ) {
+    forceDetachRetiredThreeObject(retiredRoot.parent, retiredRoot);
+  }
+  forceDetachRetiredThreeObject(stableOwner, retiredRoot);
+  for (const child of originalChildren) {
+    if (child.parent && isInThreeOwnerRealm(child, stableOwner)) {
+      forceDetachRetiredThreeObject(child.parent, child);
+    }
+  }
+
+  const topAncestor = (node: THREE.Object3D): THREE.Object3D => {
+    let current = node;
+    const seen = new Set<THREE.Object3D>();
+    while (current.parent && !seen.has(current)) {
+      seen.add(current);
+      current = current.parent;
+    }
+    return current;
+  };
+  const terminalRootSet = new Set<THREE.Object3D>();
+  const preservedRootSet = new Set<THREE.Object3D>();
+  if (retiredRoot.parent === null) terminalRootSet.add(retiredRoot);
+  else preservedRootSet.add(retiredRoot);
+  for (const child of originalChildren) {
+    const top = topAncestor(child);
+    if (
+      top.parent === null
+      && (top === retiredRoot || originalSet.has(top))
+    ) {
+      terminalRootSet.add(top);
+    } else {
+      // The final ancestry leaves our detached forest. This transfer happened
+      // before the terminal resource claim and must remain live.
+      preservedRootSet.add(child);
+    }
+  }
+
+  const terminalRoots = [...terminalRootSet].filter((root) => {
+    let parent = root.parent;
+    while (parent) {
+      if (terminalRootSet.has(parent)) return false;
+      parent = parent.parent;
+    }
+    return true;
+  });
+  const claimedNodes = new Set<THREE.Object3D>();
+  for (const root of terminalRoots) {
+    root.traverse((node) => { claimedNodes.add(node); });
+  }
+  // Claim the complete terminal forest before the first resource callback.
+  // One disposer transaction deduplicates shared resources and subtracts
+  // identities still reachable from pre-claim ownership transfers.
+  // The ownership cutoff is this claim: dispose callbacks may move tombstoned
+  // nodes, but must not attach the same terminal GPU identity to a fresh node.
+  for (const node of claimedNodes) markTerminal(node);
+  try {
+    threeResourceDisposer.disposeObject3DForest(terminalRoots, {
+      ...terminalExtras,
+      preserveRoots: [
+        ...(terminalExtras.preserveRoots ?? []),
+        // A successor under the stable owner may deliberately reuse a retired
+        // generation's geometry/material identity. Subtract its whole live
+        // forest before releasing the detached generation.
+        stableOwner,
+        ...preservedRootSet,
+      ],
+    });
+  } catch (error) {
+    errors.push(error);
+  }
+
+  for (const node of claimedNodes) {
+    // A dispose callback can only attempt adoption after terminal ownership
+    // was tombstoned. Detach every claimed top/subtree node whose new parent is
+    // outside the claimed forest, so a successor cannot retain disposed data.
+    const lateParent = node.parent;
+    if (lateParent && !claimedNodes.has(lateParent)) {
+      forceDetachRetiredThreeObject(lateParent, node);
+    }
+  }
+  forceDetachRetiredThreeObject(stableOwner, retiredRoot);
+  if (errors.length > 0) {
+    throw new AggregateError(errors, context);
   }
 }
 
@@ -617,36 +825,92 @@ function fmtBytes(n: number): string {
   return `${n.toFixed(i ? 1 : 0)} ${u[i]}`;
 }
 
-function showLoading(label?: string): void {
+interface LoadingOverlayPresentation {
+  readonly revision: number;
+}
+
+let loadingOverlayRevision = 0;
+
+function loadingOverlayIsCurrent(
+  presentation: LoadingOverlayPresentation,
+): boolean {
+  return presentation.revision === loadingOverlayRevision;
+}
+
+function showLoading(
+  label?: string | (() => string),
+): LoadingOverlayPresentation {
+  const presentation = Object.freeze({ revision: ++loadingOverlayRevision });
+  const isCurrent = (): boolean => loadingOverlayIsCurrent(presentation);
+  let resolvedLabel: string | undefined;
+  try {
+    resolvedLabel = typeof label === "function" ? label() : label;
+  } catch (error) {
+    if (isCurrent()) console.warn("loading overlay label failed", errorMessage(error));
+    resolvedLabel = "Loading…";
+  }
+  if (!isCurrent()) return presentation;
   const o = document.getElementById("load-overlay");
-  if (!o) return;
-  document.getElementById("load-label").textContent = label
-    || runtimeText("Loading…", "加载中…");
-  document.getElementById("load-sub").textContent = "";
-  document.getElementById("load-bar").style.width = "0%";
+  if (!isCurrent() || !o) return presentation;
+  const labelElement = document.getElementById("load-label");
+  if (!isCurrent()) return presentation;
+  if (labelElement) {
+    labelElement.textContent = resolvedLabel || "Loading…";
+  }
+  if (!isCurrent()) return presentation;
+  const subElement = document.getElementById("load-sub");
+  if (!isCurrent()) return presentation;
+  if (subElement) subElement.textContent = "";
+  if (!isCurrent()) return presentation;
+  const bar = document.getElementById("load-bar");
+  if (!isCurrent()) return presentation;
+  if (bar) bar.style.width = "0%";
+  if (!isCurrent()) return presentation;
   o.classList.remove("hidden");
+  if (!isCurrent()) return presentation;
   o.classList.add("indet"); // server still computing → animated sweep
+  return presentation;
 }
 
 /** ``frac`` in [0,1] for a determinate bar, or ``null`` for indeterminate. */
-function setLoadingProgress(frac: number | null, sub?: string | null): void {
+function setLoadingProgress(
+  frac: number | null,
+  sub?: string | null,
+  presentation?: LoadingOverlayPresentation,
+): boolean {
+  const isCurrent = (): boolean => (
+    presentation === undefined || loadingOverlayIsCurrent(presentation)
+  );
+  if (!isCurrent()) return false;
   const o = document.getElementById("load-overlay");
-  if (!o) return;
+  if (!isCurrent() || !o) return false;
   const bar = document.getElementById("load-bar");
+  if (!isCurrent()) return false;
   if (frac == null) {
     o.classList.add("indet");
   } else {
     o.classList.remove("indet");
-    bar.style.width = `${Math.max(2, Math.min(100, frac * 100)).toFixed(0)}%`;
+    if (!isCurrent()) return false;
+    if (bar) bar.style.width = `${Math.max(2, Math.min(100, frac * 100)).toFixed(0)}%`;
   }
-  if (sub != null) document.getElementById("load-sub").textContent = sub;
+  if (!isCurrent()) return false;
+  if (sub != null) {
+    const subElement = document.getElementById("load-sub");
+    if (!isCurrent()) return false;
+    if (subElement) subElement.textContent = sub;
+  }
+  return isCurrent();
 }
 
-function hideLoading(): void {
+function hideLoading(presentation: LoadingOverlayPresentation): boolean {
+  const isCurrent = (): boolean => loadingOverlayIsCurrent(presentation);
+  if (!isCurrent()) return false;
   const o = document.getElementById("load-overlay");
-  if (!o) return;
+  if (!isCurrent() || !o) return false;
   o.classList.add("hidden");
+  if (!isCurrent()) return false;
   o.classList.remove("indet");
+  return isCurrent();
 }
 
 // Read a (large) JSON response as a stream so the load bar reflects real
@@ -1407,6 +1671,14 @@ class EnvView {
   }
 }
 
+interface RetirableThreeContentGeneration {
+  readonly root: THREE.Group;
+  /** Includes children published before their first fallible Object3D.add(). */
+  readonly ownedChildren: Set<THREE.Object3D>;
+  /** Covers resources allocated before a child constructor/add can publish them. */
+  readonly extras: ThreeResourceExtras;
+}
+
 // Scaled terrain + props in the robot retarget frame (teal tint, co-located with robot).
 class ScaledEnvView {
   readonly group: THREE.Group;
@@ -1415,29 +1687,54 @@ class ScaledEnvView {
   joints: SceneObjectPayload[] | null = null;
   motionToken: string | null | undefined = null;
   clipDuration = 1;
-  private _objectGlbUrl: ((object: SceneObjectPayload, index: number) => string | null) | null = null;
   private _loadGeneration = 0;
+  private _content: RetirableThreeContentGeneration | null = null;
+  /**
+   * Tracks children whose GPU resources were claimed by retired-root cleanup.
+   * An async GLTF callback can then distinguish a child detached before that
+   * cleanup (still ours) from one detached and disposed by the cleanup itself.
+   */
+  private readonly _disposedWithRetiredRoot = new WeakSet<THREE.Object3D>();
 
   constructor(group: THREE.Group = scaledEnvGroup) {
     this.group = group;
     this.group.visible = false;
   }
-  clear(): void {
-    this._loadGeneration += 1;
-    try {
-      threeResourceDisposer.disposeObject3DChildren(this.group);
-    } finally {
-      try {
-        this.group.clear();
-      } finally {
-        this.objectMeshes = [];
-        this.objectTraj = [];
-        this.joints = null;
-        this.motionToken = null;
-        this._objectGlbUrl = null;
-        this.clipDuration = 1;
-      }
+  clear(isCurrent: () => boolean = () => true): boolean {
+    if (!isCurrent()) return false;
+    const expectedGeneration = this._loadGeneration + 1;
+    this._loadGeneration = expectedGeneration;
+    // Take every live alias before dispatching a Three.js removal/disposal
+    // event. A nested successor can then publish into the stable group without
+    // the predecessor's disposer ever seeing or clearing the new subtree.
+    const retired = this._content;
+    this._content = null;
+    this.objectMeshes = [];
+    this.objectTraj = [];
+    this.joints = null;
+    this.motionToken = null;
+    this.clipDuration = 1;
+    if (!retired) {
+      return isCurrent() && this._loadGeneration === expectedGeneration;
     }
+    try {
+      retireThreeContentRoot(
+        this.group,
+        retired.root,
+        "scaled-environment retired root cleanup failed",
+        (child) => { this._disposedWithRetiredRoot.add(child); },
+        [...retired.ownedChildren],
+        retired.extras,
+      );
+    } catch (error) {
+      // A successor installed from a removal/disposal callback owns the live
+      // View now. Its generation must not be relabeled as this clear's error.
+      if (!isCurrent() || this._loadGeneration !== expectedGeneration) {
+        return false;
+      }
+      throw error;
+    }
+    return isCurrent() && this._loadGeneration === expectedGeneration;
   }
   load(
     scene: ScenePayload | null | undefined,
@@ -1446,71 +1743,549 @@ class ScaledEnvView {
       duration?: number;
       objectGlbUrl?: (object: SceneObjectPayload, index: number) => string | null;
     } = {},
-  ): void {
-    this.clear();
-    if (!scene) return;
-    const generation = this._loadGeneration;
-    this.motionToken = motionToken;
-    this._objectGlbUrl = opts.objectGlbUrl || null;
-    this.clipDuration = Math.max(0.1, opts.duration ?? state.motion?.duration ?? 1);
-    if (scene.terrain) {
-      const m = buildTerrainMesh(
-        scene.terrain,
+    isCurrent: () => boolean = () => true,
+  ): boolean {
+    if (!isCurrent()) return false;
+    const expectedGeneration = this._loadGeneration + 1;
+    this.clear(isCurrent);
+    // `clear()` disposes foreign Three.js resources whose callbacks may start
+    // a successor. Never rebuild this generation after such a reentry.
+    if (
+      !isCurrent()
+      || this._loadGeneration !== expectedGeneration
+    ) return false;
+    const generationMayCommit = (): boolean => (
+      isCurrent() && this._loadGeneration === expectedGeneration
+    );
+    if (!scene) return generationMayCommit();
+    const generation = expectedGeneration;
+    const objectGlbUrl = opts.objectGlbUrl || null;
+    const clipDuration = Math.max(
+      0.1,
+      opts.duration ?? state.motion?.duration ?? 1,
+    );
+    const candidate = new THREE.Group();
+    const ownedChildren = new Set<THREE.Object3D>();
+    const registerOwnedSubtree = (object: THREE.Object3D): void => {
+      object.traverse((node) => { ownedChildren.add(node); });
+    };
+    const candidateGeometries: THREE.BufferGeometry[] = [];
+    const candidateMaterials: THREE.Material[] = [];
+    const objectMeshes: THREE.Object3D[] = [];
+    const objectTraj: SceneObjectPayload[] = [];
+    const meshRequests: Array<{
+      readonly box: THREE.Mesh;
+      readonly index: number;
+      readonly url: string;
+    }> = [];
+    let detachedCandidateRetired = false;
+    const retireDetachedCandidate = (context: string): void => {
+      if (detachedCandidateRetired) return;
+      detachedCandidateRetired = true;
+      retireThreeContentRoot(
+        this.group,
+        candidate,
+        context,
+        (child) => { this._disposedWithRetiredRoot.add(child); },
+        [...ownedChildren],
         {
-          color: 0x5c7a9e, roughness: 0.9, side: THREE.DoubleSide, flatShading: true,
-          transparent: true, opacity: 0.92,
+          geometries: candidateGeometries,
+          materials: candidateMaterials,
         },
       );
-      if (m) this.group.add(m);
+    };
+    const abandonCandidate = (): false => {
+      try {
+        retireDetachedCandidate("stale scaled-environment candidate cleanup failed");
+      } catch (error) {
+        // Stale cleanup cannot relabel a successor's successful generation.
+        console.warn("stale scaled-environment candidate cleanup failed", errorMessage(error));
+      }
+      return false;
+    };
+    try {
+      if (scene.terrain) {
+        const m = buildTerrainMesh(
+          scene.terrain,
+          {
+            color: 0x5c7a9e, roughness: 0.9, side: THREE.DoubleSide, flatShading: true,
+            transparent: true, opacity: 0.92,
+          },
+        );
+        if (m) {
+          registerOwnedSubtree(m);
+          candidate.add(m);
+        }
+        if (!generationMayCommit()) return abandonCandidate();
+      }
+      for (const [i, object] of (scene.objects || []).entries()) {
+        const color = object.color
+          ? (object.color[0] << 16) | (object.color[1] << 8) | object.color[2]
+          : 0x6a9fd4;
+        const geometry = new THREE.BoxGeometry(
+          object.extents[0],
+          object.extents[1],
+          object.extents[2],
+        );
+        candidateGeometries.push(geometry);
+        const material = new THREE.MeshStandardMaterial({
+          color,
+          transparent: true,
+          opacity: object.opacity ?? 0.7,
+          roughness: 0.55,
+        });
+        candidateMaterials.push(material);
+        const box = new THREE.Mesh(geometry, material);
+        registerOwnedSubtree(box);
+        // Once the complete child is registered, its subtree—not extras—owns
+        // these resources. This prevents a later clear from disposing an old
+        // placeholder a second time after an async GLTF swap.
+        candidateGeometries.pop();
+        candidateMaterials.pop();
+        candidate.add(box);
+        objectMeshes.push(box);
+        objectTraj.push(object);
+        const sourceIndex = object.source_index ?? i;
+        const glbUrl = objectGlbUrl
+          ? objectGlbUrl(object, sourceIndex)
+          : (motionToken
+            ? `/api/object_glb?token=${motionToken}&index=${sourceIndex}${
+              object.scale != null && Number.isFinite(object.scale)
+                ? `&scale=${encodeURIComponent(object.scale)}` : ""
+            }`
+            : null);
+        if (!generationMayCommit()) return abandonCandidate();
+        if (object.has_mesh && glbUrl) {
+          meshRequests.push({ box, index: i, url: glbUrl });
+        }
+      }
+    } catch (error) {
+      // URL factories are integration code and may throw after terrain or
+      // placeholders already allocated GPU resources. This detached builder
+      // remains their sole terminal owner until adoption succeeds.
+      try {
+        retireDetachedCandidate("failed scaled-environment candidate cleanup failed");
+      } catch (cleanupError) {
+        if (generationMayCommit()) {
+          throw new AggregateError(
+            [error, cleanupError],
+            "Scaled environment construction and cleanup failed",
+          );
+        }
+        console.warn("stale scaled-environment cleanup failed", errorMessage(cleanupError));
+        return false;
+      }
+      if (!generationMayCommit()) return false;
+      throw error;
     }
-    (scene.objects || []).forEach((o, i) => this._buildObject(o, i, generation));
-    this.joints = this.objectTraj.length ? this.objectTraj : null;
-    this.setFrame(0);
-  }
-  private _buildObject(o: SceneObjectPayload, i: number, generation: number): void {
-    const c = o.color ? (o.color[0] << 16) | (o.color[1] << 8) | o.color[2] : 0x6a9fd4;
-    const box = new THREE.Mesh(
-      new THREE.BoxGeometry(o.extents[0], o.extents[1], o.extents[2]),
-      new THREE.MeshStandardMaterial({
-        color: c, transparent: true, opacity: o.opacity ?? 0.7, roughness: 0.55,
-      })
+    if (!generationMayCommit()) {
+      return abandonCandidate();
+    }
+    const content: RetirableThreeContentGeneration = {
+      root: candidate,
+      ownedChildren,
+      extras: {
+        geometries: candidateGeometries,
+        materials: candidateMaterials,
+      },
+    };
+    const viewIsCurrent = (): boolean => (
+      generationMayCommit()
+      && this._content === content
+      && candidate.parent === this.group
     );
-    this.group.add(box);
-    this.objectMeshes.push(box);
-    this.objectTraj.push(o);
-    const srcIdx = o.source_index ?? i;
-    const glbUrl = this._objectGlbUrl
-      ? this._objectGlbUrl(o, srcIdx)
-      : (this.motionToken
-        ? `/api/object_glb?token=${this.motionToken}&index=${srcIdx}${
-          o.scale != null && Number.isFinite(o.scale)
-            ? `&scale=${encodeURIComponent(o.scale)}` : ""
-        }`
-        : null);
-    if (o.has_mesh && glbUrl) {
-      const loader = new GLTFLoader();
-      loader.load(
-        glbUrl,
-        (gltf) => {
-          const real = gltf.scene;
-          if (
-            this._loadGeneration !== generation ||
-            this.objectMeshes[i] !== box
-          ) {
-            disposeDetachedThreeObject(real, "stale scaled-environment GLTF cleanup failed");
-            return;
+    const retireCandidateIfOwned = (): void => {
+      if (this._content !== content) return;
+      this._content = null;
+      this.objectMeshes = [];
+      this.objectTraj = [];
+      this.joints = null;
+      this.motionToken = null;
+      this.clipDuration = 1;
+      retireThreeContentRoot(
+        this.group,
+        candidate,
+        "scaled-environment candidate retirement failed",
+        (child) => { this._disposedWithRetiredRoot.add(child); },
+        [...ownedChildren],
+        content.extras,
+      );
+    };
+    // Mark before install so a reentrant `added` listener can take and retire
+    // this exact candidate without exposing the stable group to old cleanup.
+    this._content = content;
+    try {
+      this.group.add(candidate);
+      if (!viewIsCurrent()) {
+        retireCandidateIfOwned();
+        return false;
+      }
+      this.motionToken = motionToken;
+      this.clipDuration = clipDuration;
+      this.objectMeshes = objectMeshes;
+      this.objectTraj = objectTraj;
+      this.joints = objectTraj.length ? objectTraj : null;
+      this.setFrame(0);
+      if (!viewIsCurrent()) {
+        retireCandidateIfOwned();
+        return false;
+      }
+      for (const request of meshRequests) {
+        if (!this._loadObjectMesh(
+          request.url,
+          request.box,
+          request.index,
+          generation,
+          objectMeshes,
+          content,
+          isCurrent,
+        )) {
+          retireCandidateIfOwned();
+          return false;
+        }
+      }
+      if (!viewIsCurrent()) {
+        retireCandidateIfOwned();
+        return false;
+      }
+      return true;
+    } catch (error) {
+      let cleanupError: unknown = null;
+      try {
+        retireCandidateIfOwned();
+      } catch (caughtCleanupError) {
+        cleanupError = caughtCleanupError;
+      }
+      if (!generationMayCommit()) {
+        if (cleanupError) {
+          console.warn("stale scaled-environment cleanup failed", errorMessage(cleanupError));
+        }
+        return false;
+      }
+      if (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
+          "Scaled environment publication and cleanup failed",
+        );
+      }
+      throw error;
+    }
+  }
+  private _loadObjectMesh(
+    url: string,
+    box: THREE.Mesh,
+    index: number,
+    generation: number,
+    objectMeshes: THREE.Object3D[],
+    content: RetirableThreeContentGeneration,
+    isCurrent: () => boolean,
+  ): boolean {
+    const candidate = content.root;
+    const schedulingIsCurrent = (): boolean => (
+      isCurrent()
+      && this._loadGeneration === generation
+      && this.objectMeshes === objectMeshes
+      && this._content === content
+      && candidate.parent === this.group
+    );
+    if (!schedulingIsCurrent()) return false;
+    const loader = new GLTFLoader();
+    if (!schedulingIsCurrent()) return false;
+    // A synchronous loader.load() exception intentionally escapes to load()'s
+    // generation transaction, which retires the published candidate exactly.
+    loader.load(
+      url,
+      (gltf) => {
+        const real = gltf.scene;
+        // Freeze the complete GLTF forest before its first public add. A
+        // listener may detach a deep descendant that a later traverse(real)
+        // could no longer discover.
+        const realOwnedSnapshot: THREE.Object3D[] = [];
+        real.traverse((node) => { realOwnedSnapshot.push(node); });
+        // The retarget attempt retires when its domain result commits, while
+        // this View remains a valid long-lived capability. Generation plus
+        // exact aliases therefore own async GLTF settlement after commit.
+        const viewOwnsGeneration = (): boolean => (
+          this._loadGeneration === generation
+          && this.objectMeshes === objectMeshes
+          && this._content === content
+          && candidate.parent === this.group
+        );
+        const placeholderIsCurrent = (): boolean => (
+          viewOwnsGeneration() && objectMeshes[index] === box
+        );
+        const placeholderStillOwned = (): boolean => (
+          placeholderIsCurrent() && box.parent === candidate
+        );
+        const wasDisposedWithRetiredRoot = (object: THREE.Object3D): boolean => (
+          this._disposedWithRetiredRoot.has(object)
+        );
+        const releaseOwnedObject = (
+          object: THREE.Object3D,
+          context: string,
+          knownSubtree: readonly THREE.Object3D[] = [object],
+        ): void => {
+          const unsettledKnownSubtree: THREE.Object3D[] = [];
+          for (const node of knownSubtree) {
+            content.ownedChildren.delete(node);
+            if (wasDisposedWithRetiredRoot(node)) {
+              // A prior generation cleanup already claimed this exact split
+              // descendant. Any later adoption is too late; detach it before
+              // the helper snapshots object.children and never dispose twice.
+              const lateParent = node.parent;
+              if (lateParent) forceDetachRetiredThreeObject(lateParent, node);
+            } else {
+              unsettledKnownSubtree.push(node);
+            }
           }
+          if (wasDisposedWithRetiredRoot(object)) return;
+
+          const insideCandidate = isInThreeOwnerRealm(object, candidate);
+          const candidateWasTransferred = (
+            candidate.parent !== null
+            && !isInThreeOwnerRealm(candidate, this.group)
+          );
+          const objectWasTransferred = (
+            object.parent !== null
+            && (
+              (insideCandidate && candidateWasTransferred)
+              || (
+                !insideCandidate
+                && !isInThreeOwnerRealm(object, this.group)
+              )
+            )
+          );
+          if (!objectWasTransferred) {
+            const parent = object.parent;
+            if (parent) forceDetachRetiredThreeObject(parent, object);
+          }
+          try {
+            retireThreeContentRoot(
+              this.group,
+              object,
+              context,
+              (node) => { this._disposedWithRetiredRoot.add(node); },
+              unsettledKnownSubtree,
+            );
+          } catch (error) {
+            console.warn(context, errorMessage(error));
+          }
+        };
+        const retireExactContent = (context: string): void => {
+          if (
+            this._loadGeneration !== generation
+            || this._content !== content
+          ) return;
+          try {
+            this.clear(() => (
+              this._loadGeneration === generation
+              && this._content === content
+            ));
+          } catch (error) {
+            console.warn(context, errorMessage(error));
+          }
+        };
+        const restorePlaceholder = (): boolean => {
+          if (!viewOwnsGeneration()) return false;
+          if (box.parent === candidate) return true;
+          if (box.parent !== null) return false;
+          try {
+            candidate.add(box);
+          } catch (error) {
+            console.warn(
+              "scaled-environment placeholder restoration failed",
+              errorMessage(error),
+            );
+          }
+          return viewOwnsGeneration() && box.parent === candidate;
+        };
+        const retireIfPlaceholderOwnershipWasLost = (context: string): void => {
+          if (
+            this._loadGeneration === generation
+            && this._content === content
+            && objectMeshes[index] === box
+            && !placeholderStillOwned()
+          ) retireExactContent(context);
+        };
+        if (!placeholderIsCurrent()) {
+          releaseOwnedObject(
+            real,
+            "stale scaled-environment GLTF cleanup failed",
+            realOwnedSnapshot,
+          );
+          retireIfPlaceholderOwnershipWasLost(
+            "stale scaled-environment placeholder retirement failed",
+          );
+          return;
+        }
+        try {
           real.position.copy(box.position);
           real.quaternion.copy(box.quaternion);
-          this.group.add(real);
-          this.objectMeshes[i] = real;
-          this.group.remove(box);
-          disposeDetachedThreeObject(box, "scaled-environment placeholder cleanup failed");
-        },
-        undefined,
-        () => {}
-      );
-    }
+        } catch (error) {
+          releaseOwnedObject(
+            real,
+            "failed scaled-environment GLTF transform cleanup failed",
+            realOwnedSnapshot,
+          );
+          retireIfPlaceholderOwnershipWasLost(
+            "scaled-environment transform failure retirement failed",
+          );
+          console.warn("scaled-environment GLTF transform failed", errorMessage(error));
+          return;
+        }
+        if (!placeholderIsCurrent()) {
+          releaseOwnedObject(
+            real,
+            "stale scaled-environment GLTF cleanup failed",
+            realOwnedSnapshot,
+          );
+          retireIfPlaceholderOwnershipWasLost(
+            "stale scaled-environment placeholder retirement failed",
+          );
+          return;
+        }
+        // Publish the child obligation before Object3D.add(): an `added`
+        // listener may detach it and synchronously clear this generation.
+        for (const node of realOwnedSnapshot) content.ownedChildren.add(node);
+        try {
+          candidate.add(real);
+        } catch (error) {
+          if (viewOwnsGeneration() && box.parent === candidate) {
+            releaseOwnedObject(
+              real,
+              "failed scaled-environment GLTF attachment cleanup failed",
+              realOwnedSnapshot,
+            );
+            retireIfPlaceholderOwnershipWasLost(
+              "scaled-environment attachment rollback retirement failed",
+            );
+          } else {
+            retireExactContent(
+              "failed scaled-environment GLTF attachment retirement failed",
+            );
+            releaseOwnedObject(
+              real,
+              "failed scaled-environment GLTF attachment cleanup failed",
+              realOwnedSnapshot,
+            );
+            releaseOwnedObject(box, "failed scaled-environment placeholder cleanup failed");
+          }
+          console.warn("scaled-environment GLTF attachment failed", errorMessage(error));
+          return;
+        }
+        if (!viewOwnsGeneration()) {
+          retireExactContent("stale scaled-environment generation retirement failed");
+          releaseOwnedObject(
+            real,
+            "stale scaled-environment GLTF attachment cleanup failed",
+            realOwnedSnapshot,
+          );
+          releaseOwnedObject(box, "stale scaled-environment placeholder cleanup failed");
+          return;
+        }
+        if (real.parent !== candidate) {
+          releaseOwnedObject(
+            real,
+            "detached scaled-environment GLTF cleanup failed",
+            realOwnedSnapshot,
+          );
+          if (!restorePlaceholder()) {
+            retireExactContent("scaled-environment placeholder loss retirement failed");
+          }
+          return;
+        }
+        if (!placeholderIsCurrent()) {
+          releaseOwnedObject(
+            real,
+            "stale scaled-environment GLTF attachment cleanup failed",
+            realOwnedSnapshot,
+          );
+          if (this._content === content) {
+            retireExactContent("stale scaled-environment alias retirement failed");
+          }
+          return;
+        }
+
+        // Keep the placeholder alias authoritative until removal settles.
+        let placeholderRemovalError: unknown = null;
+        try {
+          candidate.remove(box);
+        } catch (error) {
+          placeholderRemovalError = error;
+        }
+        if (!viewOwnsGeneration()) {
+          retireExactContent("stale scaled-environment swap retirement failed");
+          releaseOwnedObject(
+            real,
+            "stale scaled-environment GLTF swap cleanup failed",
+            realOwnedSnapshot,
+          );
+          releaseOwnedObject(box, "stale scaled-environment placeholder cleanup failed");
+          return;
+        }
+        if (box.parent === candidate) {
+          releaseOwnedObject(
+            real,
+            "scaled-environment GLTF rollback cleanup failed",
+            realOwnedSnapshot,
+          );
+          retireIfPlaceholderOwnershipWasLost(
+            "scaled-environment removal rollback retirement failed",
+          );
+          if (placeholderRemovalError) {
+            console.warn(
+              "scaled-environment placeholder removal failed",
+              errorMessage(placeholderRemovalError),
+            );
+          }
+          return;
+        }
+        if (box.parent !== null) {
+          releaseOwnedObject(
+            real,
+            "scaled-environment GLTF transfer rollback failed",
+            realOwnedSnapshot,
+          );
+          retireExactContent("scaled-environment placeholder transfer retirement failed");
+          return;
+        }
+        if (real.parent !== candidate || objectMeshes[index] !== box) {
+          releaseOwnedObject(
+            real,
+            "detached scaled-environment GLTF swap cleanup failed",
+            realOwnedSnapshot,
+          );
+          if (!restorePlaceholder()) {
+            retireExactContent("scaled-environment swap rollback retirement failed");
+          }
+          return;
+        }
+
+        objectMeshes[index] = real;
+        releaseOwnedObject(box, "scaled-environment placeholder cleanup failed");
+        if (
+          this._loadGeneration === generation
+          && this._content === content
+          && (
+            candidate.parent !== this.group
+            || objectMeshes[index] !== real
+            || real.parent !== candidate
+          )
+        ) {
+          retireExactContent("scaled-environment committed swap ownership failed");
+          return;
+        }
+        if (placeholderRemovalError) {
+          console.warn(
+            "scaled-environment placeholder removal reported an error",
+            errorMessage(placeholderRemovalError),
+          );
+        }
+      },
+      undefined,
+      () => {},
+    );
+    return schedulingIsCurrent();
   }
   get numFrames(): number {
     return this.objectTraj.length && this.objectTraj[0].positions
@@ -1744,6 +2519,8 @@ class ScaledSkeletonView {
   lines: THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial> | null = null;
   readonly color: number;
   clipDuration = 1;
+  private _loadGeneration = 0;
+  private _content: RetirableThreeContentGeneration | null = null;
 
   constructor(color = 0xffb020) {
     this.color = color;
@@ -1751,57 +2528,229 @@ class ScaledSkeletonView {
     this.group.visible = false;
     world.add(this.group);
   }
-  clear(): void {
+  clear(isCurrent: () => boolean = () => true): boolean {
+    if (!isCurrent()) return false;
+    const expectedGeneration = this._loadGeneration + 1;
+    this._loadGeneration = expectedGeneration;
+    const retired = this._content;
+    this._content = null;
+    this.spheres = [];
+    this.joints = null;
+    this.parents = [];
+    this.frameIndices = null;
+    this.lineGeom = null;
+    this.lines = null;
+    if (!retired) {
+      return isCurrent() && this._loadGeneration === expectedGeneration;
+    }
     try {
-      threeResourceDisposer.disposeObject3DChildren(this.group, {
-        geometries: [
-          ...this.spheres.map((sphere) => sphere.geometry),
-          ...(this.lineGeom ? [this.lineGeom] : []),
-        ],
-        materials: [
-          ...this.spheres.map((sphere) => sphere.material),
-          ...(this.lines ? [this.lines.material] : []),
-        ],
-      });
-    } finally {
-      try {
-        this.group.clear();
-      } finally {
-        this.spheres = [];
-        this.joints = null;
-        this.parents = [];
-        this.frameIndices = null;
-        this.lineGeom = null;
-        this.lines = null;
+      // Resources are discovered from children only after removal callbacks
+      // settle. An adopted child therefore stays live under its new owner;
+      // detached children remain this generation's terminal obligation.
+      retireThreeContentRoot(
+        this.group,
+        retired.root,
+        "scaled-skeleton retired root cleanup failed",
+        undefined,
+        [...retired.ownedChildren],
+        retired.extras,
+      );
+    } catch (error) {
+      if (!isCurrent() || this._loadGeneration !== expectedGeneration) {
+        return false;
       }
+      throw error;
     }
+    return isCurrent() && this._loadGeneration === expectedGeneration;
   }
-  load(motion: MotionPayload): void {
-    this.clear();
-    this.joints = motion.positions;
-    this.parents = motion.parent_indices;
-    this.frameIndices = motion.frame_indices;
-    this.clipDuration = effectivePlaybackDuration(motion);
-    const J = this.parents.length;
-    const mat = new THREE.MeshStandardMaterial({
-      color: this.color, roughness: 0.45, metalness: 0.15, emissive: 0x442200,
-    });
-    const sphereGeo = new THREE.SphereGeometry(0.026, 10, 10);
-    for (let j = 0; j < J; j++) {
-      const s = new THREE.Mesh(sphereGeo, mat);
-      this.group.add(s);
-      this.spheres.push(s);
-    }
-    const segCount = this.parents.filter((p) => p >= 0).length;
-    const positions = new Float32Array(segCount * 2 * 3);
-    this.lineGeom = new THREE.BufferGeometry();
-    this.lineGeom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-    this.lines = new THREE.LineSegments(
-      this.lineGeom,
-      new THREE.LineBasicMaterial({ color: this.color, transparent: true, opacity: 0.85 })
+  load(
+    motion: MotionPayload,
+    isCurrent: () => boolean = () => true,
+  ): boolean {
+    if (!isCurrent()) return false;
+    const expectedGeneration = this._loadGeneration + 1;
+    this.clear(isCurrent);
+    // A nested clear means a successor crossed the disposal callback. Even if
+    // a permissive caller predicate is supplied, never adopt its generation.
+    if (
+      !isCurrent()
+      || this._loadGeneration !== expectedGeneration
+    ) return false;
+    const generationMayCommit = (): boolean => (
+      isCurrent() && this._loadGeneration === expectedGeneration
     );
-    this.group.add(this.lines);
-    this.setFrame(0);
+    const joints = motion.positions;
+    const parents = motion.parent_indices;
+    const frameIndices = motion.frame_indices;
+    const clipDuration = effectivePlaybackDuration(motion);
+    const candidate = new THREE.Group();
+    const spheres: Array<
+      THREE.Mesh<THREE.SphereGeometry, THREE.MeshStandardMaterial>
+    > = [];
+    const childrenKnownBeforeAdoption: THREE.Object3D[] = [];
+    const knownChildSet = new Set<THREE.Object3D>();
+    const registerKnownSubtree = (object: THREE.Object3D): void => {
+      object.traverse((node) => {
+        if (knownChildSet.has(node)) return;
+        knownChildSet.add(node);
+        childrenKnownBeforeAdoption.push(node);
+      });
+    };
+    const candidateGeometries: THREE.BufferGeometry[] = [];
+    const candidateMaterials: THREE.Material[] = [];
+    const J = parents.length;
+    let lineGeom!: THREE.BufferGeometry;
+    let lines!: THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial>;
+    let detachedCandidateRetired = false;
+    const retireDetachedCandidate = (context: string): void => {
+      if (detachedCandidateRetired) return;
+      detachedCandidateRetired = true;
+      retireThreeContentRoot(
+        this.group,
+        candidate,
+        context,
+        undefined,
+        childrenKnownBeforeAdoption,
+        {
+          geometries: candidateGeometries,
+          materials: candidateMaterials,
+        },
+      );
+    };
+    try {
+      const mat = new THREE.MeshStandardMaterial({
+        color: this.color, roughness: 0.45, metalness: 0.15, emissive: 0x442200,
+      });
+      candidateMaterials.push(mat);
+      const sphereGeo = new THREE.SphereGeometry(0.026, 10, 10);
+      candidateGeometries.push(sphereGeo);
+      for (let j = 0; j < J; j++) {
+        const s = new THREE.Mesh(sphereGeo, mat);
+        registerKnownSubtree(s);
+        if (j === 0) {
+          candidateGeometries.splice(candidateGeometries.indexOf(sphereGeo), 1);
+          candidateMaterials.splice(candidateMaterials.indexOf(mat), 1);
+        }
+        candidate.add(s);
+        spheres.push(s);
+        if (!generationMayCommit()) {
+          retireDetachedCandidate("stale scaled-skeleton candidate cleanup failed");
+          return false;
+        }
+      }
+      const segCount = parents.filter((p) => p >= 0).length;
+      const positions = new Float32Array(segCount * 2 * 3);
+      lineGeom = new THREE.BufferGeometry();
+      candidateGeometries.push(lineGeom);
+      lineGeom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+      const lineMaterial = new THREE.LineBasicMaterial({
+        color: this.color, transparent: true, opacity: 0.85,
+      });
+      candidateMaterials.push(lineMaterial);
+      lines = new THREE.LineSegments(lineGeom, lineMaterial);
+      registerKnownSubtree(lines);
+      candidateGeometries.splice(candidateGeometries.indexOf(lineGeom), 1);
+      candidateMaterials.splice(candidateMaterials.indexOf(lineMaterial), 1);
+      candidate.add(lines);
+    } catch (error) {
+      try {
+        retireDetachedCandidate("failed scaled-skeleton candidate cleanup failed");
+      } catch (cleanupError) {
+        if (generationMayCommit()) {
+          throw new AggregateError(
+            [error, cleanupError],
+            "Scaled skeleton construction and cleanup failed",
+          );
+        }
+        console.warn("stale scaled-skeleton cleanup failed", errorMessage(cleanupError));
+        return false;
+      }
+      if (!generationMayCommit()) return false;
+      throw error;
+    }
+    if (!generationMayCommit()) {
+      try {
+        retireDetachedCandidate("stale scaled-skeleton candidate cleanup failed");
+      } catch (error) {
+        console.warn("stale scaled-skeleton cleanup failed", errorMessage(error));
+      }
+      return false;
+    }
+    const content: RetirableThreeContentGeneration = {
+      root: candidate,
+      ownedChildren: new Set(childrenKnownBeforeAdoption),
+      extras: {
+        geometries: candidateGeometries,
+        materials: candidateMaterials,
+      },
+    };
+    const viewIsCurrent = (): boolean => (
+      generationMayCommit()
+      && this._content === content
+      && candidate.parent === this.group
+    );
+    const retireCandidateIfOwned = (): void => {
+      if (this._content !== content) return;
+      this._content = null;
+      this.spheres = [];
+      this.joints = null;
+      this.parents = [];
+      this.frameIndices = null;
+      this.lineGeom = null;
+      this.lines = null;
+      this.clipDuration = 1;
+      retireThreeContentRoot(
+        this.group,
+        candidate,
+        "scaled-skeleton candidate retirement failed",
+        undefined,
+        [...content.ownedChildren],
+        content.extras,
+      );
+    };
+    // One mark-before-install adoption point keeps a reentrant successor from
+    // observing half of a skeleton or being removed by its predecessor.
+    this._content = content;
+    try {
+      this.group.add(candidate);
+      if (!viewIsCurrent()) {
+        retireCandidateIfOwned();
+        return false;
+      }
+      this.joints = joints;
+      this.parents = parents;
+      this.frameIndices = frameIndices;
+      this.clipDuration = clipDuration;
+      this.spheres = spheres;
+      this.lineGeom = lineGeom;
+      this.lines = lines;
+      this.setFrame(0);
+      if (!viewIsCurrent()) {
+        retireCandidateIfOwned();
+        return false;
+      }
+      return true;
+    } catch (error) {
+      let cleanupError: unknown = null;
+      try {
+        retireCandidateIfOwned();
+      } catch (caughtCleanupError) {
+        cleanupError = caughtCleanupError;
+      }
+      if (!generationMayCommit()) {
+        if (cleanupError) {
+          console.warn("stale scaled-skeleton cleanup failed", errorMessage(cleanupError));
+        }
+        return false;
+      }
+      if (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
+          "Scaled skeleton publication and cleanup failed",
+        );
+      }
+      throw error;
+    }
   }
   get numFrames(): number { return this.joints ? this.joints.length : 0; }
   setFrame(f: number): void {
@@ -1957,7 +2906,9 @@ function setH2rLayerVisible(layerId: H2rStageLayerId, on: boolean): void {
   if (state.calibrationMode && layerId !== "targetRobot" && on) return;
   h2rRequestedVisibility[layerId] = Boolean(on);
   applyH2rPhysicalVisibility();
-  player.refreshFrame();
+  // Logical H2R visibility may commit while R2R owns the shared timeline.
+  // Defer frame projection until the panel coordinator returns the Stage.
+  if (h2rOwnsStage) player.refreshFrame();
   markH2rStageDisplayChanged();
 }
 
@@ -2196,14 +3147,149 @@ export function toggleH2rStageLayer(layerId: H2rStageLayerId): void {
   setH2rLayerVisible(layerId, !h2rRequestedVisibility[layerId]);
 }
 
+/** One revision owns the shared H2R scaled skeleton/environment pair. */
+let h2rScaledPairRevision = 0;
+
 /** Remove preview resources derived from the previous motion/robot pair. */
-function clearH2rScaledPreview(): void {
+function clearH2rScaledPreview(
+  ownsPairMutation?: () => boolean,
+): boolean {
+  const clearRevision = ownsPairMutation ? null : ++h2rScaledPairRevision;
+  const mutationIsCurrent = ownsPairMutation ?? (() => (
+    clearRevision === h2rScaledPairRevision
+  ));
+  let skeletonCleared = false;
+  let environmentCleared = false;
+  const errors: unknown[] = [];
   withH2rStageDisplayBatch(() => {
-    scaledSkel.clear();
-    scaledEnv.clear();
+    try {
+      skeletonCleared = scaledSkel.clear(mutationIsCurrent);
+    } catch (error) {
+      errors.push(error);
+    }
+    if (!mutationIsCurrent()) return;
+    if (!skeletonCleared) {
+      errors.push(new Error("H2R scaled skeleton clear lost its View generation"));
+    }
+    try {
+      environmentCleared = scaledEnv.clear(mutationIsCurrent);
+    } catch (error) {
+      errors.push(error);
+    }
+    if (!mutationIsCurrent()) return;
+    if (!environmentCleared) {
+      errors.push(new Error("H2R scaled environment clear lost its View generation"));
+    }
     setH2rLayerVisible("scaledSkeleton", false);
+    if (!mutationIsCurrent()) return;
     setH2rLayerVisible("scaledEnvironment", false);
   });
+  if (!mutationIsCurrent()) {
+    for (const error of errors) {
+      console.warn("stale H2R scaled preview cleanup failed", errorMessage(error));
+    }
+    return false;
+  }
+  if (errors.length > 0) {
+    throw new AggregateError(errors, "H2R scaled preview cleanup failed");
+  }
+  return skeletonCleared && environmentCleared;
+}
+
+/**
+ * Replace the scaled skeleton/environment as one domain-owned pair.
+ * A current writer never leaves a half-published pair: any View rejection or
+ * exception triggers exact two-sided compensation before the error escapes.
+ */
+function replaceH2rScaledPreview({
+  preview,
+  environment,
+  motionToken,
+  environmentOptions = {},
+  replaceSkeleton = true,
+  replaceEnvironment = true,
+  ownsPairMutation,
+  isCurrent,
+  context,
+}: {
+  readonly preview?: MotionPayload | null;
+  readonly environment?: ScenePayload | null;
+  readonly motionToken: string | null | undefined;
+  readonly environmentOptions?: {
+    readonly duration?: number;
+    readonly objectGlbUrl?: (
+      object: SceneObjectPayload,
+      index: number,
+    ) => string | null;
+  };
+  readonly replaceSkeleton?: boolean;
+  readonly replaceEnvironment?: boolean;
+  /** Raw pair generation; it alone may interrupt a synchronous two-View mutation. */
+  readonly ownsPairMutation: () => boolean;
+  /** Domain/request capability; it decides whether the completed pair may publish. */
+  readonly isCurrent: () => boolean;
+  readonly context: string;
+}): boolean {
+  if (!ownsPairMutation() || !isCurrent()) return false;
+  let failure: unknown = null;
+  withH2rStageDisplayBatch(() => {
+    try {
+      if (replaceSkeleton) {
+        const committed = preview
+          ? scaledSkel.load(preview, ownsPairMutation)
+          : scaledSkel.clear(ownsPairMutation);
+        if (!committed && ownsPairMutation()) {
+          throw new Error(`${context}: scaled skeleton View rejected the writer`);
+        }
+      }
+      if (!ownsPairMutation()) return;
+      if (replaceEnvironment) {
+        const committed = scaledEnv.load(
+          environment ?? null,
+          motionToken,
+          environmentOptions,
+          ownsPairMutation,
+        );
+        if (!committed && ownsPairMutation()) {
+          throw new Error(`${context}: scaled environment View rejected the writer`);
+        }
+      }
+    } catch (error) {
+      failure = error;
+    }
+  });
+  if (!ownsPairMutation()) return false;
+  if (!failure && isCurrent()) return true;
+
+  let cleanupError: unknown = null;
+  try {
+    // A request identity may have changed without another pair writer taking
+    // over yet. The raw generation still owns both sides and must leave them
+    // empty; only a newer pair generation may interrupt this compensation.
+    clearH2rScaledPreview(ownsPairMutation);
+  } catch (error) {
+    cleanupError = error;
+  }
+  if (!ownsPairMutation()) return false;
+  if (!isCurrent()) {
+    if (failure) {
+      console.warn(`${context}: stale scaled pair commit failed`, errorMessage(failure));
+    }
+    if (cleanupError) {
+      console.warn(`${context}: stale scaled pair compensation failed`, errorMessage(cleanupError));
+    }
+    return false;
+  }
+  if (!failure) {
+    if (cleanupError) throw cleanupError;
+    return false;
+  }
+  throw cleanupError
+    ? new AggregateError(
+      [failure, cleanupError],
+      `${context}: scaled pair commit and compensation failed`,
+    )
+    : failure;
 }
 
 /** Run one renderer/UI cleanup without letting it block canonical state reset. */
@@ -2213,6 +3299,27 @@ function runBestEffortCleanup(context: string, cleanup: () => void): void {
   } catch (error) {
     console.warn(context, errorMessage(error));
   }
+}
+
+/** Read optional host state without letting cleanup diagnostics leak an owner. */
+function readBestEffort<T>(context: string, read: () => T): T | null {
+  try {
+    return read();
+  } catch (error) {
+    console.warn(context, errorMessage(error));
+    return null;
+  }
+}
+
+/** Run a fallible host publication without letting it outlive its exact owner. */
+function runCurrentBestEffort(
+  context: string,
+  isCurrent: () => boolean,
+  effect: () => void,
+): boolean {
+  if (!isCurrent()) return false;
+  runBestEffortCleanup(context, effect);
+  return isCurrent();
 }
 
 interface RobotViewLoadAttempt {
@@ -2225,8 +3332,12 @@ function startRobotViewLoad(
   view: RobotView,
   payload: RobotPayload,
 ): RobotViewLoadAttempt {
+  // RobotView reserves `before + 1` before its internal clear. Reading the
+  // getter after `load()` is unsafe because a synchronous clear/dispose
+  // listener may already have started successor B by the time load returns.
+  const generation = view.loadGeneration + 1;
   const completion = view.load(payload);
-  return { completion, generation: view.loadGeneration };
+  return { completion, generation };
 }
 
 /**
@@ -2297,8 +3408,10 @@ function clearH2rRobotAfterViewLoss(context: string): void {
   robot.trajectory = null;
   runBestEffortCleanup(`${context}: Stage cleanup failed`, () => {
     withH2rStageDisplayBatch(() => {
-      runBestEffortCleanup(`${context}: scaled skeleton cleanup failed`, () => scaledSkel.clear());
-      runBestEffortCleanup(`${context}: scaled environment cleanup failed`, () => scaledEnv.clear());
+      runBestEffortCleanup(
+        `${context}: scaled preview cleanup failed`,
+        () => { clearH2rScaledPreview(); },
+      );
       setH2rLayerVisible("scaledSkeleton", false);
       setH2rLayerVisible("scaledEnvironment", false);
       setH2rLayerVisible("targetRobot", false);
@@ -2332,20 +3445,37 @@ function clearH2rRobotAfterViewLoss(context: string): void {
   });
 }
 
-async function refreshScaledPreview(): Promise<void> {
+async function refreshScaledPreview(
+  claimedScaledPairRevision?: number,
+): Promise<void> {
   if (!state.motion || !state.robot || !state.calibration) {
-    clearH2rScaledPreview();
+    if (claimedScaledPairRevision === undefined) clearH2rScaledPreview();
     return;
   }
+  const scaledPairRevision = claimedScaledPairRevision
+    ?? ++h2rScaledPairRevision;
   const motionToken = state.motion.token;
-  const robotName = state.robot.name;
+  const robotPayload = state.robot;
+  const robotName = robotPayload.name;
+  const robotViewGeneration = robot.loadGeneration;
   const reference = state.reference;
+  const ownsPairMutation = (): boolean => (
+    scaledPairRevision === h2rScaledPairRevision
+  );
   const inputsAreCurrent = (): boolean =>
+    ownsPairMutation() &&
     state.motion?.token === motionToken &&
+    state.robot === robotPayload &&
     state.robot?.name === robotName &&
+    robot.isLoadGenerationCurrent(robotViewGeneration) &&
     state.reference === reference &&
-    state.calibration;
+    state.calibration &&
+    !state.calibrationMode;
   try {
+    // Claim-and-clear happens before transport. If a removed listener starts
+    // successor B, B inherits the latest generation and completes both sides.
+    if (!clearH2rScaledPreview(ownsPairMutation)) return;
+    if (!inputsAreCurrent()) return;
     const data = await API.post("/api/scaled_preview", {
       robot: robotName,
       motion_token: motionToken,
@@ -2355,13 +3485,16 @@ async function refreshScaledPreview(): Promise<void> {
     // replace its scaled resources or publish a stale Stage snapshot.
     if (!inputsAreCurrent()) return;
     const preview = data.preview ?? data;
+    if (!replaceH2rScaledPreview({
+      preview,
+      environment: data.scaled_scene ?? null,
+      motionToken,
+      ownsPairMutation,
+      isCurrent: inputsAreCurrent,
+      context: "H2R scaled preview",
+    })) return;
+    if (!inputsAreCurrent()) return;
     withH2rStageDisplayBatch(() => {
-      scaledSkel.load(preview);
-      if (data.scaled_scene) {
-        scaledEnv.load(data.scaled_scene, motionToken);
-      } else {
-        scaledEnv.clear();
-      }
       // Preload yellow overlay data but keep it hidden until a retarget completes
       // (or the user explicitly toggles it on). Playing motion against a frozen
       // calibration / zero robot makes the overlay look collapsed inside the mesh.
@@ -2369,12 +3502,16 @@ async function refreshScaledPreview(): Promise<void> {
         setH2rLayerVisible("scaledSkeleton", false);
         setH2rLayerVisible("scaledEnvironment", false);
       }
-      if (player.active) player.refreshFrame();
+      if (h2rOwnsStage && player.active) player.refreshFrame();
     });
   } catch (e) {
-    if (!inputsAreCurrent()) return;
-    clearH2rScaledPreview();
-    console.warn("scaled preview", errorMessage(e));
+    if (!ownsPairMutation()) return;
+    try {
+      clearH2rScaledPreview(ownsPairMutation);
+    } catch (cleanupError) {
+      console.warn("scaled preview cleanup", errorMessage(cleanupError));
+    }
+    if (inputsAreCurrent()) console.warn("scaled preview", errorMessage(e));
   }
 }
 
@@ -3015,6 +4152,51 @@ interface PanelSwitchReceipt {
   readonly disposition: PresentationReconcileDisposition;
 }
 
+/** The panel borrows one exact receipt without owning either R2R domain. */
+type R2rPlaybackClaim =
+  | {
+      readonly kind: "trajectory";
+      readonly commit: R2rTrajectoryPresentationCommit;
+    }
+  | {
+      readonly kind: "retarget";
+      readonly commit: R2rRetargetPresentationCommit;
+    };
+
+/**
+ * Resolve the sole pending playback capability.
+ *
+ * Two receipts would mean an ownership wiring bug, so fail closed instead of
+ * inventing precedence from completion order.
+ */
+function pendingR2rPlaybackClaim(): R2rPlaybackClaim | null {
+  const trajectory = r2rTrajectoryResults.pendingPresentation;
+  const retarget = r2rRetargetResults.pendingPresentation;
+  if (Boolean(trajectory) === Boolean(retarget)) return null;
+  return trajectory
+    ? { kind: "trajectory", commit: trajectory }
+    : { kind: "retarget", commit: retarget! };
+}
+
+function pendingR2rPlaybackClaimFor(
+  playback: R2rPlaybackPresentation,
+): R2rPlaybackClaim | null {
+  const claim = pendingR2rPlaybackClaim();
+  return claim?.commit.value === playback ? claim : null;
+}
+
+function r2rPlaybackClaimIsCommitted(claim: R2rPlaybackClaim): boolean {
+  return claim.kind === "trajectory"
+    ? r2rTrajectoryResults.isCommitted(claim.commit)
+    : r2rRetargetResults.isCommitted(claim.commit);
+}
+
+function markR2rPlaybackPresented(claim: R2rPlaybackClaim): boolean {
+  return claim.kind === "trajectory"
+    ? r2rTrajectoryResults.markPresented(claim.commit)
+    : r2rRetargetResults.markPresented(claim.commit);
+}
+
 let lastAppliedPanelPresentation: PanelPresentationOperation | null = null;
 let lastFollowedUpPanelPresentation: PanelPresentationOperation | null = null;
 
@@ -3039,7 +4221,7 @@ function captureSharedStagePlayer(): SharedStagePlayerSnapshot {
 function projectPanelPresentation(
   intent: PanelPresentationIntent,
   authority: PresentationProjectionAuthority,
-): R2rTrajectoryPresentationCommit | null {
+): R2rPlaybackClaim | null {
   window.__hhUi?.setActivePanel(intent.panelId);
   if (!authority.isCurrent()) return null;
 
@@ -3056,15 +4238,15 @@ const panelPresentationCoordinator =
     project: (target, authority) => {
       const operation = target.current;
       if (!operation) return undefined;
-      const presentedTrajectory = projectPanelPresentation(
+      const presentedPlayback = projectPanelPresentation(
         operation.value,
         authority,
       );
       if (!authority.isCurrent()) return undefined;
       if (operation.value.r2rPlayback) {
         if (
-          !presentedTrajectory
-          || !r2rTrajectoryResults.markPresented(presentedTrajectory)
+          !presentedPlayback
+          || !markR2rPlaybackPresented(presentedPlayback)
         ) {
           // The panel survived but its borrowed result did not. Publish a
           // callback-free repair carrying the latest pending result (or none);
@@ -3089,7 +4271,7 @@ function publishPanelPresentationIntent(
     current: panelPresentationCoordinator.current,
     lastApplied: lastAppliedPanelPresentation,
     currentPlayer: captureSharedStagePlayer(),
-    r2rPlayback: r2rTrajectoryResults.pendingPresentation?.value ?? null,
+    r2rPlayback: pendingR2rPlaybackClaim()?.commit.value ?? null,
   });
   return panelPresentationCoordinator.publish(intent).current;
 }
@@ -3187,8 +4369,7 @@ async function loadMotionPayload(
       skin.clear();
       state.robotTrajectory = null;
       robot.trajectory = null;
-      scaledSkel.clear();
-      scaledEnv.clear();
+      clearH2rScaledPreview();
       player.setPlaying(false);
 
       if (state.robot && state.reference) {
@@ -3308,19 +4489,167 @@ function datasetSceneGlbUrl(token: string | null | undefined, o: SceneObjectPayl
   return `/api/dataset/scene_glb?token=${encodeURIComponent(token)}&mesh=${encodeURIComponent(mesh)}`;
 }
 
+let h2rRobotExportPreviewRevision = 0;
+
+/** Immutable click-time capability for one robot-trajectory preview request. */
+interface H2rRobotExportPreviewAttempt {
+  readonly revision: number;
+  readonly scaledPairRevision: number;
+  readonly sourcePath: string;
+  readonly label: string;
+  readonly requestedRobotName: string | null;
+  readonly inputMotion: MotionPayload | null;
+  readonly inputLibraryEntry: LibraryEntry | null;
+  readonly inputRobot: RobotPayload | null;
+  readonly inputRobotTrajectory: RobotTrajectoryPayload | null;
+  readonly inputExportToken: string | null;
+  readonly inputRobotViewGeneration: number;
+}
+
+/** Reserve request and scaled-pair ownership before the first host boundary. */
+function beginH2rRobotExportPreview(
+  entry: LibraryEntry,
+  robotName?: string,
+): H2rRobotExportPreviewAttempt {
+  const revision = ++h2rRobotExportPreviewRevision;
+  const scaledPairRevision = ++h2rScaledPairRevision;
+  // Export preview also owns the shared RobotView intent. This callback-free
+  // claim makes an older parser stale without discarding reusable live content.
+  const inputRobotViewGeneration = robot.claimLoadGeneration();
+  pendingH2rPlayback = null;
+  return Object.freeze({
+    revision,
+    scaledPairRevision,
+    sourcePath: entry.source_path,
+    label: entry.stem || entry.sequence_id || "",
+    requestedRobotName: robotName || null,
+    inputMotion: state.motion,
+    inputLibraryEntry: state.libraryEntry,
+    inputRobot: state.robot,
+    inputRobotTrajectory: state.robotTrajectory,
+    inputExportToken: state.exportToken,
+    inputRobotViewGeneration,
+  });
+}
+
+function h2rRobotExportPreviewOwnsPair(
+  attempt: H2rRobotExportPreviewAttempt,
+): boolean {
+  return (
+    attempt.revision === h2rRobotExportPreviewRevision
+    && attempt.scaledPairRevision === h2rScaledPairRevision
+  );
+}
+
+function h2rRobotExportPreviewInputsAreCurrent(
+  attempt: H2rRobotExportPreviewAttempt,
+): boolean {
+  return (
+    h2rRobotExportPreviewOwnsPair(attempt)
+    && state.motion === attempt.inputMotion
+    && state.libraryEntry === attempt.inputLibraryEntry
+    && state.robot === attempt.inputRobot
+    && state.robotTrajectory === attempt.inputRobotTrajectory
+    && state.exportToken === attempt.inputExportToken
+    && robot.isLoadGenerationCurrent(attempt.inputRobotViewGeneration)
+    && !state.calibrationMode
+  );
+}
+
 async function loadRobotExportPreview(
   result: RobotExportPreviewResult,
+  attempt: H2rRobotExportPreviewAttempt,
 ): Promise<AsyncStageViewLoadResult> {
-  if (state.calibrationMode) {
-    toast(runtimeText(
-      "Robot trajectories cannot be previewed in calibration mode",
-      "标定模式下无法预览机器人轨迹",
-    ), true);
-    return "stale";
-  }
-
+  const {
+    revision: previewRevision,
+    scaledPairRevision,
+    inputMotion,
+    inputLibraryEntry,
+    inputRobot,
+    inputRobotTrajectory,
+    inputExportToken,
+  } = attempt;
+  const ownsPairMutation = (): boolean => (
+    h2rRobotExportPreviewOwnsPair(attempt)
+  );
+  const inputLeaseIsCurrent = (): boolean => (
+    h2rRobotExportPreviewInputsAreCurrent(attempt)
+  );
+  const projectRobotCapabilityWithdrawal = (
+    context: string,
+    isCurrent: () => boolean,
+  ): void => {
+    runCurrentBestEffort(`${context}: target visibility cleanup failed`, isCurrent, () => {
+      setH2rLayerVisible("targetRobot", false);
+    });
+    runCurrentBestEffort(`${context}: diagnostics cleanup failed`, isCurrent, () => {
+      clearResultDiagnostics("h2r");
+    });
+    const hideElement = (id: string): void => {
+      const element = readBestEffort(
+        `${context}: ${id} lookup failed`,
+        () => document.getElementById(id),
+      );
+      if (!isCurrent()) return;
+      if (element) {
+        const currentElement = element;
+        runCurrentBestEffort(`${context}: ${id} cleanup failed`, isCurrent, () => {
+          currentElement.style.display = "none";
+        });
+      }
+    };
+    const calibrationBanner = readBestEffort(
+      `${context}: calibration banner lookup failed`,
+      () => document.getElementById("calib-banner"),
+    );
+    if (!isCurrent()) return;
+    if (calibrationBanner) {
+      const currentBanner = calibrationBanner;
+      runCurrentBestEffort(`${context}: calibration banner cleanup failed`, isCurrent, () => {
+        currentBanner.classList.add("hidden");
+      });
+    }
+    hideElement("robot-meta-card");
+    hideElement("rt-export-card");
+    const batchRobot = readBestEffort(
+      `${context}: batch robot lookup failed`,
+      () => document.getElementById("batch-robot"),
+    );
+    if (!isCurrent()) return;
+    if (batchRobot) {
+      let emptyRobotLabel = "Not loaded";
+      if (!runCurrentBestEffort(`${context}: batch robot label failed`, isCurrent, () => {
+        emptyRobotLabel = runtimeText("Not loaded", "未加载");
+      })) return;
+      const currentBatchRobot = batchRobot;
+      runCurrentBestEffort(`${context}: batch robot cleanup failed`, isCurrent, () => {
+        currentBatchRobot.textContent = emptyRobotLabel;
+      });
+    }
+    runCurrentBestEffort(`${context}: H2R robot selector cleanup failed`, isCurrent, () => {
+      populateH2rRobotSelect();
+    });
+    runCurrentBestEffort(`${context}: batch robot selector cleanup failed`, isCurrent, () => {
+      populateBatchRobotSelect();
+    });
+    runCurrentBestEffort(`${context}: robot library cleanup failed`, isCurrent, () => {
+      renderRobotLibrary();
+    });
+    runCurrentBestEffort(`${context}: basket cleanup failed`, isCurrent, () => {
+      renderBasket();
+    });
+    runCurrentBestEffort(`${context}: pills cleanup failed`, isCurrent, () => updatePills());
+    runCurrentBestEffort(`${context}: workflow publication failed`, isCurrent, () => {
+      publishH2rWorkflowState();
+    });
+  };
+  if (!inputLeaseIsCurrent()) return "stale";
   const robotName = result.robot;
   let selectedRobot = state.robot;
+  let robotCapabilityWithdrawnForLoad = false;
+  let installedRobotCapability = false;
+  let installedRobotViewGeneration: number | null = null;
+  let robotTrajectoryMutationStarted = false;
   const selectedRobotResourcesAvailable =
     selectedRobot?.name === robotName
     && robot.links.length > 0
@@ -3330,93 +4659,353 @@ async function loadRobotExportPreview(
     // the current Stage intact. Only a failure after `robot.load` begins needs
     // a compensating visibility commit.
     const robotData = await API.post("/api/robot/select", { name: robotName });
-    const attempt = startRobotViewLoad(robot, robotData);
+    if (!inputLeaseIsCurrent()) return "stale";
+    // RobotView.load() clears the old renderer synchronously before its parser
+    // awaits. Withdraw the matching canonical capability first, so a newer
+    // Retarget click cannot capture an old payload with the in-flight View.
+    state.robot = null;
+    state.robotTrajectory = null;
+    state.exportToken = null;
+    state.exportSrcFps = null;
+    state.exportHasScene = false;
+    state.calibration = false;
+    state.calibrationMode = false;
+    h2rRunState = "idle";
+    robotCapabilityWithdrawnForLoad = true;
+    const viewAttempt = startRobotViewLoad(robot, robotData);
+    const robotLoadOwnsCapability = (): boolean => (
+      ownsPairMutation()
+      && state.motion === inputMotion
+      && state.libraryEntry === inputLibraryEntry
+      && state.robot === null
+      && state.robotTrajectory === null
+      && state.exportToken === null
+      && robot.isLoadGenerationCurrent(viewAttempt.generation)
+      && !state.calibrationMode
+    );
+    projectRobotCapabilityWithdrawal(
+      "H2R robot export preview replacement",
+      robotLoadOwnsCapability,
+    );
     try {
-      const loadResult = await attempt.completion;
+      const loadResult = await viewAttempt.completion;
       if (
         loadResult === "stale"
-        || !robot.isLoadGenerationCurrent(attempt.generation)
+        || !robot.isLoadGenerationCurrent(viewAttempt.generation)
       ) return "stale";
+      if (!robotLoadOwnsCapability()) {
+        // No newer RobotView generation exists, so this committed candidate is
+        // still A's exact obligation even though another domain/pair intent won.
+        runBestEffortCleanup(
+          "stale export-preview RobotView cleanup failed",
+          () => robot.clear(),
+        );
+        return "stale";
+      }
       selectedRobot = robotData;
+      // Publish the successfully installed RobotView capability before any
+      // pair host callback can start a successor. Canonical and renderer robot
+      // identities are therefore never observably split.
+      state.robot = robotData;
+      state.robotTrajectory = null;
+      state.exportToken = null;
+      state.exportSrcFps = null;
+      state.exportHasScene = false;
+      state.calibration = false;
+      installedRobotCapability = true;
+      robotCapabilityWithdrawnForLoad = false;
+      installedRobotViewGeneration = viewAttempt.generation;
+      if (!ownsPairMutation()) return "stale";
     } catch (error) {
-      if (!robot.isLoadGenerationCurrent(attempt.generation)) return "stale";
-      clearH2rRobotAfterViewLoss("export preview robot load");
+      if (!robot.isLoadGenerationCurrent(viewAttempt.generation)) return "stale";
+      const failureMessage = errorMessage(error);
+      // RobotView already terminalized its failed generation. Withdraw the
+      // matching canonical capability before any fallible UI cleanup; a newer
+      // preview revision owns whatever state follows and is left untouched.
+      if (previewRevision === h2rRobotExportPreviewRevision) {
+        const failureIsCurrent = (): boolean => (
+          previewRevision === h2rRobotExportPreviewRevision
+          && ownsPairMutation()
+          && state.robot === null
+          && robot.isLoadGenerationCurrent(viewAttempt.generation)
+        );
+        projectRobotCapabilityWithdrawal(
+          "H2R robot export preview load failure",
+          failureIsCurrent,
+        );
+        runCurrentBestEffort(
+          "H2R robot export preview load failure notification failed",
+          failureIsCurrent,
+          () => toast(failureMessage, true),
+        );
+      }
       throw error;
     }
   }
 
+  const robotViewGeneration = robot.loadGeneration;
+  let domainCommitted = false;
+  const previewIsCurrent = (): boolean => (
+    previewRevision === h2rRobotExportPreviewRevision
+    && scaledPairRevision === h2rScaledPairRevision
+    && robot.isLoadGenerationCurrent(robotViewGeneration)
+    && !state.calibrationMode
+    && (
+      domainCommitted
+        ? (
+          state.motion === null
+          && state.libraryEntry === null
+          && state.robot === selectedRobot
+          && state.robotTrajectory === result.trajectory
+        )
+        : (
+          state.motion === inputMotion
+          && state.libraryEntry === inputLibraryEntry
+          && state.robot === (
+            installedRobotCapability
+              ? selectedRobot
+              : robotCapabilityWithdrawnForLoad ? null : inputRobot
+          )
+          && state.robotTrajectory === (
+            installedRobotCapability || robotCapabilityWithdrawnForLoad
+              ? null
+              : inputRobotTrajectory
+          )
+          && state.exportToken === (
+            installedRobotCapability || robotCapabilityWithdrawnForLoad
+              ? null
+              : inputExportToken
+          )
+        )
+    )
+  );
+  const withdrawInstalledRobotCapability = (context: string): void => {
+    const ownedRobotGeneration = installedRobotViewGeneration ?? robotViewGeneration;
+    if (
+      (!installedRobotCapability && !robotTrajectoryMutationStarted)
+      || domainCommitted
+      || !ownsPairMutation()
+      || state.robot !== selectedRobot
+      || !robot.isLoadGenerationCurrent(ownedRobotGeneration)
+    ) return;
+    // Canonical aliases are withdrawn first, without callbacks. Every later
+    // renderer/UI boundary rechecks the raw pair owner, so A cannot erase a B
+    // that starts from a clear()/visibility listener.
+    state.robot = null;
+    state.robotTrajectory = null;
+    state.exportToken = null;
+    state.exportSrcFps = null;
+    state.exportHasScene = false;
+    state.calibration = false;
+    state.calibrationMode = false;
+    h2rRunState = "idle";
+    if (pendingH2rPlayback?.kind === "export-preview"
+      && pendingH2rPlayback.previewRevision === previewRevision) {
+      pendingH2rPlayback = null;
+    }
+    installedRobotCapability = false;
+    robotTrajectoryMutationStarted = false;
+    robot.trajectory = null;
+    robot.frameIndices = null;
+    robot.clipDuration = 1;
+    if (!ownsPairMutation()) return;
+    runBestEffortCleanup(`${context}: staged RobotView cleanup failed`, () => robot.clear());
+    if (!ownsPairMutation()) return;
+    projectRobotCapabilityWithdrawal(context, ownsPairMutation);
+  };
+  const rollbackUncommittedPreview = (context: string): void => {
+    if (domainCommitted || !ownsPairMutation()) return;
+    withdrawInstalledRobotCapability(context);
+    if (!ownsPairMutation()) return;
+    try {
+      clearH2rScaledPreview(ownsPairMutation);
+    } catch (cleanupError) {
+      console.warn(`${context}: scaled pair cleanup failed`, errorMessage(cleanupError));
+    }
+  };
+  if (!previewIsCurrent()) {
+    rollbackUncommittedPreview("H2R robot export preview superseded");
+    return "stale";
+  }
+
   const clipDur = Math.max(0.1, (result.num_frames - 1) / (result.framerate || 30));
-  withH2rStageDisplayBatch(() => {
+  let pairCommitted = false;
+  try {
+    pairCommitted = replaceH2rScaledPreview({
+      preview: null,
+      environment: result.scaled_scene ?? null,
+      motionToken: result.preview_token,
+      environmentOptions: {
+        duration: clipDur,
+        objectGlbUrl: (o) => datasetSceneGlbUrl(result.preview_token, o),
+      },
+      ownsPairMutation,
+      isCurrent: previewIsCurrent,
+      context: "H2R robot export preview",
+    });
+  } catch (error) {
+    const reportHere = installedRobotCapability && previewIsCurrent();
+    const failureMessage = reportHere ? errorMessage(error) : null;
+    rollbackUncommittedPreview("H2R robot export preview pair failure");
+    if (failureMessage) {
+      runCurrentBestEffort(
+        "H2R robot export preview pair failure notification failed",
+        ownsPairMutation,
+        () => toast(failureMessage, true),
+      );
+    }
+    throw error;
+  }
+  if (!pairCommitted) {
+    rollbackUncommittedPreview("H2R robot export preview pair rejection");
+    return "stale";
+  }
+  if (!previewIsCurrent()) {
+    rollbackUncommittedPreview("H2R robot export preview pre-commit loss");
+    return "stale";
+  }
+  try {
+    robotTrajectoryMutationStarted = true;
+    robot.setTrajectory(result.trajectory);
+    if (!previewIsCurrent()) {
+      rollbackUncommittedPreview("H2R robot export preview trajectory loss");
+      return "stale";
+    }
     state.motion = null;
     state.libraryEntry = null;
     state.robot = selectedRobot;
     state.exportToken = null;
-    clearResultDiagnostics("h2r");
-    skel.clear();
-    mesh.clear();
-    skin.clear();
-    envView.clear();
-    setH2rLayerVisible("sourceEnvironment", false);
+    state.exportSrcFps = null;
+    state.exportHasScene = Boolean(result.scaled_scene);
     state.robotTrajectory = result.trajectory;
-    robot.setTrajectory(result.trajectory);
-
-    scaledSkel.clear();
-    setH2rLayerVisible("scaledSkeleton", false);
-    if (result.scaled_scene) {
-      scaledEnv.load(result.scaled_scene, result.preview_token, {
-        duration: clipDur,
-        objectGlbUrl: (o) => datasetSceneGlbUrl(result.preview_token, o),
-      });
-      setH2rLayerVisible("scaledEnvironment", true);
-    } else {
-      scaledEnv.clear();
-      setH2rLayerVisible("scaledEnvironment", false);
+    pendingH2rPlayback = Object.freeze({
+      kind: "export-preview",
+      previewRevision,
+      scaledPairRevision,
+      robot: selectedRobot!,
+      robotViewGeneration,
+      trajectory: result.trajectory,
+      duration: robot.clipDuration || clipDur,
+    });
+    domainCommitted = true;
+  } catch (error) {
+    const reportHere = previewIsCurrent();
+    const failureMessage = reportHere ? errorMessage(error) : null;
+    rollbackUncommittedPreview("H2R robot export preview domain failure");
+    if (failureMessage) {
+      runCurrentBestEffort(
+        "H2R robot export preview domain failure notification failed",
+        ownsPairMutation,
+        () => toast(failureMessage, true),
+      );
     }
+    throw error;
+  }
 
-    setH2rLayerVisible("sourceSkeleton", false);
-    setBodyVisible(false);
-    setH2rLayerVisible("targetRobot", true);
-    player.ready(robot.clipDuration || clipDur);
+  // Everything below is a retryable projection of the committed domain. One
+  // broken DOM/renderer callback is logged locally and cannot reject the job.
+  runBestEffortCleanup("H2R robot export preview Stage projection failed", () => {
+    withH2rStageDisplayBatch(() => {
+      runCurrentBestEffort("H2R export source skeleton cleanup failed", previewIsCurrent, () => skel.clear());
+      runCurrentBestEffort("H2R export source mesh cleanup failed", previewIsCurrent, () => mesh.clear());
+      runCurrentBestEffort("H2R export source skin cleanup failed", previewIsCurrent, () => skin.clear());
+      runCurrentBestEffort("H2R export source environment cleanup failed", previewIsCurrent, () => envView.clear());
+      runCurrentBestEffort("H2R export diagnostics cleanup failed", previewIsCurrent, () => clearResultDiagnostics("h2r"));
+      runCurrentBestEffort("H2R export source environment projection failed", previewIsCurrent, () => setH2rLayerVisible("sourceEnvironment", false));
+      runCurrentBestEffort("H2R export scaled skeleton projection failed", previewIsCurrent, () => setH2rLayerVisible("scaledSkeleton", false));
+      runCurrentBestEffort("H2R export scaled environment projection failed", previewIsCurrent, () => setH2rLayerVisible("scaledEnvironment", Boolean(result.scaled_scene)));
+      runCurrentBestEffort("H2R export source skeleton projection failed", previewIsCurrent, () => setH2rLayerVisible("sourceSkeleton", false));
+      runCurrentBestEffort("H2R export body projection failed", previewIsCurrent, () => setBodyVisible(false));
+      runCurrentBestEffort("H2R export robot projection failed", previewIsCurrent, () => setH2rLayerVisible("targetRobot", true));
+    });
   });
-
-  document.getElementById("motion-meta-card").style.display = "none";
-  player.setPlaying(true);
-  robot.group.getWorldPosition(_camFocus);
-  orbit.target.copy(_camFocus);
-  _orbitManualUntil = 0;
-  revealStage();
-  updatePills();
-  toast(runtimeText(
-    `Playing robot mesh: ${result.name}`,
-    `机器人 mesh 播放：${result.name}`,
-  ));
-  return "committed";
+  runCurrentBestEffort(
+    "H2R robot export preview metadata projection failed",
+    previewIsCurrent,
+    () => {
+      const motionMetaCard = document.getElementById("motion-meta-card");
+      if (motionMetaCard) motionMetaCard.style.display = "none";
+    },
+  );
+  // The domain may finish while R2R owns the canvas. In that case the exact
+  // receipt remains pending and r2rLeavePanel applies player/camera later.
+  presentPendingH2rPlayback();
+  runCurrentBestEffort(
+    "H2R robot export preview pills failed",
+    previewIsCurrent,
+    () => updatePills(),
+  );
+  runCurrentBestEffort(
+    "H2R robot export preview notification failed",
+    previewIsCurrent,
+    () => toast(runtimeText(
+      `Playing robot mesh: ${result.name}`,
+      `机器人 mesh 播放：${result.name}`,
+    )),
+  );
+  return previewIsCurrent() ? "committed" : "stale";
 }
 
 async function previewRobotClip(
   entry: LibraryEntry,
   robotName?: string,
-): Promise<RobotExportPreviewResult> {
-  const label = entry.stem || entry.sequence_id || "";
-  showLoading(runtimeText(
-    `Loading robot trajectory ${label}`.trim(),
-    `加载机器人轨迹 ${label}`.trim(),
-  ));
+): Promise<RobotExportPreviewResult | null> {
+  if (state.calibrationMode) {
+    toast(runtimeText(
+      "Robot trajectories cannot be previewed in calibration mode",
+      "标定模式下无法预览机器人轨迹",
+    ), true);
+    return null;
+  }
+  const attempt = beginH2rRobotExportPreview(entry, robotName);
+  const ownsPairMutation = (): boolean => (
+    h2rRobotExportPreviewOwnsPair(attempt)
+  );
+  const inputsAreCurrent = (): boolean => (
+    h2rRobotExportPreviewInputsAreCurrent(attempt)
+  );
+  let loadingPresentation: LoadingOverlayPresentation | null = null;
   try {
-    const body: { source_path: string; robot?: string } = { source_path: entry.source_path };
-    if (robotName) body.robot = robotName;
+    // The request owns both scaled Views before transport. A synchronously
+    // reentrant preview/retarget/refresh claims a newer pair and finishes the
+    // inherited cleanup before this stale request can cross its first await.
+    if (!clearH2rScaledPreview(ownsPairMutation)) return null;
+    if (!inputsAreCurrent()) return null;
+    loadingPresentation = showLoading(() => runtimeText(
+      `Loading robot trajectory ${attempt.label}`.trim(),
+      `加载机器人轨迹 ${attempt.label}`.trim(),
+    ));
+    if (!inputsAreCurrent()) return null;
+    const body: { source_path: string; robot?: string } = {
+      source_path: attempt.sourcePath,
+    };
+    if (attempt.requestedRobotName) body.robot = attempt.requestedRobotName;
     const { job_id } = await API.post("/api/dataset/preview_robot", body);
+    if (!inputsAreCurrent()) return null;
     const result = await waitMotionJob<RobotExportPreviewResult>(job_id, (frac, sub) => {
-      setLoadingProgress(frac, sub);
+      if (inputsAreCurrent() && loadingPresentation) {
+        setLoadingProgress(frac, sub, loadingPresentation);
+      }
     });
-    setLoadingProgress(1, runtimeText("Building robot scene…", "构建机器人场景…"));
-    await loadRobotExportPreview(result);
+    if (!inputsAreCurrent()) return result;
+    if (loadingPresentation) {
+      setLoadingProgress(
+        1,
+        runtimeText("Building robot scene…", "构建机器人场景…"),
+        loadingPresentation,
+      );
+    }
+    if (!inputsAreCurrent()) return result;
+    await loadRobotExportPreview(result, attempt);
     return result;
   } catch (e) {
+    if (!inputsAreCurrent()) return null;
     toast(errorMessage(e), true);
     throw e;
   } finally {
-    hideLoading();
+    // Loading UI is owned by request intent, not by mutable domain identity.
+    // An older request must never hide a successor's overlay.
+    if (loadingPresentation) hideLoading(loadingPresentation);
   }
 }
 
@@ -3446,14 +5035,20 @@ async function loadLibraryEntryRequest(
   options: { usage?: "human_to_robot"; rethrow?: boolean } = {},
 ): Promise<AsyncStageViewLoadResult> {
   const label = entry.stem || entry.sequence_id || "";
-  showLoading(runtimeText(`Loading motion… ${label}`, `加载动作中… ${label}`).trim());
+  const loadingPresentation = showLoading(
+    () => runtimeText(`Loading motion… ${label}`, `加载动作中… ${label}`).trim(),
+  );
   try {
     const body = options.usage ? { ...entry, usage: options.usage } : entry;
     const { job_id } = await API.post("/api/motion/load_library", body);
     const payload = await waitMotionJob<MotionPayload>(job_id, (frac, sub) => {
-      setLoadingProgress(frac, sub);
+      setLoadingProgress(frac, sub, loadingPresentation);
     });
-    setLoadingProgress(1, runtimeText("Building scene…", "构建场景…"));
+    setLoadingProgress(
+      1,
+      runtimeText("Building scene…", "构建场景…"),
+      loadingPresentation,
+    );
     const loadResult = await loadMotionPayload(payload);
     if (loadResult === "stale") return "stale";
     return "committed";
@@ -3462,7 +5057,7 @@ async function loadLibraryEntryRequest(
     if (options.rethrow) throw e;
     return "committed";
   } finally {
-    hideLoading();
+    hideLoading(loadingPresentation);
   }
 }
 
@@ -3901,7 +5496,7 @@ async function ingestMotionFiles(
 ): Promise<MotionPayload | null> {
   if (!files || !files.length) return null;
   const libraryFolderLabel = inferLibraryFolderLabel(files);
-  showLoading(runtimeText(
+  const loadingPresentation = showLoading(() => runtimeText(
     `Linking and parsing… (${files.length} files)`,
     `链接并解析中…（${files.length} 个文件）`,
   ));
@@ -3914,9 +5509,13 @@ async function ingestMotionFiles(
     );
     const { job_id, linked, folder_label, materialize_mode } = uploadResp;
     const payload = await waitMotionJob<MotionPayload>(job_id, (frac, sub) => {
-      setLoadingProgress(frac, sub);
+      setLoadingProgress(frac, sub, loadingPresentation);
     }, { uploadFrac: 0 });
-    setLoadingProgress(1, runtimeText("Building scene…", "构建场景…"));
+    setLoadingProgress(
+      1,
+      runtimeText("Building scene…", "构建场景…"),
+      loadingPresentation,
+    );
     const loadResult = await loadMotionPayload(payload);
     if (loadResult === "stale") return null;
     if (linked || folder_label || payload.linked_folder) {
@@ -3949,7 +5548,7 @@ async function ingestMotionFiles(
     toast(errorMessage(e), true);
     return null;
   } finally {
-    hideLoading();
+    hideLoading(loadingPresentation);
   }
 }
 
@@ -6881,6 +8480,9 @@ let r2rCalibrationManipulatorSession: CalibrationManipulatorSession | null = nul
 // epoch lets either workflow's synchronous bootstrap revoke remaining UI writes
 // even before that bootstrap receives and reserves its next exact lease.
 let calibrationPresentationEpoch = 0;
+// R2R jobs must not become stale merely because the independent H2R workflow
+// starts or exits calibration while R2R is hidden.
+let r2rCalibrationRevision = 0;
 
 function calibrationManipulatorAlias(
   workflow: WorkflowId,
@@ -7076,8 +8678,7 @@ function _applyCalibSceneLayout(): void {
     state.robotTrajectory = null;
     robot.trajectory = null;
     clearResultDiagnostics("h2r");
-    scaledSkel.clear();
-    scaledEnv.clear();
+    clearH2rScaledPreview();
     setH2rLayerVisible("sourceSkeleton", false);
     setBodyVisible(false);
     setH2rLayerVisible("sourceEnvironment", false);
@@ -8059,52 +9660,177 @@ function setRetargetProgress(
   progressElement: HTMLElement,
   bar: HTMLElement,
   job: JobResponse,
-): void {
+  isCurrent: () => boolean = () => true,
+): boolean {
+  if (!isCurrent()) return false;
   const p = job.progress || 0;
   const indet = job.status === "running" && p < 0.1;
   progressElement.classList.toggle("indet", indet);
+  if (!isCurrent()) return false;
   if (!indet) {
     bar.style.width = `${Math.max(2, p * 100).toFixed(0)}%`;
+    if (!isCurrent()) return false;
+  }
+  return isCurrent();
+}
+
+let h2rRetargetRevision = 0;
+
+interface H2rPlaybackPresentationBase {
+  readonly kind: "retarget" | "export-preview";
+  readonly robot: RobotPayload;
+  readonly robotViewGeneration: number;
+  readonly trajectory: RobotTrajectoryPayload;
+  readonly duration: number;
+}
+
+interface H2rRetargetPlaybackPresentation extends H2rPlaybackPresentationBase {
+  readonly kind: "retarget";
+  readonly runRevision: number;
+  readonly motionToken: string;
+  readonly reference: string | null;
+}
+
+interface H2rExportPreviewPlaybackPresentation extends H2rPlaybackPresentationBase {
+  readonly kind: "export-preview";
+  readonly previewRevision: number;
+  readonly scaledPairRevision: number;
+}
+
+type H2rPlaybackPresentation =
+  | H2rRetargetPlaybackPresentation
+  | H2rExportPreviewPlaybackPresentation;
+
+let pendingH2rPlayback: H2rPlaybackPresentation | null = null;
+
+function h2rPlaybackIsCurrent(
+  playback: H2rPlaybackPresentation,
+): boolean {
+  if (pendingH2rPlayback !== playback) return false;
+  const sharedIdentityIsCurrent = (
+    state.robot === playback.robot
+    && robot.isLoadGenerationCurrent(playback.robotViewGeneration)
+    && state.robotTrajectory === playback.trajectory
+    && robot.trajectory === playback.trajectory
+    && !state.calibrationMode
+  );
+  if (!sharedIdentityIsCurrent) return false;
+  return playback.kind === "retarget"
+    ? (
+      playback.runRevision === h2rRetargetRevision
+      && state.motion?.token === playback.motionToken
+      && state.reference === playback.reference
+    )
+    : (
+      playback.previewRevision === h2rRobotExportPreviewRevision
+      && playback.scaledPairRevision === h2rScaledPairRevision
+      && state.motion === null
+      && state.libraryEntry === null
+      && state.exportToken === null
+    );
+}
+
+/** Apply a committed H2R result only while H2R owns the shared player/camera. */
+function presentPendingH2rPlayback(
+  stageIsCurrent: () => boolean = () => (
+    h2rOwnsStage
+    && (
+      panelPresentationCoordinator.current === null
+      || appliedPanelPresentationOwnsStage({
+        current: panelPresentationCoordinator.current,
+        lastApplied: lastAppliedPanelPresentation,
+        stageOwner: "h2r",
+      })
+    )
+  ),
+): boolean {
+  const playback = pendingH2rPlayback;
+  if (!playback) return false;
+  const presentationIsCurrent = (): boolean => (
+    stageIsCurrent() && h2rPlaybackIsCurrent(playback)
+  );
+  if (!h2rPlaybackIsCurrent(playback)) {
+    if (pendingH2rPlayback === playback) {
+      pendingH2rPlayback = null;
+    }
+    return false;
+  }
+  if (!presentationIsCurrent()) return false;
+  try {
+    player.ready(playback.duration);
+    if (!presentationIsCurrent()) return false;
+    player.refreshFrame();
+    if (!presentationIsCurrent()) return false;
+    player.setPlaying(true);
+    if (!presentationIsCurrent()) return false;
+    robot.group.getWorldPosition(_camFocus);
+    if (!presentationIsCurrent()) return false;
+    orbit.target.copy(_camFocus);
+    if (!presentationIsCurrent()) return false;
+    _orbitManualUntil = 0;
+    if (!presentationIsCurrent()) return false;
+    pendingH2rPlayback = null;
+    return true;
+  } catch (error) {
+    // Presentation is retryable and never changes the committed domain result.
+    // Keep this exact receipt pending unless a reentrant successor replaced it.
+    if (h2rPlaybackIsCurrent(playback)) {
+      console.warn("H2R playback presentation failed", errorMessage(error));
+    }
+    return false;
   }
 }
 
 document.getElementById("retarget-btn").onclick = async () => {
   if (!state.motion || !state.robot) return;
-  const retargetRobotName = state.robot.name;
+  const retargetRevision = ++h2rRetargetRevision;
+  pendingH2rPlayback = null;
+  const retargetOwnsRun = (): boolean => (
+    retargetRevision === h2rRetargetRevision
+  );
+  const retargetRobot = state.robot;
+  const retargetRobotName = retargetRobot.name;
+  const retargetRobotGeneration = robot.loadGeneration;
   const retargetMotionToken = state.motion.token;
   const retargetMotionFps = state.motion.framerate;
   const retargetReference = state.reference;
+  const retargetScaledPairRevision = ++h2rScaledPairRevision;
+  let lockAcquired = false;
+  let resultCommitted = false;
+  const retargetOwnsScaledPair = (): boolean => (
+    retargetOwnsRun()
+    && retargetScaledPairRevision === h2rScaledPairRevision
+  );
+  const retargetInputsAreCurrent = (): boolean => (
+    retargetOwnsScaledPair()
+    && state.robot === retargetRobot
+    && state.robot?.name === retargetRobotName
+    && robot.isLoadGenerationCurrent(retargetRobotGeneration)
+    && state.motion?.token === retargetMotionToken
+    && state.reference === retargetReference
+    && !state.calibrationMode
+  );
+  // Retarget owns an asynchronous pair writer. Empty both old Views before
+  // the first DOM/transport boundary so a reentrant successor can inherit and
+  // finish the cleanup rather than observing a half-retired pair.
+  if (!clearH2rScaledPreview(retargetOwnsScaledPair)) return;
+  if (!retargetInputsAreCurrent()) return;
   const prog = document.getElementById("rt-progress");
   const bar = prog.querySelector<HTMLElement>(".bar");
   const status = document.getElementById("rt-status");
-  if (!bar) throw new Error("Retarget progress bar is missing");
-  prog.style.display = "block";
-  prog.classList.add("indet");
-  bar.style.width = "0%";
-  const firstHint = !state.robot.ik_prewarmed;
-  renderSpinnerStatus(
-    status,
-    firstHint
-      ? runtimeText(
-        "Retargeting… The first run for a new robot is slower, and progress may pause briefly.",
-        "正在 retarget…（新机器人首次较慢，进度条可能短暂不动）",
-      )
-      : runtimeText("Retargeting…", "正在 retarget…"),
-  );
-  document.getElementById("retarget-btn").disabled = true;
-  h2rRunState = "running";
-  clearResultDiagnostics("h2r");
-  setRobotPanelLocked(true);
-  publishH2rWorkflowState();
+  const retargetButton = document.getElementById("retarget-btn");
   const discardStaleResult = (): boolean => {
-    const inputsAreCurrent =
-      state.robot?.name === retargetRobotName &&
-      state.motion?.token === retargetMotionToken &&
-      state.reference === retargetReference;
-    if (inputsAreCurrent) return false;
+    if (retargetInputsAreCurrent()) return false;
+    // Input loss belongs to this run until a newer Retarget click takes the
+    // raw revision. Recheck that revision after every host mutation so A can
+    // never clear progress, state, or feedback already published by B.
+    if (!retargetOwnsRun()) return true;
     prog.classList.remove("indet");
+    if (!retargetOwnsRun()) return true;
     status.textContent = "";
+    if (!retargetOwnsRun()) return true;
     h2rRunState = "idle";
+    if (!retargetOwnsRun()) return true;
     toast(runtimeText(
       "Retarget completed, but its motion, robot, or reference changed while it was running. The stale result was discarded; run Retarget again.",
       "Retarget 已完成，但过程中动作、机器人或参考姿态发生了变化。旧结果已丢弃，请重新执行 Retarget。",
@@ -8112,7 +9838,47 @@ document.getElementById("retarget-btn").onclick = async () => {
     return true;
   };
   try {
-    const retargetFps = parseOptionalFps(document.getElementById("rt-retarget-fps"));
+    if (!retargetOwnsRun()) return;
+    if (!bar) throw new Error("Retarget progress bar is missing");
+    prog.style.display = "block";
+    if (!retargetOwnsRun()) return;
+    prog.classList.add("indet");
+    if (!retargetOwnsRun()) return;
+    bar.style.width = "0%";
+    if (!retargetOwnsRun()) return;
+    const firstHint = !retargetRobot.ik_prewarmed;
+    if (!renderSpinnerStatus(
+      status,
+      firstHint
+        ? runtimeText(
+          "Retargeting… The first run for a new robot is slower, and progress may pause briefly.",
+          "正在 retarget…（新机器人首次较慢，进度条可能短暂不动）",
+        )
+        : runtimeText("Retargeting…", "正在 retarget…"),
+      retargetOwnsRun,
+    )) return;
+    retargetButton.disabled = true;
+    if (!retargetOwnsRun()) return;
+    h2rRunState = "running";
+    clearResultDiagnostics("h2r");
+    if (!retargetOwnsRun()) return;
+    // Claim the reference-counted lock before entering the host callback. The
+    // flag is set first because setRobotPanelLocked() increments before any of
+    // its fallible DOM/projector work; finally must release this exact claim
+    // even when a synchronous callback starts successor B.
+    lockAcquired = true;
+    setRobotPanelLocked(true);
+    if (!retargetOwnsRun()) return;
+    publishH2rWorkflowState();
+    if (!retargetOwnsRun()) return;
+    const retargetFpsInput = document.getElementById("rt-retarget-fps");
+    if (!retargetInputsAreCurrent()) return;
+    const retargetFps = parseOptionalFps(retargetFpsInput);
+    if (!retargetInputsAreCurrent()) return;
+    const backendSelect = document.getElementById("rt-backend");
+    if (!retargetInputsAreCurrent()) return;
+    const backend = backendSelect.value;
+    if (!retargetInputsAreCurrent()) return;
     const body: {
       robot: string;
       motion_token: string;
@@ -8124,24 +9890,27 @@ document.getElementById("retarget-btn").onclick = async () => {
       robot: retargetRobotName,
       motion_token: retargetMotionToken,
       reference: retargetReference,
-      backend: document.getElementById("rt-backend").value,
+      backend,
       foot_clamp_anti_penetration: false,
     };
     if (retargetFps) body.retarget_fps = retargetFps;
+    if (!retargetInputsAreCurrent()) return;
     const { job_id } = await API.post("/api/retarget", body);
     const j = await pollJob<RetargetResult>(job_id, (jp) => {
-      setRetargetProgress(prog, bar, jp);
+      if (!setRetargetProgress(prog, bar, jp, retargetInputsAreCurrent)) return;
       const msg = jp.message || (firstHint
         ? runtimeText(
           "Compiling the first retarget for this robot. This may take a moment…",
           "新机器人首次 retarget 编译中，请耐心等待…",
         )
         : runtimeText("Retargeting…", "正在 retarget…"));
-      renderSpinnerStatus(status, msg);
+      renderSpinnerStatus(status, msg, retargetInputsAreCurrent);
     });
     if (discardStaleResult()) return;
     prog.classList.remove("indet");
+    if (!retargetInputsAreCurrent()) return;
     bar.style.width = "100%";
+    if (!retargetInputsAreCurrent()) return;
     const srcFps = j.result.motion_source_fps ?? retargetMotionFps;
     const rtFps = j.result.retarget_fps ?? j.result.source_fps;
     const effectiveRtFps = rtFps ?? 30;
@@ -8155,32 +9924,73 @@ document.getElementById("retarget-btn").onclick = async () => {
           ? `（动作原始 ${srcFps.toFixed(1)} fps）`
           : ""),
     );
+    if (!retargetInputsAreCurrent()) return;
     if (!j.result.scaled_preview) {
-      await refreshScaledPreview();
+      await refreshScaledPreview(retargetScaledPairRevision);
     }
     if (discardStaleResult()) return;
-    withH2rStageDisplayBatch(() => {
-      if (state.robot) state.robot.ik_prewarmed = true;
-      state.robotTrajectory = j.result.trajectory;
-      robot.setTrajectory(j.result.trajectory);
-      // Always restart the shared timeline at t=0. Previously we only called
-      // `ready` when inactive, so a source scrub could leave the first result
-      // playback already near its end.
-      player.ready(robot.clipDuration);
-      player.refreshFrame();
-      if (j.result.scaled_preview) {
-        scaledSkel.load(j.result.scaled_preview);
-      }
-      if (j.result.scaled_scene) {
-        scaledEnv.load(j.result.scaled_scene, retargetMotionToken);
-        setH2rLayerVisible("scaledEnvironment", true);
-      }
-      setH2rLayerVisible("sourceSkeleton", true);
-      setBodyVisible(true);
-      setH2rLayerVisible("scaledSkeleton", true);
-      setH2rLayerVisible("targetRobot", true);
-      applyH2rComparisonPreset(comparisonPresets.h2r);
+    const resultProvidesScaledSkeleton = j.result.scaled_preview !== undefined;
+    const resultProvidesScaledEnvironment = j.result.scaled_scene !== undefined;
+    const replaceScaledEnvironment = (
+      resultProvidesScaledSkeleton || resultProvidesScaledEnvironment
+    );
+    if (
+      (resultProvidesScaledSkeleton || replaceScaledEnvironment)
+      && !replaceH2rScaledPreview({
+        preview: j.result.scaled_preview ?? null,
+        environment: j.result.scaled_scene ?? null,
+        motionToken: retargetMotionToken,
+        replaceSkeleton: resultProvidesScaledSkeleton,
+        replaceEnvironment: replaceScaledEnvironment,
+        ownsPairMutation: retargetOwnsScaledPair,
+        isCurrent: retargetInputsAreCurrent,
+        context: "H2R retarget result",
+      })
+    ) return;
+    if (discardStaleResult()) return;
+    const hasScaledEnvironment = replaceScaledEnvironment
+      ? Boolean(j.result.scaled_scene)
+      : scaledEnv.group.children.length > 0;
+    // Complete all canonical result aliases before presentation/DOM effects.
+    // Once this block commits, later UI failures must not relabel the accepted
+    // server result as a failed retarget or discard its export metadata.
+    if (state.robot) state.robot.ik_prewarmed = true;
+    state.robotTrajectory = j.result.trajectory;
+    robot.setTrajectory(j.result.trajectory);
+    if (!retargetInputsAreCurrent()) return;
+    state.exportToken = j.result.export_token;
+    state.exportSrcFps = j.result.source_fps ?? null;
+    state.exportHasScene = Boolean(j.result.has_scene);
+    h2rRunState = "completed";
+    pendingH2rPlayback = Object.freeze({
+      kind: "retarget",
+      runRevision: retargetRevision,
+      robot: retargetRobot,
+      robotViewGeneration: retargetRobotGeneration,
+      motionToken: retargetMotionToken,
+      reference: retargetReference,
+      trajectory: j.result.trajectory,
+      duration: robot.clipDuration,
     });
+    resultCommitted = true;
+
+    let retargetViewsPresented = false;
+    withH2rStageDisplayBatch(() => {
+      if (!retargetInputsAreCurrent()) return;
+      setH2rLayerVisible("scaledEnvironment", hasScaledEnvironment);
+      if (!retargetInputsAreCurrent()) return;
+      setH2rLayerVisible("sourceSkeleton", true);
+      if (!retargetInputsAreCurrent()) return;
+      setBodyVisible(true);
+      if (!retargetInputsAreCurrent()) return;
+      setH2rLayerVisible("scaledSkeleton", true);
+      if (!retargetInputsAreCurrent()) return;
+      setH2rLayerVisible("targetRobot", true);
+      if (!retargetInputsAreCurrent()) return;
+      applyH2rComparisonPreset(comparisonPresets.h2r);
+      retargetViewsPresented = retargetInputsAreCurrent();
+    });
+    if (!retargetViewsPresented || !retargetInputsAreCurrent()) return;
     emitResultDiagnostics("h2r", j.result.diagnostics ?? {
       schema_version: 1,
       available: false,
@@ -8189,20 +9999,28 @@ document.getElementById("retarget-btn").onclick = async () => {
         "当前结果未返回可用的 tracking/contact 诊断。",
       ),
     });
-    player.setPlaying(true);
-    robot.group.getWorldPosition(_camFocus);
-    orbit.target.copy(_camFocus);
-    _orbitManualUntil = 0;
-    state.exportToken = j.result.export_token;
-    state.exportSrcFps = j.result.source_fps ?? null;
-    state.exportHasScene = Boolean(j.result.has_scene);
-    document.getElementById("rt-export-card").style.display = "block";
+    if (!retargetInputsAreCurrent()) return;
+    // Hidden completion leaves the receipt pending; the panel coordinator
+    // applies it when H2R next owns the shared player and camera.
+    presentPendingH2rPlayback();
+    if (!retargetInputsAreCurrent()) return;
+    const exportCard = document.getElementById("rt-export-card");
+    if (!retargetInputsAreCurrent()) return;
+    if (exportCard) exportCard.style.display = "block";
+    if (!retargetInputsAreCurrent()) return;
     const fpsInput = document.getElementById("rt-export-fps");
+    if (!retargetInputsAreCurrent()) return;
+    if (!fpsInput) throw new Error("H2R export FPS input is missing");
     fpsInput.value = "";
+    if (!retargetInputsAreCurrent()) return;
     const tStartEl = document.getElementById("rt-export-t-start");
+    if (!retargetInputsAreCurrent()) return;
     const tEndEl = document.getElementById("rt-export-t-end");
+    if (!retargetInputsAreCurrent()) return;
     if (tStartEl) tStartEl.value = "";
+    if (!retargetInputsAreCurrent()) return;
     if (tEndEl) tEndEl.value = "";
+    if (!retargetInputsAreCurrent()) return;
     const eff = j.result.retarget_fps ?? j.result.source_fps ?? 30;
     fpsInput.placeholder = runtimeText(
       `Blank = ${eff.toFixed(0)} fps (Retarget result)`,
@@ -8233,25 +10051,61 @@ document.getElementById("retarget-btn").onclick = async () => {
       )),
     );
     const bundleHint = document.getElementById("rt-export-bundle-hint");
+    if (!retargetInputsAreCurrent()) return;
     if (bundleHint) bundleHint.style.display = j.result.has_scene ? "block" : "none";
+    if (!retargetInputsAreCurrent()) return;
     if (j.result.has_scene) {
       exportHint.append(document.createTextNode(runtimeText(
         " Results with terrain or objects are packaged as ZIP (data file + OBJ).",
         " 含地形/物体时将打包为 ZIP（数据文件 + OBJ）。",
       )));
     }
-    document.getElementById("rt-export-srcfps").replaceChildren(exportHint);
-    h2rRunState = "completed";
+    if (!retargetInputsAreCurrent()) return;
+    const sourceFps = document.getElementById("rt-export-srcfps");
+    if (!retargetInputsAreCurrent()) return;
+    if (sourceFps) sourceFps.replaceChildren(exportHint);
+    if (!retargetInputsAreCurrent()) return;
     publishH2rWorkflowState();
+    if (!retargetInputsAreCurrent()) return;
     toast(runtimeText("Retarget complete; ready to export", "Retarget 完成，可导出"));
   } catch (e) {
+    if (resultCommitted) {
+      console.warn("H2R retarget post-commit presentation failed", errorMessage(e));
+      return;
+    }
+    if (!retargetOwnsRun()) return;
+    if (!retargetInputsAreCurrent()) {
+      discardStaleResult();
+      return;
+    }
     status.textContent = "";
+    if (!retargetOwnsRun()) return;
     prog.classList.remove("indet");
+    if (!retargetOwnsRun()) return;
     h2rRunState = "failed";
+    if (!retargetOwnsRun()) return;
     toast(errorMessage(e), true);
   } finally {
-    setRobotPanelLocked(false);
-    publishH2rWorkflowState();
+    // Any identity-loss early return still terminates this run. Without this
+    // compensation, a motion/robot change between two guarded host effects
+    // could leave the canonical workflow permanently marked as running.
+    if (retargetOwnsRun() && h2rRunState === "running") {
+      h2rRunState = "idle";
+    }
+    // The lock is reference-counted, so A always releases A's own claim. If B
+    // replaced it synchronously, B's claim keeps the panel locked.
+    if (lockAcquired) {
+      runBestEffortCleanup(
+        "H2R retarget panel unlock failed",
+        () => setRobotPanelLocked(false),
+      );
+    }
+    if (!retargetOwnsRun()) return;
+    runCurrentBestEffort(
+      "H2R retarget final workflow publication failed",
+      retargetOwnsRun,
+      () => publishH2rWorkflowState(),
+    );
   }
 };
 function csvHeaderEnabled(elId: string): boolean {
@@ -8694,7 +10548,7 @@ document.getElementById("batch-pick-folder")?.addEventListener("click", async ()
 
 async function ingestBasketFiles(files: UploadFile[], profile = "auto"): Promise<void> {
   if (!files || !files.length) return;
-  showLoading(runtimeText(
+  const loadingPresentation = showLoading(() => runtimeText(
     `Uploading to the session cache… (${files.length} files)`,
     `上传到会话缓存…（${files.length} 个文件）`,
   ));
@@ -8707,11 +10561,11 @@ async function ingestBasketFiles(files: UploadFile[], profile = "auto"): Promise
         setLoadingProgress((frac ?? 0) * 0.35, runtimeText(
           `Uploading ${fmtBytes(recv)} / ${fmtBytes(total)}`,
           `上传 ${fmtBytes(recv)} / ${fmtBytes(total)}`,
-        ));
+        ), loadingPresentation);
       },
     );
     const payload = await waitMotionJob<{ entries: LibraryEntry[] }>(job_id, (frac, sub) => {
-      setLoadingProgress(0.35 + frac * 0.65, sub);
+      setLoadingProgress(0.35 + frac * 0.65, sub, loadingPresentation);
     }, { uploadFrac: 0.35 });
     const entries = payload.entries || [];
     if (!entries.length) {
@@ -8729,7 +10583,7 @@ async function ingestBasketFiles(files: UploadFile[], profile = "auto"): Promise
   } catch (e) {
     toast(errorMessage(e), true);
   } finally {
-    hideLoading();
+    hideLoading(loadingPresentation);
   }
 }
 
@@ -9187,12 +11041,17 @@ const r2rSourceLoadAttempts = new LatestAsyncAttemptOwner<
 
 let r2rSourceLoadPendingAttempt:
   LatestAsyncAttempt<R2rSourceLoadIdentity> | null = null;
+let r2rLatestSourceLoadCompletion:
+  LatestAsyncAttempt<R2rSourceLoadIdentity> | null = null;
 
 /** Reserve before transport so response order cannot replace intent order. */
 function beginR2rSourceLoad(
   kind: R2rSourceLoadKind,
   name: string,
 ): LatestAsyncAttempt<R2rSourceLoadIdentity> {
+  // Revoke the preceding terminal presentation before the successor becomes
+  // observable, so a reentrant completion cannot publish over the new load.
+  r2rLatestSourceLoadCompletion = null;
   const attempt = r2rSourceLoadAttempts.begin(Object.freeze({ kind, name }));
   r2rSourceLoadPendingAttempt = attempt;
   return attempt;
@@ -9205,7 +11064,82 @@ function finishR2rSourceLoad(
   if (r2rSourceLoadPendingAttempt === attempt) {
     r2rSourceLoadPendingAttempt = null;
   }
+  r2rLatestSourceLoadCompletion = attempt;
   return true;
+}
+
+/** Exact post-finish lease used only for best-effort terminal presentation. */
+function r2rSourceLoadCompletionIsLatest(
+  attempt: LatestAsyncAttempt<R2rSourceLoadIdentity>,
+): boolean {
+  return (
+    r2rLatestSourceLoadCompletion === attempt
+    && r2rSourceLoadPendingAttempt === null
+  );
+}
+
+function r2rSourceLoadIsPending(): boolean {
+  const attempt = r2rSourceLoadPendingAttempt;
+  return attempt !== null && r2rSourceLoadAttempts.owns(attempt);
+}
+
+/** One manual target selection owns its payload request until exact finish. */
+interface R2rTargetLoadIdentity {
+  readonly name: string;
+}
+
+const r2rTargetLoadAttempts = new LatestAsyncAttemptOwner<
+  R2rTargetLoadIdentity
+>(() => true);
+
+let r2rTargetLoadPendingAttempt:
+  LatestAsyncAttempt<R2rTargetLoadIdentity> | null = null;
+let r2rLatestTargetLoadCompletion:
+  LatestAsyncAttempt<R2rTargetLoadIdentity> | null = null;
+
+/** Reserve before calibration teardown, DOM publication, or transport. */
+function beginR2rTargetLoad(
+  name: string,
+): LatestAsyncAttempt<R2rTargetLoadIdentity> {
+  r2rLatestTargetLoadCompletion = null;
+  const attempt = r2rTargetLoadAttempts.begin(Object.freeze({ name }));
+  r2rTargetLoadPendingAttempt = attempt;
+  return attempt;
+}
+
+function finishR2rTargetLoad(
+  attempt: LatestAsyncAttempt<R2rTargetLoadIdentity>,
+): boolean {
+  if (!r2rTargetLoadAttempts.finish(attempt)) return false;
+  if (r2rTargetLoadPendingAttempt === attempt) {
+    r2rTargetLoadPendingAttempt = null;
+  }
+  r2rLatestTargetLoadCompletion = attempt;
+  return true;
+}
+
+/** Exact post-finish lease for target success/failure presentation. */
+function r2rTargetLoadCompletionIsLatest(
+  attempt: LatestAsyncAttempt<R2rTargetLoadIdentity>,
+): boolean {
+  return (
+    r2rLatestTargetLoadCompletion === attempt
+    && r2rTargetLoadPendingAttempt === null
+  );
+}
+
+function invalidateR2rTargetLoad(): void {
+  const claimedAttempt = r2rTargetLoadPendingAttempt;
+  r2rTargetLoadAttempts.invalidate();
+  if (r2rTargetLoadPendingAttempt === claimedAttempt) {
+    r2rTargetLoadPendingAttempt = null;
+  }
+  r2rLatestTargetLoadCompletion = null;
+}
+
+function r2rTargetLoadIsPending(): boolean {
+  const attempt = r2rTargetLoadPendingAttempt;
+  return attempt !== null && r2rTargetLoadAttempts.owns(attempt);
 }
 
 type R2rTrajectorySelectionKind = "upload" | "library";
@@ -9255,17 +11189,47 @@ const r2rTrajectoryResults = new LatestAsyncResultOwner<
 
 let r2rTrajectoryPendingAttempt:
   LatestAsyncAttempt<R2rTrajectorySelectionIdentity> | null = null;
+let r2rLatestTrajectoryCompletion:
+  LatestAsyncAttempt<R2rTrajectorySelectionIdentity> | null = null;
+
+/** Publish one trajectory generation without crossing a host boundary. */
+function reserveR2rTrajectorySelection(
+  identity: R2rTrajectorySelectionIdentity,
+): LatestAsyncAttempt<R2rTrajectorySelectionIdentity> {
+  r2rLatestTrajectoryCompletion = null;
+  const attempt = r2rTrajectoryResults.begin(identity);
+  // Publish pending in the same callback-free section as the owner token.
+  r2rTrajectoryPendingAttempt = attempt;
+  return attempt;
+}
 
 function beginR2rTrajectorySelection(
   identity: R2rTrajectorySelectionIdentity,
 ): LatestAsyncAttempt<R2rTrajectorySelectionIdentity> {
-  const attempt = r2rTrajectoryResults.begin(identity);
-  // `pendingAttempt` owns the new pre-validation interval. Retire any
-  // predecessor's transient label now so a cancelled successor cannot leave
-  // the workflow permanently stuck on `validating`. Preserve a stable
-  // `failed` baseline until the replacement itself reaches validation.
+  const attempt = reserveR2rTrajectorySelection(identity);
+  // Publish pending before cleanup: a synchronously reentrant retarget must
+  // observe the newer trajectory intent rather than capture the old token.
+  // Retire a predecessor's transient label in this callback-free section too;
+  // later View cleanup may itself be replaced before it can reach the footer.
   if (r2rTrajectoryState === "validating") r2rTrajectoryState = "idle";
-  r2rTrajectoryPendingAttempt = attempt;
+  // A newer source trajectory invalidates target output, but the trajectory
+  // claim is reserved first so no synchronous cleanup can revive old work.
+  invalidateR2rRetarget();
+  const trajectoryIsCurrent = (): boolean => (
+    r2rTrajectoryResults.isCurrent(attempt)
+  );
+  if (!clearR2rDerivedTargetAfterViewLoss("R2R trajectory replacement", {
+    isCurrent: trajectoryIsCurrent,
+  })) {
+    if (trajectoryIsCurrent()) finishR2rTrajectorySelection(attempt);
+    return attempt;
+  }
+  if (!clearR2rRetargetTransientUi(
+    trajectoryIsCurrent,
+  )) {
+    if (trajectoryIsCurrent()) finishR2rTrajectorySelection(attempt);
+    return attempt;
+  }
   return attempt;
 }
 
@@ -9276,7 +11240,33 @@ function finishR2rTrajectorySelection(
   if (r2rTrajectoryPendingAttempt === attempt) {
     r2rTrajectoryPendingAttempt = null;
   }
+  r2rLatestTrajectoryCompletion = attempt;
   return true;
+}
+
+/**
+ * Retire an exact trajectory token after its captured RobotView disappeared.
+ * Identity validation is expected to fail at this boundary, so token-only
+ * ownership is the safe authority for terminal compensation.
+ */
+function abandonR2rTrajectorySelection(
+  attempt: LatestAsyncAttempt<R2rTrajectorySelectionIdentity>,
+): boolean {
+  if (!r2rTrajectoryResults.abandon(attempt)) return false;
+  if (r2rTrajectoryPendingAttempt === attempt) {
+    r2rTrajectoryPendingAttempt = null;
+  }
+  r2rLatestTrajectoryCompletion = attempt;
+  return true;
+}
+
+function r2rTrajectoryCompletionIsLatest(
+  attempt: LatestAsyncAttempt<R2rTrajectorySelectionIdentity>,
+): boolean {
+  return (
+    r2rLatestTrajectoryCompletion === attempt
+    && r2rTrajectoryPendingAttempt === null
+  );
 }
 
 function commitR2rTrajectorySelection(
@@ -9287,6 +11277,7 @@ function commitR2rTrajectorySelection(
   if (committed && r2rTrajectoryPendingAttempt === attempt) {
     r2rTrajectoryPendingAttempt = null;
   }
+  if (committed) r2rLatestTrajectoryCompletion = null;
   return committed;
 }
 
@@ -9298,11 +11289,12 @@ function invalidateR2rTrajectorySelection(): void {
   if (r2rTrajectoryPendingAttempt === claimedAttempt) {
     r2rTrajectoryPendingAttempt = null;
   }
+  r2rLatestTrajectoryCompletion = null;
 }
 
 function r2rTrajectorySelectionIsPending(): boolean {
   const attempt = r2rTrajectoryPendingAttempt;
-  return attempt !== null && r2rTrajectoryResults.isCurrent(attempt);
+  return attempt !== null && r2rTrajectoryResults.owns(attempt);
 }
 
 /** Domain selection outlives presentation, but not a successor or invalidation. */
@@ -9337,13 +11329,211 @@ function rebindR2rTrajectorySelection(
   },
 ): LatestAsyncAttempt<R2rTrajectorySelectionIdentity> | null {
   if (!r2rTrajectoryResults.isCurrent(attempt)) return null;
-  return beginR2rTrajectorySelection(Object.freeze({
+  // Rebinding is the same logical selection. It advances the exact token in a
+  // callback-free section without rerunning successor cleanup.
+  return reserveR2rTrajectorySelection(Object.freeze({
     ...attempt.identity,
     sourceName: source.name,
     sourcePayload: source.payload,
     sourceViewGeneration: source.viewGeneration,
     sourceAliasesCommitted: source.aliasesCommitted,
   }));
+}
+
+/** Immutable capabilities and request options owned by one retarget run. */
+interface R2rRetargetIdentity {
+  readonly sourceName: string;
+  readonly sourcePayload: RobotPayload | null;
+  readonly sourceToken: string;
+  readonly sourceStem: string | null;
+  readonly sourceViewGeneration: number;
+  readonly targetName: string;
+  /** Payload selected when the user started this run. */
+  readonly targetPayload: RobotPayload | null;
+  /** Fallback payload resolved by this exact run, if selection had none. */
+  readonly resolvedTargetPayload: RobotPayload | null;
+  /** Null only while this run owns the next target RobotView reservation. */
+  readonly targetViewGeneration: number | null;
+  /** Calibration ownership changes even when the source/target names do not. */
+  readonly calibrationRevision: number;
+  /** False during status/bootstrap preflight; true before the job may start. */
+  readonly calibrationReady: boolean;
+  /** UI request options are frozen before the first asynchronous boundary. */
+  readonly backend: string;
+  readonly retargetFps: number | null;
+}
+
+type R2rRetargetPresentationCommit = CommittedAsyncResult<
+  R2rRetargetIdentity,
+  R2rPlaybackPresentation
+>;
+
+/** Callback-free domain aliases published atomically with a retarget result. */
+interface R2rRetargetResultMetadata {
+  readonly exportToken: string;
+  readonly exportHasScene: boolean;
+  readonly resultStem: string;
+}
+
+function r2rRetargetIdentityIsCurrent(
+  identity: R2rRetargetIdentity,
+): boolean {
+  const targetPayloadIsCurrent = (
+    r2r.targetPayload === identity.targetPayload
+    || (
+      identity.resolvedTargetPayload !== null
+      && r2r.targetPayload === identity.resolvedTargetPayload
+    )
+  );
+  return (
+    !r2rSourceLoadIsPending()
+    && !r2rTargetLoadIsPending()
+    && r2r.sourceName === identity.sourceName
+    && r2r.sourcePayload === identity.sourcePayload
+    && r2r.sourceToken === identity.sourceToken
+    && r2r.sourceStem === identity.sourceStem
+    && r2rSrc.isLoadGenerationCurrent(identity.sourceViewGeneration)
+    && r2r.targetName === identity.targetName
+    && targetPayloadIsCurrent
+    && (
+      identity.targetViewGeneration === null
+      || r2rTgt.isLoadGenerationCurrent(identity.targetViewGeneration)
+    )
+    && r2rCalibrationRevision === identity.calibrationRevision
+  );
+}
+
+const r2rRetargetResults = new LatestAsyncResultOwner<
+  R2rRetargetIdentity,
+  R2rPlaybackPresentation
+>(r2rRetargetIdentityIsCurrent);
+
+let r2rRetargetPendingAttempt:
+  LatestAsyncAttempt<R2rRetargetIdentity> | null = null;
+let r2rLatestRetargetCommit: R2rRetargetPresentationCommit | null = null;
+let r2rLatestRetargetCompletion:
+  LatestAsyncAttempt<R2rRetargetIdentity> | null = null;
+
+function beginR2rRetarget(
+  identity: R2rRetargetIdentity,
+): LatestAsyncAttempt<R2rRetargetIdentity> {
+  const replacedLatestResult = r2rLatestRetargetCommit !== null;
+  r2rLatestRetargetCompletion = null;
+  const attempt = r2rRetargetResults.begin(Object.freeze(identity));
+  r2rRetargetPendingAttempt = attempt;
+  r2rLatestRetargetCommit = null;
+  if (replacedLatestResult) {
+    r2r.exportToken = null;
+    r2r.exportHasScene = false;
+    r2r.resultStem = null;
+    r2rRunState = "idle";
+  }
+  return attempt;
+}
+
+function rebindR2rRetarget(
+  attempt: LatestAsyncAttempt<R2rRetargetIdentity>,
+  identity: R2rRetargetIdentity,
+): LatestAsyncAttempt<R2rRetargetIdentity> | null {
+  if (!r2rRetargetResults.isCurrent(attempt)) return null;
+  return beginR2rRetarget(identity);
+}
+
+function finishR2rRetarget(
+  attempt: LatestAsyncAttempt<R2rRetargetIdentity>,
+): boolean {
+  if (!r2rRetargetResults.finish(attempt)) return false;
+  if (r2rRetargetPendingAttempt === attempt) {
+    r2rRetargetPendingAttempt = null;
+  }
+  r2rLatestRetargetCompletion = attempt;
+  return true;
+}
+
+/** Retire only this retarget token when a captured View capability is gone. */
+function abandonR2rRetarget(
+  attempt: LatestAsyncAttempt<R2rRetargetIdentity>,
+): boolean {
+  if (!r2rRetargetResults.abandon(attempt)) return false;
+  if (r2rRetargetPendingAttempt === attempt) {
+    r2rRetargetPendingAttempt = null;
+  }
+  r2rLatestRetargetCompletion = attempt;
+  return true;
+}
+
+function r2rRetargetCompletionIsLatest(
+  attempt: LatestAsyncAttempt<R2rRetargetIdentity>,
+): boolean {
+  return (
+    r2rLatestRetargetCompletion === attempt
+    && r2rRetargetPendingAttempt === null
+    && r2rLatestRetargetCommit === null
+  );
+}
+
+/**
+ * Publish a target playback receipt, then retire only the source receipt it
+ * supersedes. The source trajectory remains a valid retarget input/result.
+ */
+function commitR2rRetarget(
+  attempt: LatestAsyncAttempt<R2rRetargetIdentity>,
+  presentation: R2rPlaybackPresentation,
+  metadata: R2rRetargetResultMetadata,
+): R2rRetargetPresentationCommit | null {
+  const sourcePresentation = r2rTrajectoryResults.pendingPresentation;
+  const committed = r2rRetargetResults.commit(attempt, presentation);
+  if (!committed) return null;
+  if (r2rRetargetPendingAttempt === attempt) {
+    r2rRetargetPendingAttempt = null;
+  }
+  r2rLatestRetargetCommit = committed;
+  // The owner's validator is the final reentrant boundary. Once commit
+  // succeeds, publish the matching aliases in one callback-free section.
+  r2r.exportToken = metadata.exportToken;
+  r2rRunState = "completed";
+  r2r.exportHasScene = metadata.exportHasScene;
+  r2r.resultStem = metadata.resultStem;
+  setR2rComparisonPresetIntent(comparisonPresets.r2r);
+  if (sourcePresentation) {
+    r2rTrajectoryResults.withdrawPresentation(sourcePresentation);
+  }
+  return committed;
+}
+
+/** Invalidate only retarget work/results; a source playback receipt survives. */
+function invalidateR2rRetarget(): void {
+  const claimedAttempt = r2rRetargetPendingAttempt;
+  const latestCommit = r2rLatestRetargetCommit;
+  // The surrounding intent may already have changed an identity field (for
+  // example target-pending). Tracked aliases still identify the retarget
+  // owner's newest generation, so invalidate directly instead of requiring a
+  // validator that is expected to fail at this boundary.
+  if (claimedAttempt || latestCommit) {
+    r2rRetargetResults.invalidate();
+    r2r.exportToken = null;
+    r2r.exportHasScene = false;
+    r2r.resultStem = null;
+    r2rRunState = "idle";
+  }
+  if (r2rRetargetPendingAttempt === claimedAttempt) {
+    r2rRetargetPendingAttempt = null;
+  }
+  if (r2rLatestRetargetCommit === latestCommit) {
+    r2rLatestRetargetCommit = null;
+  }
+  r2rLatestRetargetCompletion = null;
+}
+
+function r2rRetargetCommitIsLatest(
+  commit: R2rRetargetPresentationCommit,
+): boolean {
+  return r2rRetargetResults.isLatestResult(commit);
+}
+
+function r2rRetargetIsPending(): boolean {
+  const attempt = r2rRetargetPendingAttempt;
+  return attempt !== null && r2rRetargetResults.owns(attempt);
 }
 
 interface R2rCalibrationIdentity {
@@ -9364,10 +11554,17 @@ interface R2rCalibrationIdentity {
 }
 
 type R2rCalibrationBootstrapResult = "entered" | "stale" | "failed";
-interface R2rCalibrationStatusReceipt {
-  readonly attempt: LatestAsyncAttempt<R2rCalibrationIdentity>;
-  readonly calibrated: boolean;
-}
+type R2rCalibrationStatusReceipt =
+  | {
+      readonly owner: "calibration";
+      readonly attempt: LatestAsyncAttempt<R2rCalibrationIdentity>;
+      readonly calibrated: boolean;
+    }
+  | {
+      readonly owner: "retarget";
+      readonly attempt: LatestAsyncAttempt<R2rRetargetIdentity>;
+      readonly calibrated: boolean;
+    };
 type R2rCalibrationStatusResult =
   | { readonly kind: "current"; readonly receipt: R2rCalibrationStatusReceipt | null }
   | { readonly kind: "stale"; readonly receipt: null };
@@ -9391,7 +11588,9 @@ function r2rCalibrationIdentityIsCurrent(
     && r2r.targetPayload === null
   );
   return (
-    r2r.sourceName === identity.sourceName
+    !r2rSourceLoadIsPending()
+    && !r2rTargetLoadIsPending()
+    && r2r.sourceName === identity.sourceName
     && r2r.sourcePayload === identity.sourcePayload
     && r2r.sourceToken === identity.sourceToken
     && r2rSrc.isLoadGenerationCurrent(identity.sourceViewGeneration)
@@ -9412,10 +11611,13 @@ const r2rCalibrationStatusAttempts = new LatestAsyncAttemptOwner<
 >(r2rCalibrationIdentityIsCurrent);
 
 let r2rCalibrationPendingAttempt: LatestAsyncAttempt<R2rCalibrationIdentity> | null = null;
+let r2rLatestCalibrationCompletion:
+  LatestAsyncAttempt<R2rCalibrationIdentity> | null = null;
 
 function beginR2rCalibrationBootstrapAttempt(
   identity: R2rCalibrationIdentity,
 ): LatestAsyncAttempt<R2rCalibrationIdentity> {
+  r2rLatestCalibrationCompletion = null;
   const attempt = r2rCalibrationBootstrapAttempts.begin(identity);
   r2rCalibrationPendingAttempt = attempt;
   return attempt;
@@ -9429,12 +11631,34 @@ function finishR2rCalibrationBootstrapAttempt(
   if (r2rCalibrationPendingAttempt === attempt) {
     r2rCalibrationPendingAttempt = null;
   }
+  r2rLatestCalibrationCompletion = attempt;
   return true;
+}
+
+/** Retire an exact bootstrap whose captured View capability disappeared. */
+function abandonR2rCalibrationBootstrapAttempt(
+  attempt: LatestAsyncAttempt<R2rCalibrationIdentity>,
+): boolean {
+  if (!r2rCalibrationBootstrapAttempts.abandon(attempt)) return false;
+  if (r2rCalibrationPendingAttempt === attempt) {
+    r2rCalibrationPendingAttempt = null;
+  }
+  r2rLatestCalibrationCompletion = attempt;
+  return true;
+}
+
+function r2rCalibrationCompletionIsLatest(
+  attempt: LatestAsyncAttempt<R2rCalibrationIdentity>,
+): boolean {
+  return (
+    r2rLatestCalibrationCompletion === attempt
+    && r2rCalibrationPendingAttempt === null
+  );
 }
 
 function r2rCalibrationBootstrapIsPending(): boolean {
   const attempt = r2rCalibrationPendingAttempt;
-  return attempt !== null && r2rCalibrationBootstrapAttempts.isCurrent(attempt);
+  return attempt !== null && r2rCalibrationBootstrapAttempts.owns(attempt);
 }
 
 function invalidateR2rCalibrationBootstrapAttempt(): void {
@@ -9443,6 +11667,7 @@ function invalidateR2rCalibrationBootstrapAttempt(): void {
   if (r2rCalibrationPendingAttempt === claimedAttempt) {
     r2rCalibrationPendingAttempt = null;
   }
+  r2rLatestCalibrationCompletion = null;
 }
 
 // A same-pair successor may take over while A is rolling back. Keep the
@@ -9772,7 +11997,65 @@ function calibrationDiagnosticRows(
 let r2rRunState: WorkflowRunState = "idle";
 let r2rTrajectoryState: "idle" | "validating" | "failed" = "idle";
 
+/**
+ * Retire progress owned by a superseded retarget operation.
+ *
+ * DOM access is a hostile boundary in the compatibility runtime: tests and
+ * desktop hosts may synchronously reserve a newer intent from any getter or
+ * mutation. The successor supplies its exact ownership predicate so an older
+ * cleanup can never erase the newer operation's progress.
+ */
+function clearR2rRetargetTransientUi(
+  isCurrent: () => boolean = () => true,
+): boolean {
+  if (!isCurrent()) return false;
+  const progress = readBestEffort(
+    "R2R retarget progress lookup failed",
+    () => document.getElementById("r2r-progress"),
+  );
+  if (!isCurrent()) return false;
+  if (progress) {
+    const currentProgress = progress;
+    runBestEffortCleanup("R2R retarget progress mode cleanup failed", () => {
+      currentProgress.classList.remove("indet");
+    });
+    if (!isCurrent()) return false;
+    runBestEffortCleanup("R2R retarget progress visibility cleanup failed", () => {
+      currentProgress.style.display = "none";
+    });
+    if (!isCurrent()) return false;
+    const bar = readBestEffort(
+      "R2R retarget progress bar lookup failed",
+      () => currentProgress.querySelector<HTMLElement>(".bar"),
+    );
+    if (!isCurrent()) return false;
+    if (bar) {
+      const currentBar = bar;
+      runBestEffortCleanup("R2R retarget progress bar cleanup failed", () => {
+        currentBar.style.width = "0%";
+      });
+    }
+    if (!isCurrent()) return false;
+  }
+  const status = readBestEffort(
+    "R2R retarget status lookup failed",
+    () => document.getElementById("r2r-status"),
+  );
+  if (!isCurrent()) return false;
+  if (status) {
+    const currentStatus = status;
+    runBestEffortCleanup("R2R retarget status cleanup failed", () => {
+      currentStatus.textContent = "";
+    });
+  }
+  return isCurrent();
+}
+
 function r2rBlockedReason(): string | null {
+  if (r2rSourceLoadIsPending()) return runtimeText(
+    "The source robot selection is still loading.",
+    "源机器人仍在加载中。",
+  );
   if (!r2r.sourceName) return runtimeText(
     "Source robot is missing. Load the robot model associated with the trajectory first.",
     "缺少源机器人：请先加载轨迹所属的 Robot Model。",
@@ -9791,6 +12074,10 @@ function r2rBlockedReason(): string | null {
   if (!r2r.sourceToken) return runtimeText(
     "Source robot trajectory is missing. Upload a CSV, PKL, or NPZ trajectory.",
     "缺少源 Robot Trajectory：请上传 CSV、PKL 或 NPZ 轨迹。",
+  );
+  if (r2rTargetLoadIsPending()) return runtimeText(
+    "The target robot selection is still loading.",
+    "目标机器人仍在加载中。",
   );
   if (!r2r.targetName) return runtimeText(
     "Target robot is missing. Select the robot model that should receive the motion.",
@@ -9811,8 +12098,12 @@ function r2rBlockedReason(): string | null {
   return null;
 }
 
-function publishR2rWorkflowState(): void {
+function publishR2rWorkflowState(
+  isCurrent: () => boolean = () => true,
+): boolean {
+  if (!isCurrent()) return false;
   const blockedReason = r2rBlockedReason();
+  if (!isCurrent()) return false;
   const trajectoryState: WorkflowNodeState = r2rTrajectoryState === "validating"
     ? "validating"
     : r2rTrajectoryState === "failed"
@@ -9892,15 +12183,24 @@ function publishR2rWorkflowState(): void {
   ];
 
   const runButton = document.getElementById("r2r-retarget-btn");
+  if (!isCurrent()) return false;
   if (runButton) runButton.disabled = blockedReason != null;
+  if (!isCurrent()) return false;
   const reason = document.getElementById("r2r-disabled-reason");
+  if (!isCurrent()) return false;
   if (reason) reason.textContent = blockedReason || "";
+  if (!isCurrent()) return false;
   emitWorkflowState({ workflow: "r2r", nodes, blockedReason });
-  updateR2rCalibrationValidation();
+  if (!isCurrent()) return false;
+  return updateR2rCalibrationValidation(isCurrent);
 }
 
-function updateR2rCalibrationValidation(): void {
+function updateR2rCalibrationValidation(
+  isCurrent: () => boolean = () => true,
+): boolean {
+  if (!isCurrent()) return false;
   const scope = document.getElementById("r2r-calibration-scope");
+  if (!isCurrent()) return false;
   if (scope) {
     const target = r2r.targetPayload?.display_name || r2r.targetName;
     const source = r2r.sourcePayload?.display_name || r2r.sourceName;
@@ -9910,12 +12210,13 @@ function updateR2rCalibrationValidation(): void {
         "Scope: target robot + source robot",
         "配置范围：目标机器人 + 源机器人",
       );
+    if (!isCurrent()) return false;
   }
 
   const container = document.getElementById("r2r-calibration-validation-summary");
+  if (!isCurrent()) return false;
   if (!r2r.sourceName && !r2r.targetName) {
-    renderValidationSummary(container, []);
-    return;
+    return renderValidationSummary(container, [], isCurrent);
   }
 
   const limits = new Map(r2r.calibLimits.map((limit) => [limit.name, limit]));
@@ -9927,7 +12228,7 @@ function updateR2rCalibrationValidation(): void {
   });
   const changed = Object.values(r2r.calibQ).filter((value) => Math.abs(value) > 1e-4).length;
 
-  renderValidationSummary(container, [
+  return renderValidationSummary(container, [
     [r2r.sourceName ? "ok" : "warn", r2r.sourceName
       ? runtimeText(
         `Source robot: ${r2r.sourcePayload?.display_name || r2r.sourceName}`,
@@ -9959,7 +12260,7 @@ function updateR2rCalibrationValidation(): void {
         `${nearLimit.length} 个关节接近 URDF 限位`,
       )],
     ...calibrationDiagnosticRows("r2r"),
-  ]);
+  ], isCurrent);
 }
 const r2rVis: Record<R2rVisibilityKey, boolean> = {
   srcRobot: true,
@@ -10013,40 +12314,36 @@ function r2rLoadSrcScene(
   scene: ScenePayload | null | undefined,
   token: string | null | undefined,
   duration: number,
-): void {
-  if (!scene) {
-    r2rSrcEnv.clear();
-    r2r.scaledScene = null;
-    document.getElementById("r2r-tg-src-env")?.setAttribute("disabled", "");
-    return;
-  }
-  r2r.scaledScene = scene;
-  r2rSrcEnv.load(scene, token, {
+  isCurrent: () => boolean = () => true,
+): boolean {
+  if (!isCurrent()) return false;
+  if (!r2rSrcEnv.load(scene, token, {
     duration,
     objectGlbUrl: (o) => r2rSceneGlbUrl(token, o),
-  });
+  }, isCurrent)) return false;
+  r2r.scaledScene = scene ?? null;
   const envBtn = document.getElementById("r2r-tg-src-env");
-  if (envBtn) envBtn.disabled = false;
+  if (!isCurrent()) return false;
+  if (envBtn) envBtn.disabled = !scene;
+  return isCurrent();
 }
 
 function r2rLoadTgtScene(
   scene: ScenePayload | null | undefined,
   token: string | null | undefined,
   duration: number,
-): void {
-  if (!scene) {
-    r2rTgtEnv.clear();
-    r2r.tgtScaledScene = null;
-    document.getElementById("r2r-tg-tgt-env")?.setAttribute("disabled", "");
-    return;
-  }
-  r2r.tgtScaledScene = scene;
-  r2rTgtEnv.load(scene, token, {
+  isCurrent: () => boolean = () => true,
+): boolean {
+  if (!isCurrent()) return false;
+  if (!r2rTgtEnv.load(scene, token, {
     duration,
     objectGlbUrl: (o) => r2rSceneGlbUrl(token, o),
-  });
+  }, isCurrent)) return false;
+  r2r.tgtScaledScene = scene ?? null;
   const envBtn = document.getElementById("r2r-tg-tgt-env");
-  if (envBtn) envBtn.disabled = false;
+  if (!isCurrent()) return false;
+  if (envBtn) envBtn.disabled = !scene;
+  return isCurrent();
 }
 
 /** Read the same R2R resource facts used by rendering and presentation. */
@@ -10076,6 +12373,8 @@ function collectR2rStageSurface(): R2rStageSurfaceSnapshot {
 interface R2rStageApplyOptions {
   /** Suppress the transient R2R snapshot during synchronous H2R hand-back. */
   readonly publishStageDisplay?: boolean;
+  /** Exact task/presentation lease for reentrant host projections. */
+  readonly isCurrent?: () => boolean;
 }
 
 /**
@@ -10083,8 +12382,12 @@ interface R2rStageApplyOptions {
  * shared canvas, then project the workflow's visibility model onto its views.
  */
 function r2rApplyStage(
-  { publishStageDisplay = true }: R2rStageApplyOptions = {},
-): void {
+  {
+    publishStageDisplay = true,
+    isCurrent = () => true,
+  }: R2rStageApplyOptions = {},
+): boolean {
+  if (!isCurrent()) return false;
   if (!r2r.active) {
     r2rSrc.group.visible = false;
     r2rTgt.group.visible = false;
@@ -10093,12 +12396,14 @@ function r2rApplyStage(
     r2rSrcEnv.group.visible = false;
     r2rTgtEnv.group.visible = false;
     projectCalibrationReferenceStageVisibility();
+    if (!isCurrent()) return false;
     if (publishStageDisplay) markH2rStageDisplayChanged();
-    return;
+    return isCurrent();
   }
   // R2R may re-project after any of its own resource changes. Re-assert the
   // H2R ownership boundary every time without mutating H2R's logical intents.
   applyH2rPhysicalVisibility();
+  if (!isCurrent()) return false;
   if (r2r.calibrating) {
     const facts = collectR2rStageSurfaceFacts();
     r2rSrc.group.visible = false;
@@ -10108,13 +12413,17 @@ function r2rApplyStage(
     r2rTgtEnv.group.visible = false;
     r2rTgt.group.visible = facts.targetRobotAvailable;
     projectCalibrationReferenceStageVisibility();
+    if (!isCurrent()) return false;
     player.active = false;
     _setPlaybarVisible(false);
+    if (!isCurrent()) return false;
     player.setPlaying(false);
+    if (!isCurrent()) return false;
     if (publishStageDisplay) markH2rStageDisplayChanged();
-    return;
+    return isCurrent();
   }
   projectCalibrationReferenceStageVisibility();
+  if (!isCurrent()) return false;
   const facts = collectR2rStageSurfaceFacts();
   const surface = projectR2rStageSurface(facts);
   const hasSrc = facts.sourceRobotAvailable;
@@ -10130,28 +12439,41 @@ function r2rApplyStage(
   r2rTgtSkel.group.visible = r2rVis.tgtSkel && hasTgtSk;
   r2rTgtEnv.group.visible = r2rVis.tgtEnv && hasTgtEnv;
   r2rSetToggle("r2r-tg-src-robot", r2rSrc.group.visible);
+  if (!isCurrent()) return false;
   r2rSetToggle("r2r-tg-src-skel", r2rSrcSkel.group.visible);
+  if (!isCurrent()) return false;
   r2rSetToggle("r2r-tg-src-env", r2rSrcEnv.group.visible);
+  if (!isCurrent()) return false;
   r2rSetToggle("r2r-tg-tgt-robot", r2rTgt.group.visible);
+  if (!isCurrent()) return false;
   r2rSetToggle("r2r-tg-tgt-skel", r2rTgtSkel.group.visible);
+  if (!isCurrent()) return false;
   r2rSetToggle("r2r-tg-tgt-env", r2rTgtEnv.group.visible);
+  if (!isCurrent()) return false;
   if (!surface.empty) {
     player.active = true;
     revealStage();
+    if (!isCurrent()) return false;
     _setPlaybarVisible(true);
+    if (!isCurrent()) return false;
     r2rSyncPlayerDuration();
+    if (!isCurrent()) return false;
     player.refreshFrame();
+    if (!isCurrent()) return false;
   } else {
     // Entering an empty R2R workspace must not inherit playback from the main workflow.
     player.active = false;
     player.setPlaying(false);
+    if (!isCurrent()) return false;
     _setPlaybarVisible(false);
+    if (!isCurrent()) return false;
   }
   if (publishStageDisplay) markH2rStageDisplayChanged();
+  return isCurrent();
 }
 
-/** Apply a repeatable R2R visibility preset using the workflow's isolated views. */
-function applyR2rComparisonPreset(preset: ComparisonPreset): void {
+/** Update only R2R's logical visibility; shared Stage projection is separate. */
+function setR2rComparisonPresetIntent(preset: ComparisonPreset): void {
   comparisonPresets.r2r = preset;
   r2rVis.srcRobot = preset === "source" || preset === "overlay";
   r2rVis.srcSkel = false;
@@ -10159,6 +12481,11 @@ function applyR2rComparisonPreset(preset: ComparisonPreset): void {
   r2rVis.tgtRobot = preset === "result" || preset === "overlay";
   r2rVis.tgtSkel = preset === "target" || preset === "overlay";
   r2rVis.tgtEnv = preset !== "source";
+}
+
+/** Apply a repeatable R2R visibility preset using the workflow's isolated views. */
+function applyR2rComparisonPreset(preset: ComparisonPreset): void {
+  setR2rComparisonPresetIntent(preset);
   r2rApplyStage();
   emitComparisonState("r2r");
 }
@@ -10183,17 +12510,16 @@ window.addEventListener("hhtools:comparison-command", (event) => {
 function r2rEnterPanel(
   intent: PanelPresentationIntent,
   authority: PresentationProjectionAuthority,
-): R2rTrajectoryPresentationCommit | null {
+): R2rPlaybackClaim | null {
   const playback = intent.r2rPlayback;
-  const trajectoryCommit = playback
-    ? r2rTrajectoryResults.pendingPresentation
+  const playbackClaim = playback
+    ? pendingR2rPlaybackClaimFor(playback)
     : null;
   if (
     playback
     && (
-      !trajectoryCommit
-      || trajectoryCommit.value !== playback
-      || !r2rTrajectoryResults.isCommitted(trajectoryCommit)
+      !playbackClaim
+      || !r2rPlaybackClaimIsCommitted(playbackClaim)
     )
   ) return null;
   const projectionIsCurrent = (): boolean => Boolean(
@@ -10201,8 +12527,8 @@ function r2rEnterPanel(
     && (
       !playback
       || (
-        trajectoryCommit
-        && r2rTrajectoryResults.isCommitted(trajectoryCommit)
+        playbackClaim
+        && r2rPlaybackClaimIsCommitted(playbackClaim)
       )
     )
   );
@@ -10219,7 +12545,7 @@ function r2rEnterPanel(
   }
   r2rApplyStage();
   if (!projectionIsCurrent()) return null;
-  if (!playback || !trajectoryCommit) return null;
+  if (!playback || !playbackClaim) return null;
 
   player.ready(playback.duration);
   if (!projectionIsCurrent()) return null;
@@ -10229,7 +12555,7 @@ function r2rEnterPanel(
   if (!projectionIsCurrent()) return null;
   player.setPlaying(playback.playing);
   if (!projectionIsCurrent()) return null;
-  return trajectoryCommit;
+  return playbackClaim;
 }
 
 /** Project H2R ownership and restore only this operation's root player state. */
@@ -10272,54 +12598,113 @@ function r2rLeavePanel(
   if (!authority.isCurrent()) return undefined;
   projectCalibrationReferenceStageVisibility();
   if (!authority.isCurrent()) return undefined;
-  if (player.active) player.refreshFrame();
+  const presentedRetarget = presentPendingH2rPlayback(
+    () => authority.isCurrent() && h2rOwnsStage,
+  );
+  if (!authority.isCurrent()) return undefined;
+  if (!presentedRetarget && player.active) {
+    runCurrentBestEffort(
+      "H2R panel hand-back frame refresh failed",
+      () => authority.isCurrent() && h2rOwnsStage,
+      () => player.refreshFrame(),
+    );
+  }
   if (!authority.isCurrent()) return undefined;
   markH2rStageDisplayChanged();
   return undefined;
 }
 
-function r2rSetCalChip(text: unknown, cls = ""): void {
+function r2rSetCalChip(
+  text: unknown,
+  cls = "",
+  isCurrent: () => boolean = () => true,
+): boolean {
+  if (!isCurrent()) return false;
   const el = document.getElementById("r2r-cal");
-  if (!el) return;
-  renderStatusChip(el, text, cls);
+  if (!isCurrent()) return false;
+  return renderStatusChip(el, text, cls, isCurrent);
 }
 
-async function r2rUpdateRetargetBtn(): Promise<R2rCalibrationStatusResult> {
+async function r2rUpdateRetargetBtn(
+  {
+    retargetAttempt,
+  }: {
+    readonly retargetAttempt?: LatestAsyncAttempt<R2rRetargetIdentity>;
+  } = {},
+): Promise<R2rCalibrationStatusResult> {
+  // A generic panel/status refresh may observe a retarget run, but only that
+  // run's exact preflight receipt may publish calibration facts while it owns
+  // the pair. This prevents an older auto-calibration continuation from
+  // superseding a newly started run.
+  const callerIsCurrent = (): boolean => retargetAttempt
+    ? r2rRetargetResults.isCurrent(retargetAttempt)
+    : !r2rRetargetIsPending();
+  if (!callerIsCurrent()) return { kind: "stale", receipt: null };
   const calBtn = document.getElementById("r2r-calib-btn");
+  if (!callerIsCurrent()) return { kind: "stale", receipt: null };
   const rtBtn = document.getElementById("r2r-retarget-btn");
+  if (!callerIsCurrent()) return { kind: "stale", receipt: null };
   if (calBtn) calBtn.disabled = !(r2r.targetName && r2r.sourceName);
+  if (!callerIsCurrent()) return { kind: "stale", receipt: null };
   if (
     r2rTrajectorySelectionIsPending()
     || r2rTrajectoryState === "validating"
+    || r2rSourceLoadIsPending()
+    || r2rTargetLoadIsPending()
     || r2r.calibrating
     || r2rCalibrationBootstrapIsPending()
   ) {
     r2rCalibrationStatusAttempts.invalidate();
+    if (!callerIsCurrent()) return { kind: "stale", receipt: null };
     if (rtBtn) rtBtn.disabled = true;
-    publishR2rWorkflowState();
-    return { kind: "current", receipt: null };
+    if (!callerIsCurrent()) return { kind: "stale", receipt: null };
+    publishR2rWorkflowState(callerIsCurrent);
+    return callerIsCurrent()
+      ? { kind: "current", receipt: null }
+      : { kind: "stale", receipt: null };
   }
 
   const identity = captureR2rCalibrationIdentity();
   if (!identity) {
     r2rCalibrationStatusAttempts.invalidate();
     r2r.calibrated = false;
-    r2rSetCalChip("—", "");
+    if (!r2rSetCalChip("—", "", callerIsCurrent)) {
+      return { kind: "stale", receipt: null };
+    }
     const batchCalibrationStatus = document.getElementById("r2r-batch-calibration-status");
+    if (!callerIsCurrent()) return { kind: "stale", receipt: null };
     if (batchCalibrationStatus) batchCalibrationStatus.textContent = "";
+    if (!callerIsCurrent()) return { kind: "stale", receipt: null };
     if (rtBtn) rtBtn.disabled = true;
+    if (!callerIsCurrent()) return { kind: "stale", receipt: null };
     r2rRenderBasket();
-    publishR2rWorkflowState();
-    return { kind: "current", receipt: null };
+    if (!callerIsCurrent()) return { kind: "stale", receipt: null };
+    publishR2rWorkflowState(callerIsCurrent);
+    return callerIsCurrent()
+      ? { kind: "current", receipt: null }
+      : { kind: "stale", receipt: null };
   }
 
-  const statusAttempt = r2rCalibrationStatusAttempts.begin(identity);
+  // Retarget preflight borrows the retarget owner directly. Panel hand-back is
+  // allowed to cancel generic calibration UI refreshes, but it must not cancel
+  // a hidden domain job before that job reaches the transport boundary.
+  const statusAttempt = retargetAttempt
+    ? null
+    : r2rCalibrationStatusAttempts.begin(identity);
   const statusIsCurrent = (): boolean => (
-    !r2rTrajectorySelectionIsPending()
+    callerIsCurrent()
+    && !r2rTrajectorySelectionIsPending()
     && r2rTrajectoryState !== "validating"
+    && !r2rSourceLoadIsPending()
+    && !r2rTargetLoadIsPending()
     && !r2r.calibrating
     && !r2rCalibrationBootstrapIsPending()
-    && r2rCalibrationStatusAttempts.isCurrent(statusAttempt)
+    && (
+      retargetAttempt
+        ? r2rRetargetResults.isCurrent(retargetAttempt)
+        : statusAttempt !== null
+          && r2rCalibrationStatusAttempts.isCurrent(statusAttempt)
+    )
   );
   let calibrated = false;
   try {
@@ -10334,18 +12719,22 @@ async function r2rUpdateRetargetBtn(): Promise<R2rCalibrationStatusResult> {
   }
 
   r2r.calibrated = calibrated;
-  r2rSetCalChip(
+  if (!r2rSetCalChip(
     calibrated
       ? runtimeText("Calibrated", "已标定")
       : runtimeText("Not calibrated — calibration required", "未标定 — 请先标定"),
     calibrated ? "ok" : "warn",
-  );
-  if (!statusIsCurrent()) return { kind: "stale", receipt: null };
+    statusIsCurrent,
+  )) return { kind: "stale", receipt: null };
   const batchCalibrationStatus = document.getElementById("r2r-batch-calibration-status");
+  if (!statusIsCurrent()) return { kind: "stale", receipt: null };
   if (batchCalibrationStatus) {
-    batchCalibrationStatus.textContent = calibrated
+    const batchStatusText = calibrated
       ? runtimeText("Calibration ready", "标定已就绪")
       : runtimeText("Calibration required in Robot → Robot", "需要先在“机器人 → 机器人”中完成标定");
+    if (!statusIsCurrent()) return { kind: "stale", receipt: null };
+    batchCalibrationStatus.textContent = batchStatusText;
+    if (!statusIsCurrent()) return { kind: "stale", receipt: null };
   }
   if (rtBtn) {
     rtBtn.disabled = !(
@@ -10354,16 +12743,23 @@ async function r2rUpdateRetargetBtn(): Promise<R2rCalibrationStatusResult> {
       && r2r.targetName
       && calibrated
     );
+    if (!statusIsCurrent()) return { kind: "stale", receipt: null };
   }
   r2rRenderBasket();
   if (!statusIsCurrent()) return { kind: "stale", receipt: null };
-  publishR2rWorkflowState();
+  publishR2rWorkflowState(statusIsCurrent);
   if (!statusIsCurrent()) return { kind: "stale", receipt: null };
   // Keep the status claim live across the caller's await continuation. Ensure
   // consumes it synchronously; exit, replacement, or B invalidates it first.
   return {
     kind: "current",
-    receipt: { attempt: statusAttempt, calibrated },
+    receipt: retargetAttempt
+      ? { owner: "retarget", attempt: retargetAttempt, calibrated }
+      : {
+          owner: "calibration",
+          attempt: statusAttempt!,
+          calibrated,
+        },
   };
 }
 
@@ -10404,26 +12800,42 @@ async function r2rPopulateSelects(): Promise<void> {
   }
 }
 
-function setR2rRobotStatus(kind: "source" | "target", text: string): void {
+function setR2rRobotStatus(
+  kind: "source" | "target",
+  text: string,
+  isCurrent: () => boolean = () => true,
+): boolean {
   const ids = kind === "source"
     ? ["r2r-source-status", "r2r-batch-source-status"]
     : ["r2r-target-status", "r2r-batch-target-status"];
   for (const id of ids) {
+    if (!isCurrent()) return false;
     const element = document.getElementById(id);
+    if (!isCurrent()) return false;
     if (element) element.textContent = text;
+    if (!isCurrent()) return false;
   }
+  return isCurrent();
 }
 
-function syncR2rRobotSelects(kind: "source" | "target", name: string): void {
+function syncR2rRobotSelects(
+  kind: "source" | "target",
+  name: string,
+  isCurrent: () => boolean = () => true,
+): boolean {
   const ids = kind === "source"
     ? ["r2r-source-select", "r2r-batch-source-select"]
     : ["r2r-target-select", "r2r-batch-target-select"];
   for (const id of ids) {
+    if (!isCurrent()) return false;
     const select = document.getElementById(id) as HTMLSelectElement | null;
+    if (!isCurrent()) return false;
     if (select && [...select.options].some((option) => option.value === name)) {
       select.value = name;
+      if (!isCurrent()) return false;
     }
   }
+  return isCurrent();
 }
 
 /** Withdraw calibration ownership before a robot-selection intent can await. */
@@ -10441,26 +12853,43 @@ function prepareR2rRobotReplacement(): void {
   }
 }
 
-/** Invalidate calibration aliases even when interactive teardown reports a warning. */
-function clearR2rCalibrationAfterViewLoss(context: string): void {
+/** Invalidate calibration aliases without letting cleanup cross a successor. */
+function clearR2rCalibrationAfterViewLoss(
+  context: string,
+  isCurrent: () => boolean = () => true,
+): boolean {
+  if (!isCurrent()) return false;
+  r2rCalibrationRevision += 1;
   invalidateR2rCalibrationAttempts();
   const manipulatorSession = r2rCalibrationManipulatorSession;
-  r2rCalibrationManipulatorSession = null;
+  const orbitSnapshot = r2r.calibOrbitSaved;
   const targetGroundOffset = r2rCalibrationRestoreGroundOffset;
-  // Renderer-loss cleanup is a terminal calibration path even if the
-  // manipulator or later best-effort cleanup reports an error.
-  runBestEffortCleanup(
+  // Keep the shared cleanup aliases published until their physical resources
+  // settle. A successor that enters from a disposal callback can then inherit
+  // and finish the same teardown instead of leaking the old calibration.
+  if (!runCurrentBestEffort(
     `${context}: calibration FK owner cleanup failed`,
+    isCurrent,
     () => r2rCalibrationFkPreview.stop(),
-  );
-  if (r2r.calibOrbitSaved) {
-    const saved = r2r.calibOrbitSaved;
-    runBestEffortCleanup(`${context}: calibration orbit restore failed`, () => {
-      orbit.minDistance = saved.minDistance;
-      orbit.maxDistance = saved.maxDistance;
-      orbit.zoomSpeed = saved.zoomSpeed;
-    });
+  )) return false;
+  if (orbitSnapshot) {
+    if (!runCurrentBestEffort(
+      `${context}: calibration minimum orbit restore failed`,
+      isCurrent,
+      () => { orbit.minDistance = orbitSnapshot.minDistance; },
+    )) return false;
+    if (!runCurrentBestEffort(
+      `${context}: calibration maximum orbit restore failed`,
+      isCurrent,
+      () => { orbit.maxDistance = orbitSnapshot.maxDistance; },
+    )) return false;
+    if (!runCurrentBestEffort(
+      `${context}: calibration orbit speed restore failed`,
+      isCurrent,
+      () => { orbit.zoomSpeed = orbitSnapshot.zoomSpeed; },
+    )) return false;
   }
+  if (!isCurrent()) return false;
   r2r.calibrating = false;
   r2r.calibrated = false;
   r2r.calibQ = {};
@@ -10470,29 +12899,62 @@ function clearR2rCalibrationAfterViewLoss(context: string): void {
   r2r.calibLimits = [];
   r2r.calibRows = {};
   r2r.calibNeedsCameraFocus = false;
-  r2r.calibOrbitSaved = null;
   calibrationEditorUi.r2r.comparison = "current";
-  runBestEffortCleanup(
+  if (!runCurrentBestEffort(
     `${context}: calibration manipulator cleanup failed`,
+    isCurrent,
     () => {
       if (manipulatorSession) calibManip.stop(manipulatorSession);
     },
-  );
-  runBestEffortCleanup(`${context}: target opacity restore failed`, () => r2rTgt.setOpacity(1));
-  if (targetGroundOffset !== null) {
-    runBestEffortCleanup(`${context}: target ground offset restore failed`, () => {
-      r2rTgt.groundOffset = targetGroundOffset;
-    });
-    runBestEffortCleanup(`${context}: target pose restore failed`, () => {
-      if (r2rTgt.trajectory) r2rTgt.setFrame(0);
-      else r2rTgt.applyStatic();
-    });
+  )) return false;
+  if (r2rCalibrationManipulatorSession === manipulatorSession) {
+    r2rCalibrationManipulatorSession = null;
   }
-  const editor = document.getElementById("r2r-calib-edit");
-  if (editor) editor.style.display = "none";
-  document.getElementById("calib-banner")?.classList.add("hidden");
+  if (!runCurrentBestEffort(
+    `${context}: target opacity restore failed`,
+    isCurrent,
+    () => r2rTgt.setOpacity(1),
+  )) return false;
+  if (targetGroundOffset !== null) {
+    if (!runCurrentBestEffort(
+      `${context}: target ground offset restore failed`,
+      isCurrent,
+      () => { r2rTgt.groundOffset = targetGroundOffset; },
+    )) return false;
+    if (!runCurrentBestEffort(
+      `${context}: target pose restore failed`,
+      isCurrent,
+      () => {
+        if (r2rTgt.trajectory) r2rTgt.setFrame(0);
+        else r2rTgt.applyStatic();
+      },
+    )) return false;
+  }
+  const editor = readBestEffort(
+    `${context}: calibration editor lookup failed`,
+    () => document.getElementById("r2r-calib-edit"),
+  );
+  if (!isCurrent()) return false;
+  if (editor && !runCurrentBestEffort(
+    `${context}: calibration editor cleanup failed`,
+    isCurrent,
+    () => { editor.style.display = "none"; },
+  )) return false;
+  const banner = readBestEffort(
+    `${context}: calibration banner lookup failed`,
+    () => document.getElementById("calib-banner"),
+  );
+  if (!isCurrent()) return false;
+  if (banner && !runCurrentBestEffort(
+    `${context}: calibration banner cleanup failed`,
+    isCurrent,
+    () => { banner.classList.add("hidden"); },
+  )) return false;
+  if (!isCurrent()) return false;
+  r2r.calibOrbitSaved = null;
   r2rCalibrationResourcesOwned = false;
   r2rCalibrationRestoreGroundOffset = null;
+  return isCurrent();
 }
 
 /** Clear every result derived from the current R2R source/target pair. */
@@ -10500,8 +12962,13 @@ function clearR2rDerivedTargetAfterViewLoss(
   context: string,
   {
     targetViewAlreadyEmpty = false,
-  }: { targetViewAlreadyEmpty?: boolean } = {},
-): void {
+    isCurrent = () => true,
+  }: {
+    targetViewAlreadyEmpty?: boolean;
+    isCurrent?: () => boolean;
+  } = {},
+): boolean {
+  if (!isCurrent()) return false;
   r2r.exportToken = null;
   r2r.exportHasScene = false;
   r2r.resultStem = null;
@@ -10513,9 +12980,18 @@ function clearR2rDerivedTargetAfterViewLoss(
     r2rTgt.frameIndices = null;
     r2rTgt.clipDuration = 1;
     runBestEffortCleanup(`${context}: target pose reset failed`, () => r2rTgt.applyStatic());
+    if (!isCurrent()) return false;
   }
-  runBestEffortCleanup(`${context}: target skeleton cleanup failed`, () => r2rTgtSkel.clear());
-  runBestEffortCleanup(`${context}: target environment cleanup failed`, () => r2rTgtEnv.clear());
+  let targetSkeletonCleared = false;
+  runBestEffortCleanup(`${context}: target skeleton cleanup failed`, () => {
+    targetSkeletonCleared = r2rTgtSkel.clear(isCurrent);
+  });
+  if (!isCurrent() || !targetSkeletonCleared) return false;
+  let targetEnvironmentCleared = false;
+  runBestEffortCleanup(`${context}: target environment cleanup failed`, () => {
+    targetEnvironmentCleared = r2rTgtEnv.clear(isCurrent);
+  });
+  if (!isCurrent() || !targetEnvironmentCleared) return false;
   r2rVis.tgtRobot = false;
   r2rVis.tgtSkel = false;
   r2rVis.tgtEnv = false;
@@ -10523,20 +12999,57 @@ function clearR2rDerivedTargetAfterViewLoss(
     `${context}: result diagnostics cleanup failed`,
     () => clearResultDiagnostics("r2r"),
   );
-  const exportCard = document.getElementById("r2r-export-card");
-  if (exportCard) exportCard.style.display = "none";
-  for (const id of ["r2r-tg-tgt-robot", "r2r-tg-tgt-skel", "r2r-tg-tgt-env"]) {
-    const button = document.getElementById(id) as HTMLButtonElement | null;
-    if (button) button.disabled = true;
+  if (!isCurrent()) return false;
+  const exportCard = readBestEffort(
+    `${context}: export card lookup failed`,
+    () => document.getElementById("r2r-export-card"),
+  );
+  if (!isCurrent()) return false;
+  if (exportCard) {
+    const currentExportCard = exportCard;
+    runBestEffortCleanup(`${context}: export card cleanup failed`, () => {
+      currentExportCard.style.display = "none";
+    });
+    if (!isCurrent()) return false;
   }
+  for (const id of ["r2r-tg-tgt-robot", "r2r-tg-tgt-skel", "r2r-tg-tgt-env"]) {
+    const button = readBestEffort(
+      `${context}: target toggle lookup failed`,
+      () => document.getElementById(id) as HTMLButtonElement | null,
+    );
+    if (!isCurrent()) return false;
+    if (button) {
+      const currentButton = button;
+      runBestEffortCleanup(`${context}: target toggle cleanup failed`, () => {
+        currentButton.disabled = true;
+      });
+      if (!isCurrent()) return false;
+    }
+  }
+  return isCurrent();
 }
 
 /** Terminal compensation for a current-generation R2R source load failure. */
-function clearR2rSourceAfterViewLoss(context: string): void {
+function clearR2rSourceAfterViewLoss(
+  context: string,
+  isCurrent: () => boolean = () => true,
+  {
+    clearCalibration = true,
+    invalidateRetarget = true,
+    invalidateTrajectory = true,
+  }: {
+    clearCalibration?: boolean;
+    invalidateRetarget?: boolean;
+    invalidateTrajectory?: boolean;
+  } = {},
+): boolean {
+  if (!isCurrent()) return false;
   // Source capability loss revokes both an in-flight selection and any hidden
-  // trajectory result that still waits for a future R2R presentation.
-  invalidateR2rTrajectorySelection();
-  invalidateR2rCalibrationAttempts();
+  // trajectory result that still waits for a future R2R presentation. When
+  // either task itself detected the loss, its caller keeps that exact token
+  // alive as the cleanup lease and abandons it only after this routine settles.
+  if (invalidateRetarget) invalidateR2rRetarget();
+  if (invalidateTrajectory) invalidateR2rTrajectorySelection();
   r2r.sourceName = null;
   r2r.sourcePayload = null;
   r2r.sourceToken = null;
@@ -10544,55 +13057,171 @@ function clearR2rSourceAfterViewLoss(context: string): void {
   r2r.hasScene = false;
   r2r.scaledScene = null;
   r2rTrajectoryState = "idle";
-  clearR2rCalibrationAfterViewLoss(context);
+  if (
+    clearCalibration
+    && !clearR2rCalibrationAfterViewLoss(context, isCurrent)
+  ) return false;
 
-  runBestEffortCleanup(`${context}: source skeleton cleanup failed`, () => r2rSrcSkel.clear());
-  runBestEffortCleanup(`${context}: source environment cleanup failed`, () => r2rSrcEnv.clear());
+  let sourceSkeletonCleared = false;
+  if (!runCurrentBestEffort(
+    `${context}: source skeleton cleanup failed`,
+    isCurrent,
+    () => { sourceSkeletonCleared = r2rSrcSkel.clear(isCurrent); },
+  )) return false;
+  if (!sourceSkeletonCleared) return false;
+  let sourceEnvironmentCleared = false;
+  if (!runCurrentBestEffort(
+    `${context}: source environment cleanup failed`,
+    isCurrent,
+    () => { sourceEnvironmentCleared = r2rSrcEnv.clear(isCurrent); },
+  )) return false;
+  if (!sourceEnvironmentCleared) return false;
   r2rVis.srcRobot = false;
   r2rVis.srcSkel = false;
   r2rVis.srcEnv = false;
-  clearR2rDerivedTargetAfterViewLoss(context);
+  if (!clearR2rDerivedTargetAfterViewLoss(context, { isCurrent })) return false;
 
-  setR2rRobotStatus("source", runtimeText("Source robot: not loaded", "源机器人：未加载"));
-  const trajectory = document.getElementById("r2r-trajectory-value");
-  if (trajectory) trajectory.textContent = runtimeText("Not loaded", "未加载");
+  if (!runCurrentBestEffort(
+    `${context}: source status cleanup failed`,
+    isCurrent,
+    () => {
+      setR2rRobotStatus(
+        "source",
+        runtimeText("Source robot: not loaded", "源机器人：未加载"),
+        isCurrent,
+      );
+    },
+  )) return false;
+  const trajectory = readBestEffort(
+    `${context}: trajectory status lookup failed`,
+    () => document.getElementById("r2r-trajectory-value"),
+  );
+  if (!isCurrent()) return false;
+  if (trajectory && !runCurrentBestEffort(
+    `${context}: trajectory status cleanup failed`,
+    isCurrent,
+    () => { trajectory.textContent = runtimeText("Not loaded", "未加载"); },
+  )) return false;
   for (const id of ["r2r-tg-src-robot", "r2r-tg-src-skel", "r2r-tg-src-env"]) {
-    const button = document.getElementById(id) as HTMLButtonElement | null;
-    if (button) button.disabled = true;
+    const button = readBestEffort(
+      `${context}: source toggle lookup failed`,
+      () => document.getElementById(id) as HTMLButtonElement | null,
+    );
+    if (!isCurrent()) return false;
+    if (button && !runCurrentBestEffort(
+      `${context}: source toggle cleanup failed`,
+      isCurrent,
+      () => { button.disabled = true; },
+    )) return false;
   }
-  runBestEffortCleanup(`${context}: Stage projection failed`, () => r2rApplyStage());
-  runBestEffortCleanup(`${context}: workflow publication failed`, () => {
-    publishR2rWorkflowState();
-    r2rRenderBasket();
-    emitCalibrationEditorState("r2r");
-  });
-  r2rSetCalChip("—", "");
-  const calibrationButton = document.getElementById("r2r-calib-btn") as HTMLButtonElement | null;
-  if (calibrationButton) calibrationButton.disabled = true;
-  const retargetButton = document.getElementById("r2r-retarget-btn") as HTMLButtonElement | null;
-  if (retargetButton) retargetButton.disabled = true;
+  if (!runCurrentBestEffort(
+    `${context}: Stage projection failed`,
+    isCurrent,
+    () => { r2rApplyStage({ isCurrent }); },
+  )) return false;
+  if (!runCurrentBestEffort(
+    `${context}: workflow publication failed`,
+    isCurrent,
+    () => { publishR2rWorkflowState(isCurrent); },
+  )) return false;
+  if (!runCurrentBestEffort(
+    `${context}: basket publication failed`,
+    isCurrent,
+    () => r2rRenderBasket(),
+  )) return false;
+  if (!runCurrentBestEffort(
+    `${context}: editor publication failed`,
+    isCurrent,
+    () => emitCalibrationEditorState("r2r"),
+  )) return false;
+  if (!runCurrentBestEffort(
+    `${context}: calibration chip cleanup failed`,
+    isCurrent,
+    () => r2rSetCalChip("—", ""),
+  )) return false;
+  for (const id of ["r2r-calib-btn", "r2r-retarget-btn"]) {
+    const button = readBestEffort(
+      `${context}: action button lookup failed`,
+      () => document.getElementById(id) as HTMLButtonElement | null,
+    );
+    if (!isCurrent()) return false;
+    if (button && !runCurrentBestEffort(
+      `${context}: action button cleanup failed`,
+      isCurrent,
+      () => { button.disabled = true; },
+    )) return false;
+  }
+  return isCurrent();
 }
 
-/** Terminal compensation for a current-generation R2R target load failure. */
-function clearR2rTargetAfterViewLoss(context: string): void {
+/** Terminal compensation after the selected target View capability is lost. */
+function clearR2rTargetAfterViewLoss(
+  context: string,
+  isCurrent: () => boolean = () => true,
+  { invalidateRetarget = true }: { invalidateRetarget?: boolean } = {},
+): boolean {
+  if (!isCurrent()) return false;
+  if (invalidateRetarget) invalidateR2rRetarget();
+  invalidateR2rTargetLoad();
   invalidateR2rCalibrationAttempts();
   r2r.targetName = null;
   r2r.targetPayload = null;
-  clearR2rCalibrationAfterViewLoss(context);
-  clearR2rDerivedTargetAfterViewLoss(context, { targetViewAlreadyEmpty: true });
-
-  setR2rRobotStatus("target", runtimeText("Target robot: not loaded", "目标机器人：未加载"));
-  runBestEffortCleanup(`${context}: Stage projection failed`, () => r2rApplyStage());
-  runBestEffortCleanup(`${context}: workflow publication failed`, () => {
-    publishR2rWorkflowState();
-    r2rRenderBasket();
-    emitCalibrationEditorState("r2r");
-  });
-  r2rSetCalChip("—", "");
-  const calibrationButton = document.getElementById("r2r-calib-btn") as HTMLButtonElement | null;
-  if (calibrationButton) calibrationButton.disabled = true;
-  const retargetButton = document.getElementById("r2r-retarget-btn") as HTMLButtonElement | null;
-  if (retargetButton) retargetButton.disabled = true;
+  if (!clearR2rCalibrationAfterViewLoss(context, isCurrent)) return false;
+  if (!clearR2rDerivedTargetAfterViewLoss(context, {
+    targetViewAlreadyEmpty: true,
+    isCurrent,
+  })) return false;
+  let targetStatusCleared = false;
+  if (!runCurrentBestEffort(
+    `${context}: target status cleanup failed`,
+    isCurrent,
+    () => {
+      targetStatusCleared = setR2rRobotStatus(
+        "target",
+        runtimeText("Target robot: not loaded", "目标机器人：未加载"),
+        isCurrent,
+      );
+    },
+  )) return false;
+  if (!targetStatusCleared) return false;
+  if (!runCurrentBestEffort(
+    `${context}: Stage projection failed`,
+    isCurrent,
+    () => { r2rApplyStage({ isCurrent }); },
+  )) return false;
+  if (!runCurrentBestEffort(
+    `${context}: workflow publication failed`,
+    isCurrent,
+    () => { publishR2rWorkflowState(isCurrent); },
+  )) return false;
+  if (!runCurrentBestEffort(
+    `${context}: basket publication failed`,
+    isCurrent,
+    () => r2rRenderBasket(),
+  )) return false;
+  if (!runCurrentBestEffort(
+    `${context}: editor publication failed`,
+    isCurrent,
+    () => emitCalibrationEditorState("r2r"),
+  )) return false;
+  if (!runCurrentBestEffort(
+    `${context}: calibration chip cleanup failed`,
+    isCurrent,
+    () => r2rSetCalChip("—", ""),
+  )) return false;
+  for (const id of ["r2r-calib-btn", "r2r-retarget-btn"]) {
+    const button = readBestEffort(
+      `${context}: target action lookup failed`,
+      () => document.getElementById(id) as HTMLButtonElement | null,
+    );
+    if (!isCurrent()) return false;
+    if (button && !runCurrentBestEffort(
+      `${context}: target action cleanup failed`,
+      isCurrent,
+      () => { button.disabled = true; },
+    )) return false;
+  }
+  return isCurrent();
 }
 
 async function r2rLoadSourceRobot(
@@ -10600,27 +13229,66 @@ async function r2rLoadSourceRobot(
   { activateWorkspace = true }: { activateWorkspace?: boolean } = {},
 ): Promise<void> {
   if (!name) return;
-  if (r2rRunState === "running") {
-    toast(runtimeText(
-      "Wait for the current R2R retarget task before replacing its source robot.",
-      "当前 R2R Retarget 仍在运行，请等待完成后再替换源机器人。",
-    ), true);
-    return;
-  }
   const sourceAttempt = beginR2rSourceLoad("manual", name);
+  let sourceViewGeneration: number | null = null;
+  const sourceAttemptIsOwned = (): boolean => (
+    r2rSourceLoadAttempts.owns(sourceAttempt)
+  );
   const sourceIsCurrent = (): boolean => (
     r2rSourceLoadAttempts.isCurrent(sourceAttempt)
+    && (
+      sourceViewGeneration === null
+      || r2rSrc.isLoadGenerationCurrent(sourceViewGeneration)
+    )
   );
+  const failOwnedSourceLoad = (error: unknown): boolean => {
+    // A View-only replacement makes the capability validator false without
+    // creating a new source request. Raw token ownership is therefore the
+    // authority for clearing this attempt's aliases and terminal UI.
+    if (!sourceAttemptIsOwned()) return false;
+    if (!clearR2rSourceAfterViewLoss(
+      "selected R2R source load",
+      sourceAttemptIsOwned,
+    ) && !sourceAttemptIsOwned()) return false;
+    if (!sourceAttemptIsOwned()) return false;
+    runBestEffortCleanup("R2R source failure status publication failed", () => {
+      setR2rRobotStatus("source", runtimeText(
+        "Source robot: not loaded",
+        "源机器人：未加载",
+      ), sourceAttemptIsOwned);
+    });
+    if (!sourceAttemptIsOwned()) return false;
+    if (!finishR2rSourceLoad(sourceAttempt)) return false;
+    const completionIsLatest = (): boolean => (
+      r2rSourceLoadCompletionIsLatest(sourceAttempt)
+    );
+    runCurrentBestEffort(
+      "R2R source failure workflow publication failed",
+      completionIsLatest,
+      () => { publishR2rWorkflowState(completionIsLatest); },
+    );
+    runCurrentBestEffort(
+      "R2R source failure toast failed",
+      completionIsLatest,
+      () => toast(errorMessage(error), true),
+    );
+    return completionIsLatest();
+  };
   try {
     // The user's replacement intent wins before any host callback or transport
-    // can yield. Canonical source capabilities are withdrawn while the exact
-    // source owner protects the network and RobotView phases.
+    // can yield. Withdraw the old trajectory capability immediately; the exact
+    // source owner then protects calibration teardown and RobotView replacement.
+    invalidateR2rRetarget();
     invalidateR2rTrajectorySelection();
     r2r.sourceToken = null;
     r2r.sourceStem = null;
     r2r.exportToken = null;
     r2rRunState = "idle";
     r2r.calibrated = false;
+    // Retire the old trajectory receipt and its canonical token before the
+    // first hostile DOM cleanup can synchronously ask the panel coordinator
+    // to consume it for this already-replaced source.
+    if (!clearR2rRetargetTransientUi(sourceIsCurrent)) return;
     prepareR2rRobotReplacement();
     if (!sourceIsCurrent()) return;
     r2r.sourceName = null;
@@ -10632,23 +13300,37 @@ async function r2rLoadSourceRobot(
       () => r2rSrc.clear(),
     );
     if (!sourceIsCurrent()) return;
+    let sourceSkeletonCleared = false;
     runBestEffortCleanup(
       "R2R source replacement skeleton cleanup failed",
-      () => r2rSrcSkel.clear(),
+      () => { sourceSkeletonCleared = r2rSrcSkel.clear(sourceIsCurrent); },
     );
     if (!sourceIsCurrent()) return;
+    if (!sourceSkeletonCleared) {
+      throw new Error("R2R source skeleton View cleanup was superseded");
+    }
+    let sourceEnvironmentCleared = false;
     runBestEffortCleanup(
       "R2R source replacement environment cleanup failed",
-      () => r2rSrcEnv.clear(),
+      () => { sourceEnvironmentCleared = r2rSrcEnv.clear(sourceIsCurrent); },
     );
     if (!sourceIsCurrent()) return;
+    if (!sourceEnvironmentCleared) {
+      throw new Error("R2R source environment View cleanup was superseded");
+    }
     r2rVis.srcSkel = false;
     r2rVis.srcEnv = false;
-    clearR2rDerivedTargetAfterViewLoss("R2R source replacement");
-    if (!sourceIsCurrent()) return;
+    if (!clearR2rDerivedTargetAfterViewLoss("R2R source replacement", {
+      isCurrent: sourceIsCurrent,
+    })) {
+      if (sourceIsCurrent()) {
+        throw new Error("R2R source replacement View cleanup was superseded");
+      }
+      return;
+    }
     runBestEffortCleanup(
       "R2R source replacement Stage projection failed",
-      () => r2rApplyStage(),
+      () => { r2rApplyStage({ isCurrent: sourceIsCurrent }); },
     );
     if (!sourceIsCurrent()) return;
     clearResultDiagnostics("r2r");
@@ -10658,12 +13340,11 @@ async function r2rLoadSourceRobot(
       trajectoryValue.textContent = runtimeText("Not loaded", "未加载");
     }
     if (!sourceIsCurrent()) return;
-    setR2rRobotStatus("source", runtimeText(
+    if (!setR2rRobotStatus("source", runtimeText(
       `Loading source robot: ${name}`,
       `正在加载源机器人：${name}`,
-    ));
-    if (!sourceIsCurrent()) return;
-    publishR2rWorkflowState();
+    ), sourceIsCurrent)) return;
+    publishR2rWorkflowState(sourceIsCurrent);
     if (!sourceIsCurrent()) return;
     toast(runtimeText("Loading source robot…", "加载源机器人…"));
     if (!sourceIsCurrent()) return;
@@ -10674,20 +13355,18 @@ async function r2rLoadSourceRobot(
     prepareR2rRobotReplacement();
     if (!sourceIsCurrent()) return;
     const viewAttempt = startRobotViewLoad(r2rSrc, sourcePayload);
+    sourceViewGeneration = viewAttempt.generation;
     if (!sourceIsCurrent()) return;
     let loadResult: AsyncStageViewLoadResult;
     try {
       loadResult = await viewAttempt.completion;
     } catch (error) {
-      if (
-        !sourceIsCurrent()
-        || !r2rSrc.isLoadGenerationCurrent(viewAttempt.generation)
-      ) {
-        finishR2rSourceLoad(sourceAttempt);
-        return;
-      }
-      clearR2rSourceAfterViewLoss("selected R2R source load");
-      if (!sourceIsCurrent()) return;
+      if (!sourceAttemptIsOwned()) return;
+      const sourceCleared = clearR2rSourceAfterViewLoss(
+        "selected R2R source load",
+        sourceAttemptIsOwned,
+      );
+      if (!sourceCleared && !sourceAttemptIsOwned()) return;
       throw error;
     }
     if (
@@ -10695,8 +13374,8 @@ async function r2rLoadSourceRobot(
       || !sourceIsCurrent()
       || !r2rSrc.isLoadGenerationCurrent(viewAttempt.generation)
     ) {
-      finishR2rSourceLoad(sourceAttempt);
-      return;
+      if (!sourceAttemptIsOwned()) return;
+      throw new Error("R2R source RobotView was replaced before commit");
     }
     prepareR2rRobotReplacement();
     if (!sourceIsCurrent()) return;
@@ -10705,102 +13384,230 @@ async function r2rLoadSourceRobot(
     r2r.sourcePayload = sourcePayload;
     r2r.sourceName = name;
     r2rVis.srcRobot = true;
-    const sourceRobotToggle = document.getElementById(
-      "r2r-tg-src-robot",
-    ) as HTMLButtonElement | null;
-    if (sourceRobotToggle) sourceRobotToggle.disabled = false;
-    if (!sourceIsCurrent()) return;
     r2r.exportToken = null;
     r2rRunState = "idle";
-    clearResultDiagnostics("r2r");
-    if (!sourceIsCurrent()) return;
-    syncR2rRobotSelects("source", name);
-    if (!sourceIsCurrent()) return;
+    // The payload/name/View generation is now the selected source capability.
+    // Everything below is presentation, so a hostile DOM host may defer it but
+    // must never relabel the successful selection as a transport failure.
+    if (!runCurrentBestEffort(
+      "R2R source toggle publication failed",
+      sourceIsCurrent,
+      () => {
+        const sourceRobotToggle = document.getElementById(
+          "r2r-tg-src-robot",
+        ) as HTMLButtonElement | null;
+        if (sourceRobotToggle) sourceRobotToggle.disabled = false;
+      },
+    )) return;
+    if (!runCurrentBestEffort(
+      "R2R source diagnostics cleanup failed",
+      sourceIsCurrent,
+      () => clearResultDiagnostics("r2r"),
+    )) return;
+    if (!runCurrentBestEffort(
+      "R2R source selection synchronization failed",
+      sourceIsCurrent,
+      () => { syncR2rRobotSelects("source", name, sourceIsCurrent); },
+    )) return;
     let workspaceActivationSettled = true;
     if (activateWorkspace) {
-      const panelSwitch = switchInspectorPanel("r2r");
-      if (!sourceIsCurrent()) return;
-      workspaceActivationSettled = panelSwitchSettledOnStageOwner(
-        panelSwitch,
-        "r2r",
-      );
-      if (workspaceActivationSettled) {
-        r2rFocus(r2rSrc);
-        if (!sourceIsCurrent()) return;
-        workspaceActivationSettled = panelSwitchSettledOnStageOwner(
-          panelSwitch,
-          "r2r",
-        );
-      }
+      workspaceActivationSettled = false;
+      if (!runCurrentBestEffort(
+        "R2R source workspace activation failed",
+        sourceIsCurrent,
+        () => {
+          const panelSwitch = switchInspectorPanel("r2r");
+          if (!sourceIsCurrent()) return;
+          workspaceActivationSettled = panelSwitchSettledOnStageOwner(
+            panelSwitch,
+            "r2r",
+          );
+          if (!workspaceActivationSettled || !sourceIsCurrent()) return;
+          // Keep false across the fallible focus call. Only a fully applied
+          // panel receipt is allowed to trigger the later auto-calibration.
+          workspaceActivationSettled = false;
+          r2rFocus(r2rSrc);
+          if (!sourceIsCurrent()) return;
+          workspaceActivationSettled = panelSwitchSettledOnStageOwner(
+            panelSwitch,
+            "r2r",
+          );
+        },
+      )) return;
     }
-    setR2rRobotStatus("source", runtimeText(
-      `Source robot: ${sourcePayload.display_name}`,
-      `源机器人：${sourcePayload.display_name}`,
-    ));
-    if (!sourceIsCurrent()) return;
-    publishR2rWorkflowState();
-    if (!sourceIsCurrent()) return;
-    toast(runtimeText(
-      `Source robot loaded: ${sourcePayload.display_name}`,
-      `源机器人已加载：${sourcePayload.display_name}`,
-    ));
-    if (!sourceIsCurrent()) return;
+    if (!runCurrentBestEffort(
+      "R2R source status publication failed",
+      sourceIsCurrent,
+      () => {
+        setR2rRobotStatus("source", runtimeText(
+          `Source robot: ${sourcePayload.display_name}`,
+          `源机器人：${sourcePayload.display_name}`,
+        ), sourceIsCurrent);
+      },
+    )) return;
     if (!finishR2rSourceLoad(sourceAttempt)) return;
+    const completionIsLatest = (): boolean => (
+      r2rSourceLoadCompletionIsLatest(sourceAttempt)
+    );
+    // Pending is terminal before React reads the workflow manifest. The exact
+    // completion lease then guards presentation without reviving the attempt.
+    if (!runCurrentBestEffort(
+      "R2R source workflow publication failed",
+      completionIsLatest,
+      () => { publishR2rWorkflowState(completionIsLatest); },
+    )) return;
+    if (!runCurrentBestEffort(
+      "R2R source success notification failed",
+      completionIsLatest,
+      () => toast(runtimeText(
+        `Source robot loaded: ${sourcePayload.display_name}`,
+        `源机器人已加载：${sourcePayload.display_name}`,
+      )),
+    )) return;
     // A cross-owner navigation cancels only shared-Stage continuation. The
     // successfully loaded source facts and their panel-independent status stay
     // committed instead of being mislabeled stale.
     if (!activateWorkspace || workspaceActivationSettled) {
-      await r2rMaybeAutoCalib();
+      try {
+        await r2rMaybeAutoCalib();
+      } catch (error) {
+        console.warn("R2R source auto-calibration failed", errorMessage(error));
+      }
     }
-    r2rRenderBasket();
+    if (!completionIsLatest()) return;
+    runCurrentBestEffort(
+      "R2R source basket publication failed",
+      completionIsLatest,
+      () => r2rRenderBasket(),
+    );
   } catch (error) {
-    if (!sourceIsCurrent()) return;
-    runBestEffortCleanup("R2R source failure status publication failed", () => {
-      setR2rRobotStatus("source", runtimeText(
-        "Source robot: not loaded",
-        "源机器人：未加载",
+    failOwnedSourceLoad(error);
+  } finally {
+    // Every normal success/failure retires the token above. Reaching this
+    // point while it is still owned means an early guard observed capability
+    // loss without a successor; compensate exactly so React never stays loading.
+    if (sourceAttemptIsOwned()) {
+      failOwnedSourceLoad(new Error(
+        "R2R source load lost its renderer capability before completion",
       ));
-    });
-    if (!sourceIsCurrent()) return;
-    runBestEffortCleanup(
-      "R2R source failure workflow publication failed",
-      () => publishR2rWorkflowState(),
-    );
-    if (!sourceIsCurrent()) return;
-    runBestEffortCleanup(
-      "R2R source failure toast failed",
-      () => toast(errorMessage(error), true),
-    );
-    finishR2rSourceLoad(sourceAttempt);
+    }
   }
 }
 
 async function r2rLoadTargetRobot(name: string): Promise<void> {
   if (!name) return;
-  prepareR2rRobotReplacement();
-  toast(runtimeText("Loading target robot…", "加载目标机器人…"));
+  const targetAttempt = beginR2rTargetLoad(name);
+  const targetIsCurrent = (): boolean => (
+    r2rTargetLoadAttempts.isCurrent(targetAttempt)
+  );
   try {
-    const targetPayload = await API.post("/api/robot/select", { name });
+    // Target intent wins synchronously. Retarget/status/bootstrap continuations
+    // cannot observe the previous aliases while this request is pending.
+    invalidateR2rRetarget();
+    if (!clearR2rRetargetTransientUi(targetIsCurrent)) return;
     prepareR2rRobotReplacement();
+    if (!targetIsCurrent()) return;
+    r2r.targetName = null;
+    r2r.targetPayload = null;
+    r2r.calibrated = false;
+    runBestEffortCleanup(
+      "R2R target replacement RobotView cleanup failed",
+      () => r2rTgt.clear(),
+    );
+    if (!targetIsCurrent()) return;
+    if (!clearR2rDerivedTargetAfterViewLoss("R2R target replacement", {
+      targetViewAlreadyEmpty: true,
+      isCurrent: targetIsCurrent,
+    })) {
+      if (targetIsCurrent()) {
+        throw new Error("R2R target replacement View cleanup was superseded");
+      }
+      return;
+    }
+    if (!setR2rRobotStatus("target", runtimeText(
+      `Loading target robot: ${name}`,
+      `正在加载目标机器人：${name}`,
+    ), targetIsCurrent)) return;
+    publishR2rWorkflowState(targetIsCurrent);
+    if (!targetIsCurrent()) return;
+    toast(runtimeText("Loading target robot…", "加载目标机器人…"));
+    if (!targetIsCurrent()) return;
+
+    const targetPayload = await API.post("/api/robot/select", { name });
+    if (!targetIsCurrent()) return;
     r2r.calibrated = false;
     r2r.targetPayload = targetPayload;
     r2r.targetName = name;
-    r2r.exportToken = null;
-    r2rRunState = "idle";
-    clearResultDiagnostics("r2r");
-    syncR2rRobotSelects("target", name);
-    setR2rRobotStatus("target", runtimeText(
-      `Target robot: ${targetPayload.display_name}`,
-      `目标机器人：${targetPayload.display_name}`,
-    ));
-    toast(runtimeText(
-      `Target robot loaded: ${targetPayload.display_name}`,
-      `目标机器人已加载：${targetPayload.display_name}`,
-    ));
-    await r2rMaybeAutoCalib();
-    r2rRenderBasket();
+    if (!targetIsCurrent()) return;
+    // The payload/name pair is now the selected domain capability. Remaining
+    // DOM/workflow notifications are best-effort presentation and must not
+    // relabel a successful selection as a transport failure.
+    if (!finishR2rTargetLoad(targetAttempt)) return;
+    const completionIsLatest = (): boolean => (
+      r2rTargetLoadCompletionIsLatest(targetAttempt)
+    );
+    if (!runCurrentBestEffort(
+      "R2R target selection synchronization failed",
+      completionIsLatest,
+      () => { syncR2rRobotSelects("target", name, completionIsLatest); },
+    )) return;
+    if (!runCurrentBestEffort(
+      "R2R target status publication failed",
+      completionIsLatest,
+      () => {
+        setR2rRobotStatus("target", runtimeText(
+          `Target robot: ${targetPayload.display_name}`,
+          `目标机器人：${targetPayload.display_name}`,
+        ), completionIsLatest);
+      },
+    )) return;
+    if (!runCurrentBestEffort(
+      "R2R target basket publication failed",
+      completionIsLatest,
+      () => r2rRenderBasket(),
+    )) return;
+    if (!runCurrentBestEffort(
+      "R2R target workflow publication failed",
+      completionIsLatest,
+      () => { publishR2rWorkflowState(completionIsLatest); },
+    )) return;
+    if (!runCurrentBestEffort(
+      "R2R target success notification failed",
+      completionIsLatest,
+      () => toast(runtimeText(
+        `Target robot loaded: ${targetPayload.display_name}`,
+        `目标机器人已加载：${targetPayload.display_name}`,
+      )),
+    )) return;
+    try {
+      await r2rMaybeAutoCalib();
+    } catch (error) {
+      console.warn("R2R target auto-calibration failed", errorMessage(error));
+    }
   } catch (error) {
-    toast(errorMessage(error), true);
+    if (!targetIsCurrent()) return;
+    runBestEffortCleanup(
+      "R2R target failure status publication failed",
+      () => setR2rRobotStatus(
+        "target",
+        runtimeText("Target robot: not loaded", "目标机器人：未加载"),
+        targetIsCurrent,
+      ),
+    );
+    if (!targetIsCurrent()) return;
+    if (!finishR2rTargetLoad(targetAttempt)) return;
+    const completionIsLatest = (): boolean => (
+      r2rTargetLoadCompletionIsLatest(targetAttempt)
+    );
+    runBestEffortCleanup(
+      "R2R target failure workflow publication failed",
+      () => publishR2rWorkflowState(completionIsLatest),
+    );
+    runCurrentBestEffort(
+      "R2R target failure toast failed",
+      completionIsLatest,
+      () => toast(errorMessage(error), true),
+    );
   }
 }
 
@@ -11081,9 +13888,23 @@ function rollbackR2rCalibrationBootstrap(
   targetGroundOffset: number,
   calibrationResourcesOwned: boolean,
   manipulatorSession: CalibrationManipulatorSession | null,
-  { targetViewLost = false }: { targetViewLost?: boolean } = {},
+  {
+    sourceViewLost = false,
+    targetViewLost = false,
+    onAttemptRebound,
+  }: {
+    sourceViewLost?: boolean;
+    targetViewLost?: boolean;
+    /** Keep the caller's finally block attached to rollback's replacement token. */
+    onAttemptRebound?: (
+      attempt: LatestAsyncAttempt<R2rCalibrationIdentity>,
+    ) => void;
+  } = {},
 ): boolean {
-  if (!r2rCalibrationBootstrapAttempts.isCurrent(attempt)) return false;
+  const ownsAttempt = (): boolean => (
+    r2rCalibrationBootstrapAttempts.owns(attempt)
+  );
+  if (!ownsAttempt()) return false;
   if (r2rCalibrationManipulatorSession === manipulatorSession) {
     r2rCalibrationManipulatorSession = null;
   }
@@ -11095,12 +13916,12 @@ function rollbackR2rCalibrationBootstrap(
       if (manipulatorSession) calibManip.stop(manipulatorSession);
     },
   );
-  if (!r2rCalibrationBootstrapAttempts.isCurrent(attempt)) return false;
+  if (!ownsAttempt()) return false;
   runBestEffortCleanup(
     "R2R calibration bootstrap: FK owner cleanup failed",
     () => r2rCalibrationFkPreview.stop(),
   );
-  if (!r2rCalibrationBootstrapAttempts.isCurrent(attempt)) return false;
+  if (!ownsAttempt()) return false;
 
   if (targetViewLost) {
     // Keep terminal target withdrawal under an owned token until every
@@ -11109,6 +13930,9 @@ function rollbackR2rCalibrationBootstrap(
       ...attempt.identity,
       targetCapabilityWithdrawn: true,
     });
+    // Publish the replacement synchronously: no fallible renderer/DOM work may
+    // occur while the caller's finalizer still knows only the retired token.
+    onAttemptRebound?.(attempt);
     r2r.targetName = null;
     r2r.targetPayload = null;
     r2r.exportToken = null;
@@ -11120,7 +13944,9 @@ function rollbackR2rCalibrationBootstrap(
 
   // Canonical editor aliases become terminal before fallible renderer cleanup.
   r2r.calibrating = false;
-  r2r.calibrated = targetViewLost ? false : attempt.identity.calibratedBefore;
+  r2r.calibrated = sourceViewLost || targetViewLost
+    ? false
+    : attempt.identity.calibratedBefore;
   r2r.calibNeedsCameraFocus = false;
   r2r.calibQ = {};
   r2r.calibBaselineQ = null;
@@ -11131,21 +13957,21 @@ function rollbackR2rCalibrationBootstrap(
   calibrationEditorUi.r2r.comparison = "current";
 
   const cleanup = (context: string, action: () => void): boolean => {
-    if (!r2rCalibrationBootstrapAttempts.isCurrent(attempt)) return false;
+    if (!ownsAttempt()) return false;
     runBestEffortCleanup(context, action);
-    return r2rCalibrationBootstrapAttempts.isCurrent(attempt);
+    return ownsAttempt();
   };
   const readForCleanup = <Value>(
     context: string,
     read: () => Value | null,
   ): { readonly current: boolean; readonly value: Value | null } => {
-    if (!r2rCalibrationBootstrapAttempts.isCurrent(attempt)) {
+    if (!ownsAttempt()) {
       return { current: false, value: null };
     }
     let value: Value | null = null;
     runBestEffortCleanup(context, () => { value = read(); });
     return {
-      current: r2rCalibrationBootstrapAttempts.isCurrent(attempt),
+      current: ownsAttempt(),
       value,
     };
   };
@@ -11255,23 +14081,31 @@ function rollbackR2rCalibrationBootstrap(
   }
   if ((calibrationResourcesOwned || targetViewLost) && !cleanup(
     "R2R calibration bootstrap: Stage restore failed",
-    () => r2rApplyStage(),
+    () => { r2rApplyStage({ isCurrent: ownsAttempt }); },
   )) return false;
-  if (!cleanup("R2R calibration bootstrap: workflow publication failed", () => {
-    publishR2rWorkflowState();
-  })) return false;
   if (!cleanup("R2R calibration bootstrap: editor publication failed", () => {
     emitCalibrationEditorState("r2r");
   })) return false;
   if (!cleanup("R2R calibration bootstrap: error notification failed", () => {
     toast(errorMessage(error), true);
   })) return false;
-  if (!finishR2rCalibrationBootstrapAttempt(attempt)) return false;
+  if (!abandonR2rCalibrationBootstrapAttempt(attempt)) return false;
   // Keep the original orbit baseline available to a reentrant same-pair owner.
   r2r.calibOrbitSaved = null;
   r2rCalibrationResourcesOwned = false;
   r2rCalibrationRestoreGroundOffset = null;
-  return true;
+  const completionIsLatest = (): boolean => (
+    r2rCalibrationCompletionIsLatest(attempt)
+  );
+  try {
+    publishR2rWorkflowState(completionIsLatest);
+  } catch (publicationError) {
+    console.warn(
+      "R2R calibration rollback publication failed",
+      errorMessage(publicationError),
+    );
+  }
+  return completionIsLatest();
 }
 
 async function r2rStartCalib(
@@ -11280,6 +14114,50 @@ async function r2rStartCalib(
   if (r2r.calibrating && activeCalibrationManipulatorSession("r2r")) {
     return "entered";
   }
+  const r2rStageMayHostCalibration = (): boolean => (
+    appliedPanelPresentationOwnsStage({
+      current: panelPresentationCoordinator.current,
+      lastApplied: lastAppliedPanelPresentation,
+      stageOwner: "r2r",
+    })
+  );
+  // Automatic calls may originate from a panel-independent completion, while
+  // explicit calls originate from the visible R2R button. Neither may take
+  // the shared Stage back from a newer H2R navigation operation.
+  if (!r2rStageMayHostCalibration()) return auto ? "failed" : "stale";
+  if (
+    r2rTrajectorySelectionIsPending()
+    || r2rSourceLoadIsPending()
+    || r2rTargetLoadIsPending()
+  ) {
+    toast(runtimeText(
+      "Wait for the current R2R selection to finish loading",
+      "请等待当前 R2R 选择加载完成",
+    ), true);
+    return "failed";
+  }
+  // Recalibration supersedes only target results; the source trajectory stays
+  // a valid local capability and may still own a pending playback receipt.
+  r2rCalibrationRevision += 1;
+  const replacementRevision = r2rCalibrationRevision;
+  invalidateR2rRetarget();
+  const calibrationIntentIsCurrent = (): boolean => (
+    r2rCalibrationRevision === replacementRevision
+    && !r2rRetargetIsPending()
+    && !r2rTrajectorySelectionIsPending()
+    && !r2rSourceLoadIsPending()
+    && !r2rTargetLoadIsPending()
+  );
+  if (!clearR2rDerivedTargetAfterViewLoss("R2R calibration replacement", {
+    isCurrent: calibrationIntentIsCurrent,
+  })) return calibrationIntentIsCurrent() ? "failed" : "stale";
+  if (!clearR2rRetargetTransientUi(calibrationIntentIsCurrent)) {
+    return calibrationIntentIsCurrent() ? "failed" : "stale";
+  }
+  // H2R navigation does not own R2R-local cleanup, so it is intentionally not
+  // part of the predicate above. Re-check it now, before advancing any shared
+  // calibration presentation epoch or reserving a bootstrap.
+  if (!r2rStageMayHostCalibration()) return auto ? "failed" : "stale";
   calibrationPresentationEpoch += 1;
   r2rCalibrationStatusAttempts.invalidate();
   const capturedIdentity = captureR2rCalibrationIdentity();
@@ -11295,6 +14173,18 @@ async function r2rStartCalib(
   }
 
   let attempt = beginR2rCalibrationBootstrapAttempt(capturedIdentity);
+  const adoptRollbackAttempt = (
+    rebound: LatestAsyncAttempt<R2rCalibrationIdentity>,
+  ): void => {
+    attempt = rebound;
+  };
+  // Transient cleanup above crosses hostile DOM boundaries. Reserve first so
+  // a reentrant panel leave can revoke this exact bootstrap, then revalidate
+  // Stage ownership before the first transport request is allowed to start.
+  if (!r2rStageMayHostCalibration()) {
+    if (!finishR2rCalibrationBootstrapAttempt(attempt)) return "stale";
+    return auto ? "failed" : "stale";
+  }
   let targetLoadGeneration: number | null = null;
   let targetGroundOffset = (
     r2rCalibrationRestoreGroundOffset ?? r2rTgt.groundOffset
@@ -11394,7 +14284,10 @@ async function r2rStartCalib(
         targetGroundOffset,
         calibrationResourcesOwned,
         manipulatorSession,
-        { targetViewLost: true },
+        {
+          targetViewLost: true,
+          onAttemptRebound: adoptRollbackAttempt,
+        },
       );
       return rolledBack ? "failed" : "stale";
     }
@@ -11454,7 +14347,7 @@ async function r2rStartCalib(
     if (!manipulatorOwnsLease()) return "stale";
     if (retargetButton) retargetButton.disabled = true;
     if (!manipulatorOwnsLease()) return "stale";
-    publishR2rWorkflowState();
+    publishR2rWorkflowState(manipulatorOwnsLease);
     if (!manipulatorOwnsLease()) return "stale";
     const editor = document.getElementById("r2r-calib-edit");
     if (!manipulatorOwnsLease()) return "stale";
@@ -11524,10 +14417,66 @@ async function r2rStartCalib(
       targetGroundOffset,
       calibrationResourcesOwned,
       manipulatorSession,
+      { onAttemptRebound: adoptRollbackAttempt },
     )
       ? "failed"
       : "stale";
   } finally {
+    if (r2rCalibrationBootstrapAttempts.owns(attempt)) {
+      try {
+        const ownsAttempt = (): boolean => (
+          r2rCalibrationBootstrapAttempts.owns(attempt)
+        );
+        const sourceViewLost = !r2rSrc.isLoadGenerationCurrent(
+          attempt.identity.sourceViewGeneration,
+        );
+        const targetGeneration = attempt.identity.targetViewGeneration
+          ?? targetLoadGeneration;
+        const targetViewLost = (
+          targetGeneration !== null
+          && !r2rTgt.isLoadGenerationCurrent(targetGeneration)
+        );
+        if (sourceViewLost) {
+          clearR2rSourceAfterViewLoss(
+            "R2R calibration source capability loss",
+            ownsAttempt,
+            { clearCalibration: false },
+          );
+        }
+        if (ownsAttempt()) {
+          rollbackR2rCalibrationBootstrap(
+            attempt,
+            new Error("R2R calibration lost a renderer capability"),
+            targetGroundOffset,
+            calibrationResourcesOwned,
+            manipulatorSession,
+            {
+              sourceViewLost,
+              targetViewLost,
+              onAttemptRebound: adoptRollbackAttempt,
+            },
+          );
+        }
+      } catch (error) {
+        console.warn(
+          "R2R calibration capability-loss compensation failed",
+          errorMessage(error),
+        );
+      }
+    }
+    // Rollback may itself fail after synchronously rebasing to a withdrawn
+    // target identity. Retire only this invocation's exact token; a reentrant
+    // successor has a different generation and is never touched here.
+    if (r2rCalibrationBootstrapAttempts.owns(attempt)) {
+      try {
+        abandonR2rCalibrationBootstrapAttempt(attempt);
+      } catch (error) {
+        console.warn(
+          "R2R calibration final owner retirement failed",
+          errorMessage(error),
+        );
+      }
+    }
     if (manipulatorSession && !manipulatorCommitted) {
       runBestEffortCleanup(
         "R2R calibration bootstrap: uncommitted manipulator cleanup failed",
@@ -11551,6 +14500,7 @@ function r2rExitCalib(
     expectedSession
     && !calibrationSessionIsCurrent("r2r", expectedSession)
   ) return;
+  r2rCalibrationRevision += 1;
   calibrationPresentationEpoch += 1;
   invalidateR2rCalibrationAttempts();
   const manipulatorSession = expectedSession ?? r2rCalibrationManipulatorSession;
@@ -11618,7 +14568,7 @@ function r2rExitCalib(
   );
   if (superseded()) return;
   runBestEffortCleanup("R2R calibration exit: workflow publication failed", () => {
-    publishR2rWorkflowState();
+    publishR2rWorkflowState(() => !superseded());
     emitCalibrationEditorState("r2r");
   });
   if (superseded()) return;
@@ -11630,9 +14580,19 @@ function r2rExitCalib(
 type R2rEnsureCalibrationResult = R2rCalibrationBootstrapResult | "ready";
 
 async function r2rEnsureCalibration(
-  { auto = true }: { auto?: boolean } = {},
+  {
+    auto = true,
+    retargetAttempt,
+  }: {
+    auto?: boolean;
+    retargetAttempt?: LatestAsyncAttempt<R2rRetargetIdentity>;
+  } = {},
 ): Promise<R2rEnsureCalibrationResult> {
-  const statusResult = await r2rUpdateRetargetBtn();
+  const statusResult = await r2rUpdateRetargetBtn({ retargetAttempt });
+  if (
+    retargetAttempt
+    && !r2rRetargetResults.isCurrent(retargetAttempt)
+  ) return "stale";
   if (statusResult.kind === "stale") return "stale";
   const receipt = statusResult.receipt;
   if (!receipt) {
@@ -11643,6 +14603,18 @@ async function r2rEnsureCalibration(
   // A bootstrap can enter after the producer's final guard but before this
   // continuation. Active calibration always wins and retarget stays closed.
   if (r2r.calibrating || r2rCalibrationBootstrapIsPending()) return "entered";
+  if (receipt.owner === "retarget") {
+    if (!r2rRetargetResults.isCurrent(receipt.attempt)) return "stale";
+    if (receipt.calibrated) return "ready";
+    // A hidden, uncalibrated run may update its local status, but it must not
+    // steal a newer H2R navigation intent by auto-opening the R2R editor.
+    if (!appliedPanelPresentationOwnsStage({
+      current: panelPresentationCoordinator.current,
+      lastApplied: lastAppliedPanelPresentation,
+      stageOwner: "r2r",
+    })) return "failed";
+    return r2rStartCalib({ auto });
+  }
   if (!r2rCalibrationStatusAttempts.isCurrent(receipt.attempt)) return "stale";
   if (receipt.calibrated) {
     return r2rCalibrationStatusAttempts.finish(receipt.attempt)
@@ -11656,7 +14628,13 @@ async function r2rEnsureCalibration(
 
 async function r2rMaybeAutoCalib(): Promise<void> {
   publishR2rWorkflowState();
-  if (!r2r.targetName || !r2r.sourceName || r2r.calibrating) return;
+  if (
+    !r2r.targetName
+    || !r2r.sourceName
+    || r2r.calibrating
+    || r2rSourceLoadIsPending()
+    || r2rRetargetIsPending()
+  ) return;
   await r2rEnsureCalibration({ auto: true });
 }
 
@@ -11723,7 +14701,11 @@ type R2rSourceEnsureResult =
       readonly kind: "ready";
       readonly attempt: LatestAsyncAttempt<R2rTrajectorySelectionIdentity>;
     }
-  | { readonly kind: "superseded" };
+  | {
+      readonly kind: "superseded";
+      /** Latest rebind, so the outer finally can retire an orphan exactly. */
+      readonly attempt: LatestAsyncAttempt<R2rTrajectorySelectionIdentity>;
+    };
 
 interface R2rTrajectorySelectionSpec {
   readonly kind: R2rTrajectorySelectionKind;
@@ -11738,6 +14720,9 @@ interface R2rTrajectorySelectionSpec {
 
 async function r2rEnsureSourceLoaded(
   initialAttempt: LatestAsyncAttempt<R2rTrajectorySelectionIdentity>,
+  publishLatestAttempt: (
+    attempt: LatestAsyncAttempt<R2rTrajectorySelectionIdentity>,
+  ) => void,
 ): Promise<R2rSourceEnsureResult> {
   let trajectoryAttempt = initialAttempt;
   const trajectoryIsCurrent = (): boolean => (
@@ -11746,10 +14731,12 @@ async function r2rEnsureSourceLoaded(
   if (r2r.sourceName && r2r.sourcePayload) {
     return trajectoryIsCurrent()
       ? { kind: "ready", attempt: trajectoryAttempt }
-      : { kind: "superseded" };
+      : { kind: "superseded", attempt: trajectoryAttempt };
   }
   const name = document.getElementById("r2r-source-select")?.value;
-  if (!trajectoryIsCurrent()) return { kind: "superseded" };
+  if (!trajectoryIsCurrent()) {
+    return { kind: "superseded", attempt: trajectoryAttempt };
+  }
   if (!name) {
     throw new Error(runtimeText(
       "Select and load G1 (or another source robot) in “1 · Source robot” first",
@@ -11762,7 +14749,7 @@ async function r2rEnsureSourceLoaded(
   );
   const superseded = (): R2rSourceEnsureResult => {
     finishR2rSourceLoad(sourceAttempt);
-    return { kind: "superseded" };
+    return { kind: "superseded", attempt: trajectoryAttempt };
   };
   try {
     // Reserve both owners before clearing: disposal callbacks may synchronously
@@ -11791,6 +14778,10 @@ async function r2rEnsureSourceLoaded(
     });
     if (!rebound) return superseded();
     trajectoryAttempt = rebound;
+    // Share the rebound synchronously with the outer terminal owner. If the
+    // RobotView promise rejects, its catch/finally must abandon this token,
+    // not the initial token that the automatic source load replaced.
+    publishLatestAttempt(trajectoryAttempt);
 
     const loadResult = await sourceViewAttempt.completion;
     if (loadResult === "stale" || !sourceIsCurrent()) return superseded();
@@ -11801,10 +14792,11 @@ async function r2rEnsureSourceLoaded(
     // fact; no host callback is allowed between these assignments.
     r2r.sourcePayload = sourcePayload;
     r2r.sourceName = name;
-    trajectoryAttempt = beginR2rTrajectorySelection(Object.freeze({
+    trajectoryAttempt = reserveR2rTrajectorySelection(Object.freeze({
       ...trajectoryAttempt.identity,
       sourceAliasesCommitted: true,
     }));
+    publishLatestAttempt(trajectoryAttempt);
     if (!sourceIsCurrent()) return superseded();
     r2r.calibrated = false;
     r2rVis.srcRobot = true;
@@ -11813,15 +14805,14 @@ async function r2rEnsureSourceLoaded(
     ) as HTMLButtonElement | null;
     if (sourceRobotToggle) sourceRobotToggle.disabled = false;
     if (!sourceIsCurrent()) return superseded();
-    setR2rRobotStatus("source", runtimeText(
+    if (!setR2rRobotStatus("source", runtimeText(
       `Source robot: ${sourcePayload.display_name}`,
       `源机器人：${sourcePayload.display_name}`,
-    ));
-    if (!sourceIsCurrent()) return superseded();
-    publishR2rWorkflowState();
+    ), sourceIsCurrent)) return superseded();
+    publishR2rWorkflowState(sourceIsCurrent);
     if (!sourceIsCurrent()) return superseded();
     if (!finishR2rSourceLoad(sourceAttempt)) {
-      return { kind: "superseded" };
+      return { kind: "superseded", attempt: trajectoryAttempt };
     }
     return { kind: "ready", attempt: trajectoryAttempt };
   } catch (error) {
@@ -11835,48 +14826,45 @@ function failR2rTrajectorySelection(
   trajectoryAttempt: LatestAsyncAttempt<R2rTrajectorySelectionIdentity>,
   error: unknown,
 ): boolean {
-  const isCurrent = (): boolean => (
-    r2rTrajectoryResults.isCurrent(trajectoryAttempt)
+  const ownsAttempt = (): boolean => (
+    r2rTrajectoryResults.owns(trajectoryAttempt)
   );
-  if (!isCurrent()) return false;
+  if (!ownsAttempt()) return false;
   r2rTrajectoryState = "failed";
   const status = document.getElementById("r2r-traj-status");
+  if (!ownsAttempt()) return false;
   if (status) status.textContent = "";
-  if (!isCurrent()) return false;
+  if (!ownsAttempt()) return false;
   const progress = document.getElementById("r2r-traj-progress");
+  if (!ownsAttempt()) return false;
   if (progress) progress.style.display = "none";
-  if (!isCurrent()) return false;
+  if (!ownsAttempt()) return false;
   try {
     toast(errorMessage(error), true);
   } catch (toastError) {
     console.warn("R2R trajectory failure toast failed", errorMessage(toastError));
   }
-  if (!isCurrent()) return false;
-  if (!finishR2rTrajectorySelection(trajectoryAttempt)) return false;
+  if (!ownsAttempt()) return false;
+  if (!abandonR2rTrajectorySelection(trajectoryAttempt)) return false;
+  const completionIsLatest = (): boolean => (
+    r2rTrajectoryCompletionIsLatest(trajectoryAttempt)
+  );
   // Publish only after clearing `pendingAttempt`; otherwise the terminal
   // failed node would retain the obsolete "validation still running" reason.
   try {
-    publishR2rWorkflowState();
+    publishR2rWorkflowState(completionIsLatest);
   } catch (publicationError) {
     console.warn(
       "R2R trajectory failure publication failed",
       errorMessage(publicationError),
     );
   }
-  return true;
+  return completionIsLatest();
 }
 
 async function runR2rTrajectorySelection(
   spec: R2rTrajectorySelectionSpec,
 ): Promise<MotionSelectionResult> {
-  if (r2rRunState === "running") {
-    const message = runtimeText(
-      "Wait for the current R2R retarget task before replacing its source trajectory.",
-      "当前 R2R Retarget 仍在运行，请等待完成后再替换源轨迹。",
-    );
-    toast(message, true);
-    throw new Error(message);
-  }
   let trajectoryAttempt = beginR2rTrajectorySelection(
     captureR2rTrajectorySelectionIdentity(spec.kind, spec.requestLabel),
   );
@@ -11886,19 +14874,25 @@ async function runR2rTrajectorySelection(
   let selectedData: R2rSourceTrajectoryResult | null = null;
   let committed: R2rTrajectoryPresentationCommit | null = null;
   try {
-    const source = await r2rEnsureSourceLoaded(trajectoryAttempt);
-    if (source.kind === "superseded") return "superseded";
+    const source = await r2rEnsureSourceLoaded(
+      trajectoryAttempt,
+      (latestAttempt) => { trajectoryAttempt = latestAttempt; },
+    );
     trajectoryAttempt = source.attempt;
+    if (source.kind === "superseded") return "superseded";
     if (!isCurrent()) return "superseded";
 
     const panelSwitch = switchInspectorPanel("r2r");
     if (!isCurrent()) return "superseded";
     if (!panelSwitchSettledOnStageOwner(panelSwitch, "r2r")) {
       if (finishR2rTrajectorySelection(trajectoryAttempt)) {
+        const completionIsLatest = (): boolean => (
+          r2rTrajectoryCompletionIsLatest(trajectoryAttempt)
+        );
         // The cancelled successor may have retired a predecessor's transient
         // `validating` label. Publish that terminal baseline exactly once.
         try {
-          publishR2rWorkflowState();
+          publishR2rWorkflowState(completionIsLatest);
         } catch (error) {
           console.warn(
             "R2R trajectory cancellation publication failed",
@@ -11924,7 +14918,7 @@ async function runR2rTrajectorySelection(
     r2rRunState = "idle";
     clearResultDiagnostics("r2r");
     if (!isCurrent()) return "superseded";
-    publishR2rWorkflowState();
+    publishR2rWorkflowState(isCurrent);
     if (!isCurrent()) return "superseded";
     const reportProgress = (fraction: number, message: string): void => {
       if (!isCurrent()) return;
@@ -11946,6 +14940,36 @@ async function runR2rTrajectorySelection(
       return "superseded";
     }
     throw error;
+  } finally {
+    // `isCurrent` also validates RobotView generations. If only that external
+    // capability disappears, no successor exists to retire our token. Exact
+    // token ownership lets this task terminalize without touching a newer one.
+    if (r2rTrajectoryResults.owns(trajectoryAttempt)) {
+      try {
+        const sourceGeneration = trajectoryAttempt.identity.sourceViewGeneration;
+        if (
+          sourceGeneration !== null
+          && !r2rSrc.isLoadGenerationCurrent(sourceGeneration)
+        ) {
+          clearR2rSourceAfterViewLoss(
+            "R2R trajectory source capability loss",
+            () => r2rTrajectoryResults.owns(trajectoryAttempt),
+            { invalidateTrajectory: false },
+          );
+        }
+        if (r2rTrajectoryResults.owns(trajectoryAttempt)) {
+          failR2rTrajectorySelection(
+            trajectoryAttempt,
+            new Error("R2R trajectory lost its source renderer capability"),
+          );
+        }
+      } catch (error) {
+        console.warn(
+          "R2R trajectory capability-loss compensation failed",
+          errorMessage(error),
+        );
+      }
+    }
   }
 
   // Domain data is already committed. Publication/presentation/toast failures
@@ -11956,7 +14980,7 @@ async function runR2rTrajectorySelection(
   try {
     // The pending attempt was cleared by commit, so hidden H2R completion now
     // publishes `ready` rather than leaving React on a stale validating frame.
-    publishR2rWorkflowState();
+    publishR2rWorkflowState(() => r2rTrajectoryCommitIsSelected(committed));
   } catch (error) {
     console.warn("R2R trajectory workflow publication failed", errorMessage(error));
   }
@@ -11999,8 +15023,11 @@ function r2rApplySourceTrajectoryResult(
   );
   if (!isCurrent()) return null;
   const status = document.getElementById("r2r-traj-status");
+  if (!isCurrent()) return null;
   const progress = document.getElementById("r2r-traj-progress");
+  if (!isCurrent()) return null;
   const bar = progress?.querySelector<HTMLElement>(".bar");
+  if (!isCurrent()) return null;
   const sourceStem = data.name || fallbackStem || "source";
 
   // The source RobotView is already locked by the attempt identity. Reusing it
@@ -12012,20 +15039,52 @@ function r2rApplySourceTrajectoryResult(
   r2rTrajectoryState = "idle";
   r2r.sourceStem = sourceStem;
   r2r.hasScene = !!data.has_scene;
-  if (data.suggested_backend) r2rApplySuggestedBackend(data.suggested_backend);
+  if (
+    data.suggested_backend
+    && !r2rApplySuggestedBackend(data.suggested_backend, isCurrent)
+  ) return null;
   if (!isCurrent()) return null;
   r2rSrc.setTrajectory(data.trajectory);
   if (!isCurrent()) return null;
   if (data.skeleton_preview) {
-    r2rSrcSkel.load(data.skeleton_preview);
-    if (!isCurrent()) return null;
+    if (!r2rSrcSkel.load(data.skeleton_preview, isCurrent)) {
+      if (isCurrent()) {
+        throw new Error("R2R source skeleton View was replaced during commit");
+      }
+      return null;
+    }
     const skBtn = document.getElementById("r2r-tg-src-skel");
+    if (!isCurrent()) return null;
     if (skBtn) skBtn.disabled = false;
+    if (!isCurrent()) return null;
+  } else {
+    // The trajectory response is authoritative for this selection. Clearing
+    // the absent preview prevents B from inheriting A's skeleton generation
+    // and leaving a toggle enabled for mismatched trajectory data.
+    if (!r2rSrcSkel.clear(isCurrent)) {
+      if (isCurrent()) {
+        throw new Error("R2R source skeleton View was replaced during clear");
+      }
+      return null;
+    }
+    const skBtn = document.getElementById("r2r-tg-src-skel");
+    if (!isCurrent()) return null;
+    if (skBtn) skBtn.disabled = true;
+    if (!isCurrent()) return null;
   }
   if (!isCurrent()) return null;
   const clipDur = Math.max(0.1, (data.num_frames - 1) / (data.framerate || 30));
-  r2rLoadSrcScene(data.scaled_scene, data.token, clipDur);
-  if (!isCurrent()) return null;
+  if (!r2rLoadSrcScene(
+    data.scaled_scene,
+    data.token,
+    clipDur,
+    isCurrent,
+  )) {
+    if (isCurrent()) {
+      throw new Error("R2R source environment View was replaced during commit");
+    }
+    return null;
+  }
   r2rVis.srcRobot = true;
   r2rVis.srcSkel = false;
   r2rVis.srcEnv = !!data.scaled_scene;
@@ -12041,9 +15100,11 @@ function r2rApplySourceTrajectoryResult(
   }
   if (!isCurrent()) return null;
   const selection = document.getElementById("r2r-trajectory-value");
+  if (!isCurrent()) return null;
   if (selection) selection.textContent = sourceStem;
   if (!isCurrent()) return null;
   if (progress) progress.style.display = "block";
+  if (!isCurrent()) return null;
   if (bar) bar.style.width = "100%";
   if (!isCurrent()) return null;
   return commitR2rTrajectorySelection(
@@ -12153,12 +15214,25 @@ function r2rSuggestedBackendForProfile(profile: string): string {
   return "newton";
 }
 
-function r2rApplySuggestedBackend(backend: string | null | undefined): void {
-  if (!backend) return;
+function r2rApplySuggestedBackend(
+  backend: string | null | undefined,
+  isCurrent: () => boolean = () => true,
+): boolean {
+  if (!backend) return isCurrent();
+  if (!isCurrent()) return false;
   const rb = document.getElementById("r2r-backend");
+  if (!isCurrent()) return false;
   const bb = document.getElementById("r2r-batch-backend");
-  if (rb) rb.value = backend;
-  if (bb) bb.value = backend;
+  if (!isCurrent()) return false;
+  if (rb) {
+    rb.value = backend;
+    if (!isCurrent()) return false;
+  }
+  if (bb) {
+    bb.value = backend;
+    if (!isCurrent()) return false;
+  }
+  return isCurrent();
 }
 
 function r2rIngestTraj(files: UploadFile[], profile = "auto"): void {
@@ -12170,120 +15244,346 @@ function r2rIngestTraj(files: UploadFile[], profile = "auto"): void {
 }
 
 // --------------------------------------------------------------- retarget
+function captureR2rRetargetIdentity(): R2rRetargetIdentity | null {
+  if (!r2r.sourceName || !r2r.sourceToken || !r2r.targetName) return null;
+  return Object.freeze({
+    sourceName: r2r.sourceName,
+    sourcePayload: r2r.sourcePayload,
+    sourceToken: r2r.sourceToken,
+    sourceStem: r2r.sourceStem,
+    sourceViewGeneration: r2rSrc.loadGeneration,
+    targetName: r2r.targetName,
+    targetPayload: r2r.targetPayload,
+    resolvedTargetPayload: r2r.targetPayload,
+    targetViewGeneration: r2rTgt.loadGeneration,
+    calibrationRevision: r2rCalibrationRevision,
+    calibrationReady: false,
+    // These provisional values are rebound from the UI synchronously below,
+    // after the operation owns all reentrant host reads.
+    backend: "newton",
+    retargetFps: null,
+  });
+}
+
+function failR2rRetarget(
+  attempt: LatestAsyncAttempt<R2rRetargetIdentity>,
+  error: unknown,
+  { targetResultStaged }: { readonly targetResultStaged: boolean },
+): boolean {
+  const ownsAttempt = (): boolean => r2rRetargetResults.owns(attempt);
+  if (!ownsAttempt()) return false;
+  if (
+    targetResultStaged
+    && !clearR2rDerivedTargetAfterViewLoss("R2R retarget failure", {
+      isCurrent: ownsAttempt,
+    })
+    && !ownsAttempt()
+  ) return false;
+  if (!clearR2rRetargetTransientUi(ownsAttempt)) return false;
+  r2rRunState = "failed";
+  if (!ownsAttempt()) return false;
+  try {
+    toast(errorMessage(error), true);
+  } catch (toastError) {
+    console.warn("R2R retarget failure toast failed", errorMessage(toastError));
+  }
+  if (!ownsAttempt()) return false;
+  if (!abandonR2rRetarget(attempt)) return false;
+  const completionIsLatest = (): boolean => (
+    r2rRetargetCompletionIsLatest(attempt)
+  );
+  try {
+    publishR2rWorkflowState(completionIsLatest);
+  } catch (publicationError) {
+    console.warn(
+      "R2R retarget failure publication failed",
+      errorMessage(publicationError),
+    );
+  }
+  return completionIsLatest();
+}
+
 async function r2rRunRetarget(): Promise<void> {
-  if (r2rTrajectorySelectionIsPending() || r2rTrajectoryState !== "idle") {
+  if (
+    r2rTrajectorySelectionIsPending()
+    || r2rTrajectoryState !== "idle"
+    || r2rSourceLoadIsPending()
+    || r2rTargetLoadIsPending()
+  ) {
     toast(runtimeText(
       r2rTrajectorySelectionIsPending() || r2rTrajectoryState === "validating"
         ? "Wait for source trajectory validation to finish."
-        : "Select the source trajectory again before retargeting.",
+        : r2rSourceLoadIsPending()
+          ? "Wait for the source robot selection to finish loading."
+          : r2rTargetLoadIsPending()
+            ? "Wait for the target robot selection to finish loading."
+            : "Select the source trajectory again before retargeting.",
       r2rTrajectorySelectionIsPending() || r2rTrajectoryState === "validating"
         ? "请等待源机器人轨迹校验完成。"
-        : "请重新选择源机器人轨迹后再执行 Retarget。",
+        : r2rSourceLoadIsPending()
+          ? "请等待源机器人加载完成。"
+          : r2rTargetLoadIsPending()
+            ? "请等待目标机器人加载完成。"
+            : "请重新选择源机器人轨迹后再执行 Retarget。",
     ), true);
     return;
   }
-  if (!r2r.sourceToken || !r2r.targetName || !r2r.sourceName) {
+  const capturedIdentity = captureR2rRetargetIdentity();
+  if (!capturedIdentity) {
     toast(runtimeText(
       "Upload a source trajectory and load the target robot first",
       "请先上传源轨迹并加载目标机器人",
     ), true);
     return;
   }
-  const requestedSourceName = r2r.sourceName;
-  const requestedSourcePayload = r2r.sourcePayload;
-  const requestedSourceToken = r2r.sourceToken;
-  const requestedSourceViewGeneration = r2rSrc.loadGeneration;
-  const calibrationResult = await r2rEnsureCalibration({ auto: true });
-  if (
-    calibrationResult !== "ready"
-    || r2rTrajectorySelectionIsPending()
-    || r2rTrajectoryState !== "idle"
-    || r2r.sourceName !== requestedSourceName
-    || r2r.sourcePayload !== requestedSourcePayload
-    || r2r.sourceToken !== requestedSourceToken
-    || !r2rSrc.isLoadGenerationCurrent(requestedSourceViewGeneration)
-  ) return;
-  // Claim before the first DOM mutation. A synchronously reentrant trajectory
-  // selection now sees `running` and cannot overlap this unowned legacy job.
-  r2rRunState = "running";
+  let retargetAttempt = beginR2rRetarget(capturedIdentity);
+  const isCurrent = (): boolean => (
+    r2rRetargetResults.isCurrent(retargetAttempt)
+  );
+  // The newly reserved run owns retirement of both an uncommitted predecessor
+  // View and its spinner. Keep preflight visually idle until this exact run
+  // reaches the job boundary.
+  r2rRunState = "idle";
+  r2rCalibrationStatusAttempts.invalidate();
+  if (!clearR2rDerivedTargetAfterViewLoss("R2R retarget replacement", {
+    isCurrent,
+  })) {
+    if (r2rRetargetResults.owns(retargetAttempt)) {
+      failR2rRetarget(
+        retargetAttempt,
+        new Error("R2R retarget replacement View cleanup was superseded"),
+        { targetResultStaged: false },
+      );
+    }
+    return;
+  }
+  if (!clearR2rRetargetTransientUi(isCurrent)) {
+    if (r2rRetargetResults.owns(retargetAttempt)) {
+      failR2rRetarget(
+        retargetAttempt,
+        new Error("R2R retarget presentation cleanup was superseded"),
+        { targetResultStaged: false },
+      );
+    }
+    return;
+  }
   let prog: HTMLElement | null = null;
   let status: HTMLElement | null = null;
+  let targetResultStaged = false;
   try {
+    // Capture click-time request options only after reserving the exact run;
+    // DOM getters can be instrumented or synchronously reentrant in tests.
+    const backend = document.getElementById("r2r-backend")?.value || "newton";
+    if (!isCurrent()) return;
+    const retargetFps = parseOptionalFps(
+      document.getElementById("r2r-retarget-fps"),
+    );
+    if (!isCurrent()) return;
+    const configuredAttempt = rebindR2rRetarget(retargetAttempt, {
+      ...retargetAttempt.identity,
+      backend,
+      retargetFps,
+    });
+    if (!configuredAttempt) return;
+    retargetAttempt = configuredAttempt;
+
+    const calibrationResult = await r2rEnsureCalibration({
+      auto: true,
+      retargetAttempt,
+    });
+    if (calibrationResult !== "ready" || !isCurrent()) {
+      finishR2rRetarget(retargetAttempt);
+      return;
+    }
+    const readyAttempt = rebindR2rRetarget(retargetAttempt, {
+      ...retargetAttempt.identity,
+      calibrationReady: true,
+    });
+    if (!readyAttempt) return;
+    retargetAttempt = readyAttempt;
+    if (!isCurrent()) return;
+
+    r2rRunState = "running";
     prog = document.getElementById("r2r-progress");
+    if (!isCurrent()) return;
     status = document.getElementById("r2r-status");
+    if (!isCurrent()) return;
     const bar = prog?.querySelector<HTMLElement>(".bar") ?? null;
+    if (!isCurrent()) return;
     if (!prog || !bar) throw new Error("R2R progress UI is missing");
     const progressElement = prog;
     prog.style.display = "block";
+    if (!isCurrent()) return;
     prog.classList.add("indet");
+    if (!isCurrent()) return;
     bar.style.width = "0%";
-    renderSpinnerStatus(status, runtimeText(
+    if (!isCurrent()) return;
+    if (!renderSpinnerStatus(status, runtimeText(
       "Retargeting… The first run for a new robot is slower.",
       "正在 retarget…（新机器人首次较慢）",
-    ));
+    ), isCurrent)) return;
     const retargetButton = document.getElementById("r2r-retarget-btn") as
       HTMLButtonElement | null;
+    if (!isCurrent()) return;
     if (retargetButton) retargetButton.disabled = true;
+    if (!isCurrent()) return;
     r2r.exportToken = null;
+    r2r.exportHasScene = false;
+    r2r.resultStem = null;
+    if (!isCurrent()) return;
     clearResultDiagnostics("r2r");
-    publishR2rWorkflowState();
+    if (!isCurrent()) return;
+    publishR2rWorkflowState(isCurrent);
+    if (!isCurrent()) return;
     const body: R2rRetargetRequest = {
-      target: r2r.targetName,
-      source: r2r.sourceName,
-      source_token: r2r.sourceToken,
-      backend: document.getElementById("r2r-backend")?.value || "newton",
+      target: retargetAttempt.identity.targetName,
+      source: retargetAttempt.identity.sourceName,
+      source_token: retargetAttempt.identity.sourceToken,
+      backend: retargetAttempt.identity.backend,
     };
-    const fps = parseOptionalFps(document.getElementById("r2r-retarget-fps"));
-    if (fps) body.retarget_fps = fps;
+    if (retargetAttempt.identity.retargetFps) {
+      body.retarget_fps = retargetAttempt.identity.retargetFps;
+    }
     const { job_id } = await API.post("/api/r2r/retarget", body);
+    if (!isCurrent()) return;
     const j = await pollJob<RetargetResult>(job_id, (jp) => {
-      setRetargetProgress(progressElement, bar, jp);
-      renderSpinnerStatus(status, jp.message || runtimeText("Retargeting…", "正在 retarget…"));
+      if (!isCurrent()) return;
+      if (!setRetargetProgress(progressElement, bar, jp, isCurrent)) return;
+      if (!renderSpinnerStatus(
+        status,
+        jp.message || runtimeText("Retargeting…", "正在 retarget…"),
+        isCurrent,
+      )) return;
     });
-    let targetPayload = r2r.targetPayload;
+    if (!isCurrent()) return;
+    let targetPayload = retargetAttempt.identity.resolvedTargetPayload;
     if (!targetPayload) {
-      targetPayload = await API.post("/api/robot/select", { name: r2r.targetName });
+      targetPayload = await API.post("/api/robot/select", {
+        name: retargetAttempt.identity.targetName,
+      });
+      if (!isCurrent()) return;
+      const resolvedAttempt = rebindR2rRetarget(retargetAttempt, {
+        ...retargetAttempt.identity,
+        resolvedTargetPayload: targetPayload,
+      });
+      if (!resolvedAttempt) return;
+      retargetAttempt = resolvedAttempt;
     }
     if (!targetPayload) throw new Error("Target robot payload is missing");
     prepareR2rRobotReplacement();
-    const attempt = startRobotViewLoad(r2rTgt, targetPayload);
+    if (!isCurrent()) return;
+    const reservingViewAttempt = rebindR2rRetarget(retargetAttempt, {
+      ...retargetAttempt.identity,
+      resolvedTargetPayload: targetPayload,
+      targetViewGeneration: null,
+    });
+    if (!reservingViewAttempt) return;
+    retargetAttempt = reservingViewAttempt;
+    const targetViewAttempt = startRobotViewLoad(r2rTgt, targetPayload);
+    if (!isCurrent()) return;
+    const loadingViewAttempt = rebindR2rRetarget(retargetAttempt, {
+      ...retargetAttempt.identity,
+      targetViewGeneration: targetViewAttempt.generation,
+    });
+    if (!loadingViewAttempt) return;
+    retargetAttempt = loadingViewAttempt;
+    if (!isCurrent()) return;
     let targetLoadResult: AsyncStageViewLoadResult;
     try {
-      targetLoadResult = await attempt.completion;
+      targetLoadResult = await targetViewAttempt.completion;
     } catch (error) {
-      if (!r2rTgt.isLoadGenerationCurrent(attempt.generation)) return;
-      clearR2rTargetAfterViewLoss("R2R result target load");
-      toast(errorMessage(error), true);
-      return;
+      if (
+        !isCurrent()
+        || !r2rTgt.isLoadGenerationCurrent(targetViewAttempt.generation)
+      ) return;
+      // The user-selected target payload remains retryable, but every derived
+      // target result is withdrawn under this exact run before failure UI.
+      const targetCleared = clearR2rDerivedTargetAfterViewLoss(
+        "R2R result target load",
+        {
+        targetViewAlreadyEmpty: true,
+        isCurrent,
+        },
+      );
+      if (!targetCleared && !isCurrent()) return;
+      throw error;
     }
     if (
       targetLoadResult === "stale"
-      || !r2rTgt.isLoadGenerationCurrent(attempt.generation)
+      || !isCurrent()
+      || !r2rTgt.isLoadGenerationCurrent(targetViewAttempt.generation)
     ) return;
+    targetResultStaged = true;
     prepareR2rRobotReplacement();
+    if (!isCurrent()) return;
     r2r.targetPayload = targetPayload;
-    prog.classList.remove("indet");
-    bar.style.width = "100%";
+    if (!isCurrent()) return;
     r2rTgt.setTrajectory(j.result.trajectory);
+    if (!isCurrent()) return;
     if (j.result.scaled_preview) {
-      r2rTgtSkel.load(j.result.scaled_preview);
-      document.getElementById("r2r-tg-tgt-skel").disabled = false;
+      if (!r2rTgtSkel.load(j.result.scaled_preview, isCurrent)) {
+        if (isCurrent()) {
+          throw new Error("R2R target skeleton View was replaced during commit");
+        }
+        return;
+      }
+    } else {
+      // A new result without a scaled preview must not inherit the previous
+      // result's skeleton capability.
+      if (!r2rTgtSkel.clear(isCurrent)) {
+        if (isCurrent()) {
+          throw new Error("R2R target skeleton View was replaced during clear");
+        }
+        return;
+      }
     }
+    if (!isCurrent()) return;
+    const targetSkeletonToggle = document.getElementById("r2r-tg-tgt-skel");
+    if (!isCurrent()) return;
+    if (targetSkeletonToggle) {
+      targetSkeletonToggle.disabled = !j.result.scaled_preview;
+    }
+    if (!isCurrent()) return;
     const tgtDur = Math.max(
       0.1,
       ((j.result.num_frames || 1) - 1) / (j.result.source_fps || 30),
     );
-    r2rLoadTgtScene(j.result.scaled_scene, r2r.sourceToken, tgtDur);
-    document.getElementById("r2r-tg-tgt-robot").disabled = false;
-    r2r.exportToken = j.result.export_token;
-    r2rRunState = "completed";
-    r2r.exportHasScene = !!j.result.has_scene;
-    r2r.resultStem = j.result.stem || r2r.sourceStem || "r2r";
-    r2rVis.tgtRobot = true;
-    r2rVis.tgtSkel = !!j.result.scaled_preview;
-    r2rVis.tgtEnv = !!j.result.scaled_scene;
-    player.ready(r2rTgt.clipDuration || 1);
-    applyR2rComparisonPreset(comparisonPresets.r2r);
+    if (!r2rLoadTgtScene(
+      j.result.scaled_scene,
+      retargetAttempt.identity.sourceToken,
+      tgtDur,
+      isCurrent,
+    )) {
+      if (isCurrent()) {
+        throw new Error("R2R target environment View was replaced during commit");
+      }
+      return;
+    }
+    const targetRobotToggle = document.getElementById("r2r-tg-tgt-robot");
+    if (!isCurrent()) return;
+    if (targetRobotToggle) targetRobotToggle.disabled = false;
+    if (!isCurrent()) return;
+    const committed = commitR2rRetarget(
+      retargetAttempt,
+      createR2rPlaybackPresentation({ duration: r2rTgt.clipDuration || 1 }),
+      Object.freeze({
+        exportToken: j.result.export_token,
+        exportHasScene: !!j.result.has_scene,
+        resultStem: j.result.stem
+          || retargetAttempt.identity.sourceStem
+          || "r2r",
+      }),
+    );
+    if (!committed) return;
+
+    const commitIsLatest = (): boolean => r2rRetargetCommitIsLatest(committed);
+    if (!commitIsLatest()) return;
+    prog.classList.remove("indet");
+    if (!commitIsLatest()) return;
+    bar.style.width = "100%";
+    if (!commitIsLatest()) return;
+    emitComparisonState("r2r");
+    if (!commitIsLatest()) return;
     emitResultDiagnostics("r2r", j.result.diagnostics ?? {
       schema_version: 1,
       available: false,
@@ -12292,34 +15592,114 @@ async function r2rRunRetarget(): Promise<void> {
         "当前结果未返回可用的 tracking/contact 诊断。",
       ),
     });
-    player.seek(0);
-    r2rApplyStage();
-    r2rFocus(r2rTgt);
-    player.setPlaying(true);
-    status.textContent = runtimeText(
+    if (!commitIsLatest()) return;
+    const completionStatus = runtimeText(
       `Completed: ${j.result.num_frames} frames @ ${(j.result.source_fps || 30).toFixed(1)} fps`,
       `完成：${j.result.num_frames} 帧 @ ${(j.result.source_fps || 30).toFixed(1)} fps`,
     );
-    document.getElementById("r2r-export-card").style.display = "block";
-    document.getElementById("r2r-export-fps").value = "";
+    if (!commitIsLatest()) return;
+    if (status) status.textContent = completionStatus;
+    if (!commitIsLatest()) return;
+    const exportCard = document.getElementById("r2r-export-card");
+    if (!commitIsLatest()) return;
+    if (exportCard) exportCard.style.display = "block";
+    if (!commitIsLatest()) return;
+    const exportFps = document.getElementById("r2r-export-fps");
+    if (!commitIsLatest()) return;
+    if (exportFps) exportFps.value = "";
+    if (!commitIsLatest()) return;
     const r2rT0 = document.getElementById("r2r-export-t-start");
+    if (!commitIsLatest()) return;
     const r2rT1 = document.getElementById("r2r-export-t-end");
+    if (!commitIsLatest()) return;
     if (r2rT0) r2rT0.value = "";
+    if (!commitIsLatest()) return;
     if (r2rT1) r2rT1.value = "";
+    if (!commitIsLatest()) return;
     const r2rBundleHint = document.getElementById("r2r-export-bundle-hint");
+    if (!commitIsLatest()) return;
     if (r2rBundleHint) r2rBundleHint.style.display = j.result.has_scene ? "block" : "none";
-    publishR2rWorkflowState();
+    if (!commitIsLatest()) return;
+    publishR2rWorkflowState(commitIsLatest);
+    if (!commitIsLatest()) return;
     toast(runtimeText(
       "R2R retarget complete; playing the target robot",
       "R2R Retarget 完成，正在播放目标机器人",
     ));
+    if (!commitIsLatest()) return;
+    if (appliedPanelPresentationOwnsStage({
+      current: panelPresentationCoordinator.current,
+      lastApplied: lastAppliedPanelPresentation,
+      stageOwner: "r2r",
+    })) {
+      try {
+        switchInspectorPanel("r2r");
+      } catch (error) {
+        console.warn("R2R retarget presentation deferred", errorMessage(error));
+      }
+    }
   } catch (e) {
-    if (status) status.textContent = "";
-    if (prog) prog.classList.remove("indet");
-    r2rRunState = "failed";
-    toast(errorMessage(e), true);
+    failR2rRetarget(retargetAttempt, e, { targetResultStaged });
   } finally {
-    publishR2rWorkflowState();
+    // A captured RobotView may be replaced without a new retarget request.
+    // The token-only owner check distinguishes that orphan from a real
+    // successor and guarantees `running`/spinner state is always terminal.
+    if (r2rRetargetResults.owns(retargetAttempt)) {
+      try {
+        const ownsAttempt = (): boolean => (
+          r2rRetargetResults.owns(retargetAttempt)
+        );
+        const sourceViewLost = !r2rSrc.isLoadGenerationCurrent(
+          retargetAttempt.identity.sourceViewGeneration,
+        );
+        const targetGeneration = retargetAttempt.identity.targetViewGeneration;
+        const targetViewLost = (
+          targetGeneration !== null
+          && !r2rTgt.isLoadGenerationCurrent(targetGeneration)
+        );
+        if (sourceViewLost) {
+          clearR2rSourceAfterViewLoss(
+            "R2R retarget source capability loss",
+            ownsAttempt,
+            { invalidateRetarget: false },
+          );
+        }
+        if (targetViewLost && ownsAttempt()) {
+          clearR2rTargetAfterViewLoss(
+            "R2R retarget target capability loss",
+            ownsAttempt,
+            { invalidateRetarget: false },
+          );
+        }
+        if (ownsAttempt()) {
+          failR2rRetarget(
+            retargetAttempt,
+            new Error("R2R retarget lost a renderer capability before completion"),
+            { targetResultStaged },
+          );
+        }
+      } catch (error) {
+        console.warn(
+          "R2R retarget capability-loss compensation failed",
+          errorMessage(error),
+        );
+      }
+      // Cleanup diagnostics are best-effort; token retirement is not. Even a
+      // throwing DOM/Stage callback must not leave the exact run pending.
+      if (r2rRetargetResults.owns(retargetAttempt)) {
+        r2rRunState = "failed";
+        if (abandonR2rRetarget(retargetAttempt)) {
+          const completionIsLatest = (): boolean => (
+            r2rRetargetCompletionIsLatest(retargetAttempt)
+          );
+          runCurrentBestEffort(
+            "R2R retarget terminal fallback publication failed",
+            completionIsLatest,
+            () => { publishR2rWorkflowState(completionIsLatest); },
+          );
+        }
+      }
+    }
   }
 }
 
@@ -12420,7 +15800,7 @@ async function r2rIngestBasket(
   profile = "auto",
 ): Promise<void> {
   if (!files?.length) return;
-  showLoading(runtimeText(
+  const loadingPresentation = showLoading(() => runtimeText(
     `Uploading R2R batch… (${files.length} files)`,
     `R2R 批量上传… (${files.length} 个文件)`,
   ));
@@ -12432,10 +15812,11 @@ async function r2rIngestBasket(
       (frac) => setLoadingProgress(
         (frac ?? 0) * 0.4,
         runtimeText("Uploading…", "上传中…"),
+        loadingPresentation,
       ),
     );
     const payload = await waitMotionJob<R2rBasketUploadResult>(job_id, (frac, sub) => {
-      setLoadingProgress(0.4 + frac * 0.6, sub);
+      setLoadingProgress(0.4 + frac * 0.6, sub, loadingPresentation);
     }, { uploadFrac: 0.4 });
     const entries = payload.entries || [];
     for (const e of entries) {
@@ -12454,7 +15835,7 @@ async function r2rIngestBasket(
   } catch (e) {
     toast(errorMessage(e), true);
   } finally {
-    hideLoading();
+    hideLoading(loadingPresentation);
   }
 }
 
@@ -12608,7 +15989,9 @@ function r2rInit(): void {
  * robot, reference, and health requests continue asynchronously in `init`.
  */
 animate(); // start the render loop now that `player` is initialised
-window.__hh = { skel, mesh, skin, scaledSkel, robot, player, scene, world }; // debug handle
+// Keep the diagnostic surface read-mostly. Scaled pair Views are deliberately
+// excluded because every legitimate writer must reserve h2rScaledPairRevision.
+window.__hh = { skel, mesh, skin, robot, player, scene, world };
 window.__hhtoolsReady = true;
 window.addEventListener("hhtools:calibration-editor-command", (event) => {
   void handleCalibrationEditorCommand(event);

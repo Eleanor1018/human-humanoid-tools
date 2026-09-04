@@ -668,7 +668,8 @@ describe("legacy runtime ownership boundaries", () => {
     expect(definitions).toContain("function finishR2rCalibrationBootstrapAttempt(");
     expect(definitions).toContain("if (r2rCalibrationPendingAttempt === attempt)");
     expect(definitions).toContain("function r2rCalibrationBootstrapIsPending()");
-    expect(definitions).toContain("r2rCalibrationBootstrapAttempts.isCurrent(attempt)");
+    expect(definitions).toContain("r2rCalibrationBootstrapAttempts.owns(attempt)");
+    expect(runtimeSource).toContain("onAttemptRebound?.(attempt)");
 
     const status = runtimeSource.slice(
       runtimeSource.indexOf("async function r2rUpdateRetargetBtn"),
@@ -701,14 +702,29 @@ describe("legacy runtime ownership boundaries", () => {
     expect(status).toContain("&& !r2rCalibrationBootstrapIsPending()");
     expect(status).toContain("identity.targetName");
     expect(status).toContain("identity.sourceName");
-    expect(status).toContain("receipt: { attempt: statusAttempt, calibrated }");
+    expect(status).toContain(
+      '? { owner: "retarget", attempt: retargetAttempt, calibrated }',
+    );
+    expect(status).toContain('owner: "calibration"');
+    expect(status).toContain("attempt: statusAttempt!");
+    const callerGate = status.indexOf(
+      'if (!callerIsCurrent()) return { kind: "stale", receipt: null }',
+    );
+    expect(callerGate).toBeGreaterThanOrEqual(0);
+    expect(callerGate).toBeLessThan(
+      status.indexOf('document.getElementById("r2r-calib-btn")'),
+    );
+    expect(callerGate).toBeLessThan(
+      status.indexOf("r2rCalibrationStatusAttempts.begin(identity)"),
+    );
+    expect(status).toContain("callerIsCurrent()\n    && !r2rTrajectorySelectionIsPending()");
     // The caller consumes this still-live receipt; finishing here would reopen
     // a microtask gap where an exit or replacement could auto-start old state.
     expect(status).not.toContain("finish(statusAttempt)");
     for (const effect of [
       "r2rSetCalChip(",
       "r2rRenderBasket()",
-      "publishR2rWorkflowState()",
+      "publishR2rWorkflowState(statusIsCurrent)",
     ]) {
       const effectAt = status.indexOf(effect, statusCommit);
       const guardAt = status.indexOf("if (!statusIsCurrent())", effectAt);
@@ -720,10 +736,32 @@ describe("legacy runtime ownership boundaries", () => {
       runtimeSource.indexOf("async function r2rEnsureCalibration"),
       runtimeSource.indexOf("async function r2rMaybeAutoCalib"),
     );
-    const statusAwait = ensure.indexOf("await r2rUpdateRetargetBtn()");
+    const statusAwait = ensure.indexOf(
+      "await r2rUpdateRetargetBtn({ retargetAttempt })",
+    );
+    const retargetReceiptGuard = ensure.indexOf(
+      "!r2rRetargetResults.isCurrent(retargetAttempt)",
+      statusAwait,
+    );
     const activeConsumerGuard = ensure.indexOf(
       'if (r2r.calibrating || r2rCalibrationBootstrapIsPending()) return "entered"',
       statusAwait,
+    );
+    const retargetReceiptBranch = ensure.indexOf(
+      'if (receipt.owner === "retarget")',
+      activeConsumerGuard,
+    );
+    const exactRetargetReceiptGuard = ensure.indexOf(
+      "!r2rRetargetResults.isCurrent(receipt.attempt)",
+      retargetReceiptBranch,
+    );
+    const hiddenStageGuard = ensure.indexOf(
+      "!appliedPanelPresentationOwnsStage({",
+      exactRetargetReceiptGuard,
+    );
+    const exactBootstrapHandoff = ensure.indexOf(
+      "return r2rStartCalib({ auto })",
+      hiddenStageGuard,
     );
     const receiptCheck = ensure.indexOf(
       "r2rCalibrationStatusAttempts.isCurrent(receipt.attempt)",
@@ -731,7 +769,12 @@ describe("legacy runtime ownership boundaries", () => {
     );
     const bootstrapHandoff = ensure.indexOf("return r2rStartCalib({ auto })", receiptCheck);
     expect(statusAwait).toBeGreaterThanOrEqual(0);
+    expect(retargetReceiptGuard).toBeGreaterThan(statusAwait);
     expect(activeConsumerGuard).toBeGreaterThan(statusAwait);
+    expect(retargetReceiptBranch).toBeGreaterThan(activeConsumerGuard);
+    expect(exactRetargetReceiptGuard).toBeGreaterThan(retargetReceiptBranch);
+    expect(hiddenStageGuard).toBeGreaterThan(exactRetargetReceiptGuard);
+    expect(exactBootstrapHandoff).toBeGreaterThan(hiddenStageGuard);
     expect(receiptCheck).toBeGreaterThan(activeConsumerGuard);
     expect(bootstrapHandoff).toBeGreaterThan(receiptCheck);
 
@@ -747,6 +790,26 @@ describe("legacy runtime ownership boundaries", () => {
     expect(missingPair).not.toContain("invalidateR2rCalibrationBootstrapAttempt()");
     const firstBegin = entry.indexOf(
       "beginR2rCalibrationBootstrapAttempt(capturedIdentity)",
+    );
+    const calibrationIntentGuard = entry.slice(
+      entry.indexOf("const calibrationIntentIsCurrent"),
+      entry.indexOf("clearR2rDerivedTargetAfterViewLoss"),
+    );
+    for (const guard of [
+      "r2rCalibrationRevision === replacementRevision",
+      "!r2rRetargetIsPending()",
+      "!r2rTrajectorySelectionIsPending()",
+      "!r2rSourceLoadIsPending()",
+      "!r2rTargetLoadIsPending()",
+    ]) {
+      expect(calibrationIntentGuard).toContain(guard);
+    }
+    expect(calibrationIntentGuard).not.toContain("r2rStageMayHostCalibration()");
+    const transientCleanup = entry.indexOf("clearR2rRetargetTransientUi(");
+    const firstStageGuard = entry.indexOf("if (!r2rStageMayHostCalibration())");
+    const postReservationStageGuard = entry.indexOf(
+      "if (!r2rStageMayHostCalibration())",
+      firstBegin,
     );
     expect(entry.indexOf("calibrationPresentationEpoch += 1"))
       .toBeLessThan(firstBegin);
@@ -767,6 +830,23 @@ describe("legacy runtime ownership boundaries", () => {
       selectAwait,
     );
     expect(firstBegin).toBeGreaterThanOrEqual(0);
+    expect(firstStageGuard).toBeGreaterThanOrEqual(0);
+    expect(firstStageGuard).toBeLessThan(transientCleanup);
+    expect(transientCleanup).toBeLessThan(firstBegin);
+    const postCleanupStageGuard = entry.indexOf(
+      "if (!r2rStageMayHostCalibration())",
+      transientCleanup,
+    );
+    expect(postCleanupStageGuard).toBeGreaterThan(transientCleanup);
+    expect(postCleanupStageGuard).toBeLessThan(
+      entry.indexOf("calibrationPresentationEpoch += 1"),
+    );
+    expect(postReservationStageGuard).toBeGreaterThan(firstBegin);
+    expect(entry.indexOf(
+      "finishR2rCalibrationBootstrapAttempt(attempt)",
+      postReservationStageGuard,
+    )).toBeGreaterThan(postReservationStageGuard);
+    expect(postReservationStageGuard).toBeLessThan(sessionAwait);
     expect(sessionAwait).toBeGreaterThan(firstBegin);
     expect(sessionGuard).toBeGreaterThan(sessionAwait);
     expect(selectAwait).toBeGreaterThan(sessionGuard);
@@ -812,7 +892,7 @@ describe("legacy runtime ownership boundaries", () => {
     expect(targetLoadAwait).toBeGreaterThan(exactBegin);
     expect(entry.slice(wildcardBegin, exactBegin)).not.toContain("await ");
     const targetLoadCatch = entry.indexOf("} catch (error) {", targetLoadAwait);
-    const targetLossRollback = entry.indexOf("{ targetViewLost: true }", targetLoadCatch);
+    const targetLossRollback = entry.indexOf("targetViewLost: true", targetLoadCatch);
     expect(targetLossRollback).toBeGreaterThan(targetLoadCatch);
     expect(entry).not.toContain("clearR2rTargetAfterViewLoss(");
     expect(entry).toContain("let calibrationResourcesOwned = r2rCalibrationResourcesOwned");
@@ -836,7 +916,7 @@ describe("legacy runtime ownership boundaries", () => {
       "updateR2rCalibBanner()",
       'classList.remove("hidden")',
       "r2rSetCalChip(",
-      "publishR2rWorkflowState()",
+      "publishR2rWorkflowState(manipulatorOwnsLease)",
       'editor.style.display = "block"',
       "startReservedCalibrationManipulatorSession(",
       "r2rApplyStage()",
@@ -918,17 +998,19 @@ describe("legacy runtime ownership boundaries", () => {
     expect(withdrawal.indexOf("beginR2rCalibrationBootstrapAttempt({"))
       .toBeLessThan(withdrawal.indexOf("r2r.targetName = null"));
     expect(withdrawal).toContain("targetCapabilityWithdrawn: true");
-    expect(rollback).toContain(
-      "r2r.calibrated = targetViewLost ? false : attempt.identity.calibratedBefore",
-    );
-    expect(rollback).toContain("if (!r2rCalibrationBootstrapAttempts.isCurrent(attempt)) return false");
+    expectTokensInOrder(rollback, [
+      "r2r.calibrated = sourceViewLost || targetViewLost",
+      "? false",
+      ": attempt.identity.calibratedBefore",
+    ]);
+    expect(rollback).toContain("if (!ownsAttempt()) return false");
     expect(rollback).toContain("runBestEffortCleanup(context, action)");
     expect(rollback.indexOf("r2rCalibrationManipulatorSession = null"))
       .toBeLessThan(rollback.indexOf("calibManip.stop(manipulatorSession)"));
     expect(rollback.indexOf("calibManip.stop(manipulatorSession)"))
       .toBeLessThan(rollback.indexOf("r2rCalibrationFkPreview.stop()"));
     const rollbackFinish = rollback.indexOf(
-      "finishR2rCalibrationBootstrapAttempt(attempt)",
+      "abandonR2rCalibrationBootstrapAttempt(attempt)",
     );
     expect(rollbackFinish).toBeGreaterThan(rollback.indexOf("toast(errorMessage(error), true)"));
     expect(rollback.indexOf("r2r.calibOrbitSaved = null")).toBeGreaterThan(rollbackFinish);
@@ -974,14 +1056,19 @@ describe("legacy runtime ownership boundaries", () => {
     expect(replacement.indexOf("r2rExitCalib()"))
       .toBeLessThan(replacement.indexOf("r2rCalibrationFkPreview.stop()"));
     expect(replacement).toContain("r2rCalibrationResourcesOwned");
+    const calibrationOnlyLossCleanup = runtimeSource.slice(
+      runtimeSource.indexOf("function clearR2rCalibrationAfterViewLoss"),
+      runtimeSource.indexOf("function clearR2rDerivedTargetAfterViewLoss"),
+    );
+    expect(calibrationOnlyLossCleanup).toContain("invalidateR2rCalibrationAttempts()");
     for (const functionName of [
-      "clearR2rCalibrationAfterViewLoss",
       "clearR2rSourceAfterViewLoss",
       "clearR2rTargetAfterViewLoss",
     ]) {
       const start = runtimeSource.indexOf(`function ${functionName}`);
       const body = runtimeSource.slice(start, runtimeSource.indexOf("\n}", start) + 2);
-      expect(body).toContain("invalidateR2rCalibrationAttempts()");
+      expect(body).toContain("clearR2rCalibrationAfterViewLoss");
+      expect(body).toContain("context, isCurrent");
     }
 
     const replacementLoads = [
@@ -1009,7 +1096,7 @@ describe("legacy runtime ownership boundaries", () => {
           runtimeSource.indexOf("async function r2rRunRetarget"),
           runtimeSource.indexOf("// --------------------------------------------------------------- batch"),
         ),
-        start: "const attempt = startRobotViewLoad(r2rTgt, targetPayload)",
+        start: "const targetViewAttempt = startRobotViewLoad(r2rTgt, targetPayload)",
         commit: "r2r.targetPayload = targetPayload",
       },
     ] as const;
@@ -1071,7 +1158,6 @@ describe("legacy runtime ownership boundaries", () => {
           "this.objectTraj = []",
           "this.joints = null",
           "this.motionToken = null",
-          "this._objectGlbUrl = null",
           "this.clipDuration = 1",
         ],
       },
@@ -1090,23 +1176,105 @@ describe("legacy runtime ownership boundaries", () => {
         expect(classSource).not.toContain("m.material =");
       }
 
-      const clearStart = classSource.indexOf("clear(): void {");
+      const clearStart = classSource.indexOf(
+        view.className === "ScaledEnvView"
+          ? "clear(isCurrent: () => boolean = () => true): boolean {"
+          : "clear(): void {",
+      );
       const loadStart = classSource.indexOf("\n  load(", clearStart);
       const clearSource = classSource.slice(clearStart, loadStart);
-      expect(clearSource).toContain("this._loadGeneration += 1");
-      expect(clearSource).toContain(
-        "threeResourceDisposer.disposeObject3DChildren(this.group)",
-      );
-      expect(clearSource).toContain("finally {");
-      expect(clearSource).toContain("this.group.clear()");
+      if (view.className === "ScaledEnvView") {
+        expectTokensInOrder(clearSource, [
+          "const expectedGeneration = this._loadGeneration + 1",
+          "this._loadGeneration = expectedGeneration",
+          "const retired = this._content",
+          "this._content = null",
+          "this.objectMeshes = []",
+          "retireThreeContentRoot(",
+          "[...retired.ownedChildren]",
+          "retired.extras",
+        ]);
+        expect(clearSource).toContain("if (!isCurrent()) return false");
+      } else {
+        expect(clearSource).toContain("this._loadGeneration += 1");
+        expect(clearSource).toContain(
+          "threeResourceDisposer.disposeObject3DChildren(this.group)",
+        );
+        expect(clearSource).toContain("finally {");
+        expect(clearSource).toContain("this.group.clear()");
+      }
       for (const alias of view.clearedAliases) {
         expect(clearSource, `${view.className}: ${alias}`).toContain(alias);
       }
       expect(clearSource).not.toContain("while (this.group.children.length)");
 
-      const buildStart = classSource.indexOf("private _buildObject", loadStart);
+      const buildStart = classSource.indexOf(
+        view.className === "ScaledEnvView"
+          ? "private _loadObjectMesh"
+          : "private _buildObject",
+        loadStart,
+      );
       const loadSource = classSource.slice(loadStart, buildStart);
       const buildSource = classSource.slice(buildStart);
+      if (view.className === "ScaledEnvView") {
+        expectTokensInOrder(loadSource, [
+          "const expectedGeneration = this._loadGeneration + 1",
+          "this.clear(isCurrent)",
+          "this._loadGeneration !== expectedGeneration",
+          "const generation = expectedGeneration",
+          "const candidate = new THREE.Group()",
+          "const ownedChildren = new Set<THREE.Object3D>()",
+          "candidate.add(box)",
+          "this._content = content",
+          "this.group.add(candidate)",
+          "if (!viewIsCurrent())",
+          "this.objectMeshes = objectMeshes",
+          "this.objectTraj = objectTraj",
+          "this._loadObjectMesh(",
+        ]);
+        for (const exactViewGuard of [
+          "this._loadGeneration === generation",
+          "this.objectMeshes === objectMeshes",
+          "objectMeshes[index] === box",
+          "candidate.parent === this.group",
+        ]) {
+          expect(buildSource).toContain(exactViewGuard);
+        }
+        const staleDispose = buildSource.indexOf(view.staleContext);
+        const attach = buildSource.indexOf("candidate.add(real)", staleDispose);
+        const detachPlaceholder = buildSource.indexOf(
+          "candidate.remove(box)",
+          attach,
+        );
+        const postAttachGuard = buildSource.indexOf(
+          "if (!viewOwnsGeneration()) {",
+          attach,
+        );
+        const publish = buildSource.indexOf(
+          "objectMeshes[index] = real",
+          detachPlaceholder,
+        );
+        const disposePlaceholder = buildSource.indexOf(
+          view.placeholderContext,
+          publish,
+        );
+        expect(staleDispose).toBeGreaterThanOrEqual(0);
+        expect(attach).toBeGreaterThan(staleDispose);
+        expect(postAttachGuard).toBeGreaterThan(attach);
+        expect(detachPlaceholder).toBeGreaterThan(postAttachGuard);
+        // The old placeholder remains the authoritative alias until removal
+        // settles; only then may the real GLTF become visible to frame updates.
+        expect(publish).toBeGreaterThan(detachPlaceholder);
+        expect(disposePlaceholder).toBeGreaterThan(publish);
+        // Attempt authority is only a pre-commit scheduling lease. The exact
+        // View generation must continue accepting a GLTF after result commit.
+        const meshGuard = buildSource.slice(
+          buildSource.indexOf("const viewOwnsGeneration"),
+          buildSource.indexOf("const placeholderIsCurrent"),
+        );
+        expect(meshGuard).not.toContain("isCurrent()");
+        continue;
+      }
       expect(loadSource).toContain("const generation = this._loadGeneration");
       expect(loadSource).toContain(view.invocation);
       expect(buildSource).toContain("generation: number");
@@ -1187,25 +1355,6 @@ describe("legacy runtime ownership boundaries", () => {
           "this.positions = new Float32Array()",
         ],
       },
-      {
-        className: "ScaledSkeletonView",
-        endMarker: "// Scaled-environment interpolation",
-        inventory: [
-          "...this.spheres.map((sphere) => sphere.geometry)",
-          "...(this.lineGeom ? [this.lineGeom] : [])",
-          "...this.spheres.map((sphere) => sphere.material)",
-          "...(this.lines ? [this.lines.material] : [])",
-        ],
-        cleanup: ["this.group.clear()"],
-        aliasReleases: [
-          "this.lineGeom = null",
-          "this.lines = null",
-          "this.spheres = []",
-          "this.joints = null",
-          "this.parents = []",
-          "this.frameIndices = null",
-        ],
-      },
     ] as const;
 
     for (const {
@@ -1262,6 +1411,51 @@ describe("legacy runtime ownership boundaries", () => {
         ).toBeGreaterThan(previousCleanup);
       }
     }
+
+    const scaledSkeletonStart = runtimeSource.indexOf(
+      "class ScaledSkeletonView",
+    );
+    const scaledSkeleton = runtimeSource.slice(
+      scaledSkeletonStart,
+      runtimeSource.indexOf(
+        "// Scaled-environment interpolation",
+        scaledSkeletonStart,
+      ),
+    );
+    const scaledSkeletonClear = scaledSkeleton.slice(
+      scaledSkeleton.indexOf("clear(isCurrent: () => boolean = () => true): boolean"),
+      scaledSkeleton.indexOf("\n  load("),
+    );
+    const scaledSkeletonLoad = scaledSkeleton.slice(
+      scaledSkeleton.indexOf("\n  load("),
+      scaledSkeleton.indexOf("\n  get numFrames"),
+    );
+    expectTokensInOrder(scaledSkeletonClear, [
+      "const expectedGeneration = this._loadGeneration + 1",
+      "this._loadGeneration = expectedGeneration",
+      "const retired = this._content",
+      "this._content = null",
+      "this.spheres = []",
+      "retireThreeContentRoot(",
+      "[...retired.ownedChildren]",
+      "retired.extras",
+    ]);
+    expectTokensInOrder(scaledSkeletonLoad, [
+      "const expectedGeneration = this._loadGeneration + 1",
+      "this.clear(isCurrent)",
+      "this._loadGeneration !== expectedGeneration",
+      "const candidate = new THREE.Group()",
+      "const childrenKnownBeforeAdoption: THREE.Object3D[] = []",
+      "candidate.add(s)",
+      "candidate.add(lines)",
+      "this._content = content",
+      "this.group.add(candidate)",
+      "if (!viewIsCurrent())",
+      "this.spheres = spheres",
+      "this.lineGeom = lineGeom",
+      "this.lines = lines",
+      "this.setFrame(0)",
+    ]);
 
     const referenceInstall = referenceSkeletonViewSource.slice(
       referenceSkeletonViewSource.indexOf("  install({"),
@@ -2014,7 +2208,8 @@ describe("legacy runtime ownership boundaries", () => {
     expect(relinquish).toBeLessThan(hideH2rViews);
     expect(hideH2rViews).toBeLessThan(applyR2r);
     expect(enter).toContain("if (intent.resetSharedPlayback)");
-    expect(enter).toContain("r2rTrajectoryResults.isCommitted(trajectoryCommit)");
+    expect(enter).toContain("pendingR2rPlaybackClaimFor(playback)");
+    expect(enter).toContain("r2rPlaybackClaimIsCommitted(playbackClaim)");
     expectTokensInOrder(enter, [
       "r2rApplyStage()",
       "if (!projectionIsCurrent()) return null",
@@ -2037,9 +2232,12 @@ describe("legacy runtime ownership boundaries", () => {
       leave.indexOf("applyH2rPhysicalVisibility()"),
     );
     expect(leave.indexOf("applyH2rPhysicalVisibility()")).toBeLessThan(
-      leave.indexOf("if (player.active) player.refreshFrame()"),
+      leave.indexOf("presentPendingH2rPlayback("),
     );
-    expect(leave.indexOf("if (player.active) player.refreshFrame()")).toBeLessThan(
+    expect(leave.indexOf("presentPendingH2rPlayback(")).toBeLessThan(
+      leave.indexOf('"H2R panel hand-back frame refresh failed"'),
+    );
+    expect(leave.indexOf('"H2R panel hand-back frame refresh failed"')).toBeLessThan(
       leave.indexOf("markH2rStageDisplayChanged()"),
     );
     expect(
@@ -2068,7 +2266,9 @@ describe("legacy runtime ownership boundaries", () => {
     );
     expectTokensInOrder(trajectoryRunner, [
       "beginR2rTrajectorySelection(",
-      "await r2rEnsureSourceLoaded(trajectoryAttempt)",
+      "await r2rEnsureSourceLoaded(",
+      "trajectoryAttempt",
+      "(latestAttempt) => { trajectoryAttempt = latestAttempt; }",
       'switchInspectorPanel("r2r")',
       'panelSwitchSettledOnStageOwner(panelSwitch, "r2r")',
       'r2rTrajectoryState = "validating"',
@@ -2086,6 +2286,10 @@ describe("legacy runtime ownership boundaries", () => {
     expect(sourceOwnership).toContain("new LatestAsyncAttemptOwner<");
     expect(sourceOwnership).toContain("function beginR2rSourceLoad(");
     expect(sourceOwnership).toContain("function finishR2rSourceLoad(");
+    expect(sourceOwnership).toContain("function r2rSourceLoadIsPending()");
+    expect(sourceOwnership).toContain(
+      "attempt !== null && r2rSourceLoadAttempts.owns(attempt)",
+    );
 
     const ownership = runtimeSource.slice(
       runtimeSource.indexOf("type R2rTrajectorySelectionKind"),
@@ -2130,7 +2334,7 @@ describe("legacy runtime ownership boundaries", () => {
     expectTokensInOrder(runner, [
       "if (!committed)",
       "r2rTrajectoryCommitIsSelected(committed)",
-      "publishR2rWorkflowState()",
+      "publishR2rWorkflowState(() => r2rTrajectoryCommitIsSelected(committed))",
       "r2rTrajectoryCommitIsSelected(committed)",
     ]);
     expect(runner).toContain("void r2rUpdateRetargetBtn().catch(");
@@ -2147,13 +2351,13 @@ describe("legacy runtime ownership boundaries", () => {
     expectTokensInOrder(failure, [
       'r2rTrajectoryState = "failed"',
       "toast(errorMessage(error), true)",
-      "finishR2rTrajectorySelection(trajectoryAttempt)",
-      "publishR2rWorkflowState()",
+      "abandonR2rTrajectorySelection(trajectoryAttempt)",
+      "publishR2rWorkflowState(completionIsLatest)",
     ]);
     expectTokensInOrder(runner, [
       'if (!panelSwitchSettledOnStageOwner(panelSwitch, "r2r"))',
       "finishR2rTrajectorySelection(trajectoryAttempt)",
-      "publishR2rWorkflowState()",
+      "publishR2rWorkflowState(completionIsLatest)",
       'return "superseded"',
     ]);
 
@@ -2163,6 +2367,17 @@ describe("legacy runtime ownership boundaries", () => {
     );
     expect(apply).toContain("r2rTrajectoryResults.isCurrent(trajectoryAttempt)");
     expect(apply).toContain("r2rSrc.setTrajectory(data.trajectory)");
+    expect(apply).toContain(
+      "if (!r2rSrcSkel.load(data.skeleton_preview, isCurrent)) {",
+    );
+    expectTokensInOrder(apply, [
+      "r2rLoadSrcScene(",
+      "data.scaled_scene",
+      "data.token",
+      "clipDur",
+      "isCurrent",
+      ")) return null",
+    ]);
     expect(apply).not.toContain("startRobotViewLoad(r2rSrc");
     expect(apply).not.toMatch(/\bplayer\./);
     expect(apply).not.toContain("r2rApplyStage(");
@@ -2186,8 +2401,19 @@ describe("legacy runtime ownership boundaries", () => {
     );
     expect(sourceSelectionClaim).toBeGreaterThanOrEqual(0);
     expect(sourceSelectionClaim).toBeLessThan(sourceSelectionAwait);
-    expect(sourceSelection.indexOf('if (r2rRunState === "running")'))
-      .toBeLessThan(sourceSelectionClaim);
+    expect(sourceSelection).not.toContain('if (r2rRunState === "running")');
+    expect(sourceSelection.indexOf("invalidateR2rRetarget()"))
+      .toBeGreaterThan(sourceSelectionClaim);
+    expect(sourceSelection.indexOf("invalidateR2rRetarget()"))
+      .toBeLessThan(sourceSelectionAwait);
+    expectTokensInOrder(sourceSelection, [
+      'beginR2rSourceLoad("manual", name)',
+      "invalidateR2rRetarget()",
+      "invalidateR2rTrajectorySelection()",
+      "r2r.sourceToken = null",
+      "r2r.sourceStem = null",
+      "clearR2rRetargetTransientUi(sourceIsCurrent)",
+    ]);
     expect(sourceSelection.match(/invalidateR2rTrajectorySelection\(\)/g))
       .toHaveLength(2);
     expect(sourceSelection.indexOf("invalidateR2rTrajectorySelection()"))
@@ -2244,10 +2470,10 @@ describe("legacy runtime ownership boundaries", () => {
       runtimeSource.indexOf("/** After a robot is loaded"),
     );
     expect(navigation).toContain(
-      "r2rTrajectoryResults.pendingPresentation?.value ?? null",
+      "pendingR2rPlaybackClaim()?.commit.value ?? null",
     );
     expect(navigation).toContain(
-      "r2rTrajectoryResults.markPresented(presentedTrajectory)",
+      "markR2rPlaybackPresented(presentedPlayback)",
     );
     expect(navigation).toContain(
       "publishPanelPresentationIntent(operation.value.panelId)",
@@ -2271,17 +2497,675 @@ describe("legacy runtime ownership boundaries", () => {
     );
     const retargetPendingGate = retarget.indexOf("r2rTrajectorySelectionIsPending()");
     const retargetStateGate = retarget.indexOf('r2rTrajectoryState !== "idle"');
+    const sourcePendingGate = retarget.indexOf("r2rSourceLoadIsPending()");
+    const targetPendingGate = retarget.indexOf("r2rTargetLoadIsPending()");
+    const retargetAttempt = retarget.indexOf("beginR2rRetarget(capturedIdentity)");
     const calibrationAwait = retarget.indexOf("await r2rEnsureCalibration");
     expect(retargetPendingGate).toBeGreaterThanOrEqual(0);
     expect(retargetStateGate).toBeGreaterThanOrEqual(0);
+    expect(sourcePendingGate).toBeGreaterThanOrEqual(0);
+    expect(targetPendingGate).toBeGreaterThanOrEqual(0);
+    expect(retargetAttempt).toBeGreaterThanOrEqual(0);
     expect(calibrationAwait).toBeGreaterThanOrEqual(0);
     expect(retargetPendingGate).toBeLessThan(calibrationAwait);
     expect(retargetStateGate).toBeLessThan(calibrationAwait);
+    expect(sourcePendingGate).toBeLessThan(retargetAttempt);
+    expect(targetPendingGate).toBeLessThan(retargetAttempt);
+    expect(retargetAttempt).toBeLessThan(calibrationAwait);
     const retargetClaim = retarget.indexOf('r2rRunState = "running"', calibrationAwait);
     const firstProgressMutation = retarget.indexOf('prog.style.display = "block"');
     expect(retargetClaim).toBeGreaterThan(calibrationAwait);
     expect(firstProgressMutation).toBeGreaterThanOrEqual(0);
     expect(retargetClaim).toBeLessThan(firstProgressMutation);
+  });
+
+  it("gives manual R2R target selection exact latest-attempt ownership", () => {
+    const ownership = runtimeSource.slice(
+      runtimeSource.indexOf("interface R2rTargetLoadIdentity"),
+      runtimeSource.indexOf("type R2rTrajectorySelectionKind"),
+    );
+    expect(ownership).toContain("readonly name: string");
+    expect(ownership).toContain(
+      "new LatestAsyncAttemptOwner<\n  R2rTargetLoadIdentity",
+    );
+    expectTokensInOrder(ownership, [
+      "function beginR2rTargetLoad(",
+      "r2rTargetLoadAttempts.begin(Object.freeze({ name }))",
+      "r2rTargetLoadPendingAttempt = attempt",
+      "function finishR2rTargetLoad(",
+      "r2rTargetLoadAttempts.finish(attempt)",
+      "r2rTargetLoadPendingAttempt === attempt",
+      "r2rTargetLoadPendingAttempt = null",
+    ]);
+    expectTokensInOrder(ownership, [
+      "function invalidateR2rTargetLoad()",
+      "const claimedAttempt = r2rTargetLoadPendingAttempt",
+      "r2rTargetLoadAttempts.invalidate()",
+      "r2rTargetLoadPendingAttempt === claimedAttempt",
+      "r2rTargetLoadPendingAttempt = null",
+    ]);
+    expect(ownership).toContain(
+      "attempt !== null && r2rTargetLoadAttempts.owns(attempt)",
+    );
+
+    const selection = runtimeSource.slice(
+      runtimeSource.indexOf("async function r2rLoadTargetRobot"),
+      runtimeSource.indexOf("// --------------------------------------------------------------- calibration"),
+    );
+    const claim = selection.indexOf("const targetAttempt = beginR2rTargetLoad(name)");
+    const firstAwait = selection.indexOf("await ");
+    const request = selection.indexOf('await API.post("/api/robot/select"');
+    expect(claim).toBeGreaterThanOrEqual(0);
+    expect(claim).toBeLessThan(firstAwait);
+    expect(selection).not.toContain('if (r2rRunState === "running")');
+    expectTokensInOrder(selection, [
+      "const targetAttempt = beginR2rTargetLoad(name)",
+      "r2rTargetLoadAttempts.isCurrent(targetAttempt)",
+      "invalidateR2rRetarget()",
+      "prepareR2rRobotReplacement()",
+      "if (!targetIsCurrent()) return",
+      "r2r.targetName = null",
+      "r2r.targetPayload = null",
+      'await API.post("/api/robot/select"',
+      "if (!targetIsCurrent()) return",
+      "r2r.targetPayload = targetPayload",
+      "r2r.targetName = name",
+      "if (!targetIsCurrent()) return",
+      "finishR2rTargetLoad(targetAttempt)",
+      "await r2rMaybeAutoCalib()",
+    ]);
+    expect(selection.indexOf("invalidateR2rRetarget()")).toBeLessThan(request);
+    for (const effect of [
+      "r2rRenderBasket()",
+      "publishR2rWorkflowState(completionIsLatest)",
+      "toast(runtimeText(",
+    ]) {
+      const effectAt = selection.indexOf(effect, request);
+      const guardedPublication = selection.lastIndexOf(
+        "runCurrentBestEffort(",
+        effectAt,
+      );
+      expect(effectAt, `target selection effect: ${effect}`).toBeGreaterThan(request);
+      expect(guardedPublication).toBeGreaterThan(request);
+      expect(selection.slice(guardedPublication, effectAt)).toContain(
+        "completionIsLatest",
+      );
+    }
+    for (const exactEffect of [
+      'syncR2rRobotSelects("target", name, completionIsLatest)',
+      'setR2rRobotStatus("target", runtimeText(',
+    ]) {
+      const effectAt = selection.indexOf(exactEffect, request);
+      const guardedPublication = selection.lastIndexOf(
+        "runCurrentBestEffort(",
+        effectAt,
+      );
+      expect(effectAt, `target exact effect: ${exactEffect}`).toBeGreaterThan(request);
+      expect(selection.slice(effectAt, effectAt + 300)).toContain("completionIsLatest");
+      expect(guardedPublication).toBeGreaterThan(request);
+      expect(selection.slice(guardedPublication, effectAt)).toContain(
+        "completionIsLatest",
+      );
+    }
+    const failure = selection.slice(selection.lastIndexOf("} catch (error) {"));
+    expectTokensInOrder(failure, [
+      "if (!targetIsCurrent()) return",
+      "R2R target failure status publication failed",
+      "if (!targetIsCurrent()) return",
+      "finishR2rTargetLoad(targetAttempt)",
+      "R2R target failure workflow publication failed",
+      "R2R target failure toast failed",
+    ]);
+
+    const blocked = runtimeSource.slice(
+      runtimeSource.indexOf("function r2rBlockedReason"),
+      runtimeSource.indexOf("function publishR2rWorkflowState"),
+    );
+    expect(blocked.indexOf("r2rTargetLoadIsPending()"))
+      .toBeLessThan(blocked.indexOf("!r2r.targetName"));
+    const status = runtimeSource.slice(
+      runtimeSource.indexOf("async function r2rUpdateRetargetBtn"),
+      runtimeSource.indexOf("// --------------------------------------------------------------- robot pickers"),
+    );
+    expect(status.indexOf("r2rTargetLoadIsPending()"))
+      .toBeLessThan(status.indexOf("await API.get("));
+    const calibration = runtimeSource.slice(
+      runtimeSource.indexOf("async function r2rStartCalib"),
+      runtimeSource.indexOf("function r2rExitCalib"),
+    );
+    for (const pendingSelection of [
+      "r2rTrajectorySelectionIsPending()",
+      "r2rSourceLoadIsPending()",
+      "r2rTargetLoadIsPending()",
+    ]) {
+      expect(calibration.indexOf(pendingSelection))
+        .toBeLessThan(calibration.indexOf("calibrationPresentationEpoch += 1"));
+    }
+    const targetLoss = runtimeSource.slice(
+      runtimeSource.indexOf("function clearR2rTargetAfterViewLoss"),
+      runtimeSource.indexOf("async function r2rLoadSourceRobot"),
+    );
+    expectTokensInOrder(targetLoss, [
+      "invalidateR2rRetarget()",
+      "invalidateR2rTargetLoad()",
+      "invalidateR2rCalibrationAttempts()",
+      "r2r.targetName = null",
+      "r2r.targetPayload = null",
+    ]);
+  });
+
+  it("routes trajectory and retarget playback through one tagged panel claim", () => {
+    const navigation = runtimeSource.slice(
+      runtimeSource.indexOf("interface PanelSwitchReceipt"),
+      runtimeSource.indexOf("/** After a robot is loaded"),
+    );
+    const claim = navigation.slice(
+      navigation.indexOf("type R2rPlaybackClaim"),
+      navigation.indexOf("let lastAppliedPanelPresentation"),
+    );
+    for (const tag of [
+      'readonly kind: "trajectory"',
+      "readonly commit: R2rTrajectoryPresentationCommit",
+      'readonly kind: "retarget"',
+      "readonly commit: R2rRetargetPresentationCommit",
+    ]) {
+      expect(claim).toContain(tag);
+    }
+    expectTokensInOrder(claim, [
+      "const trajectory = r2rTrajectoryResults.pendingPresentation",
+      "const retarget = r2rRetargetResults.pendingPresentation",
+      "if (Boolean(trajectory) === Boolean(retarget)) return null",
+      '? { kind: "trajectory", commit: trajectory }',
+      ': { kind: "retarget", commit: retarget! }',
+    ]);
+    expect(claim).toContain("claim?.commit.value === playback ? claim : null");
+    for (const dispatch of [
+      "r2rTrajectoryResults.isCommitted(claim.commit)",
+      "r2rRetargetResults.isCommitted(claim.commit)",
+      "r2rTrajectoryResults.markPresented(claim.commit)",
+      "r2rRetargetResults.markPresented(claim.commit)",
+    ]) {
+      expect(claim).toContain(dispatch);
+    }
+    expect(navigation).toContain(
+      "r2rPlayback: pendingR2rPlaybackClaim()?.commit.value ?? null",
+    );
+    expect(navigation).toContain(
+      "markR2rPlaybackPresented(presentedPlayback)",
+    );
+
+    const enter = runtimeSource.slice(
+      runtimeSource.indexOf("function r2rEnterPanel"),
+      runtimeSource.indexOf("function r2rLeavePanel"),
+    );
+    expect(enter).toContain("pendingR2rPlaybackClaimFor(playback)");
+    expect(enter.match(/r2rPlaybackClaimIsCommitted\(playbackClaim\)/g))
+      .toHaveLength(2);
+    expect(enter).toContain("return playbackClaim");
+
+    const retargetOwnership = runtimeSource.slice(
+      runtimeSource.indexOf("function commitR2rRetarget"),
+      runtimeSource.indexOf("interface R2rCalibrationIdentity"),
+    );
+    expectTokensInOrder(retargetOwnership, [
+      "const sourcePresentation = r2rTrajectoryResults.pendingPresentation",
+      "r2rRetargetResults.commit(attempt, presentation)",
+      "if (!committed) return null",
+      "r2rLatestRetargetCommit = committed",
+      "r2rTrajectoryResults.withdrawPresentation(sourcePresentation)",
+    ]);
+    const trajectoryBegin = runtimeSource.slice(
+      runtimeSource.indexOf("function beginR2rTrajectorySelection"),
+      runtimeSource.indexOf("function finishR2rTrajectorySelection"),
+    );
+    expectTokensInOrder(trajectoryBegin, [
+      "reserveR2rTrajectorySelection(identity)",
+      "invalidateR2rRetarget()",
+      'clearR2rDerivedTargetAfterViewLoss("R2R trajectory replacement"',
+      "clearR2rRetargetTransientUi(",
+    ]);
+  });
+
+  it("owns each R2R retarget job and freezes every continuation input", () => {
+    const ownership = runtimeSource.slice(
+      runtimeSource.indexOf("interface R2rRetargetIdentity"),
+      runtimeSource.indexOf("interface R2rCalibrationIdentity"),
+    );
+    for (const identityFact of [
+      "readonly sourceName: string",
+      "readonly sourcePayload: RobotPayload | null",
+      "readonly sourceToken: string",
+      "readonly sourceStem: string | null",
+      "readonly sourceViewGeneration: number",
+      "readonly targetName: string",
+      "readonly targetPayload: RobotPayload | null",
+      "readonly resolvedTargetPayload: RobotPayload | null",
+      "readonly targetViewGeneration: number | null",
+      "readonly calibrationRevision: number",
+      "readonly calibrationReady: boolean",
+      "readonly backend: string",
+      "readonly retargetFps: number | null",
+    ]) {
+      expect(ownership).toContain(identityFact);
+    }
+    for (const identityCheck of [
+      "!r2rSourceLoadIsPending()",
+      "!r2rTargetLoadIsPending()",
+      "r2r.sourceName === identity.sourceName",
+      "r2r.sourcePayload === identity.sourcePayload",
+      "r2r.sourceToken === identity.sourceToken",
+      "r2r.sourceStem === identity.sourceStem",
+      "r2rSrc.isLoadGenerationCurrent(identity.sourceViewGeneration)",
+      "r2r.targetName === identity.targetName",
+      "r2r.targetPayload === identity.targetPayload",
+      "r2r.targetPayload === identity.resolvedTargetPayload",
+      "r2rTgt.isLoadGenerationCurrent(identity.targetViewGeneration)",
+      "r2rCalibrationRevision === identity.calibrationRevision",
+    ]) {
+      expect(ownership).toContain(identityCheck);
+    }
+    expect(ownership).toContain("new LatestAsyncResultOwner<");
+    expect(ownership).toContain("let r2rRetargetPendingAttempt:");
+    expect(ownership).toContain("let r2rLatestRetargetCommit:");
+    expectTokensInOrder(ownership, [
+      "function beginR2rRetarget(",
+      "r2rRetargetResults.begin(Object.freeze(identity))",
+      "r2rRetargetPendingAttempt = attempt",
+      "function rebindR2rRetarget(",
+      "r2rRetargetResults.isCurrent(attempt)",
+      "return beginR2rRetarget(identity)",
+      "function finishR2rRetarget(",
+      "r2rRetargetResults.finish(attempt)",
+      "function commitR2rRetarget(",
+      "r2rRetargetResults.commit(attempt, presentation)",
+      "function invalidateR2rRetarget()",
+      "r2rRetargetResults.invalidate()",
+      "r2rRetargetResults.isLatestResult(commit)",
+    ]);
+
+    const capture = runtimeSource.slice(
+      runtimeSource.indexOf("function captureR2rRetargetIdentity"),
+      runtimeSource.indexOf("function failR2rRetarget"),
+    );
+    expect(capture).toContain("return Object.freeze({");
+    for (const captured of [
+      "sourceName: r2r.sourceName",
+      "sourcePayload: r2r.sourcePayload",
+      "sourceToken: r2r.sourceToken",
+      "sourceStem: r2r.sourceStem",
+      "sourceViewGeneration: r2rSrc.loadGeneration",
+      "targetName: r2r.targetName",
+      "targetPayload: r2r.targetPayload",
+      "targetViewGeneration: r2rTgt.loadGeneration",
+      "calibrationRevision: r2rCalibrationRevision",
+    ]) {
+      expect(capture).toContain(captured);
+    }
+
+    const run = runtimeSource.slice(
+      runtimeSource.indexOf("async function r2rRunRetarget"),
+      runtimeSource.indexOf("// --------------------------------------------------------------- batch"),
+    );
+    const begin = run.indexOf("beginR2rRetarget(capturedIdentity)");
+    const firstAwait = run.indexOf("await ");
+    const backendRead = run.indexOf('document.getElementById("r2r-backend")');
+    const fpsRead = run.indexOf('document.getElementById("r2r-retarget-fps")');
+    const configuredRebind = run.indexOf(
+      "const configuredAttempt = rebindR2rRetarget(retargetAttempt",
+    );
+    const calibrationAwait = run.indexOf("await r2rEnsureCalibration");
+    expect(begin).toBeGreaterThanOrEqual(0);
+    expect(begin).toBeLessThan(firstAwait);
+    expect(begin).toBeLessThan(backendRead);
+    expect(backendRead).toBeLessThan(fpsRead);
+    expect(run.indexOf("if (!isCurrent()) return", backendRead))
+      .toBeLessThan(fpsRead);
+    expect(fpsRead).toBeLessThan(configuredRebind);
+    expect(configuredRebind).toBeLessThan(calibrationAwait);
+    expectTokensInOrder(run, [
+      "await r2rEnsureCalibration({",
+      "auto: true",
+      "retargetAttempt",
+      'calibrationResult !== "ready" || !isCurrent()',
+      "rebindR2rRetarget(retargetAttempt",
+      "calibrationReady: true",
+      "retargetAttempt = readyAttempt",
+      "if (!isCurrent()) return",
+      'r2rRunState = "running"',
+    ]);
+
+    const body = run.slice(
+      run.indexOf("const body: R2rRetargetRequest"),
+      run.indexOf('await API.post("/api/r2r/retarget"'),
+    );
+    for (const frozenRequestFact of [
+      "target: retargetAttempt.identity.targetName",
+      "source: retargetAttempt.identity.sourceName",
+      "source_token: retargetAttempt.identity.sourceToken",
+      "backend: retargetAttempt.identity.backend",
+      "body.retarget_fps = retargetAttempt.identity.retargetFps",
+    ]) {
+      expect(body).toContain(frozenRequestFact);
+    }
+    expect(body).not.toContain("target: r2r.targetName");
+    expect(body).not.toContain("source: r2r.sourceName");
+    expect(body).not.toContain('document.getElementById("r2r-backend")');
+
+    expectTokensInOrder(run, [
+      'await API.post("/api/r2r/retarget", body)',
+      "if (!isCurrent()) return",
+      "pollJob<RetargetResult>(job_id, (jp) =>",
+      "if (!isCurrent()) return",
+      "setRetargetProgress(progressElement, bar, jp, isCurrent)",
+      "renderSpinnerStatus(",
+      "isCurrent",
+      "retargetAttempt.identity.resolvedTargetPayload",
+      'name: retargetAttempt.identity.targetName',
+      "if (!isCurrent()) return",
+      "resolvedTargetPayload: targetPayload",
+    ]);
+    expectTokensInOrder(run, [
+      "targetViewGeneration: null",
+      "const targetViewAttempt = startRobotViewLoad(r2rTgt, targetPayload)",
+      "if (!isCurrent()) return",
+      "targetViewGeneration: targetViewAttempt.generation",
+      "await targetViewAttempt.completion",
+      'targetLoadResult === "stale"',
+      "!isCurrent()",
+      "!r2rTgt.isLoadGenerationCurrent(targetViewAttempt.generation)",
+      "targetResultStaged = true",
+      "prepareR2rRobotReplacement()",
+      "if (!isCurrent()) return",
+      "r2r.targetPayload = targetPayload",
+      "if (!isCurrent()) return",
+      "r2rTgt.setTrajectory(j.result.trajectory)",
+    ]);
+
+    const completion = run.slice(run.indexOf("const committed = commitR2rRetarget("));
+    expectTokensInOrder(completion, [
+      "commitR2rRetarget(",
+      "Object.freeze({",
+      "exportToken: j.result.export_token",
+      "exportHasScene: !!j.result.has_scene",
+      "resultStem: j.result.stem",
+      "if (!committed) return",
+      "r2rRetargetCommitIsLatest(committed)",
+      "if (!commitIsLatest()) return",
+      'emitComparisonState("r2r")',
+      "if (!commitIsLatest()) return",
+      'emitResultDiagnostics("r2r"',
+      "if (!commitIsLatest()) return",
+      "publishR2rWorkflowState(commitIsLatest)",
+      "if (!commitIsLatest()) return",
+      "toast(runtimeText(",
+      "if (!commitIsLatest()) return",
+      "appliedPanelPresentationOwnsStage({",
+      'switchInspectorPanel("r2r")',
+    ]);
+    for (const preCommitMetadata of [
+      "r2r.exportToken = j.result.export_token",
+      'r2rRunState = "completed"',
+      "r2r.exportHasScene = !!j.result.has_scene",
+      "r2r.resultStem = j.result.stem",
+      'setR2rComparisonPresetIntent("result")',
+    ]) {
+      expect(run).not.toContain(preCommitMetadata);
+    }
+    const atomicCommit = ownership.slice(
+      ownership.indexOf("function commitR2rRetarget"),
+      ownership.indexOf("function invalidateR2rRetarget"),
+    );
+    expectTokensInOrder(atomicCommit, [
+      "r2rRetargetResults.commit(attempt, presentation)",
+      "if (!committed) return null",
+      "r2rLatestRetargetCommit = committed",
+      "r2r.exportToken = metadata.exportToken",
+      'r2rRunState = "completed"',
+      "r2r.exportHasScene = metadata.exportHasScene",
+      "r2r.resultStem = metadata.resultStem",
+      "setR2rComparisonPresetIntent(comparisonPresets.r2r)",
+    ]);
+    const spinnerRenderer = runtimeSource.slice(
+      runtimeSource.indexOf("function renderSpinnerStatus"),
+      runtimeSource.indexOf("function renderMetaRows"),
+    );
+    expect(spinnerRenderer.match(/if \(!isCurrent\(\)\) return false/g)?.length)
+      .toBeGreaterThanOrEqual(4);
+    expectTokensInOrder(spinnerRenderer, [
+      "document.createElement",
+      "if (!isCurrent()) return false",
+      'spinner.className = "spin"',
+      "if (!isCurrent()) return false",
+      "document.createTextNode",
+      "if (!isCurrent()) return false",
+      "container.replaceChildren",
+      "return isCurrent()",
+    ]);
+    const progressRendererStart = runtimeSource.indexOf(
+      "function setRetargetProgress",
+    );
+    const progressRenderer = runtimeSource.slice(
+      progressRendererStart,
+      runtimeSource.indexOf(
+        'document.getElementById("retarget-btn")',
+        progressRendererStart,
+      ),
+    );
+    expectTokensInOrder(progressRenderer, [
+      "isCurrent: () => boolean",
+      "if (!isCurrent()) return false",
+      'progressElement.classList.toggle("indet", indet)',
+      "if (!isCurrent()) return false",
+      "bar.style.width",
+      "if (!isCurrent()) return false",
+      "return isCurrent()",
+    ]);
+    // Hidden H2R completion may commit R2R-local state and a pending playback
+    // receipt, but only the panel coordinator may touch shared presentation.
+    for (const sharedPresentationWrite of [
+      "player.ready(",
+      "player.seek(",
+      "player.setPlaying(",
+      "player.refreshFrame(",
+      "player.active =",
+      "player.t =",
+      "player.duration =",
+      "_setPlaybarVisible(",
+      "revealStage(",
+    ]) {
+      expect(run).not.toContain(sharedPresentationWrite);
+    }
+    expect(run).not.toMatch(/\borbit\./);
+    expect(run).not.toContain("r2rApplyStage(");
+    expect(run).not.toContain("r2rFocus(");
+    expect(run).not.toContain("applyR2rComparisonPreset(");
+    // Identity validation can fail because a captured RobotView disappeared
+    // without any successor request. The token-only finalizer must retire that
+    // orphan while remaining neutral to a real newer retarget generation.
+    expectTokensInOrder(run, [
+      "} finally {",
+      "r2rRetargetResults.owns(retargetAttempt)",
+      "sourceViewLost",
+      "targetViewLost",
+      "failR2rRetarget(",
+      "abandonR2rRetarget(retargetAttempt)",
+      "publishR2rWorkflowState(completionIsLatest)",
+    ]);
+    expect(run).toContain(
+      "if (!r2rTgtSkel.load(j.result.scaled_preview, isCurrent)) {",
+    );
+    expectTokensInOrder(run, [
+      "r2rLoadTgtScene(",
+      "j.result.scaled_scene",
+      "retargetAttempt.identity.sourceToken",
+      "tgtDur",
+      "isCurrent",
+      ")) return",
+    ]);
+
+    const failure = runtimeSource.slice(
+      runtimeSource.indexOf("function failR2rRetarget"),
+      runtimeSource.indexOf("async function r2rRunRetarget"),
+    );
+    expectTokensInOrder(failure, [
+      "r2rRetargetResults.owns(attempt)",
+      "targetResultStaged",
+      'clearR2rDerivedTargetAfterViewLoss("R2R retarget failure"',
+      "clearR2rRetargetTransientUi(ownsAttempt)",
+      'r2rRunState = "failed"',
+      "if (!ownsAttempt()) return false",
+      "toast(errorMessage(error), true)",
+      "if (!ownsAttempt()) return false",
+      "abandonR2rRetarget(attempt)",
+      "publishR2rWorkflowState(completionIsLatest)",
+    ]);
+    expect(run.slice(run.lastIndexOf("} catch (e) {"))).toContain(
+      "failR2rRetarget(retargetAttempt, e, { targetResultStaged })",
+    );
+  });
+
+  it("invalidates R2R retarget ownership at every pair-changing intent", () => {
+    const boundaries = [
+      {
+        name: "manual source replacement",
+        source: runtimeSource.slice(
+          runtimeSource.indexOf("async function r2rLoadSourceRobot"),
+          runtimeSource.indexOf("async function r2rLoadTargetRobot"),
+        ),
+        before: 'await API.post("/api/robot/select"',
+      },
+      {
+        name: "manual target replacement",
+        source: runtimeSource.slice(
+          runtimeSource.indexOf("async function r2rLoadTargetRobot"),
+          runtimeSource.indexOf("// --------------------------------------------------------------- calibration"),
+        ),
+        before: 'await API.post("/api/robot/select"',
+      },
+      {
+        name: "calibration replacement",
+        source: runtimeSource.slice(
+          runtimeSource.indexOf("async function r2rStartCalib"),
+          runtimeSource.indexOf("function r2rExitCalib"),
+        ),
+        before: "calibrationPresentationEpoch += 1",
+      },
+    ] as const;
+    for (const boundary of boundaries) {
+      const invalidate = boundary.source.indexOf("invalidateR2rRetarget()");
+      const cleanup = boundary.source.indexOf(
+        "clearR2rRetargetTransientUi",
+        invalidate,
+      );
+      const derivedCleanup = boundary.source.indexOf(
+        "clearR2rDerivedTargetAfterViewLoss",
+        invalidate,
+      );
+      const successor = boundary.source.indexOf(boundary.before);
+      expect(invalidate, `${boundary.name}: invalidation`).toBeGreaterThanOrEqual(0);
+      expect(derivedCleanup, `${boundary.name}: derived cleanup`)
+        .toBeGreaterThan(invalidate);
+      expect(cleanup, `${boundary.name}: transient cleanup`).toBeGreaterThan(invalidate);
+      expect(successor, `${boundary.name}: successor boundary`).toBeGreaterThan(invalidate);
+      expect(derivedCleanup, `${boundary.name}: derived cleanup order`)
+        .toBeLessThan(successor);
+      expect(cleanup, `${boundary.name}: cleanup order`).toBeLessThan(successor);
+    }
+
+    const trajectoryReplacement = runtimeSource.slice(
+      runtimeSource.indexOf("function beginR2rTrajectorySelection"),
+      runtimeSource.indexOf("function finishR2rTrajectorySelection"),
+    );
+    expectTokensInOrder(trajectoryReplacement, [
+      "reserveR2rTrajectorySelection(identity)",
+      "invalidateR2rRetarget()",
+      'clearR2rDerivedTargetAfterViewLoss("R2R trajectory replacement"',
+      "clearR2rRetargetTransientUi(",
+    ]);
+    const trajectoryReservation = runtimeSource.slice(
+      runtimeSource.indexOf("function reserveR2rTrajectorySelection"),
+      runtimeSource.indexOf("function beginR2rTrajectorySelection"),
+    );
+    expectTokensInOrder(trajectoryReservation, [
+      "r2rTrajectoryResults.begin(identity)",
+      "r2rTrajectoryPendingAttempt = attempt",
+      "return attempt",
+    ]);
+    const trajectoryRebind = runtimeSource.slice(
+      runtimeSource.indexOf("function rebindR2rTrajectorySelection"),
+      runtimeSource.indexOf("/** Immutable capabilities and request options"),
+    );
+    expect(trajectoryRebind).toContain("reserveR2rTrajectorySelection(");
+    expect(trajectoryRebind).not.toContain("beginR2rTrajectorySelection(");
+    expect(trajectoryRebind).not.toContain("clearR2rDerivedTargetAfterViewLoss(");
+    expect(trajectoryRebind).not.toContain("clearR2rRetargetTransientUi(");
+
+    const status = runtimeSource.slice(
+      runtimeSource.indexOf("async function r2rUpdateRetargetBtn"),
+      runtimeSource.indexOf("// --------------------------------------------------------------- robot pickers"),
+    );
+    expect(status).toContain("r2r.calibrated = calibrated");
+    expect(status).not.toContain("invalidateR2rRetarget()");
+    expect(status).toContain(": !r2rRetargetIsPending()");
+
+    const transientCleanup = runtimeSource.slice(
+      runtimeSource.indexOf("function clearR2rRetargetTransientUi"),
+      runtimeSource.indexOf("function r2rBlockedReason"),
+    );
+    expectTokensInOrder(transientCleanup, [
+      "if (!isCurrent()) return false",
+      "readBestEffort(",
+      '"R2R retarget progress lookup failed"',
+      'document.getElementById("r2r-progress")',
+      "if (!isCurrent()) return false",
+      'currentProgress.classList.remove("indet")',
+      "if (!isCurrent()) return false",
+      'currentProgress.style.display = "none"',
+      "if (!isCurrent()) return false",
+      'currentBar.style.width = "0%"',
+      "if (!isCurrent()) return false",
+      'document.getElementById("r2r-status")',
+      "if (!isCurrent()) return false",
+      'currentStatus.textContent = ""',
+      "return isCurrent()",
+    ]);
+    const retargetRun = runtimeSource.slice(
+      runtimeSource.indexOf("async function r2rRunRetarget"),
+      runtimeSource.indexOf("// --------------------------------------------------------------- batch"),
+    );
+    expectTokensInOrder(retargetRun, [
+      "beginR2rRetarget(capturedIdentity)",
+      'r2rRunState = "idle"',
+      'clearR2rDerivedTargetAfterViewLoss("R2R retarget replacement"',
+      "clearR2rRetargetTransientUi(isCurrent)",
+      'document.getElementById("r2r-backend")',
+    ]);
+    const autoCalibration = runtimeSource.slice(
+      runtimeSource.indexOf("async function r2rMaybeAutoCalib"),
+      runtimeSource.indexOf("async function r2rSaveCalib"),
+    );
+    expect(autoCalibration).toContain("|| r2rRetargetIsPending()");
+    for (const lossFunction of [
+      "clearR2rSourceAfterViewLoss",
+      "clearR2rTargetAfterViewLoss",
+    ]) {
+      const start = runtimeSource.indexOf(`function ${lossFunction}`);
+      const body = runtimeSource.slice(start, runtimeSource.indexOf("\n}", start) + 2);
+      expect(body).toContain("invalidateR2rRetarget()");
+    }
+    const invalidation = runtimeSource.slice(
+      runtimeSource.indexOf("function invalidateR2rRetarget"),
+      runtimeSource.indexOf("function r2rRetargetCommitIsLatest"),
+    );
+    expect(invalidation).not.toContain("invalidateR2rTrajectorySelection()");
+    for (const withdrawnResultFact of [
+      "r2r.exportToken = null",
+      "r2r.exportHasScene = false",
+      "r2r.resultStem = null",
+      'r2rRunState = "idle"',
+    ]) {
+      expect(invalidation).toContain(withdrawnResultFact);
+    }
   });
 
   it("invalidates scaled previews when their H2R identity changes", () => {
@@ -2316,8 +3200,7 @@ describe("legacy runtime ownership boundaries", () => {
       runtimeSource.indexOf("function clearH2rRobotAfterViewLoss"),
       runtimeSource.indexOf("async function refreshScaledPreview"),
     );
-    expect(robotLossCleanup).toContain("scaledSkel.clear()");
-    expect(robotLossCleanup).toContain("scaledEnv.clear()");
+    expect(robotLossCleanup).toContain("clearH2rScaledPreview()");
   });
 
   it("commits async retarget results only after the final identity guard", () => {
@@ -2332,9 +3215,18 @@ describe("legacy runtime ownership boundaries", () => {
 
     expect(finalGuard).toBeGreaterThanOrEqual(0);
     expect(trajectoryCommit).toBeGreaterThan(finalGuard);
-    expect(retarget.slice(finalGuard, trajectoryCommit)).toContain(
+    expectTokensInOrder(retarget.slice(finalGuard), [
+      "state.robotTrajectory = j.result.trajectory",
+      "robot.setTrajectory(j.result.trajectory)",
+      "state.exportToken = j.result.export_token",
+      'h2rRunState = "completed"',
+      "pendingH2rPlayback = Object.freeze({",
+      "resultCommitted = true",
       "withH2rStageDisplayBatch(() =>",
-    );
+      'emitResultDiagnostics("h2r"',
+      "presentPendingH2rPlayback()",
+    ]);
+    expect(retarget).toContain("if (resultCommitted)");
   });
 
   it("does not publish RobotView caller state after a stale load", () => {
@@ -2345,12 +3237,12 @@ describe("legacy runtime ownership boundaries", () => {
           runtimeSource.indexOf("async function loadRobotExportPreview"),
           runtimeSource.indexOf("async function previewRobotClip"),
         ),
-        start: "const attempt = startRobotViewLoad(robot, robotData)",
-        load: "const loadResult = await attempt.completion",
+        start: "const viewAttempt = startRobotViewLoad(robot, robotData)",
+        load: "const loadResult = await viewAttempt.completion",
         staleCheck: 'loadResult === "stale"',
         generationCheck:
-          "!robot.isLoadGenerationCurrent(attempt.generation)",
-        commit: "state.robot = selectedRobot",
+          "!robot.isLoadGenerationCurrent(viewAttempt.generation)",
+        commit: "state.robot = robotData",
       },
       {
         name: "H2R robot selection",
@@ -2408,11 +3300,11 @@ describe("legacy runtime ownership boundaries", () => {
           runtimeSource.indexOf("async function r2rRunRetarget"),
           runtimeSource.indexOf("// --------------------------------------------------------------- batch"),
         ),
-        start: "const attempt = startRobotViewLoad(r2rTgt, targetPayload)",
-        load: "targetLoadResult = await attempt.completion",
+        start: "const targetViewAttempt = startRobotViewLoad(r2rTgt, targetPayload)",
+        load: "targetLoadResult = await targetViewAttempt.completion",
         staleCheck: 'targetLoadResult === "stale"',
         generationCheck:
-          "!r2rTgt.isLoadGenerationCurrent(attempt.generation)",
+          "!r2rTgt.isLoadGenerationCurrent(targetViewAttempt.generation)",
         commit: "r2rTgt.setTrajectory(j.result.trajectory)",
       },
     ] as const;
@@ -2439,6 +3331,7 @@ describe("legacy runtime ownership boundaries", () => {
     const exportPreview = callerSlices[0].source;
     expect(exportPreview).toContain("robot.links.length > 0");
     expect(exportPreview).toContain("robot.group.children.length > 0");
+    expect(runtimeSource).toContain("robot.claimLoadGeneration()");
     const deletion = runtimeSource.slice(
       runtimeSource.indexOf("async function deleteRobotSummary"),
       runtimeSource.indexOf("const robotSearchInput"),
@@ -2489,10 +3382,10 @@ describe("legacy runtime ownership boundaries", () => {
       "r2r.resultStem = null",
       "r2r.scaledScene = null",
       "r2r.tgtScaledScene = null",
-      "r2rSrcSkel.clear()",
-      "r2rSrcEnv.clear()",
-      "r2rTgtSkel.clear()",
-      "r2rTgtEnv.clear()",
+      "r2rSrcSkel.clear(isCurrent)",
+      "r2rSrcEnv.clear(isCurrent)",
+      "r2rTgtSkel.clear(isCurrent)",
+      "r2rTgtEnv.clear(isCurrent)",
     ]) {
       expect(r2rCleanup, `R2R cleanup: ${reset}`).toContain(reset);
     }
@@ -2510,8 +3403,8 @@ describe("legacy runtime ownership boundaries", () => {
           runtimeSource.indexOf("async function previewRobotClip"),
         ),
         generationGuard:
-          'if (!robot.isLoadGenerationCurrent(attempt.generation)) return "stale"',
-        cleanup: 'clearH2rRobotAfterViewLoss("export preview robot load")',
+          'if (!robot.isLoadGenerationCurrent(viewAttempt.generation)) return "stale"',
+        cleanup: "projectRobotCapabilityWithdrawal(",
       },
       {
         name: "H2R robot selection",
@@ -2531,7 +3424,7 @@ describe("legacy runtime ownership boundaries", () => {
         ),
         generationGuard:
           "|| !r2rSrc.isLoadGenerationCurrent(viewAttempt.generation)",
-        cleanup: 'clearR2rSourceAfterViewLoss("selected R2R source load")',
+        cleanup: "failOwnedSourceLoad(error)",
       },
       {
         name: "R2R calibration target",
@@ -2549,10 +3442,27 @@ describe("legacy runtime ownership boundaries", () => {
           runtimeSource.indexOf("// --------------------------------------------------------------- batch"),
         ),
         generationGuard:
-          "if (!r2rTgt.isLoadGenerationCurrent(attempt.generation)) return",
-        cleanup: 'clearR2rTargetAfterViewLoss("R2R result target load")',
+          "!r2rTgt.isLoadGenerationCurrent(targetViewAttempt.generation)",
+        cleanup: "clearR2rDerivedTargetAfterViewLoss(",
       },
     ] as const;
+    const r2rSourceSelection = currentFailureCallers[2].source;
+    const sourceFailureHelperStart = r2rSourceSelection.indexOf(
+      "const failOwnedSourceLoad",
+    );
+    const sourceFailureHelperEnd = r2rSourceSelection.indexOf(
+      "\n  try {",
+      sourceFailureHelperStart,
+    );
+    expect(sourceFailureHelperStart).toBeGreaterThanOrEqual(0);
+    expect(sourceFailureHelperEnd).toBeGreaterThan(sourceFailureHelperStart);
+    const sourceFailureHelper = r2rSourceSelection.slice(
+      sourceFailureHelperStart,
+      sourceFailureHelperEnd,
+    );
+    expect(sourceFailureHelper).toContain(
+      'clearR2rSourceAfterViewLoss(\n      "selected R2R source load"',
+    );
     for (const caller of currentFailureCallers) {
       const guard = caller.source.indexOf(caller.generationGuard);
       const cleanup = caller.source.indexOf(caller.cleanup, guard);
