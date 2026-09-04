@@ -161,15 +161,58 @@ describe("BakedMeshView", () => {
     replacement.resolve(twoFrameVertices(30));
 
     await expect(escapedLoad).resolves.toBe("stale");
-    expect(view.mesh).toBeNull();
-    expect(view.group.children).toHaveLength(0);
+    expect(view.mesh).toBe(stableMesh);
+    expect(view.group.children).toEqual([stableMesh]);
+    expect(disposeGeometry).not.toHaveBeenCalled();
+    expect(disposeMaterial).not.toHaveBeenCalled();
   });
 
-  it("does not adopt a generation started re-entrantly during clear", async () => {
+  it("keeps stable content until a prepared replacement commits", async () => {
+    const replacement = deferred<Float32Array>();
+    const view = new BakedMeshView({
+      decodeVertices: (encodedVertices) => encodedVertices === "stable"
+        ? Promise.resolve(twoFrameVertices())
+        : replacement.promise,
+    });
+    await view.load(bodyMesh("stable"));
+    const stableMesh = view.mesh;
+    const disposeGeometry = vi.spyOn(stableMesh!.geometry, "dispose");
+    const disposeMaterial = vi.spyOn(stableMesh!.material, "dispose");
+
+    const preparing = view.prepare(bodyMesh("replacement"));
+    expect(view.mesh).toBe(stableMesh);
+    expect(view.group.children).toEqual([stableMesh]);
+
+    const replacementVertices = twoFrameVertices(50);
+    replacement.resolve(replacementVertices);
+    const result = await preparing;
+    expect(result.status).toBe("prepared");
+    if (result.status !== "prepared") throw new Error("expected preparation");
+
+    expect(view.mesh).toBe(stableMesh);
+    expect(disposeGeometry).not.toHaveBeenCalled();
+    expect(disposeMaterial).not.toHaveBeenCalled();
+    expect(result.preparation.commit()).toBe("committed");
+
+    const replacementMesh = view.mesh;
+    expect(replacementMesh).not.toBe(stableMesh);
+    expect(view.verts).toBe(replacementVertices);
+    expect(view.group.children).toEqual([replacementMesh]);
+    expect(disposeGeometry).toHaveBeenCalledOnce();
+    expect(disposeMaterial).toHaveBeenCalledOnce();
+    expect(result.preparation.commit()).toBe("stale");
+    result.preparation.abandon();
+    expect(view.mesh).toBe(replacementMesh);
+  });
+
+  it("does not adopt a successor started re-entrantly during commit clear", async () => {
     const currentDecode = deferred<Float32Array>();
     const decodeVertices = vi.fn((encodedVertices: string) => {
       if (encodedVertices === "initial") {
         return Promise.resolve(twoFrameVertices());
+      }
+      if (encodedVertices === "stale") {
+        return Promise.resolve(twoFrameVertices(30));
       }
       if (encodedVertices === "current") return currentDecode.promise;
       throw new Error(`unexpected decode: ${encodedVertices}`);
@@ -187,11 +230,15 @@ describe("BakedMeshView", () => {
     };
     oldGeometry.addEventListener("dispose", startCurrentLoad);
 
-    const staleLoad = view.load(bodyMesh("stale"));
+    const stalePreparation = await view.prepare(bodyMesh("stale"));
+    expect(stalePreparation.status).toBe("prepared");
+    if (stalePreparation.status !== "prepared") {
+      throw new Error("expected preparation");
+    }
 
-    await expect(staleLoad).resolves.toBe("stale");
+    expect(stalePreparation.preparation.commit()).toBe("stale");
     expect(currentLoad).toBeDefined();
-    expect(decodeVertices).not.toHaveBeenCalledWith("stale");
+    expect(decodeVertices).toHaveBeenCalledWith("stale");
     expect(disposeGeometry).toHaveBeenCalledOnce();
     expect(disposeMaterial).toHaveBeenCalledOnce();
 
@@ -200,6 +247,68 @@ describe("BakedMeshView", () => {
     await expect(currentLoad!).resolves.toBe("committed");
     expect(view.verts).toBe(currentVertices);
     expect(view.group.children).toEqual([view.mesh]);
+  });
+
+  it("rejects a prepared candidate committed from inside an active clear", async () => {
+    const view = new BakedMeshView({
+      decodeVertices: async (encodedVertices) => encodedVertices === "stable"
+        ? twoFrameVertices()
+        : twoFrameVertices(70),
+    });
+    await view.load(bodyMesh("stable"));
+    const stableGeometry = view.mesh!.geometry;
+    const prepared = await view.prepare(bodyMesh("candidate"));
+    expect(prepared.status).toBe("prepared");
+    if (prepared.status !== "prepared") throw new Error("expected preparation");
+    const disposeGeometry = vi.spyOn(
+      THREE.BufferGeometry.prototype,
+      "dispose",
+    );
+    const disposeMaterial = vi.spyOn(THREE.Material.prototype, "dispose");
+    let nestedCommit:
+      | ReturnType<typeof prepared.preparation.commit>
+      | null = null;
+    const commitCandidate = () => {
+      stableGeometry.removeEventListener("dispose", commitCandidate);
+      nestedCommit = prepared.preparation.commit();
+    };
+    stableGeometry.addEventListener("dispose", commitCandidate);
+
+    view.clear();
+
+    expect(nestedCommit).toBe("stale");
+    expect(disposeGeometry).toHaveBeenCalledTimes(2);
+    expect(disposeMaterial).toHaveBeenCalledTimes(2);
+    expect(view.group.children).toHaveLength(0);
+    expect(view.mesh).toBeNull();
+    expect(view.verts).toBeNull();
+    expect(view.ready).toBe(false);
+  });
+
+  it("rechecks its generation after a re-entrant publication validator", async () => {
+    const view = new BakedMeshView({
+      decodeVertices: async () => twoFrameVertices(80),
+    });
+    const prepared = await view.prepare(bodyMesh());
+    expect(prepared.status).toBe("prepared");
+    if (prepared.status !== "prepared") throw new Error("expected preparation");
+    const disposeGeometry = vi.spyOn(
+      THREE.BufferGeometry.prototype,
+      "dispose",
+    );
+    const disposeMaterial = vi.spyOn(THREE.Material.prototype, "dispose");
+
+    expect(prepared.preparation.commit(() => {
+      view.claimLoadGeneration();
+      return true;
+    })).toBe("stale");
+
+    expect(disposeGeometry).toHaveBeenCalledOnce();
+    expect(disposeMaterial).toHaveBeenCalledOnce();
+    expect(view.group.children).toHaveLength(0);
+    expect(view.mesh).toBeNull();
+    expect(view.verts).toBeNull();
+    expect(view.ready).toBe(false);
   });
 
   it("invalidates a pending decoder before clear releases every alias", async () => {
@@ -396,41 +505,122 @@ describe("BakedMeshView", () => {
     expect(view.ready).toBe(false);
   });
 
+  it("disposes a stale candidate when its removed observer throws", async () => {
+    const removalFailure = new Error("removed observer failed");
+    const reportWarning = vi.fn<BakedMeshWarningReporter>();
+    const view = new BakedMeshView({
+      decodeVertices: async () => twoFrameVertices(),
+      reportWarning,
+    });
+    const originalAdd = THREE.Object3D.prototype.add;
+    vi.spyOn(THREE.BufferGeometry.prototype, "dispose");
+    vi.spyOn(THREE.Material.prototype, "dispose");
+    vi.spyOn(THREE.Object3D.prototype, "add").mockImplementationOnce(
+      function (this: THREE.Object3D, ...objects: THREE.Object3D[]) {
+        objects[0].addEventListener("removed", () => {
+          throw removalFailure;
+        });
+        originalAdd.apply(this, objects);
+        view.claimLoadGeneration();
+        return this;
+      },
+    );
+
+    await expect(view.load(bodyMesh())).resolves.toBe("stale");
+
+    expect(reportWarning).toHaveBeenCalledWith(
+      "baked mesh cleanup failed",
+      removalFailure,
+    );
+    expect(THREE.BufferGeometry.prototype.dispose).toHaveBeenCalledOnce();
+    expect(THREE.Material.prototype.dispose).toHaveBeenCalledOnce();
+    expect(view.group.children).toHaveLength(0);
+    expect(view.mesh).toBeNull();
+    expect(view.verts).toBeNull();
+    expect(view.ready).toBe(false);
+  });
+
+  it("abandons an uncommitted candidate exactly once", async () => {
+    const view = new BakedMeshView({
+      decodeVertices: async () => twoFrameVertices(),
+    });
+    const prepared = await view.prepare(bodyMesh());
+    expect(prepared.status).toBe("prepared");
+    if (prepared.status !== "prepared") throw new Error("expected preparation");
+    const disposeGeometry = vi.spyOn(
+      THREE.BufferGeometry.prototype,
+      "dispose",
+    );
+    const disposeMaterial = vi.spyOn(THREE.Material.prototype, "dispose");
+
+    prepared.preparation.abandon();
+    prepared.preparation.abandon();
+    expect(prepared.preparation.commit()).toBe("stale");
+
+    expect(disposeGeometry).toHaveBeenCalledOnce();
+    expect(disposeMaterial).toHaveBeenCalledOnce();
+    expect(view.group.children).toHaveLength(0);
+    expect(view.mesh).toBeNull();
+    expect(view.verts).toBeNull();
+    expect(view.ready).toBe(false);
+  });
+
+  it("releases a prepared candidate when stable-content clear throws", async () => {
+    const disposer = new ThreeResourceDisposer();
+    const disposeForest = vi.spyOn(disposer, "disposeObject3DForest");
+    const view = new BakedMeshView({
+      decodeVertices: async (encodedVertices) => encodedVertices === "stable"
+        ? twoFrameVertices()
+        : twoFrameVertices(90),
+      resourceDisposer: disposer,
+    });
+    await view.load(bodyMesh("stable"));
+    const prepared = await view.prepare(bodyMesh("candidate"));
+    expect(prepared.status).toBe("prepared");
+    if (prepared.status !== "prepared") throw new Error("expected preparation");
+    vi.spyOn(view.mesh!.geometry, "dispose").mockImplementation(() => {
+      throw new Error("stable geometry disposal failed");
+    });
+
+    expect(() => prepared.preparation.commit()).toThrow(AggregateError);
+
+    expect(disposeForest).toHaveBeenCalledOnce();
+    expect(view.group.children).toHaveLength(0);
+    expect(view.mesh).toBeNull();
+    expect(view.verts).toBeNull();
+    expect(view.ready).toBe(false);
+  });
+
   it("keeps stale cleanup reporting observational when the reporter also fails", async () => {
     const cleanupFailure = new Error("detached cleanup failed");
     const reporterFailure = new Error("warning reporter failed");
     const disposer = new ThreeResourceDisposer();
-    const disposeObject3DChildren = disposer.disposeObject3DChildren.bind(disposer);
-    let disposalCall = 0;
-    vi.spyOn(disposer, "disposeObject3DChildren").mockImplementation(
-      (owner, extras) => {
-        disposalCall += 1;
-        disposeObject3DChildren(owner, extras);
-        if (disposalCall === 3) throw cleanupFailure;
+    const disposeObject3DForest = disposer.disposeObject3DForest.bind(disposer);
+    vi.spyOn(disposer, "disposeObject3DForest").mockImplementation(
+      (roots, extras) => {
+        disposeObject3DForest(roots, extras);
+        throw cleanupFailure;
       },
     );
     const reportWarning = vi.fn<BakedMeshWarningReporter>(() => {
       throw reporterFailure;
-    });
-    let view!: BakedMeshView;
-    vi.spyOn(
-      THREE.BufferGeometry.prototype,
-      "computeVertexNormals",
-    ).mockImplementationOnce(() => {
-      view.clear();
     });
     const disposeGeometry = vi.spyOn(
       THREE.BufferGeometry.prototype,
       "dispose",
     );
     const disposeMaterial = vi.spyOn(THREE.Material.prototype, "dispose");
-    view = new BakedMeshView({
+    const view = new BakedMeshView({
       decodeVertices: async () => twoFrameVertices(),
       reportWarning,
       resourceDisposer: disposer,
     });
+    const prepared = await view.prepare(bodyMesh());
+    expect(prepared.status).toBe("prepared");
+    if (prepared.status !== "prepared") throw new Error("expected preparation");
+    view.claimLoadGeneration();
 
-    await expect(view.load(bodyMesh())).resolves.toBe("stale");
+    expect(prepared.preparation.commit()).toBe("stale");
 
     expect(reportWarning).toHaveBeenCalledOnce();
     expect(reportWarning).toHaveBeenCalledWith(

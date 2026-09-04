@@ -17,6 +17,29 @@ export interface BakedMeshViewOptions {
   readonly resourceDisposer?: ThreeResourceDisposer;
 }
 
+/** Detached body candidate whose resources have exactly one terminal owner. */
+export interface PreparedBakedMesh {
+  /** Replace stable View content only while the caller still owns publication. */
+  commit(isCurrent?: () => boolean): AsyncStageViewLoadResult;
+  /** Release an uncommitted candidate; repeated terminal calls are neutral. */
+  abandon(): void;
+}
+
+export type BakedMeshPreparationResult =
+  | { readonly status: "prepared"; readonly preparation: PreparedBakedMesh }
+  | { readonly status: "stale" };
+
+interface BakedMeshCandidate {
+  readonly generation: number;
+  readonly mesh:
+    | THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial>
+    | null;
+  readonly vertices: Float32Array | null;
+  readonly numVerts: number;
+  readonly geometry: THREE.BufferGeometry | null;
+  readonly material: THREE.MeshStandardMaterial | null;
+}
+
 async function decodeGzipVertices(encodedVertices: string): Promise<Float32Array> {
   const compressed = Uint8Array.from(
     atob(encodedVertices),
@@ -40,9 +63,10 @@ const defaultWarningReporter: BakedMeshWarningReporter = (
  * Owns one optional SMPL-style baked body mesh and its decoded frame buffer.
  *
  * Construction is deliberately inert: composition decides which Scene/Group
- * owns `group`. Every load builds into locals and commits once, after the
- * decoder generation is still current, so a late completion cannot resurrect
- * resources cleared or replaced by a newer motion.
+ * owns `group`. Preparation builds detached resources while stable content
+ * remains visible. The returned transaction commits once only while its
+ * decoder generation and external publication owner are current, so a late
+ * completion cannot replace resources owned by a newer motion.
  */
 export class BakedMeshView {
   readonly group = new THREE.Group();
@@ -108,31 +132,48 @@ export class BakedMeshView {
     }
   }
 
-  async load(
+  /** Decode and build GPU resources without disturbing stable View content. */
+  async prepare(
     bodyMesh: BodyMeshPayload | null | undefined,
-  ): Promise<AsyncStageViewLoadResult> {
-    // Reserve this attempt before clear(): resource dispose listeners can
-    // re-enter load(), and the outer attempt must not adopt their generation.
-    const generation = this.#loadGeneration + 1;
-    this.clear();
-    if (!this.#isCurrent(generation)) return "stale";
-    if (!bodyMesh?.available) return "committed";
+  ): Promise<BakedMeshPreparationResult> {
+    const generation = this.claimLoadGeneration();
+    if (!bodyMesh?.available) {
+      return {
+        status: "prepared",
+        preparation: this.#createPreparation({
+          generation,
+          mesh: null,
+          vertices: null,
+          numVerts: 0,
+          geometry: null,
+          material: null,
+        }),
+      };
+    }
 
     let vertices: Float32Array;
     try {
       vertices = await this.#decodeVertices(bodyMesh.vertices_gz_b64);
     } catch (error) {
-      if (!this.#isCurrent(generation)) return "stale";
-      // A current decode failure historically kept the skeleton presentation
-      // usable. Preserve that compatibility while leaving this View empty.
+      if (!this.#isCurrent(generation)) return { status: "stale" };
+      // A current decode failure preserves the skeleton fallback by preparing
+      // an intentionally empty body generation.
       this.#reportWarningSafely("baked mesh decode failed", error);
-      return "committed";
+      if (!this.#isCurrent(generation)) return { status: "stale" };
+      return {
+        status: "prepared",
+        preparation: this.#createPreparation({
+          generation,
+          mesh: null,
+          vertices: null,
+          numVerts: 0,
+          geometry: null,
+          material: null,
+        }),
+      };
     }
 
-    // The decoder may finish after clear() or another load(). Decoded CPU data
-    // needs no disposal; simply refuse to construct GPU resources for it.
-    if (!this.#isCurrent(generation)) return "stale";
-
+    if (!this.#isCurrent(generation)) return { status: "stale" };
     const expectedLength = bodyMesh.num_frames * bodyMesh.num_verts * 3;
     if (vertices.length !== expectedLength) {
       this.#reportWarningSafely(
@@ -140,7 +181,18 @@ export class BakedMeshView {
         vertices.length,
         expectedLength,
       );
-      return "committed";
+      if (!this.#isCurrent(generation)) return { status: "stale" };
+      return {
+        status: "prepared",
+        preparation: this.#createPreparation({
+          generation,
+          mesh: null,
+          vertices: null,
+          numVerts: 0,
+          geometry: null,
+          material: null,
+        }),
+      };
     }
 
     let geometry: THREE.BufferGeometry | null = null;
@@ -165,49 +217,48 @@ export class BakedMeshView {
         flatShading: true,
       });
       candidate = new THREE.Mesh(geometry, material);
-
-      // Keep this final guard beside the graph commit. Today mesh construction
-      // is synchronous, but the invariant survives future async build steps.
-      if (!this.#isCurrent(generation)) {
-        this.#disposeDetached(candidate, geometry, material);
-        return "stale";
-      }
-      this.group.add(candidate);
-      if (!this.#isCurrent(generation)) {
-        // An `added` observer may synchronously clear the View. Only dispose a
-        // candidate that still escaped that clear and remains attached here.
-        if (candidate.parent === this.group) {
-          this.group.remove(candidate);
-          this.#disposeDetached(candidate, geometry, material);
-        }
-        return "stale";
-      }
     } catch (error) {
-      const stillCurrent = this.#isCurrent(generation);
-      if (candidate?.parent === this.group) {
-        this.group.remove(candidate);
-        this.#disposeDetached(candidate, geometry, material);
-      } else if (stillCurrent) {
-        this.#disposeDetached(candidate, geometry, material);
-      }
-      // A re-entrant clear() can dispose and detach the candidate from an
-      // `added` observer before that observer throws. In that stale case the
-      // candidate has already crossed its terminal boundary; never dispose it
-      // a second time from this escaped stack.
-      if (!stillCurrent) return "stale";
-      // Keep the legacy warning/fallback behavior for both decode and local
-      // geometry-build failures; neither may leave a half-committed View.
+      this.#disposeDetached(candidate, geometry, material);
+      if (!this.#isCurrent(generation)) return { status: "stale" };
       this.#reportWarningSafely("baked mesh decode failed", error);
-      return "committed";
+      if (!this.#isCurrent(generation)) return { status: "stale" };
+      return {
+        status: "prepared",
+        preparation: this.#createPreparation({
+          generation,
+          mesh: null,
+          vertices: null,
+          numVerts: 0,
+          geometry: null,
+          material: null,
+        }),
+      };
     }
 
-    // No fallible work remains after these aliases become observable.
-    this.mesh = candidate;
-    this.verts = vertices;
-    this.numVerts = bodyMesh.num_verts;
-    this.clipDuration = null; // driven by the skeleton timeline
-    this.ready = true;
-    return "committed";
+    if (!this.#isCurrent(generation)) {
+      this.#disposeDetached(candidate, geometry, material);
+      return { status: "stale" };
+    }
+    return {
+      status: "prepared",
+      preparation: this.#createPreparation({
+        generation,
+        mesh: candidate,
+        vertices,
+        numVerts: bodyMesh.num_verts,
+        geometry,
+        material,
+      }),
+    };
+  }
+
+  async load(
+    bodyMesh: BodyMeshPayload | null | undefined,
+  ): Promise<AsyncStageViewLoadResult> {
+    const result = await this.prepare(bodyMesh);
+    return result.status === "stale"
+      ? "stale"
+      : result.preparation.commit();
   }
 
   get numFrames(): number {
@@ -245,22 +296,148 @@ export class BakedMeshView {
     positions.needsUpdate = true;
   }
 
+  #createPreparation(candidate: BakedMeshCandidate): PreparedBakedMesh {
+    let settled = false;
+    return Object.freeze({
+      commit: (isCurrent: () => boolean = () => true) => {
+        if (settled) return "stale";
+        settled = true;
+        return this.#commitPrepared(candidate, isCurrent);
+      },
+      abandon: () => {
+        if (settled) return;
+        settled = true;
+        this.#disposeDetached(
+          candidate.mesh,
+          candidate.geometry,
+          candidate.material,
+        );
+      },
+    });
+  }
+
+  #commitPrepared(
+    candidate: BakedMeshCandidate,
+    isCurrent: () => boolean,
+  ): AsyncStageViewLoadResult {
+    const externalIsCurrent = (): boolean => {
+      try {
+        return isCurrent();
+      } catch {
+        return false;
+      }
+    };
+    // The external validator is a foreign callback. Check the local generation
+    // both before and after it so synchronous re-entry fails closed.
+    const ownsGeneration = (generation: number): boolean => (
+      !this.#clearing
+      && this.#isCurrent(generation)
+      && externalIsCurrent()
+      && !this.#clearing
+      && this.#isCurrent(generation)
+    );
+    const disposeCandidate = (): void => {
+      this.#disposeDetached(
+        candidate.mesh,
+        candidate.geometry,
+        candidate.material,
+      );
+    };
+    const detachAndDisposeCandidate = (): unknown | null => {
+      let detachFailure: unknown | null = null;
+      try {
+        if (candidate.mesh?.parent === this.group) {
+          this.group.remove(candidate.mesh);
+        }
+      } catch (error) {
+        detachFailure = error;
+      } finally {
+        // Object3D.remove() dispatches synchronous events after detaching. A
+        // faulty observer must never skip this transaction's terminal release.
+        disposeCandidate();
+      }
+      return detachFailure;
+    };
+    if (!ownsGeneration(candidate.generation)) {
+      disposeCandidate();
+      return "stale";
+    }
+
+    // clear() claims a distinct commit generation. A disposal callback may
+    // synchronously start a successor; the generation check below makes this
+    // transaction abandon only its own detached candidate in that case.
+    const commitGeneration = this.#loadGeneration + 1;
+    try {
+      this.clear();
+    } catch (error) {
+      disposeCandidate();
+      // Candidate disposal is itself an observable host boundary. Re-check
+      // after it so a successor started by a disposal listener owns the error.
+      if (!ownsGeneration(commitGeneration)) return "stale";
+      throw error;
+    }
+    if (!ownsGeneration(commitGeneration)) {
+      disposeCandidate();
+      return "stale";
+    }
+    if (!candidate.mesh || !candidate.vertices) {
+      return ownsGeneration(commitGeneration) ? "committed" : "stale";
+    }
+
+    try {
+      this.group.add(candidate.mesh);
+      if (!ownsGeneration(commitGeneration)) {
+        // A re-entrant clear may already have detached and disposed the mesh.
+        if (candidate.mesh.parent === this.group) {
+          const cleanupError = detachAndDisposeCandidate();
+          if (cleanupError) {
+            this.#reportWarningSafely("baked mesh cleanup failed", cleanupError);
+          }
+        }
+        return "stale";
+      }
+    } catch (error) {
+      if (candidate.mesh.parent === this.group) {
+        const cleanupError = detachAndDisposeCandidate();
+        if (cleanupError) {
+          this.#reportWarningSafely("baked mesh cleanup failed", cleanupError);
+        }
+      } else if (ownsGeneration(commitGeneration)) {
+        disposeCandidate();
+      }
+      if (!ownsGeneration(commitGeneration)) return "stale";
+      this.#reportWarningSafely("baked mesh decode failed", error);
+      return ownsGeneration(commitGeneration) ? "committed" : "stale";
+    }
+
+    // No fallible work remains after these aliases become observable.
+    this.mesh = candidate.mesh;
+    this.verts = candidate.vertices;
+    this.numVerts = candidate.numVerts;
+    this.clipDuration = null; // driven by the skeleton timeline
+    this.ready = true;
+    return "committed";
+  }
+
   #isCurrent(generation: number): boolean {
     return this.#loadGeneration === generation;
   }
 
   #disposeDetached(
-    candidate: THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial> | null,
+    candidate:
+      | THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial>
+      | null,
     geometry: THREE.BufferGeometry | null,
     material: THREE.MeshStandardMaterial | null,
   ): void {
-    const owner = new THREE.Group();
-    if (candidate) owner.add(candidate);
     try {
-      this.#resourceDisposer.disposeObject3DChildren(owner, {
-        geometries: geometry ? [geometry] : [],
-        materials: material ? [material] : [],
-      });
+      this.#resourceDisposer.disposeObject3DForest(
+        candidate ? [candidate] : [],
+        {
+          geometries: geometry ? [geometry] : [],
+          materials: material ? [material] : [],
+        },
+      );
     } catch (error) {
       // Detached async results have no synchronous owner that could recover a
       // cleanup error. Report it, finish terminalization, and never resurrect it.
