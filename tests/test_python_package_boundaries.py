@@ -119,14 +119,14 @@ _LEGACY_LOCATION_BASELINE: dict[ImportIdentity, int] = {
         "hhtools.retarget.newton_basic.human_aliases",
         "project_motion",
     ): 1,
-    ImportIdentity("hhtools/analysis/clip.py", "hhtools.web.r2r_upload_resolve", "_load_source"): 1,
+    ImportIdentity("hhtools/analysis/clip.py", "hhtools.web.library.r2r_upload_resolve", "_load_source"): 1,
     ImportIdentity(
         "hhtools/analysis/clip.py", "hhtools.retarget.robot_to_robot", "_load_source"
     ): 1,
     ImportIdentity(
-        "hhtools/cli/retarget.py", "hhtools.web.export_bundle", "interaction_mesh_run"
+        "hhtools/cli/retarget.py", "hhtools.web.output.export_bundle", "interaction_mesh_run"
     ): 1,
-    ImportIdentity("hhtools/cli/retarget.py", "hhtools.web.export_bundle", "retarget"): 1,
+    ImportIdentity("hhtools/cli/retarget.py", "hhtools.web.output.export_bundle", "retarget"): 1,
     ImportIdentity(
         "hhtools/core/grounding.py",
         "hhtools.retarget.newton_basic.human_aliases",
@@ -266,35 +266,35 @@ _LEGACY_LOCATION_BASELINE: dict[ImportIdentity, int] = {
         "estimate_robot_standing_height",
     ): 1,
     ImportIdentity(
-        "hhtools/services/legacy_job_upgrade.py", "hhtools.web.job_specs", _MODULE_SCOPE
+        "hhtools/services/legacy_job_upgrade.py", "hhtools.web.jobs.job_specs", _MODULE_SCOPE
     ): 1,
     ImportIdentity(
         "hhtools/viewer/app.py",
-        "hhtools.web.export_bundle",
+        "hhtools.web.output.export_bundle",
         "_build_robot_tab._on_retarget._worker",
     ): 1,
     ImportIdentity(
         "hhtools/viewer/app.py",
-        "hhtools.web.scaled_preview",
+        "hhtools.web.analysis.scaled_preview",
         "_build_robot_tab._compute_scaled_preview",
     ): 1,
     ImportIdentity(
-        "hhtools/web/calibration_session.py",
+        "hhtools/web/analysis/calibration_session.py",
         "hhtools.viewer.anatomy",
         "build_calibration_session",
     ): 1,
-    ImportIdentity("hhtools/web/dataset_analysis.py", "hhtools.viewer.library", "build_entries"): 1,
+    ImportIdentity("hhtools/web/analysis/dataset_analysis.py", "hhtools.viewer.library", "build_entries"): 1,
     ImportIdentity(
-        "hhtools/web/motion_library_links.py",
+        "hhtools/web/library/motion_library_links.py",
         "hhtools.viewer.library",
         "library_entry_for_load",
     ): 1,
-    ImportIdentity("hhtools/web/scaled_preview.py", "hhtools.viewer.anatomy", _MODULE_SCOPE): 1,
+    ImportIdentity("hhtools/web/analysis/scaled_preview.py", "hhtools.viewer.anatomy", _MODULE_SCOPE): 1,
     ImportIdentity(
-        "hhtools/web/serialize.py", "hhtools.viewer.anatomy", "_prune_canonical_names"
+        "hhtools/web/output/serialize.py", "hhtools.viewer.anatomy", "_prune_canonical_names"
     ): 1,
     ImportIdentity(
-        "hhtools/web/serialize.py",
+        "hhtools/web/output/serialize.py",
         "hhtools.viewer.anatomy",
         "skeleton_exclude_joint_indices",
     ): 1,
@@ -307,7 +307,7 @@ _LEGACY_LOCATION_BASELINE: dict[ImportIdentity, int] = {
     ): 1,
     ImportIdentity("hhtools/web/server.py", "hhtools.viewer.library", "_load_batch_motion"): 1,
     ImportIdentity(
-        "hhtools/web/upload_resolve.py",
+        "hhtools/web/library/upload_resolve.py",
         "hhtools.viewer.library",
         "_infer_dataset_from_path",
     ): 1,
@@ -329,15 +329,15 @@ _LEGACY_IMPORT_FINGERPRINTS: dict[tuple[str, str, str], str] = {
     ): "from:load_source_trajectory",
     (
         "hhtools/analysis/clip.py",
-        "hhtools.web.r2r_upload_resolve",
+        "hhtools.web.library.r2r_upload_resolve",
         "_load_source",
     ): "from:_is_robot_export_trajectory",
     (
         "hhtools/cli/retarget.py",
-        "hhtools.web.export_bundle",
+        "hhtools.web.output.export_bundle",
         "interaction_mesh_run",
     ): "from:bake_export_root_z",
-    ("hhtools/cli/retarget.py", "hhtools.web.export_bundle", "retarget"): "from:bake_export_root_z",
+    ("hhtools/cli/retarget.py", "hhtools.web.output.export_bundle", "retarget"): "from:bake_export_root_z",
     (
         "hhtools/core/grounding.py",
         "hhtools.retarget.newton_basic.human_aliases",
@@ -490,36 +490,36 @@ _LEGACY_IMPORT_FINGERPRINTS: dict[tuple[str, str, str], str] = {
     ): "from:require_mujoco_model",
     (
         "hhtools/services/legacy_job_upgrade.py",
-        "hhtools.web.job_specs",
+        "hhtools.web.jobs.job_specs",
         _MODULE_SCOPE,
     ): "from:JobSpecError,build_job_spec,normalize_job_spec",
     (
         "hhtools/viewer/app.py",
-        "hhtools.web.export_bundle",
+        "hhtools.web.output.export_bundle",
         "_build_robot_tab._on_retarget._worker",
     ): "from:bake_export_root_z",
     (
         "hhtools/viewer/app.py",
-        "hhtools.web.scaled_preview",
+        "hhtools.web.analysis.scaled_preview",
         "_build_robot_tab._compute_scaled_preview",
     ): "from:resolve_scaled_overlay_z_correction",
     (
-        "hhtools/web/calibration_session.py",
+        "hhtools/web/analysis/calibration_session.py",
         "hhtools.viewer.anatomy",
         "build_calibration_session",
     ): "from:detect_virtual_root",
     (
-        "hhtools/web/dataset_analysis.py",
+        "hhtools/web/analysis/dataset_analysis.py",
         "hhtools.viewer.library",
         "build_entries",
     ): "from:scan_library",
     (
-        "hhtools/web/motion_library_links.py",
+        "hhtools/web/library/motion_library_links.py",
         "hhtools.viewer.library",
         "library_entry_for_load",
     ): "from:LibraryEntry",
     (
-        "hhtools/web/scaled_preview.py",
+        "hhtools/web/analysis/scaled_preview.py",
         "hhtools.viewer.anatomy",
         _MODULE_SCOPE,
     ): (
@@ -528,12 +528,12 @@ _LEGACY_IMPORT_FINGERPRINTS: dict[tuple[str, str, str], str] = {
         "motion_has_interaction_scene,scaled_overlay_exclude_bone_indices"
     ),
     (
-        "hhtools/web/serialize.py",
+        "hhtools/web/output/serialize.py",
         "hhtools.viewer.anatomy",
         "_prune_canonical_names",
     ): "from:deepest_mapped_canonicals",
     (
-        "hhtools/web/serialize.py",
+        "hhtools/web/output/serialize.py",
         "hhtools.viewer.anatomy",
         "skeleton_exclude_joint_indices",
     ): "from:degenerate_auxiliary_bone_indices,detect_virtual_root",
@@ -560,7 +560,7 @@ _LEGACY_IMPORT_FINGERPRINTS: dict[tuple[str, str, str], str] = {
     ): "from:scan_library",
     ("hhtools/web/server.py", "hhtools.viewer.library", "_load_batch_motion"): "from:LibraryEntry",
     (
-        "hhtools/web/upload_resolve.py",
+        "hhtools/web/library/upload_resolve.py",
         "hhtools.viewer.library",
         "_infer_dataset_from_path",
     ): "from:_DIR_TO_ADAPTER,_normalise_dirname",

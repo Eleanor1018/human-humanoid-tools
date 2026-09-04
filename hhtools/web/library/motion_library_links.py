@@ -27,7 +27,7 @@ def motions_library_root() -> Path:
     """
 
     from hhtools.utils.paths import user_motion_library_settings_path
-    from hhtools.web.motion_library_settings import (
+    from hhtools.web.library.motion_library_settings import (
         MotionLibrarySettingsStore,
         effective_motion_library_root,
     )
@@ -762,7 +762,7 @@ def scan_motions_library(
 ) -> list[dict[str, Any]]:
     """Scan the selected managed library root for library entries."""
 
-    from hhtools.web.dataset_analysis import build_entries
+    from hhtools.web.analysis.dataset_analysis import build_entries
 
     root = ensure_motions_library(library_root)
     entries: list[dict[str, Any]] = []

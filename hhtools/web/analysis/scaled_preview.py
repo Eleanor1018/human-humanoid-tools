@@ -351,7 +351,7 @@ def _uniform_scaled_preview_fallback(
     robot_model=None,
 ) -> dict[str, Any]:
     """Numpy-only scaled overlay when ``newton`` is not installed."""
-    from hhtools.web.serialize import _downsample_indices
+    from hhtools.web.output.serialize import _downsample_indices
 
     jn = list(motion.hierarchy.bone_names)
     pos = _uniform_scaled_joint_positions(
@@ -384,7 +384,7 @@ def compute_web_scaled_preview(
 ) -> dict[str, Any]:
     """Build scaled skeleton payload for the browser (dense topology when possible)."""
     from hhtools.retarget.newton_basic.scaler import HumanToRobotScaler
-    from hhtools.web.serialize import _downsample_indices, serialize_scaled_preview
+    from hhtools.web.output.serialize import _downsample_indices, serialize_scaled_preview
 
     scaler_cfg = resolve_web_scaler_config(
         model, motion, reference, float(human_height),

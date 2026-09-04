@@ -14,7 +14,7 @@ import pytest
 from hhtools.core.motion import Motion
 from hhtools.io.datasets.omomo import OmomoAdapter
 from hhtools.retarget.retarget_result import RetargetedMotion
-from hhtools.web.export_bundle import (
+from hhtools.web.output.export_bundle import (
     OBJECT_CSV_HEADER,
     _resolve_export_scene_params,
     resolve_clip_export_dir,

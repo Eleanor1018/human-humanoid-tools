@@ -14,7 +14,7 @@ from hhtools.retarget.retarget_result import RetargetedMotion
 from hhtools.robot.foot_geometry import lowest_ankle_z, quat_xyzw_to_rotmat
 from hhtools.robot.loader import load_robot
 from hhtools.robot.registry import get, refresh
-from hhtools.web.serialize import (
+from hhtools.web.output.serialize import (
     _scaled_overlay_foot_z,
     serialize_robot_trajectory,
 )

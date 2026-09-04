@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from hhtools.web import server
-from hhtools.web.motion_library_links import motions_library_root
+from hhtools.web.library.motion_library_links import motions_library_root
 
 
 def _create_test_app(tmp_path: Path, monkeypatch, **limits):
@@ -136,7 +136,7 @@ def test_running_limit_queues_one_job_then_returns_429(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    from hhtools.web import dataset_analysis
+    from hhtools.web.analysis import dataset_analysis
 
     started = threading.Event()
     release = threading.Event()
@@ -316,7 +316,7 @@ def test_full_queue_rejects_motion_before_upload_or_library_write(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    from hhtools.web import dataset_analysis
+    from hhtools.web.analysis import dataset_analysis
 
     started = threading.Event()
     release = threading.Event()
@@ -364,7 +364,8 @@ def test_queued_same_label_motion_uploads_parse_their_immutable_drops(
 ) -> None:
     """A later upload must not replace the bytes an earlier queued job parses."""
 
-    from hhtools.web import dataset_analysis, motion_library_links, upload_resolve
+    from hhtools.web.analysis import dataset_analysis
+    from hhtools.web.library import motion_library_links, upload_resolve
 
     blocker_started = threading.Event()
     release_blocker = threading.Event()
@@ -489,7 +490,7 @@ def test_manual_library_link_waits_for_motion_publish_lock(
 ) -> None:
     """Every same-process writer must share the Motion Library namespace lock."""
 
-    from hhtools.web import motion_library_links, upload_resolve
+    from hhtools.web.library import motion_library_links, upload_resolve
 
     publish_started = threading.Event()
     release_publish = threading.Event()

@@ -188,7 +188,7 @@ def serialize_reference_skeleton(
 
 def _robot_ground_offset_z(model: URDFRobotModel, joint_q: dict[str, float] | None = None) -> float:
     """Lift so the lowest mesh vertex at ``joint_q`` rests on z=0."""
-    from hhtools.web.serialize import _ground_offset_z
+    from hhtools.web.output.serialize import _ground_offset_z
 
     try:
         if joint_q is not None:

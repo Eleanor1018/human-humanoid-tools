@@ -193,7 +193,7 @@ def _load_object_track_csv(path: Path) -> dict[str, Any] | None:
 
 
 def _downsample_scene_frames(num_frames: int, max_frames: int = 600) -> np.ndarray:
-    from hhtools.web.serialize import _downsample_indices
+    from hhtools.web.output.serialize import _downsample_indices
 
     return _downsample_indices(num_frames, max_frames)
 
@@ -231,9 +231,9 @@ def load_r2r_clip_scene(
     """Build a ``scaled_scene`` payload from an hhtools robot-export clip folder.
 
     Terrain / object meshes and tracks are already in the **source robot**
-    retarget frame (as written by :mod:`hhtools.web.export_bundle`).
+    retarget frame (as written by :mod:`hhtools.web.output.export_bundle`).
     """
-    from hhtools.web.serialize import _serialize_terrain
+    from hhtools.web.output.serialize import _serialize_terrain
 
     clip_dir = Path(clip_dir).resolve()
     prof = (profile or "mimic").strip().lower()
@@ -293,11 +293,11 @@ def compute_r2r_target_scaled_scene(
     """Scale source-robot terrain/objects for target-robot web preview.
 
     Uses the same uniform ``ratio`` as the yellow overlay and
-    :func:`~hhtools.web.r2r_export_bundle.write_r2r_export_bundle`.
+    :func:`~hhtools.web.output.r2r_export_bundle.write_r2r_export_bundle`.
     """
 
-    from hhtools.web.r2r_export_bundle import r2r_scene_scale_ratio
-    from hhtools.web.serialize import _serialize_terrain
+    from hhtools.web.output.r2r_export_bundle import r2r_scene_scale_ratio
+    from hhtools.web.output.serialize import _serialize_terrain
 
     scene_motion = attach_r2r_clip_scene_to_motion(
         motion,

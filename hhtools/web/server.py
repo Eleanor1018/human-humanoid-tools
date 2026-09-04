@@ -33,19 +33,19 @@ from typing import Any
 
 from hhtools.services.runtime_lease import AgentRuntimeLease
 from hhtools.web.dependencies import require_web_runtime_dependencies
-from hhtools.web.job_scheduler import (
+from hhtools.web.jobs.job_scheduler import (
     JobQueueFullError,
     JobReservation,
     JobScheduler,
     JobSchedulerClosedError,
 )
-from hhtools.web.job_settings import (
+from hhtools.web.jobs.job_settings import (
     JobAdmissionSettings,
     JobAdmissionSettingsStore,
     updated_job_admission_settings,
     validate_job_admission_settings,
 )
-from hhtools.web.job_specs import (
+from hhtools.web.jobs.job_specs import (
     JobSpecError,
     build_job_spec,
     normalize_job_spec,
@@ -220,7 +220,7 @@ def _adopt_motion_library_root(
     marked in place because hhtools already owns its child namespace.
     """
 
-    from hhtools.web.motion_library_settings import (
+    from hhtools.web.library.motion_library_settings import (
         motion_library_marker_path,
         motion_library_marker_payload,
         validate_motion_library_marker,
@@ -477,7 +477,7 @@ def _create_app_owned(
         agent_error_response,
         is_agent_path,
     )
-    from hhtools.web.job_history import JobHistoryStore
+    from hhtools.web.jobs.job_history import JobHistoryStore
 
     static_dir = Path(__file__).parent / "static"
 
@@ -1297,8 +1297,8 @@ def _create_app_owned(
         user_motion_library_root,
         user_motion_library_settings_path,
     )
-    from hhtools.web.motion_library_links import ensure_motions_library, motions_library_root
-    from hhtools.web.motion_library_settings import (
+    from hhtools.web.library.motion_library_links import ensure_motions_library, motions_library_root
+    from hhtools.web.library.motion_library_settings import (
         MotionLibrarySettingsStore,
         effective_motion_library_root,
         updated_motion_library_settings,
@@ -1418,7 +1418,7 @@ def _create_app_owned(
         )
 
     def _agent_load_motion(resolved: ResolvedMotion) -> Any:
-        from hhtools.web.upload_resolve import (
+        from hhtools.web.library.upload_resolve import (
             _load_intermimic,
             _load_meshmimic,
             _load_via_dataset_adapter,
@@ -1617,8 +1617,8 @@ def _create_app_owned(
         human_height: float,
         retargeted: Any,
     ) -> H2RPreview:
-        from hhtools.web.result_diagnostics import build_result_diagnostics
-        from hhtools.web.serialize import (
+        from hhtools.web.analysis.result_diagnostics import build_result_diagnostics
+        from hhtools.web.output.serialize import (
             _scaled_overlay_foot_z,
             serialize_robot_trajectory,
         )
@@ -2061,7 +2061,7 @@ def _create_app_owned(
     @app.get("/api/library")
     def library(source: str | None = None) -> dict:
         from hhtools.viewer.library import scan_library
-        from hhtools.web.motion_library_links import scan_motions_library
+        from hhtools.web.library.motion_library_links import scan_motions_library
 
         root = Path(source) if source else state.source_root
         merged: list[dict] = []
@@ -2110,7 +2110,7 @@ def _create_app_owned(
 
     @app.post("/api/library/link")
     def library_link(body: dict) -> dict:
-        from hhtools.web.motion_library_links import link_to_library, scan_motions_library
+        from hhtools.web.library.motion_library_links import link_to_library, scan_motions_library
 
         path = str(body.get("path") or "").strip()
         folder_label = str(body.get("folder_label") or "").strip() or None
@@ -2138,7 +2138,7 @@ def _create_app_owned(
 
     @app.delete("/api/library/link/{folder_label}")
     def library_unlink(folder_label: str) -> dict:
-        from hhtools.web.motion_library_links import remove_library_folder
+        from hhtools.web.library.motion_library_links import remove_library_folder
 
         with motion_library_publish_lock:
             removed = remove_library_folder(folder_label)
@@ -2150,7 +2150,7 @@ def _create_app_owned(
 
     def _run_dataset_analyze_job(job: Job, body: dict) -> None:
         try:
-            from hhtools.web import dataset_analysis as _da
+            from hhtools.web.analysis import dataset_analysis as _da
 
             root = Path(body.get("source") or state.source_root)
             embedding = str(body.get("embedding") or "handcrafted")
@@ -2185,7 +2185,7 @@ def _create_app_owned(
 
     @app.get("/api/dataset/result")
     def dataset_result(source: str | None = None, embedding: str = "handcrafted") -> dict:
-        from hhtools.web import dataset_analysis as _da
+        from hhtools.web.analysis import dataset_analysis as _da
 
         root = Path(source) if source else state.source_root
         entries = _da.build_entries(root)
@@ -2196,7 +2196,7 @@ def _create_app_owned(
 
     @app.post("/api/dataset/subset")
     def dataset_subset(body: dict) -> dict:
-        from hhtools.web import dataset_analysis as _da
+        from hhtools.web.analysis import dataset_analysis as _da
 
         clips = body.get("clips") or []
         k = int(body.get("k", 0))
@@ -2221,7 +2221,7 @@ def _create_app_owned(
         Pass ``append_to`` (a prior ``source`` path from this endpoint) to merge
         multiple drag-and-drop batches into one analysis basket.
         """
-        from hhtools.web import dataset_analysis as _da
+        from hhtools.web.analysis import dataset_analysis as _da
 
         dataset_root = (state.upload_root / "dataset").resolve()
         dataset_root.mkdir(parents=True, exist_ok=True)
@@ -2248,7 +2248,7 @@ def _create_app_owned(
     @app.post("/api/dataset/scan")
     def dataset_scan(body: dict) -> dict:
         """Scan a server-local directory without copying files into /tmp."""
-        from hhtools.web import dataset_analysis as _da
+        from hhtools.web.analysis import dataset_analysis as _da
 
         raw = str(body.get("source") or "").strip()
         if not raw:
@@ -2260,7 +2260,7 @@ def _create_app_owned(
 
     @app.post("/api/dataset/upload/remove")
     async def dataset_upload_remove(body: dict) -> dict:
-        from hhtools.web import dataset_analysis as _da
+        from hhtools.web.analysis import dataset_analysis as _da
 
         source = str(body.get("source") or "").strip()
         folder_label = str(body.get("folder_label") or "").strip()
@@ -2285,7 +2285,7 @@ def _create_app_owned(
     def dataset_export_manifest(body: dict):
         from fastapi.responses import Response
 
-        from hhtools.web import dataset_analysis as _da
+        from hhtools.web.analysis import dataset_analysis as _da
 
         clips = body.get("clips") or []
         ids = body.get("ids") or []
@@ -2327,7 +2327,7 @@ def _create_app_owned(
         """ZIP selected robot clip folders (trajectory CSV + terrain/object sidecars)."""
         from fastapi.responses import FileResponse
 
-        from hhtools.web import dataset_analysis as _da
+        from hhtools.web.analysis import dataset_analysis as _da
 
         clips = body.get("clips") or []
         ids = body.get("ids") or []
@@ -2385,7 +2385,7 @@ def _create_app_owned(
         """Serve object mesh from a dataset robot-preview clip folder."""
         from types import SimpleNamespace
 
-        from hhtools.web.serialize import object_mesh_glb
+        from hhtools.web.output.serialize import object_mesh_glb
 
         rec = state.dataset_previews.get(token)
         if rec is None:
@@ -2442,11 +2442,11 @@ def _create_app_owned(
         job: Job | None = None,
         extra: dict | None = None,
     ) -> dict:
-        from hhtools.web.serialize import serialize_motion
+        from hhtools.web.output.serialize import serialize_motion
 
         ground_cb = None
         if job is not None:
-            from hhtools.web.motion_progress import MotionLoadProgress
+            from hhtools.web.jobs.motion_progress import MotionLoadProgress
 
             ground_cb = MotionLoadProgress(job, base=0.42, span=0.13).as_callback()
             ground_cb(0.0, "对齐地面与坐标…")
@@ -2475,7 +2475,7 @@ def _create_app_owned(
 
         ser_cb = None
         if job is not None:
-            from hhtools.web.motion_progress import MotionLoadProgress
+            from hhtools.web.jobs.motion_progress import MotionLoadProgress
 
             ser_cb = MotionLoadProgress(job, base=0.55, span=0.17).as_callback()
 
@@ -2499,11 +2499,11 @@ def _create_app_owned(
         return payload
 
     def _run_motion_library_job(job: Job, body: dict) -> None:
-        from hhtools.web.motion_progress import MotionLoadProgress
-        from hhtools.web.r2r_upload_resolve import _is_robot_export_trajectory
+        from hhtools.web.jobs.motion_progress import MotionLoadProgress
+        from hhtools.web.library.r2r_upload_resolve import _is_robot_export_trajectory
 
         try:
-            from hhtools.web.motion_library_links import library_entry_for_load
+            from hhtools.web.library.motion_library_links import library_entry_for_load
 
             entry = library_entry_for_load(
                 dataset=body["dataset"],
@@ -2544,7 +2544,7 @@ def _create_app_owned(
             job.mark_terminal("error")
 
     def _run_basket_upload_job(job: Job, drop: Path, profile: str) -> None:
-        from hhtools.web.upload_resolve import (
+        from hhtools.web.library.upload_resolve import (
             enumerate_upload_clips,
             upload_validation_error,
         )
@@ -2587,9 +2587,9 @@ def _create_app_owned(
         profile: str,
         prefer_paths: list[str] | None = None,
     ) -> None:
-        from hhtools.web.motion_library_links import materialize_drop
-        from hhtools.web.motion_progress import MotionLoadProgress
-        from hhtools.web.upload_resolve import resolve_upload_drop
+        from hhtools.web.library.motion_library_links import materialize_drop
+        from hhtools.web.jobs.motion_progress import MotionLoadProgress
+        from hhtools.web.library.upload_resolve import resolve_upload_drop
 
         try:
             load_prog = MotionLoadProgress(job, base=0.08, span=0.34)
@@ -2664,9 +2664,9 @@ def _create_app_owned(
         """Convert one uploaded video with the isolated official GVHMR runtime."""
 
         from hhtools.integrations.gvhmr import GvhmrConfig, run_gvhmr
-        from hhtools.web.motion_library_links import materialize_drop
-        from hhtools.web.motion_progress import MotionLoadProgress
-        from hhtools.web.upload_resolve import load_clip_at_path
+        from hhtools.web.library.motion_library_links import materialize_drop
+        from hhtools.web.jobs.motion_progress import MotionLoadProgress
+        from hhtools.web.library.upload_resolve import load_clip_at_path
 
         try:
             config = GvhmrConfig.from_environment()
@@ -2834,8 +2834,8 @@ def _create_app_owned(
     @app.post("/api/motion/load_library")
     async def load_library(body: dict) -> dict:
         if body.get("usage") == "human_to_robot":
-            from hhtools.web.motion_library_links import library_entry_for_load
-            from hhtools.web.r2r_upload_resolve import _is_robot_export_trajectory
+            from hhtools.web.library.motion_library_links import library_entry_for_load
+            from hhtools.web.library.r2r_upload_resolve import _is_robot_export_trajectory
 
             try:
                 entry = library_entry_for_load(
@@ -2897,7 +2897,7 @@ def _create_app_owned(
     @app.post("/api/basket/scan")
     def basket_scan(body: dict) -> dict:
         """Enumerate Human2Robot clips on a server-local path (no copy)."""
-        from hhtools.web.upload_resolve import enumerate_upload_clips
+        from hhtools.web.library.upload_resolve import enumerate_upload_clips
 
         raw = str(body.get("source") or "").strip()
         profile = str(body.get("profile") or "auto").strip() or "auto"
@@ -2939,12 +2939,12 @@ def _create_app_owned(
     ) -> dict:
         """Upload motion clips; auto-link or copy them into the managed library."""
 
-        from hhtools.web.motion_library_links import motions_library_root
+        from hhtools.web.library.motion_library_links import motions_library_root
 
         if not files:
             raise HTTPException(status_code=400, detail="empty upload")
 
-        from hhtools.web.upload_resolve import (
+        from hhtools.web.library.upload_resolve import (
             enumerate_upload_clips,
             upload_validation_error,
         )
@@ -3002,7 +3002,7 @@ def _create_app_owned(
         rec = state.motions.get(token)
         if not rec:
             raise HTTPException(status_code=404, detail="unknown motion token")
-        from hhtools.web.serialize import object_mesh_glb
+        from hhtools.web.output.serialize import object_mesh_glb
 
         objs = rec["motion"].objects
         if index < 0 or index >= len(objs):
@@ -3041,7 +3041,7 @@ def _create_app_owned(
     def _serialize_and_store_robot(name: str) -> dict:
         from hhtools.robot.loader import load_robot
         from hhtools.robot.registry import get as get_preset
-        from hhtools.web.serialize import serialize_robot
+        from hhtools.web.output.serialize import serialize_robot
 
         preset = get_preset(name)
         model = load_robot(preset, compile_mjcf=True)
@@ -3251,7 +3251,7 @@ def _create_app_owned(
         """Apply a calibration joint_q on the server and return link transforms."""
         import numpy as np
 
-        from hhtools.web.calibration_session import joint_world_payload
+        from hhtools.web.analysis.calibration_session import joint_world_payload
 
         robot = body.get("robot")
         model = state.robots.get(robot)
@@ -3262,7 +3262,7 @@ def _create_app_owned(
             model.apply_configuration(joint_q)
         except Exception as err:  # noqa: BLE001
             raise HTTPException(status_code=400, detail=str(err)) from err
-        from hhtools.web.calibration_session import _robot_ground_offset_z
+        from hhtools.web.analysis.calibration_session import _robot_ground_offset_z
 
         ground_z = _robot_ground_offset_z(model)
         links = [link.name for link in model.links]
@@ -3324,7 +3324,7 @@ def _create_app_owned(
     @app.post("/api/calibration/session")
     async def calibration_session(body: dict) -> dict:
         """Enter calibration mode: reference T-pose, joint limits, saved joint_q."""
-        from hhtools.web.calibration_session import build_calibration_session
+        from hhtools.web.analysis.calibration_session import build_calibration_session
 
         robot = body.get("robot")
         reference = body.get("reference")
@@ -3395,7 +3395,7 @@ def _create_app_owned(
                 state=state,
                 foot_clamp_anti_penetration=foot_clamp_anti_penetration,
             )
-            from hhtools.web.serialize import serialize_robot_trajectory
+            from hhtools.web.output.serialize import serialize_robot_trajectory
 
             scaled = _compute_scaled_preview(
                 model, robot, motion, reference, human_height,
@@ -3406,7 +3406,7 @@ def _create_app_owned(
             scaled = _align_scaled_preview_to_robot_playback(
                 model, ret, scaled, traj,
             )
-            from hhtools.web.result_diagnostics import build_result_diagnostics
+            from hhtools.web.analysis.result_diagnostics import build_result_diagnostics
 
             diagnostics = build_result_diagnostics(
                 traj,
@@ -3417,7 +3417,7 @@ def _create_app_owned(
             scaled_scene = _compute_scaled_scene(
                 model, robot, motion, reference, human_height,
             )
-            from hhtools.web.serialize import _scaled_overlay_foot_z
+            from hhtools.web.output.serialize import _scaled_overlay_foot_z
 
             # Keep the retarget result + source motion in memory so the export
             # endpoint can render CSV or PKL at any target fps on demand.
@@ -3518,7 +3518,7 @@ def _create_app_owned(
 
     def _load_replay_motion(job: Job, request: dict[str, Any]) -> str:
         """Rebuild a motion token from the source path captured by JobSpec."""
-        from hhtools.web.r2r_upload_resolve import _is_robot_export_trajectory
+        from hhtools.web.library.r2r_upload_resolve import _is_robot_export_trajectory
 
         source_path = Path(str(request["source_path"])).expanduser().resolve()
         job.progress = max(job.progress, 0.02)
@@ -3532,7 +3532,7 @@ def _create_app_owned(
             candidate = dict(source_entry)
             candidate["source_path"] = str(source_path)
             try:
-                from hhtools.web.motion_library_links import library_entry_for_load
+                from hhtools.web.library.motion_library_links import library_entry_for_load
 
                 entry = library_entry_for_load(
                     dataset=str(candidate.get("dataset") or "unknown"),
@@ -3971,7 +3971,7 @@ def _create_app_owned(
                                 clip_progress=0.0,
                             )
                             try:
-                                from hhtools.web.motion_library_links import (
+                                from hhtools.web.library.motion_library_links import (
                                     library_entry_for_load,
                                 )
 
@@ -4096,7 +4096,7 @@ def _create_app_owned(
                 job, "正在打包 ZIP…", _BATCH_ZIP_PROGRESS, batch_t0,
                 clip_progress=1.0,
             )
-            from hhtools.web.export_bundle import zip_directory
+            from hhtools.web.output.export_bundle import zip_directory
 
             zip_path = zip_directory(out_dir, out_name, compress=False)
             gpu_note = (
@@ -4293,8 +4293,8 @@ def _create_app_owned(
     @app.post("/api/r2r/source/library")
     async def r2r_source_library(body: dict) -> dict:
         """Load one existing robot trajectory without crossing into H2R data."""
-        from hhtools.web.motion_library_links import library_entry_for_load
-        from hhtools.web.r2r_upload_resolve import r2r_clip_ref_for_path
+        from hhtools.web.library.motion_library_links import library_entry_for_load
+        from hhtools.web.library.r2r_upload_resolve import r2r_clip_ref_for_path
 
         source_robot = str(body.get("source_robot") or "").strip()
         if not source_robot:
@@ -4337,7 +4337,7 @@ def _create_app_owned(
         """Serve an interaction-object mesh from an uploaded R2R clip folder."""
         from types import SimpleNamespace
 
-        from hhtools.web.serialize import object_mesh_glb
+        from hhtools.web.output.serialize import object_mesh_glb
 
         rec = state.r2r_sources.get(token)
         if rec is None:
@@ -4478,7 +4478,7 @@ def _create_app_owned(
                 ik_iterations=ik_iters,
                 progress_callback=_cb,
             )
-            from hhtools.web.serialize import serialize_robot_trajectory
+            from hhtools.web.output.serialize import serialize_robot_trajectory
 
             scaled = _compute_r2r_scaled_preview(src, tgt, motion, calib)
             traj = serialize_robot_trajectory(
@@ -4488,7 +4488,7 @@ def _create_app_owned(
                 ground_follow=False,
                 yellow_align="ankle",
             )
-            from hhtools.web.result_diagnostics import build_result_diagnostics
+            from hhtools.web.analysis.result_diagnostics import build_result_diagnostics
 
             diagnostics = build_result_diagnostics(
                 traj,
@@ -4496,9 +4496,9 @@ def _create_app_owned(
                 ik_map=tgt.preset.ik_map,
                 feet=tgt.preset.feet,
             )
-            from hhtools.web.r2r_export_bundle import clip_has_export_scene
-            from hhtools.web.r2r_scene import compute_r2r_target_scaled_scene
-            from hhtools.web.serialize import _scaled_overlay_foot_z
+            from hhtools.web.output.r2r_export_bundle import clip_has_export_scene
+            from hhtools.web.output.r2r_scene import compute_r2r_target_scaled_scene
+            from hhtools.web.output.serialize import _scaled_overlay_foot_z
 
             stem = rec.get("stem") or "r2r"
             clip_dir_path = Path(rec.get("clip_dir") or Path(rec["source_path"]).parent)
@@ -4600,7 +4600,7 @@ def _create_app_owned(
     @app.post("/api/r2r/basket/scan")
     def r2r_basket_scan(body: dict) -> dict:
         """Enumerate R2R clips on a server-local path (no copy)."""
-        from hhtools.web.r2r_upload_resolve import enumerate_r2r_clips, validate_r2r_upload
+        from hhtools.web.library.r2r_upload_resolve import enumerate_r2r_clips, validate_r2r_upload
 
         raw = str(body.get("source") or "").strip()
         profile = str(body.get("profile") or "auto").strip() or "auto"
@@ -4703,7 +4703,7 @@ def create_app(
 
 def _enrich_basket_entry(entry: dict, fallback: str = "smpl") -> dict:
     """Attach stable calibration and Motion Library UX metadata."""
-    from hhtools.web.motion_library_categories import infer_motion_category
+    from hhtools.web.library.motion_library_categories import infer_motion_category
 
     out = dict(entry)
     if not (out.get("reference") or "").strip():
@@ -4731,7 +4731,7 @@ def _matching_materialized_clip(
 ) -> Path:
     """Match a loaded snapshot clip to its newly materialized library path."""
 
-    from hhtools.web.upload_resolve import enumerate_upload_clips
+    from hhtools.web.library.upload_resolve import enumerate_upload_clips
 
     library_root = Path(library_root).resolve()
     snapshot_root = Path(snapshot_root).resolve()
@@ -4778,7 +4778,7 @@ def _library_entry_from_link(
     dataset: str | None,
 ) -> dict:
     """Build a library-shaped entry for a clip under the managed library root."""
-    from hhtools.web.motion_library_links import scan_motions_library
+    from hhtools.web.library.motion_library_links import scan_motions_library
 
     picked = Path(picked).resolve()
     sp = str(picked)
@@ -4815,7 +4815,7 @@ def _library_entry_from_upload(
     clip_kind: str = "",
 ) -> dict:
     """Build a batch-basket / library-shaped entry for an uploaded clip."""
-    from hhtools.web.upload_resolve import export_subdir_for_clip
+    from hhtools.web.library.upload_resolve import export_subdir_for_clip
 
     picked = Path(picked).resolve()
     drop_dir = Path(drop_dir).resolve()
@@ -4853,8 +4853,8 @@ def _library_entry_from_upload(
 def _load_clip_for_batch(entry_dict: dict, entry, cache):
     """Load a basket clip — uploaded paths bypass adapter-only cache conversion."""
     from hhtools.viewer.cache import _attach_library_folder_label
-    from hhtools.web.motion_library_links import resolve_clip_on_disk
-    from hhtools.web.upload_resolve import load_clip_at_path
+    from hhtools.web.library.motion_library_links import resolve_clip_on_disk
+    from hhtools.web.library.upload_resolve import load_clip_at_path
 
     if entry_dict.get("origin") != "upload":
         entry_dict = dict(entry_dict)
@@ -5087,7 +5087,7 @@ def _build_r2r_calibration_session(target_model, source_model) -> dict:
     as the reference skeleton — the robot-to-robot analogue of a human T-pose.
     """
     from hhtools.retarget import robot_to_robot as r2r
-    from hhtools.web.calibration_session import (
+    from hhtools.web.analysis.calibration_session import (
         _joint_limits_payload,
         _reference_heading_rad,
         _robot_ground_offset_z,
@@ -5139,7 +5139,7 @@ def _compute_r2r_scaled_preview(source_model, target_model, motion, calibrated_j
     from hhtools.retarget import robot_to_robot as r2r
     from hhtools.retarget.calibration.calibration import uniform_overlay_scale_for_motion
     from hhtools.retarget.newton_basic.scaler import HumanToRobotScaler
-    from hhtools.web.scaled_preview import (
+    from hhtools.web.analysis.scaled_preview import (
         _uniform_scaled_preview_fallback,
         resolve_scaled_overlay_z_correction,
     )
@@ -5185,7 +5185,7 @@ def _align_scaled_preview_to_robot_playback(
         quat_xyzw_to_rotmat,
         scene_min_mesh_z,
     )
-    from hhtools.web.serialize import _scaled_overlay_foot_z
+    from hhtools.web.output.serialize import _scaled_overlay_foot_z
 
     yellow_z = _scaled_overlay_foot_z(scaled_preview, 0)
     if yellow_z is None:
@@ -5233,14 +5233,14 @@ def _run_r2r_source_upload_job(
     selected_path: Path | None = None,
 ) -> None:
     from hhtools.retarget import robot_to_robot as r2r
-    from hhtools.web.r2r_export_bundle import clip_has_export_scene
-    from hhtools.web.r2r_upload_resolve import (
+    from hhtools.web.output.r2r_export_bundle import clip_has_export_scene
+    from hhtools.web.library.r2r_upload_resolve import (
         detect_r2r_profile,
         enumerate_r2r_clips,
         r2r_clip_ref_for_path,
         validate_r2r_upload,
     )
-    from hhtools.web.serialize import (
+    from hhtools.web.output.serialize import (
         serialize_motion_skeleton_preview,
         serialize_robot_trajectory,
     )
@@ -5301,7 +5301,7 @@ def _run_r2r_source_upload_job(
         if src_has_scene:
             job.progress = 0.88
             job.message = "正在加载地形/物体…"
-            from hhtools.web.r2r_scene import load_r2r_clip_scene
+            from hhtools.web.output.r2r_scene import load_r2r_clip_scene
 
             scaled_scene = load_r2r_clip_scene(
                 clip_dir,
@@ -5380,7 +5380,7 @@ def _ground_skeleton_preview(payload: dict) -> dict:
 
 
 def _r2r_entry_from_upload(drop_dir: Path, ref) -> dict:
-    from hhtools.web.r2r_upload_resolve import export_subdir_for_r2r_clip
+    from hhtools.web.library.r2r_upload_resolve import export_subdir_for_r2r_clip
 
     picked = Path(ref.path).resolve()
     drop_dir = Path(drop_dir).resolve()
@@ -5420,7 +5420,7 @@ def _r2r_entry_from_upload(drop_dir: Path, ref) -> dict:
 
 
 def _run_r2r_basket_upload_job(job: Job, drop: Path, profile: str) -> None:
-    from hhtools.web.r2r_upload_resolve import enumerate_r2r_clips, validate_r2r_upload
+    from hhtools.web.library.r2r_upload_resolve import enumerate_r2r_clips, validate_r2r_upload
 
     try:
         validate_r2r_upload(drop, profile)
@@ -5455,7 +5455,7 @@ def _r2r_prepare_retarget_motion(
         return motion
     if not has_scene or clip_dir is None or robot_path is None:
         return motion
-    from hhtools.web.r2r_scene import attach_r2r_clip_scene_to_motion
+    from hhtools.web.output.r2r_scene import attach_r2r_clip_scene_to_motion
 
     return attach_r2r_clip_scene_to_motion(
         motion,
@@ -5763,7 +5763,7 @@ def _record_batch_failure(
     errors: list[str],
     failures: list[dict],
 ):
-    from hhtools.web.batch_failure_log import BatchFailureLog, open_batch_failure_log
+    from hhtools.web.jobs.batch_failure_log import BatchFailureLog, open_batch_failure_log
 
     if failure_log is None:
         failure_log = open_batch_failure_log(state.save_dir, job_id, out_name)
@@ -5803,7 +5803,7 @@ def _run_batch_entries_sequential(
     t_start: float | None = None,
     t_end: float | None = None,
 ) -> BatchFailureLog | None:
-    from hhtools.web.motion_library_links import library_entry_for_load
+    from hhtools.web.library.motion_library_links import library_entry_for_load
 
     total = len(entries)
     for i, e in enumerate(entries):
@@ -6165,7 +6165,7 @@ def _ground_motion_for_web(motion):
 
 
 def _run_dataset_robot_preview_job(job: Job, body: dict, state: SessionState) -> None:
-    from hhtools.web.motion_progress import MotionLoadProgress
+    from hhtools.web.jobs.motion_progress import MotionLoadProgress
 
     try:
         source_path = Path(str(body["source_path"]))
@@ -6223,9 +6223,9 @@ def _build_robot_export_playback(
 ) -> dict[str, Any]:
     """Parse a robot export CSV and build mesh playback + optional scene payload."""
     from hhtools.retarget import robot_to_robot as r2r
-    from hhtools.web.r2r_scene import _parse_comment_meta, load_r2r_clip_scene
-    from hhtools.web.r2r_upload_resolve import detect_r2r_profile
-    from hhtools.web.serialize import serialize_robot_trajectory
+    from hhtools.web.output.r2r_scene import _parse_comment_meta, load_r2r_clip_scene
+    from hhtools.web.library.r2r_upload_resolve import detect_r2r_profile
+    from hhtools.web.output.serialize import serialize_robot_trajectory
 
     path = Path(source_path).resolve()
     clip_dir = path.parent
@@ -6288,11 +6288,11 @@ def _load_robot_export_for_web(
 ):
     """FK a retarget robot CSV export into a :class:`Motion` for 3D preview."""
     from hhtools.retarget import robot_to_robot as r2r
-    from hhtools.web.r2r_scene import (
+    from hhtools.web.output.r2r_scene import (
         _parse_comment_meta,
         attach_r2r_clip_scene_to_motion,
     )
-    from hhtools.web.r2r_upload_resolve import detect_r2r_profile
+    from hhtools.web.library.r2r_upload_resolve import detect_r2r_profile
 
     path = Path(source_path).resolve()
     clip_dir = path.parent
@@ -6515,7 +6515,7 @@ def _resample_retargeted(retargeted, fps: float | None):
     """Return a (joint_q, sample_rate) pair, optionally resampled to ``fps``."""
     import numpy as np
 
-    from hhtools.web.serialize import resample_joint_q
+    from hhtools.web.output.serialize import resample_joint_q
 
     src = float(getattr(retargeted, "sample_rate", 30.0))
     if fps is None or fps <= 0 or abs(fps - src) < 1e-6:
@@ -6544,8 +6544,8 @@ def _write_r2r_export(
     t_end: float | None = None,
 ):
     """R2R clip bundle: target robot traj + rescaled terrain/object sidecars."""
-    from hhtools.web.export_bundle import resolve_clip_export_dir
-    from hhtools.web.r2r_export_bundle import (
+    from hhtools.web.output.export_bundle import resolve_clip_export_dir
+    from hhtools.web.output.r2r_export_bundle import (
         clip_has_export_scene,
         write_r2r_export_bundle,
     )
@@ -6575,7 +6575,7 @@ def _write_r2r_export(
     if subdir is not None and path.suffix == ".zip":
         import shutil
 
-        from hhtools.web.r2r_export_bundle import (
+        from hhtools.web.output.r2r_export_bundle import (
             clip_has_export_scene,
             resolve_r2r_source_clip_dir,
         )
@@ -6617,7 +6617,7 @@ def _write_export(
     t_end: float | None = None,
 ):
     """Write a browser-downloadable CSV/PKL bundle (zip when scene props exist)."""
-    from hhtools.web.export_bundle import (
+    from hhtools.web.output.export_bundle import (
         motion_has_scene,
         resolve_clip_export_dir,
         write_retarget_export_bundle,
@@ -6747,11 +6747,11 @@ def _compute_scaled_scene(
     from hhtools.core.scene import SceneObject
     from hhtools.retarget.calibration.calibration import uniform_overlay_scale_for_motion
     from hhtools.retarget.newton_basic.scaler import HumanToRobotScaler
-    from hhtools.web.scaled_preview import (
+    from hhtools.web.analysis.scaled_preview import (
         resolve_scaled_overlay_z_correction,
         resolve_web_scaler_config,
     )
-    from hhtools.web.serialize import (
+    from hhtools.web.output.serialize import (
         _MAX_PLAYBACK_FRAMES,
         _downsample_indices,
         _serialize_object_meta,
@@ -6838,7 +6838,7 @@ def _compute_scaled_preview(
     max_frames: int = 0,
 ) -> dict:
     """Dense uniform scaled skeleton (Viser ``_compute_scaled_preview`` parity)."""
-    from hhtools.web.scaled_preview import compute_web_scaled_preview
+    from hhtools.web.analysis.scaled_preview import compute_web_scaled_preview
 
     return compute_web_scaled_preview(
         model,

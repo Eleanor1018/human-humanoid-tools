@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from fastapi.testclient import TestClient
 
 from hhtools.web import server
-from hhtools.web.motion_library_settings import (
+from hhtools.web.library.motion_library_settings import (
     MOTION_LIBRARY_MARKER_FILENAME,
     MotionLibrarySettings,
     motion_library_marker_path,
@@ -201,7 +201,7 @@ def test_library_api_reads_root_and_entries_from_one_locked_snapshot(
     seen_scan_roots: list[Path | None] = []
 
     from hhtools.viewer import library as viewer_library
-    from hhtools.web import motion_library_links
+    from hhtools.web.library import motion_library_links
 
     def switch_root_during_assets_scan(_root: Path) -> list:
         app.state.motion_library_settings_store.save(
@@ -231,7 +231,7 @@ def test_library_link_uses_one_explicit_root_for_link_scan_and_response(
     app = _create_app(tmp_path, monkeypatch)
     seen: dict[str, Path | None] = {}
 
-    from hhtools.web import motion_library_links
+    from hhtools.web.library import motion_library_links
 
     def link_with_root(
         _path: str,
@@ -271,7 +271,7 @@ def test_library_api_exposes_stable_motion_category(
     clip.write_bytes(b"clip")
 
     from hhtools.viewer import library as viewer_library
-    from hhtools.web import motion_library_links
+    from hhtools.web.library import motion_library_links
 
     monkeypatch.setattr(
         viewer_library,
@@ -311,7 +311,7 @@ def test_library_api_exposes_robot_trajectory_asset_boundary(
     clip.write_text("root_x,root_y,root_z,dof_0\n0,0,1,0\n", encoding="utf-8")
 
     from hhtools.viewer import library as viewer_library
-    from hhtools.web import motion_library_links
+    from hhtools.web.library import motion_library_links
 
     monkeypatch.setattr(viewer_library, "scan_library", lambda _root: [])
     monkeypatch.setattr(

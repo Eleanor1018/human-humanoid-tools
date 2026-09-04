@@ -4,7 +4,7 @@ import errno
 import os
 from pathlib import Path
 
-from hhtools.web import motion_library_links as links
+from hhtools.web.library import motion_library_links as links
 
 
 def _prepare_single_file_drop(tmp_path: Path, monkeypatch) -> tuple[Path, Path]:

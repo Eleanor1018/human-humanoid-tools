@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from hhtools.web.calibration_session import serialize_reference_skeleton
+from hhtools.web.analysis.calibration_session import serialize_reference_skeleton
 
 
 def _reference_pose():

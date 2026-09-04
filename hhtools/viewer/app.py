@@ -3590,7 +3590,7 @@ def _build_robot_tab(  # type: ignore[no-untyped-def]
                 from hhtools.retarget.interaction_mesh.arm_reach import (
                     maybe_boost_arm_reach_positions,
                 )
-                from hhtools.web.scaled_preview import (
+                from hhtools.web.analysis.scaled_preview import (
                     resolve_scaled_overlay_z_correction,
                 )
 
@@ -4627,7 +4627,7 @@ def _build_robot_tab(  # type: ignore[no-untyped-def]
                         f"hhtools_{model.preset.name}_"
                         f"{(stem or 'motion').replace('/', '_')}.csv"
                     )
-                    from hhtools.web.export_bundle import bake_export_root_z
+                    from hhtools.web.output.export_bundle import bake_export_root_z
 
                     src_motion = clips[i] if i < len(clips) else None
                     joint_q, lift = bake_export_root_z(

@@ -151,7 +151,7 @@ def _bake_export_joint_q(
     yellow_align: str = "sole",
 ) -> tuple[np.ndarray, float]:
     """Bake viewer ``mesh_z_lift`` into robot ``root_z`` for CSV/PKL export."""
-    from hhtools.web.serialize import bake_playback_mesh_z_lift_into_joint_q
+    from hhtools.web.output.serialize import bake_playback_mesh_z_lift_into_joint_q
 
     if model is None or not hasattr(model, "trimesh_scene"):
         return np.asarray(joint_q, dtype=np.float32), 0.0
@@ -456,7 +456,7 @@ def identity_resample(retargeted: Any, fps: float | None):
     jq = np.asarray(retargeted.joint_q, dtype=np.float32)
     if fps is None or fps <= 0 or abs(float(fps) - src) < 1e-6:
         return jq, src
-    from hhtools.web.serialize import resample_joint_q
+    from hhtools.web.output.serialize import resample_joint_q
 
     rc = int(getattr(retargeted, "root_coord_count", 7))
     return resample_joint_q(jq, src, float(fps), root_coord_count=rc), float(fps)

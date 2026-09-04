@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from hhtools.web.motion_library_categories import (
+from hhtools.web.library.motion_library_categories import (
     _SIDECAR_DIRECTORY_CACHE_MAXSIZE,
     _cached_sidecar_category,
     infer_motion_category,

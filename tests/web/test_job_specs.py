@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from hhtools.web.job_specs import (
+from hhtools.web.jobs.job_specs import (
     JobSpecError,
     build_job_spec,
     normalize_job_spec,

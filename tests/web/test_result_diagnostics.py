@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from hhtools.web.result_diagnostics import build_result_diagnostics
+from hhtools.web.analysis.result_diagnostics import build_result_diagnostics
 
 
 def _transform(x: float, y: float, z: float) -> list[float]:

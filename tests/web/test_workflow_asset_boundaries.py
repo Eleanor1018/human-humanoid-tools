@@ -5,7 +5,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from hhtools.web import server
-from hhtools.web.r2r_upload_resolve import r2r_clip_ref_for_path
+from hhtools.web.library.r2r_upload_resolve import r2r_clip_ref_for_path
 
 
 def _client(tmp_path: Path, monkeypatch) -> TestClient:

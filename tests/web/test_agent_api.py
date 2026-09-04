@@ -53,7 +53,7 @@ from hhtools.services.jobs import (
 from hhtools.services.legacy_job_upgrade import LegacyJobUpgradeError
 from hhtools.web import server
 from hhtools.agent.api import _error_response, _looks_like_host_path, router
-from hhtools.web.job_scheduler import JobScheduler
+from hhtools.web.jobs.job_scheduler import JobScheduler
 
 _DIGEST = "a" * 64
 _ASSET_ID = f"asset:sha256:{_DIGEST}"

@@ -1411,7 +1411,7 @@ def retarget_robot_to_robot(
     ``backend`` is ``"newton"`` (GPU IK) or ``"interaction_mesh"`` (MPC on
     terrain / interaction objects).  For the latter, attach scene data to
     ``source_motion`` before calling (see
-    :func:`~hhtools.web.r2r_scene.attach_r2r_clip_scene_to_motion`).
+    :func:`~hhtools.web.output.r2r_scene.attach_r2r_clip_scene_to_motion`).
     """
     cfg, ref = _build_scaler_config(source_model, target_model, calibrated_joint_q)
     reference_key = f"robot_{source_model.preset.name}"

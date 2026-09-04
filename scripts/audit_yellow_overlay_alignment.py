@@ -91,7 +91,7 @@ def _yellow_overlay_metrics(motion, model, reference: str, human_h: float = 1.65
     from hhtools.retarget.newton_basic.scaler import HumanToRobotScaler
     from hhtools.robot.retarget_profile import resolve_retarget_scaler_config
     from hhtools.robot.standing_height import estimate_robot_standing_height
-    from hhtools.web.scaled_preview import (
+    from hhtools.web.analysis.scaled_preview import (
         _uniform_overlay_z_correction,
         _uniform_scaled_joint_positions,
         resolve_scaled_overlay_z_correction,

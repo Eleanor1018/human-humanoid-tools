@@ -8,7 +8,7 @@ import pytest
 from hhtools.core.hierarchy import Hierarchy
 from hhtools.core.motion import Motion
 from hhtools.core.scene import TerrainHeightfield
-from hhtools.web.scaled_preview import (
+from hhtools.web.analysis.scaled_preview import (
     _uniform_scaled_joint_positions,
     resolve_scaled_overlay_z_correction,
 )

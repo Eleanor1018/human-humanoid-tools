@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from hhtools.utils import paths
-from hhtools.web.motion_library_settings import (
+from hhtools.web.library.motion_library_settings import (
     MOTION_LIBRARY_MARKER_FILENAME,
     MotionLibrarySettings,
     MotionLibrarySettingsStore,

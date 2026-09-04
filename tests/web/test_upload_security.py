@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from hhtools.web import server
-from hhtools.web.motion_library_links import _safe_folder_name, motions_library_root
+from hhtools.web.library.motion_library_links import _safe_folder_name, motions_library_root
 
 
 @pytest.fixture()

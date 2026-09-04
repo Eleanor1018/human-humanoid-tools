@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from hhtools.web.job_history import JobHistoryStore
+from hhtools.web.jobs.job_history import JobHistoryStore
 
 
 def test_store_persists_records_and_adopts_artifacts(tmp_path: Path) -> None:

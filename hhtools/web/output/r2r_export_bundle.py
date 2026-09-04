@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 hhtools contributors
 # SPDX-License-Identifier: Apache-2.0
-"""R2R export bundles — mirror :mod:`hhtools.web.export_bundle` for robot-export clips.
+"""R2R export bundles — mirror :mod:`hhtools.web.output.export_bundle` for robot-export clips.
 
 Source clips already carry robot-frame terrain / object sidecars from the
 human→robot export step.  R2R batch re-targets the robot trajectory onto a new
@@ -18,7 +18,7 @@ from typing import Any
 
 import numpy as np
 
-from hhtools.web.export_bundle import (
+from hhtools.web.output.export_bundle import (
     OBJECT_CSV_HEADER,
     _bake_export_joint_q,
     _robot_pkl_blob,
@@ -31,7 +31,7 @@ _log = logging.getLogger(__name__)
 
 def _r2r_scaled_source_foot_z(source_motion, ratio: float) -> float | None:
     """Lowest source ankle/foot Z after the same uniform scale as the yellow overlay."""
-    from hhtools.web.serialize import _scaled_overlay_foot_z
+    from hhtools.web.output.serialize import _scaled_overlay_foot_z
 
     hierarchy = getattr(source_motion, "hierarchy", None)
     names = list(getattr(hierarchy, "bone_names", []) or [])
@@ -177,7 +177,7 @@ def _write_r2r_object_tracks(
     fmt: str,
     csv_header: bool,
 ) -> list[str]:
-    from hhtools.web.r2r_scene import _align_track_frames, _load_object_track_csv
+    from hhtools.web.output.r2r_scene import _align_track_frames, _load_object_track_csv
 
     written: list[str] = []
     for i, src_csv in enumerate(sorted(source_clip_dir.glob("object_*.csv"))):
@@ -235,7 +235,7 @@ def _copy_r2r_scene_meshes(
             seen_mesh.add(key)
             mesh_srcs.append(src)
     try:
-        from hhtools.web.r2r_scene import resolve_object_mesh_path
+        from hhtools.web.output.r2r_scene import resolve_object_mesh_path
     except Exception:  # noqa: BLE001
         resolve_object_mesh_path = None  # type: ignore[assignment]
     if resolve_object_mesh_path is not None:
@@ -290,7 +290,7 @@ def write_r2r_export_bundle(
     """
     import dataclasses
 
-    from hhtools.web.export_bundle import apply_export_time_window
+    from hhtools.web.output.export_bundle import apply_export_time_window
 
     retargeted, source_motion = apply_export_time_window(
         retargeted, source_motion, t_start=t_start, t_end=t_end,
@@ -405,7 +405,7 @@ def write_r2r_export_bundle(
     # See ``write_retarget_export_bundle`` — avoid zipping a directory into
     # a ``.zip`` path that lives inside that same directory (R2R batch uploads
     # where ``out_root.name == stem``).
-    from hhtools.web.export_bundle import zip_directory
+    from hhtools.web.output.export_bundle import zip_directory
 
     zip_path = zip_directory(clip_dir, stem)
     shutil.rmtree(clip_dir, ignore_errors=True)

@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from hhtools.web import server
-from hhtools.web.job_settings import (
+from hhtools.web.jobs.job_settings import (
     JobAdmissionSettings,
     JobAdmissionSettingsStore,
     updated_job_admission_settings,

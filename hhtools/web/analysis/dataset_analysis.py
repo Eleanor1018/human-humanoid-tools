@@ -52,7 +52,7 @@ def build_entries(source_root: Path) -> list[dict[str, Any]]:
 
     Discovery merges three strategies (deduped by ``source_path``):
 
-    1. :func:`hhtools.web.upload_resolve.enumerate_upload_clips` — arbitrary
+    1. :func:`hhtools.web.library.upload_resolve.enumerate_upload_clips` — arbitrary
        human motion folder layouts (``ACCAD/…/*.npz``, nested ``mimic/`` trees,
        intermimic clip folders with ``*_cleaned_simplified.obj``, meshmimic
        with ``*_terrain.obj``, …) using the same rules as the retarget basket.
@@ -60,13 +60,13 @@ def build_entries(source_root: Path) -> list[dict[str, Any]]:
        trees whose *dataset directory names* match :data:`_DIR_TO_ADAPTER`
        (``AMASS``, ``OMOMO``, ``LAFAN``, …); fills gaps the upload scanner
        might label differently.
-    3. :func:`hhtools.web.r2r_upload_resolve.enumerate_r2r_clips` — robot
+    3. :func:`hhtools.web.library.r2r_upload_resolve.enumerate_r2r_clips` — robot
        retarget exports (``.csv`` / ``.pkl`` / ``.npz`` with joint trajectories,
        including ``*_export`` folders with terrain / object sidecars).
     """
     from hhtools.viewer.library import scan_library
-    from hhtools.web.r2r_upload_resolve import enumerate_r2r_clips
-    from hhtools.web.upload_resolve import enumerate_upload_clips
+    from hhtools.web.library.r2r_upload_resolve import enumerate_r2r_clips
+    from hhtools.web.library.upload_resolve import enumerate_upload_clips
 
     root = source_root.resolve()
     entries: list[dict[str, Any]] = []
@@ -550,7 +550,7 @@ def export_robot_clips_zip(
             encoding="utf-8",
         )
 
-        from hhtools.web.export_bundle import zip_directory
+        from hhtools.web.output.export_bundle import zip_directory
 
         zip_path = zip_directory(staging, zip_stem)
     finally:

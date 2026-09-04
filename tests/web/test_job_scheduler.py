@@ -6,7 +6,7 @@ from functools import partial
 
 import pytest
 
-from hhtools.web.job_scheduler import (
+from hhtools.web.jobs.job_scheduler import (
     JobQueueFullError,
     JobScheduler,
     JobSchedulerClosedError,
