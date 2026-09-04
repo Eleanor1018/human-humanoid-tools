@@ -61,7 +61,20 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
 
     await expect(page).toHaveTitle('Human-Humanoid Tools')
     await expect(page.locator("#app[data-hhtools-ready='true']")).toBeVisible()
-    await expect(page.locator('#app')).toHaveText('')
+    await expect(page.getByLabel('HHTOOLS')).toBeVisible()
+    const menu = page.getByRole('navigation', { name: 'Application menu' })
+    await expect(menu.getByRole('button')).toHaveText([
+      'File',
+      'Workflows',
+      'Analysis',
+      'Settings',
+      'Help'
+    ])
+    await menu.getByRole('button', { name: 'Workflows' }).click()
+    await expect(menu.getByRole('button', { name: 'Workflows' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
     await expect
       .poll(() =>
         page.evaluate(() =>
