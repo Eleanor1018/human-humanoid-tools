@@ -97,9 +97,9 @@ You can also launch **Human-Humanoid Tools** from the application menu. See the
 
 The WebUI and Electron GUI use one React + TypeScript renderer from
 `hhtools/web/frontend`; Electron loads the same page through its local FastAPI sidecar, so there is
-no second GUI renderer. The current frontend is an intentionally empty bootstrap. Tailwind CSS is
-wired into the build, while shadcn/ui primitives will be added only when the first real view needs
-them.
+no second GUI renderer. The current frontend is a minimal navigation shell with empty feature
+views. Tailwind CSS is wired into the build, while shadcn/ui primitives will be added only when the
+first real view needs them.
 
 ```bash
 cd hhtools/web/frontend
