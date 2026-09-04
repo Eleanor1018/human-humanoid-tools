@@ -11,6 +11,7 @@
 | 语义 | Token | 色值 |
 |---|---|---|
 | 应用底色 | `--canvas` | `#F6F8FA` |
+| Stage 画布底色 | `--stage-canvas` | `#F5F5F7` |
 | 主表面 | `--surface` | `#FFFFFF` |
 | 浅表面 | `--surface-subtle` | `#F1F4F7` |
 | 主文字 | `--text` | `#02122E` |
@@ -75,3 +76,5 @@
 - [x] 建立 Batch 三模式右侧面板样式壳
 - [x] 建立 Data Analysis pipeline 与步骤样式壳
 - [x] 七个功能页面的视觉壳均遵循本规范
+- [x] 中间 Stage 迁移为单一 R3F Canvas，保留旧相机、灯光、网格和坐标轴
+- [x] R3F Canvas 使用旧版 `NoToneMapping` 色彩管线，避免材质颜色漂移

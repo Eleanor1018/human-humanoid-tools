@@ -40,7 +40,10 @@ src/
 │   │   └── VideoToMotionView.tsx
 │   └── analysis/
 │       └── AnalysisView.tsx # Dataset analysis shell
-├── stage/                   # Stage surface and floating view controls
+├── stage/                   # R3F Stage surface and floating view controls
+│   ├── StageCanvas.tsx      # One Canvas, camera, controls, lights and grid
+│   ├── StageEmpty.tsx       # Legacy initial empty-state copy
+│   └── StageViewMenu.tsx    # React visibility HUD
 └── styles.css
 ```
 
@@ -60,6 +63,16 @@ main -> App -> features -> components/ui
 - Features do not reach into another feature's internal files.
 - `stage/` and shared components never import from features.
 - Browser code never imports Python, Node, or Electron directly.
+
+### Stage renderer
+
+- `StageCanvas.tsx` owns the single R3F `<Canvas>` and its local orbit control.
+- The scene keeps the legacy camera, transparent renderer, lights, grid, axes,
+  and Z-up world transform; overlays stay ordinary React siblings.
+- `@react-three/drei` is intentionally not installed. Direct Three addon imports
+  keep the first renderer slice small and explicit.
+- Motion, terrain, baked body, and robot payloads will arrive through typed
+  React-owned state. Layer components must not call FastAPI or read `window`.
 
 ## Growth Rules
 
@@ -89,6 +102,8 @@ main -> App -> features -> components/ui
 - [x] Robot-to-Robot inspector visual shell
 - [x] Batch inspector visual shell
 - [x] Data Analysis inspector visual shell
+- [x] R3F Stage base scene (camera, controls, lights, axes, grid)
+- [ ] R3F motion/robot/environment payload layers
 - [ ] Motion backend integration
 
 ## References

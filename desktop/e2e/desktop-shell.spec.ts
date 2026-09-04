@@ -136,7 +136,9 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
     await sidebar.getByRole('button', { name: 'Video → Motion' }).click()
     await expect(inspector.getByRole('heading', { name: 'Video → Motion' })).toBeVisible()
     await expect(page.getByRole('list', { name: 'Video to Motion pipeline' })).toBeVisible()
-    await expect(inspector.locator('details')).toHaveCount(4)
+    await expect(
+      inspector.locator('section[aria-label="Video → Motion"] > div > details')
+    ).toHaveCount(4)
     await expect(inspector.getByRole('group', { name: 'Video import area' })).toBeVisible()
 
     await sidebar.getByRole('button', { name: 'Human → Robot' }).click()
@@ -177,6 +179,28 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
     await expect(page.locator('.workspace-drawer-handle, .col-resizer')).toHaveCount(0)
 
     const stage = page.getByRole('main', { name: 'Workspace content' })
+    await expect(stage.locator('[data-stage-renderer="react-three-fiber"]')).toHaveCount(1)
+    const stageCanvas = stage.locator('canvas')
+    await expect(stageCanvas).toHaveCount(1)
+    await expect(stage.getByText('Drop a motion here to preview')).toBeVisible()
+    const canvasInfo = await stageCanvas.evaluate((element) => {
+      const canvas = element as HTMLCanvasElement
+      const gl = canvas.getContext('webgl2') ?? canvas.getContext('webgl')
+      return {
+        width: canvas.width,
+        height: canvas.height,
+        clientWidth: canvas.clientWidth,
+        clientHeight: canvas.clientHeight,
+        hasWebGL: gl !== null,
+      }
+    })
+    expect(canvasInfo.hasWebGL).toBe(true)
+    expect(canvasInfo.width).toBeGreaterThan(0)
+    expect(canvasInfo.height).toBeGreaterThan(0)
+    expect(canvasInfo.width / canvasInfo.height).toBeCloseTo(
+      canvasInfo.clientWidth / canvasInfo.clientHeight,
+      1,
+    )
     const stageMenu = stage.locator('[data-slot="toggle-group"][aria-label="Stage visibility"]')
     const stageToggles = stageMenu.locator('[data-slot="toggle-group-item"]')
     await expect(stageMenu).toBeVisible()
