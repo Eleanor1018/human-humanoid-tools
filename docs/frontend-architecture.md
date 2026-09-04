@@ -4,6 +4,7 @@
 
 Keep one small React renderer for both WebUI and Electron GUI. Organize code by
 user-facing feature, with explicit dependencies and no legacy runtime bridge.
+Visual implementation follows [Frontend Visual Design](./frontend-design.md).
 
 ## Structure
 
