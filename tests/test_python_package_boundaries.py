@@ -110,7 +110,7 @@ class InternalImport:
         )
 
 
-# Current static debt: 52 forbidden import occurrences represented by 51 locations.
+# Current static debt: 51 forbidden import occurrences represented by 50 locations.
 # Reduce this table whenever an inversion is removed.  Never add an entry merely
 # to make a new failure green; fix the dependency direction instead.
 _LEGACY_LOCATION_BASELINE: dict[ImportIdentity, int] = {
@@ -298,14 +298,29 @@ _LEGACY_LOCATION_BASELINE: dict[ImportIdentity, int] = {
         "hhtools.viewer.anatomy",
         "skeleton_exclude_joint_indices",
     ): 1,
-    ImportIdentity("hhtools/web/server.py", "hhtools.viewer.anatomy", "_ground_motion_for_web"): 1,
-    ImportIdentity("hhtools/web/server.py", "hhtools.viewer.cache", "_create_app_owned"): 1,
-    ImportIdentity("hhtools/web/server.py", "hhtools.viewer.cache", "_load_clip_for_batch"): 1,
-    ImportIdentity("hhtools/web/server.py", "hhtools.viewer.cache", "_load_motion_for_web"): 1,
     ImportIdentity(
-        "hhtools/web/server.py", "hhtools.viewer.library", "_create_app_owned.library"
+        "hhtools/web/server/motion_runtime.py",
+        "hhtools.viewer.anatomy",
+        "_ground_motion_for_web",
     ): 1,
-    ImportIdentity("hhtools/web/server.py", "hhtools.viewer.library", "_load_batch_motion"): 1,
+    ImportIdentity(
+        "hhtools/web/server/factory.py", "hhtools.viewer.cache", "_create_app_owned"
+    ): 1,
+    ImportIdentity(
+        "hhtools/web/server/motion_runtime.py",
+        "hhtools.viewer.cache",
+        "_load_clip_for_batch",
+    ): 1,
+    ImportIdentity(
+        "hhtools/web/server/motion_runtime.py",
+        "hhtools.viewer.cache",
+        "_load_motion_for_web",
+    ): 1,
+    ImportIdentity(
+        "hhtools/web/server/routes/library.py",
+        "hhtools.viewer.library",
+        "register_library_routes.library",
+    ): 1,
     ImportIdentity(
         "hhtools/web/library/upload_resolve.py",
         "hhtools.viewer.library",
@@ -538,27 +553,30 @@ _LEGACY_IMPORT_FINGERPRINTS: dict[tuple[str, str, str], str] = {
         "skeleton_exclude_joint_indices",
     ): "from:degenerate_auxiliary_bone_indices,detect_virtual_root",
     (
-        "hhtools/web/server.py",
+        "hhtools/web/server/motion_runtime.py",
         "hhtools.viewer.anatomy",
         "_ground_motion_for_web",
     ): "from:center_motion_root_xy,snap_motion_to_ground",
-    ("hhtools/web/server.py", "hhtools.viewer.cache", "_create_app_owned"): "from:EphemeralCache",
     (
-        "hhtools/web/server.py",
+        "hhtools/web/server/factory.py",
+        "hhtools.viewer.cache",
+        "_create_app_owned",
+    ): "from:EphemeralCache",
+    (
+        "hhtools/web/server/motion_runtime.py",
         "hhtools.viewer.cache",
         "_load_clip_for_batch",
     ): "from:_attach_library_folder_label",
     (
-        "hhtools/web/server.py",
+        "hhtools/web/server/motion_runtime.py",
         "hhtools.viewer.cache",
         "_load_motion_for_web",
     ): "from:_attach_library_folder_label",
     (
-        "hhtools/web/server.py",
+        "hhtools/web/server/routes/library.py",
         "hhtools.viewer.library",
-        "_create_app_owned.library",
+        "register_library_routes.library",
     ): "from:scan_library",
-    ("hhtools/web/server.py", "hhtools.viewer.library", "_load_batch_motion"): "from:LibraryEntry",
     (
         "hhtools/web/library/upload_resolve.py",
         "hhtools.viewer.library",

@@ -630,7 +630,8 @@ def write_retarget_export_bundle(
 ) -> Path:
     """Write a clip bundle and return the path to a ``.zip`` (or bare file if no scene).
 
-    ``resample_fn`` is ``_resample_retargeted`` from :mod:`hhtools.web.server` to
+    ``resample_fn`` is ``_resample_retargeted`` from
+    :mod:`hhtools.web.server.export_runtime` to
     avoid a circular import at module load time.
 
     Robot ``root_z`` is baked with the same constant ``mesh_z_lift`` the browser

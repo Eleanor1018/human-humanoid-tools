@@ -9,6 +9,8 @@ from fastapi.testclient import TestClient
 
 from hhtools.web import server
 from hhtools.web.library.motion_library_links import motions_library_root
+from hhtools.web.server import state as server_state
+from hhtools.web.server.routes import motion as motion_routes
 
 
 def _create_test_app(tmp_path: Path, monkeypatch, **limits):
@@ -19,8 +21,8 @@ def _create_test_app(tmp_path: Path, monkeypatch, **limits):
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    monkeypatch.setattr(server, "_tmpdir", local_tmpdir)
-    monkeypatch.setattr(server, "_robot_library_root", lambda: tmp_path / "robots")
+    monkeypatch.setattr(server_state, "_tmpdir", local_tmpdir)
+    monkeypatch.setattr(server_state, "_robot_library_root", lambda: tmp_path / "robots")
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     return server.create_app(
         source_root=tmp_path / "motions",
@@ -408,8 +410,8 @@ def test_queued_same_label_motion_uploads_parse_their_immutable_drops(
 
     monkeypatch.setattr(dataset_analysis, "run_analysis", blocked_analysis)
     monkeypatch.setattr(upload_resolve, "resolve_upload_drop", recording_resolver)
-    monkeypatch.setattr(server, "_library_entry_from_link", simple_library_entry)
-    monkeypatch.setattr(server, "_ground_motion_for_web", blocked_grounding)
+    monkeypatch.setattr(motion_routes, "_library_entry_from_link", simple_library_entry)
+    monkeypatch.setattr(motion_routes, "_ground_motion_for_web", blocked_grounding)
     monkeypatch.setattr(
         motion_library_links,
         "auto_resolve_source_files",
@@ -531,12 +533,12 @@ def test_manual_library_link_waits_for_motion_publish_lock(
         lambda _root=None: [],
     )
     monkeypatch.setattr(
-        server,
+        motion_routes,
         "_matching_materialized_clip",
         lambda *_args, **_kwargs: library_clip,
     )
     monkeypatch.setattr(
-        server,
+        motion_routes,
         "_library_entry_from_link",
         lambda label, _root, picked, dataset: {
             "dataset": dataset or "unknown",
@@ -657,7 +659,7 @@ def test_negative_job_limit_is_rejected(
 def test_pending_job_is_not_pruned_by_ttl(tmp_path: Path, monkeypatch) -> None:
     app = _create_test_app(tmp_path, monkeypatch, job_ttl_seconds=0.01)
     state = app.state.session_state
-    pending = server.Job(
+    pending = server_state.Job(
         id="pending-job",
         kind="test",
         status="pending",
@@ -685,7 +687,7 @@ def test_job_retention_prunes_oldest_artifact(tmp_path: Path, monkeypatch) -> No
     now = time.monotonic()
     artifact = state.export_root / "old.zip"
     artifact.write_bytes(b"generated")
-    old = server.Job(
+    old = server_state.Job(
         id="old-job",
         kind="test",
         status="done",
@@ -694,7 +696,7 @@ def test_job_retention_prunes_oldest_artifact(tmp_path: Path, monkeypatch) -> No
         terminal_since=now - 20,
         last_accessed_at=now - 20,
     )
-    latest = server.Job(
+    latest = server_state.Job(
         id="latest-job",
         kind="test",
         status="done",
@@ -720,7 +722,7 @@ def test_job_ttl_starts_when_worker_reaches_terminal_state(
 ) -> None:
     app = _create_test_app(tmp_path, monkeypatch, job_ttl_seconds=0.01)
     state = app.state.session_state
-    expired = server.Job(id="expired-job", kind="test")
+    expired = server_state.Job(id="expired-job", kind="test")
     expired.mark_terminal("done")
     expired.terminal_since = time.monotonic() - 1
     expired.last_accessed_at = expired.terminal_since

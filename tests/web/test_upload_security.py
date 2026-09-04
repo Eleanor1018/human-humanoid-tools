@@ -8,6 +8,9 @@ from fastapi.testclient import TestClient
 
 from hhtools.web import server
 from hhtools.web.library.motion_library_links import _safe_folder_name, motions_library_root
+from hhtools.web.server import boundary as server_boundary
+from hhtools.web.server import library_runtime
+from hhtools.web.server import state as server_state
 
 
 @pytest.fixture()
@@ -17,8 +20,8 @@ def web_client(tmp_path: Path, monkeypatch) -> TestClient:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    monkeypatch.setattr(server, "_tmpdir", local_tmpdir)
-    monkeypatch.setattr(server, "_robot_library_root", lambda: tmp_path / "robots")
+    monkeypatch.setattr(server_state, "_tmpdir", local_tmpdir)
+    monkeypatch.setattr(server_state, "_robot_library_root", lambda: tmp_path / "robots")
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     app = server.create_app(
         source_root=tmp_path / "motions",
@@ -43,18 +46,18 @@ def web_client(tmp_path: Path, monkeypatch) -> TestClient:
 )
 def test_upload_relative_path_rejects_escape_forms(filename: str) -> None:
     with pytest.raises(ValueError):
-        server._safe_upload_relative_path(filename)
+        server_boundary._safe_upload_relative_path(filename)
 
 
 def test_upload_relative_path_allows_safe_nested_path() -> None:
-    relative = server._safe_upload_relative_path("dataset/session/clip.bvh")
+    relative = server_boundary._safe_upload_relative_path("dataset/session/clip.bvh")
 
     assert relative.parts == ("dataset", "session", "clip.bvh")
 
 
 def test_resolved_upload_destination_must_stay_below_root(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="escapes"):
-        server._ensure_path_within(tmp_path / "root", tmp_path / "escaped.bin")
+        server_boundary._ensure_path_within(tmp_path / "root", tmp_path / "escaped.bin")
 
 
 def test_materialized_clip_matches_an_unwrapped_upload_tree(tmp_path: Path) -> None:
@@ -67,7 +70,7 @@ def test_materialized_clip_matches_an_unwrapped_upload_tree(tmp_path: Path) -> N
     snapshot_clip.write_bytes(b"snapshot")
     library_clip.write_bytes(b"materialized")
 
-    matched = server._matching_materialized_clip(
+    matched = library_runtime._matching_materialized_clip(
         library_root,
         snapshot_root=snapshot_root,
         snapshot_picked=snapshot_clip,

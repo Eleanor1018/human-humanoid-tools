@@ -93,7 +93,7 @@ def _playback_ankle_world_z(model, traj: dict) -> float:
 
 
 def test_r2r_yellow_keeps_scaled_source_feet(g1_rp1):
-    from hhtools.web.server import _compute_r2r_scaled_preview
+    from hhtools.web.server.preview_runtime import _compute_r2r_scaled_preview
 
     src, tgt = g1_rp1
     motion = _r2r_motion(ankle_z=0.06, sole_z=0.0)
@@ -113,7 +113,7 @@ def test_r2r_yellow_keeps_scaled_source_feet(g1_rp1):
 
 def test_r2r_playback_aligns_robot_ankles_to_yellow_feet(g1_rp1):
     from hhtools.retarget.robot_to_robot import align_retargeted_ankles_to_scaled_source
-    from hhtools.web.server import _compute_r2r_scaled_preview
+    from hhtools.web.server.preview_runtime import _compute_r2r_scaled_preview
 
     src, tgt = g1_rp1
     motion = _r2r_motion(ankle_z=0.06, sole_z=0.0)

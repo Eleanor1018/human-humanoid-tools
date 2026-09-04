@@ -9,6 +9,9 @@ from hhtools.robot import registry as robot_registry
 from hhtools.web import server
 from hhtools.web.jobs.job_specs import build_job_spec, replay_capability
 from hhtools.web.library import upload_resolve
+from hhtools.web.server import library_runtime
+from hhtools.web.server import state as server_state
+from hhtools.web.server.routes import batch as batch_routes
 
 
 def _create_test_app(tmp_path: Path, monkeypatch):
@@ -17,8 +20,8 @@ def _create_test_app(tmp_path: Path, monkeypatch):
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    monkeypatch.setattr(server, "_tmpdir", local_tmpdir)
-    monkeypatch.setattr(server, "_robot_library_root", lambda: tmp_path / "robots")
+    monkeypatch.setattr(server_state, "_tmpdir", local_tmpdir)
+    monkeypatch.setattr(server_state, "_robot_library_root", lambda: tmp_path / "robots")
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     return server.create_app(
         source_root=tmp_path / "motions",
@@ -45,7 +48,7 @@ def test_local_batch_entries_keep_original_paths(tmp_path: Path, monkeypatch) ->
         lambda root, profile: [discovered],
     )
 
-    root, profile, entries = server._entries_for_batch_source(source, "AUTO")
+    root, profile, entries = library_runtime._entries_for_batch_source(source, "AUTO")
 
     assert root == source.resolve()
     assert profile == "auto"
@@ -82,9 +85,9 @@ def test_local_batch_history_keeps_source_not_entries(tmp_path: Path, monkeypatc
     state = app.state.session_state
     state.robots["test_robot"] = object()
     monkeypatch.setattr(robot_registry, "get", lambda _name: object())
-    monkeypatch.setattr(server, "_request_human_height", lambda *_args: 1.7)
+    monkeypatch.setattr(batch_routes, "_request_human_height", lambda *_args: 1.7)
     monkeypatch.setattr(
-        server,
+        batch_routes,
         "_entries_for_batch_source",
         lambda _source, _profile: (source.resolve(), "auto", []),
     )

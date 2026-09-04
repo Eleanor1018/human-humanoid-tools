@@ -13,6 +13,7 @@ from hhtools.web.library.motion_library_settings import (
     motion_library_marker_path,
     validate_motion_library_marker,
 )
+from hhtools.web.server import state as server_state
 
 
 def _create_app(tmp_path: Path, monkeypatch):
@@ -22,7 +23,7 @@ def _create_app(tmp_path: Path, monkeypatch):
         "HHTOOLS_MOTION_LIBRARY_SETTINGS_PATH",
         str(tmp_path / "motion-library-settings.json"),
     )
-    monkeypatch.setattr(server, "_robot_library_root", lambda: tmp_path / "robots")
+    monkeypatch.setattr(server_state, "_robot_library_root", lambda: tmp_path / "robots")
     return server.create_app(
         source_root=tmp_path / "assets" / "motions",
         save_dir=tmp_path / "save",

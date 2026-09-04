@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from hhtools.robot import registry
 from hhtools.web import server
+from hhtools.web.server import state as server_state
 
 CURATED_ROBOT_NAMES = (
     "g1_29dof",
@@ -23,7 +24,7 @@ CURATED_ROBOT_NAMES = (
 def robot_library_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     robot_root = tmp_path / "robots"
     robot_root.mkdir()
-    monkeypatch.setattr(server, "_robot_library_root", lambda: robot_root)
+    monkeypatch.setattr(server_state, "_robot_library_root", lambda: robot_root)
     app = server.create_app(
         source_root=tmp_path / "motions",
         save_dir=tmp_path / "save",

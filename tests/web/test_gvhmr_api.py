@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from hhtools.integrations import gvhmr
 from hhtools.web import server
+from hhtools.web.server import state as server_state
 
 
 def _create_test_app(tmp_path: Path, monkeypatch):
@@ -14,8 +15,8 @@ def _create_test_app(tmp_path: Path, monkeypatch):
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    monkeypatch.setattr(server, "_tmpdir", local_tmpdir)
-    monkeypatch.setattr(server, "_robot_library_root", lambda: tmp_path / "robots")
+    monkeypatch.setattr(server_state, "_tmpdir", local_tmpdir)
+    monkeypatch.setattr(server_state, "_robot_library_root", lambda: tmp_path / "robots")
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     return server.create_app(
         source_root=tmp_path / "motions",

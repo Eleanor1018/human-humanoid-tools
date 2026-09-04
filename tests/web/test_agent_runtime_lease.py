@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from hhtools.services import RuntimeLeaseError
 from hhtools.web import server
+from hhtools.web.server import state as server_state
 
 
 def _app(tmp_path: Path, *, cache_name: str):
@@ -29,7 +30,7 @@ def test_create_app_holds_one_runtime_until_its_workers_stop(
         str(tmp_path / "motion-library"),
     )
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
-    monkeypatch.setattr(server, "_robot_library_root", lambda: tmp_path / "robots")
+    monkeypatch.setattr(server_state, "_robot_library_root", lambda: tmp_path / "robots")
 
     first = _app(tmp_path, cache_name="cache-first")
     assert first.state.agent_runtime_lease.held is True

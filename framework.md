@@ -84,8 +84,11 @@ hhtools/
 │   └── cache.py           #   临时 NPZ 缓存
 │
 ├── web/                   # 第 5 层：HTML / three.js Web UI（推荐入口）
-│   ├── server.py          #   FastAPI 后端
-│   ├── serialize.py       #   Motion / Robot → JSON / GLB
+│   ├── server/            #   FastAPI 组合根、路由与功能 runtime
+│   │   ├── factory.py     #   应用装配
+│   │   ├── routes/        #   按功能注册 HTTP 路由
+│   │   └── *_runtime.py   #   Job / Motion / Retarget 等应用编排
+│   ├── output/serialize.py #  Motion / Robot → JSON / GLB
 │   └── static/            #   前端 SPA
 │
 └── cli/                   # Typer CLI（convert / import / robot / retarget / web）
@@ -264,9 +267,9 @@ J_L = \mathrm{kron}(L, I_3) \cdot J_V, \quad
 ## 7. Web UI 架构
 
 ```
-浏览器（three.js）          FastAPI（hhtools/web/server.py）
+浏览器（three.js）          FastAPI（hhtools/web/server/）
      │                              │
-     │  REST / WebSocket            │
+     │  HTTP JSON / multipart       │
      ├──── motion/upload ──────────►│ io.load_motion → Motion
      ├──── robot/upload ───────────►│ robot.scaffold → URDFRobotModel
      ├──── calibration/save ───────►│ retarget.calibration
@@ -286,7 +289,7 @@ J_L = \mathrm{kron}(L, I_3) \cdot J_V, \quad
 | 新数据集 | 继承 `DatasetAdapter`，`@register_dataset` | `hhtools.io.datasets.base` |
 | 新机器人 | URDF + meshes → `configs/robots/<name>/`，`hhtools robot validate` | `hhtools.robot.registry` |
 | 新重映射后端 | 实现 `pipeline.run(motion) → RetargetedMotion` | `hhtools.retarget` |
-| 新 Web 端点 | `web/server.py` 加路由 + `serialize.py` | `hhtools.web` |
+| 新 Web 端点 | 在 `web/server/routes/` 对应功能注册路由 | `hhtools.web.server` |
 
 ---
 
