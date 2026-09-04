@@ -205,7 +205,7 @@ export function VideoToMotionView() {
             >
               <input
                 ref={fileInput}
-                className="sr-only"
+                className="hidden"
                 type="file"
                 accept="video/mp4,video/quicktime,video/x-matroska,video/x-msvideo,video/webm,.m4v"
                 onChange={(event) => selectVideo(event.target.files?.[0] ?? null)}
