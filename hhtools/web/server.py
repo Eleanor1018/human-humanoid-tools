@@ -1097,6 +1097,8 @@ def _create_app_owned(
         files = request.get("files")
         if isinstance(entries, list):
             summary["entry_count"] = len(entries)
+        elif isinstance(request.get("entry_count"), int):
+            summary["entry_count"] = request["entry_count"]
         if isinstance(files, list):
             summary["file_count"] = len(files)
         elif isinstance(request.get("file_count"), int):
@@ -2921,6 +2923,7 @@ def _create_app_owned(
                 ref.profile,
                 upload_profile=ref.profile,
                 clip_kind=ref.clip_kind,
+                origin="local",
             )
             for ref in clips
         ]
@@ -3878,10 +3881,17 @@ def _create_app_owned(
             )
             requested_batch = max(1, min(256, int(body.get("batch_size", 16))))
             batch_size = requested_batch
-            entries = [
-                _enrich_basket_entry(e, default_reference)
-                for e in (body.get("entries") or state.basket)
-            ]
+            source_root: Path | None = None
+            source_profile: str | None = None
+            if "source" in body:
+                source_root, source_profile, entries = _entries_for_batch_source(
+                    body.get("source"), body.get("profile")
+                )
+            else:
+                entries = [
+                    _enrich_basket_entry(e, default_reference)
+                    for e in (body.get("entries") or state.basket)
+                ]
             model = state.robots[robot]
             if backend != "interaction_mesh":
                 from hhtools.retarget.newton_basic.batch_limits import clamp_gpu_batch_size
@@ -3895,24 +3905,32 @@ def _create_app_owned(
                         robot,
                     )
 
-            job.request = _snapshot_job_request(
-                {
-                    **job.request,
-                    "entries": entries,
-                    "robot": robot,
-                    "reference": default_reference,
-                    "backend": backend,
-                    "ik_iterations": ik_iters,
-                    "human_height": human_height,
-                    "limit_frames": limit_frames,
-                    "batch_size": batch_size,
-                    "retarget_fps": retarget_fps,
-                    "export_fps": export_fps,
-                    "format": fmt,
-                    "csv_header": csv_header,
-                    "out_dir": out_name,
-                }
-            )
+            effective_request = {
+                **job.request,
+                "robot": robot,
+                "reference": default_reference,
+                "backend": backend,
+                "ik_iterations": ik_iters,
+                "human_height": human_height,
+                "limit_frames": limit_frames,
+                "batch_size": batch_size,
+                "retarget_fps": retarget_fps,
+                "export_fps": export_fps,
+                "format": fmt,
+                "csv_header": csv_header,
+                "out_dir": out_name,
+            }
+            if source_root is None:
+                effective_request["entries"] = entries
+            else:
+                # Keep large directory batches out of the persisted job JSON.
+                effective_request.pop("entries", None)
+                effective_request.update(
+                    source=str(source_root),
+                    profile=source_profile,
+                    entry_count=len(entries),
+                )
+            job.request = _snapshot_job_request(effective_request)
             out_dir = state.export_root / job.id
             if out_dir.exists():
                 shutil.rmtree(out_dir, ignore_errors=True)
@@ -4132,7 +4150,14 @@ def _create_app_owned(
 
     @app.post("/api/batch/retarget")
     async def batch_retarget(body: dict) -> dict:
-        job = _schedule_job("batch", body, _run_batch_job, args=(body,))
+        request = dict(body)
+        if "source" in request:
+            try:
+                request["source"] = str(_resolve_batch_source(request.get("source")))
+            except ValueError as err:
+                raise HTTPException(status_code=400, detail=str(err)) from err
+            request["profile"] = _normalise_batch_profile(request.get("profile"))
+        job = _schedule_job("batch", request, _run_batch_job, args=(request,))
         return {"job_id": job.id}
 
     # ----------------------------------------------------------------- export
@@ -4813,8 +4838,9 @@ def _library_entry_from_upload(
     *,
     upload_profile: str | None = None,
     clip_kind: str = "",
+    origin: str = "upload",
 ) -> dict:
-    """Build a batch-basket / library-shaped entry for an uploaded clip."""
+    """Build a batch entry for a direct-path clip, uploaded or server-local."""
     from hhtools.web.library.upload_resolve import export_subdir_for_clip
 
     picked = Path(picked).resolve()
@@ -4842,7 +4868,7 @@ def _library_entry_from_upload(
         "sequence_id": sequence_id,
         "source_path": str(picked),
         "stem": stem,
-        "origin": "upload",
+        "origin": origin,
         "export_subdir": export_subdir_for_clip(drop_dir, picked),
         "upload_profile": prof,
         "clip_kind": clip_kind,
@@ -4850,13 +4876,57 @@ def _library_entry_from_upload(
     })
 
 
+def _normalise_batch_profile(profile: object) -> str:
+    return str(profile or "auto").strip().lower() or "auto"
+
+
+def _resolve_batch_source(source: object) -> Path:
+    raw = str(source or "").strip()
+    if not raw:
+        raise ValueError("请填写本机目录路径")
+    root = Path(raw).expanduser()
+    if not root.is_dir():
+        raise ValueError(f"目录不存在：{root}")
+    return root.resolve()
+
+
+def _entries_for_batch_source(
+    source: object,
+    profile: object = "auto",
+) -> tuple[Path, str, list[dict]]:
+    """Enumerate a local batch directory while leaving every clip in place."""
+    from hhtools.web.library.upload_resolve import (
+        enumerate_upload_clips,
+        upload_validation_error,
+    )
+
+    root = _resolve_batch_source(source)
+    normalized_profile = _normalise_batch_profile(profile)
+    clips = enumerate_upload_clips(root, normalized_profile)
+    if not clips:
+        raise ValueError(upload_validation_error(normalized_profile))
+    entries = [
+        _library_entry_from_upload(
+            root,
+            ref.path,
+            ref.dataset,
+            ref.profile,
+            upload_profile=ref.profile,
+            clip_kind=ref.clip_kind,
+            origin="local",
+        )
+        for ref in clips
+    ]
+    return root, normalized_profile, entries
+
+
 def _load_clip_for_batch(entry_dict: dict, entry, cache):
-    """Load a basket clip — uploaded paths bypass adapter-only cache conversion."""
+    """Load uploaded/local paths directly; managed-library entries use cache."""
     from hhtools.viewer.cache import _attach_library_folder_label
     from hhtools.web.library.motion_library_links import resolve_clip_on_disk
     from hhtools.web.library.upload_resolve import load_clip_at_path
 
-    if entry_dict.get("origin") != "upload":
+    if entry_dict.get("origin") not in {"upload", "local"}:
         entry_dict = dict(entry_dict)
         entry_dict["source_path"] = str(entry.source_path)
         return cache.load_motion(entry)
@@ -5709,8 +5779,8 @@ def _set_retarget_job_clip_progress(job: Job | None, value: float, message: str)
 
 
 def _batch_export_subdir(entry: dict) -> str | None:
-    """Export folder: preserve drag-in tree for uploads, else per-dataset."""
-    if entry.get("origin") == "upload":
+    """Preserve imported directory trees; group library clips by dataset."""
+    if entry.get("origin") in {"upload", "local"}:
         sub = (entry.get("export_subdir") or "").strip().replace("\\", "/")
         return sub or None
     return _dataset_subdir(entry)
