@@ -3,13 +3,30 @@ import test from "node:test";
 
 import {
   boundedProgress,
+  canSetupGvhmrInDesktop,
   getGvhmrRuntimeStatus,
   isSupportedVideoName,
   parseOptionalFocalLength,
+  setupGvhmrInDesktop,
   startVideoToMotion,
   summarizeMotionResult,
   waitForVideoToMotion,
 } from "../src/video-to-motion/api.ts";
+
+test("uses the narrow desktop bridge only when Electron exposes it", async () => {
+  const webHost = {};
+  const desktopHost = {
+    hhtoolsDesktop: {
+      setupGvhmr: async () => ({ action: "configured" as const }),
+    },
+  };
+
+  assert.equal(canSetupGvhmrInDesktop(webHost), false);
+  assert.equal(canSetupGvhmrInDesktop(desktopHost), true);
+  assert.deepEqual(await setupGvhmrInDesktop(desktopHost), {
+    action: "configured",
+  });
+});
 
 test("validates video names and optional focal length", () => {
   assert.equal(isSupportedVideoName("walk.MP4"), true);

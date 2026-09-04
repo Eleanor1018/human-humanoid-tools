@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
+  canSetupGvhmrInDesktop,
   formatFileSize,
   getGvhmrRuntimeStatus,
   isSupportedVideoName,
   parseOptionalFocalLength,
   startVideoToMotion,
+  setupGvhmrInDesktop,
   summarizeMotionResult,
   waitForVideoToMotion,
   type GvhmrRuntimeStatus,
@@ -38,6 +40,7 @@ export function VideoToMotionPage() {
   const [job, setJob] = useState<VideoToMotionJob | null>(null);
   const [workflowError, setWorkflowError] = useState<string | null>(null);
   const [result, setResult] = useState<MotionResultSummary | null>(null);
+  const [setupBusy, setSetupBusy] = useState(false);
   const runtimeRequestRef = useRef<AbortController | null>(null);
   const operationRef = useRef<AbortController | null>(null);
 
@@ -156,6 +159,20 @@ export function VideoToMotionPage() {
     }
   };
 
+  const configureRuntime = async () => {
+    setSetupBusy(true);
+    setRuntimeError(null);
+    try {
+      const setup = await setupGvhmrInDesktop();
+      if (setup.action === "configured") refreshRuntime();
+    } catch (error) {
+      setRuntimePhase("error");
+      setRuntimeError(errorMessage(error));
+    } finally {
+      setSetupBusy(false);
+    }
+  };
+
   const runtimeLabel =
     runtimePhase === "checking"
       ? "Checking local GVHMR"
@@ -186,11 +203,21 @@ export function VideoToMotionPage() {
         >
           <span className="runtime-status-dot" aria-hidden="true" />
           <span>{runtimeLabel}</span>
+          {canSetupGvhmrInDesktop() && runtimePhase !== "ready" && (
+            <button
+              type="button"
+              className="quiet-button"
+              onClick={() => void configureRuntime()}
+              disabled={runtimePhase === "checking" || busy || setupBusy}
+            >
+              {setupBusy ? "Setting up…" : "Set up"}
+            </button>
+          )}
           <button
             type="button"
             className="quiet-button"
             onClick={refreshRuntime}
-            disabled={runtimePhase === "checking" || busy}
+            disabled={runtimePhase === "checking" || busy || setupBusy}
           >
             Refresh
           </button>

@@ -110,6 +110,34 @@ export interface GvhmrRuntimeStatus {
   readonly training_enabled?: boolean;
 }
 
+export interface DesktopGvhmrSetupResult {
+  readonly action: "cancelled" | "configured" | "guide-opened";
+}
+
+interface DesktopGvhmrBridge {
+  setupGvhmr(): Promise<DesktopGvhmrSetupResult>;
+}
+
+function desktopGvhmrBridge(host: unknown = globalThis): DesktopGvhmrBridge | null {
+  const candidate = (host as { hhtoolsDesktop?: Partial<DesktopGvhmrBridge> })
+    .hhtoolsDesktop;
+  return typeof candidate?.setupGvhmr === "function"
+    ? (candidate as DesktopGvhmrBridge)
+    : null;
+}
+
+export function canSetupGvhmrInDesktop(host: unknown = globalThis): boolean {
+  return desktopGvhmrBridge(host) !== null;
+}
+
+export async function setupGvhmrInDesktop(
+  host: unknown = globalThis,
+): Promise<DesktopGvhmrSetupResult> {
+  const bridge = desktopGvhmrBridge(host);
+  if (!bridge) throw new Error("GVHMR setup is available in the desktop app only.");
+  return bridge.setupGvhmr();
+}
+
 export type VideoToMotionJobState =
   | "pending"
   | "running"
