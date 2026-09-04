@@ -16,9 +16,12 @@ src/
 ├── components/
 │   ├── Navbar.tsx           # Five-item application menu shell
 │   ├── Sidebar.tsx          # Fixed seven-item feature navigation
+│   ├── Inspector.tsx        # Shared fixed right-side page frame
+│   ├── ImportDropzone.tsx   # Shared visual import surface
 │   └── ui/                  # Project-owned shadcn primitives
 ├── features/                # One folder per product feature
 │   ├── motion/
+│   │   └── MotionView.tsx   # Motion inspector and local import mode state
 │   ├── robot/
 │   ├── h2r/
 │   ├── r2r/
@@ -68,7 +71,8 @@ main -> App -> features -> api -> FastAPI
 - [x] Five-item top menu and dropdown shells
 - [x] Fixed seven-item left navigation
 - [x] Minimal shadcn foundation and floating Stage view menu
-- [ ] Motion feature
+- [x] Motion inspector visual shell
+- [ ] Motion backend integration
 
 ## References
 

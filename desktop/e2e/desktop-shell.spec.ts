@@ -105,12 +105,34 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
       'aria-current',
       'page'
     )
+
+    const inspector = page.getByRole('complementary', { name: 'Inspector' })
+    await expect(inspector.getByRole('heading', { name: 'Motion' })).toBeVisible()
+    await expect(inspector.getByRole('heading', { name: 'Library' })).toBeVisible()
+    const profilePicker = inspector.getByRole('radiogroup', { name: 'Motion import type' })
+    await expect(profilePicker.getByRole('radio')).toHaveText([
+      'mimic',
+      'intermimic',
+      'meshmimic'
+    ])
+    await expect(
+      profilePicker.getByRole('radio', { name: 'mimic', exact: true })
+    ).toBeChecked()
+    await expect(inspector.getByText('Drop a motion file or folder')).toBeVisible()
+    expect((await inspector.boundingBox())?.width).toBeCloseTo(360, 0)
+    await profilePicker.getByRole('radio', { name: 'intermimic', exact: true }).click()
+    await expect(
+      inspector.getByText('Drop an object-interaction motion folder')
+    ).toBeVisible()
+    await expect(inspector.getByRole('button', { name: 'Choose file' })).toHaveCount(0)
+
     await sidebar.getByRole('button', { name: 'Human → Robot' }).click()
     await expect(page.locator('#app')).toHaveAttribute('data-active-view', 'h2r')
     await expect(sidebar.getByRole('button', { name: 'Human → Robot' })).toHaveAttribute(
       'aria-current',
       'page'
     )
+    await expect(inspector.getByRole('heading', { name: 'Motion' })).toHaveCount(0)
     await expect(page.locator('.workspace-drawer-handle, .col-resizer')).toHaveCount(0)
 
     const stage = page.getByRole('main', { name: 'Workspace content' })
