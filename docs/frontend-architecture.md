@@ -20,6 +20,7 @@ src/
 │   ├── ImportDropzone.tsx   # Shared visual import surface
 │   ├── SearchField.tsx      # Shared compact search control
 │   ├── WorkflowSteps.tsx    # Shared pipeline and disclosure structure
+│   ├── Field.tsx            # Shared compact form field
 │   └── ui/                  # Project-owned shadcn primitives
 ├── features/                # One folder per product feature
 │   ├── motion/
@@ -27,6 +28,7 @@ src/
 │   ├── robot/
 │   │   └── RobotView.tsx    # Robot import and library shell
 │   ├── h2r/
+│   │   └── HumanToRobotView.tsx
 │   ├── r2r/
 │   ├── batch/
 │   ├── video2motion/
@@ -78,6 +80,7 @@ main -> App -> features -> api -> FastAPI
 - [x] Motion inspector visual shell
 - [x] Robot inspector visual shell
 - [x] Video-to-Motion inspector visual shell
+- [x] Human-to-Robot inspector visual shell
 - [ ] Motion backend integration
 
 ## References

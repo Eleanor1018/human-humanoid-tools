@@ -5,6 +5,7 @@ import { Navbar } from "./components/Navbar";
 import { Sidebar } from "./components/Sidebar";
 import { MotionView } from "./features/motion/MotionView";
 import { RobotView } from "./features/robot/RobotView";
+import { HumanToRobotView } from "./features/h2r/HumanToRobotView";
 import { VideoToMotionView } from "./features/video-to-motion/VideoToMotionView";
 import { cn } from "./lib/utils";
 import type { ViewId } from "./navigation";
@@ -14,6 +15,7 @@ const inspectorViews: Partial<Record<ViewId, ComponentType>> = {
   motion: MotionView,
   "robot-assets": RobotView,
   "video-to-motion": VideoToMotionView,
+  h2r: HumanToRobotView,
 };
 
 export function App() {

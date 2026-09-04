@@ -145,6 +145,10 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
       'aria-current',
       'page'
     )
+    await expect(inspector.getByRole('heading', { name: 'Human → Robot' })).toBeVisible()
+    await expect(page.getByRole('list', { name: 'Human to Robot pipeline' })).toBeVisible()
+    await expect(inspector.locator('details')).toHaveCount(4)
+    await expect(inspector.getByRole('button', { name: 'Select motion' })).toBeDisabled()
     await expect(inspector.getByRole('heading', { name: 'Motion' })).toHaveCount(0)
     await expect(page.locator('.workspace-drawer-handle, .col-resizer')).toHaveCount(0)
 
