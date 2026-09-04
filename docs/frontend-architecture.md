@@ -21,6 +21,8 @@ src/
 │   ├── SearchField.tsx      # Shared compact search control
 │   ├── WorkflowSteps.tsx    # Shared pipeline and disclosure structure
 │   ├── Field.tsx            # Shared compact form field
+│   ├── RobotPicker.tsx      # Shared robot selection shell
+│   ├── RetargetControls.tsx # Shared retarget settings shell
 │   └── ui/                  # Project-owned shadcn primitives
 ├── features/                # One folder per product feature
 │   ├── motion/
@@ -30,6 +32,7 @@ src/
 │   ├── h2r/
 │   │   └── HumanToRobotView.tsx
 │   ├── r2r/
+│   │   └── RobotToRobotView.tsx
 │   ├── batch/
 │   ├── video2motion/
 │   │   └── VideoToMotionView.tsx
@@ -81,6 +84,7 @@ main -> App -> features -> api -> FastAPI
 - [x] Robot inspector visual shell
 - [x] Video-to-Motion inspector visual shell
 - [x] Human-to-Robot inspector visual shell
+- [x] Robot-to-Robot inspector visual shell
 - [ ] Motion backend integration
 
 ## References

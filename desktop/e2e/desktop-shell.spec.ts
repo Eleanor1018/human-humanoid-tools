@@ -150,6 +150,12 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
     await expect(inspector.locator('details')).toHaveCount(4)
     await expect(inspector.getByRole('button', { name: 'Select motion' })).toBeDisabled()
     await expect(inspector.getByRole('heading', { name: 'Motion' })).toHaveCount(0)
+
+    await sidebar.getByRole('button', { name: 'Robot → Robot' }).click()
+    await expect(inspector.getByRole('heading', { name: 'Robot → Robot' })).toBeVisible()
+    await expect(page.getByRole('list', { name: 'Robot to Robot pipeline' })).toBeVisible()
+    await expect(inspector.locator('details')).toHaveCount(5)
+    await expect(inspector.getByText('No source robot loaded.')).toBeVisible()
     await expect(page.locator('.workspace-drawer-handle, .col-resizer')).toHaveCount(0)
 
     const stage = page.getByRole('main', { name: 'Workspace content' })
