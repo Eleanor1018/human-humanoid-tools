@@ -81,7 +81,9 @@ def normalize_job_spec(payload: Any) -> dict[str, Any]:
     return build_job_spec(kind, request)
 
 
-def _source_paths(spec: dict[str, Any]) -> tuple[list[Path], str | None]:
+def _source_paths(  # noqa: PLR0911 - each invalid source shape has a specific reason
+    spec: dict[str, Any],
+) -> tuple[list[Path], str | None]:
     kind = spec["kind"]
     request = spec["request"]
     if kind == "retarget":
@@ -89,6 +91,10 @@ def _source_paths(spec: dict[str, Any]) -> tuple[list[Path], str | None]:
         if not isinstance(raw, str) or not raw.strip():
             return [], "任务只保留了会话 token，没有可重开的源文件路径。"
         return [Path(raw).expanduser()], None
+
+    raw_source = request.get("source")
+    if isinstance(raw_source, str) and raw_source.strip():
+        return [Path(raw_source).expanduser()], None
 
     entries = request.get("entries")
     if not isinstance(entries, list) or not entries:
@@ -142,6 +148,18 @@ def replay_capability(  # noqa: PLR0911 - each failure mode has a user-facing re
         except OSError:
             resolved_ephemeral = None
 
+    directory_source = (
+        kind == "batch"
+        and isinstance(request.get("source"), str)
+        and bool(str(request["source"]).strip())
+    )
+    source_count = (
+        int(request["entry_count"])
+        if directory_source
+        and isinstance(request.get("entry_count"), int)
+        and request["entry_count"] >= 0
+        else len(paths)
+    )
     for path in paths:
         try:
             resolved = path.resolve()
@@ -149,19 +167,25 @@ def replay_capability(  # noqa: PLR0911 - each failure mode has a user-facing re
             return {
                 "available": False,
                 "reason": f"无法解析源文件：{path}",
-                "source_count": len(paths),
+                "source_count": source_count,
             }
-        if not resolved.is_file():
+        if directory_source and not resolved.is_dir():
+            return {
+                "available": False,
+                "reason": f"源目录已不存在：{resolved}",
+                "source_count": source_count,
+            }
+        if not directory_source and not resolved.is_file():
             return {
                 "available": False,
                 "reason": f"源文件已不存在：{resolved}",
-                "source_count": len(paths),
+                "source_count": source_count,
             }
         if resolved_ephemeral is not None and resolved.is_relative_to(resolved_ephemeral):
             return {
                 "available": False,
                 "reason": "源文件仍在临时上传目录，请先保存到 Motion Library。",
-                "source_count": len(paths),
+                "source_count": source_count,
             }
 
-    return {"available": True, "reason": None, "source_count": len(paths)}
+    return {"available": True, "reason": None, "source_count": source_count}

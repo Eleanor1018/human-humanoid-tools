@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from hhtools.robot import registry as robot_registry
 from hhtools.web import server
+from hhtools.web.jobs.job_specs import build_job_spec, replay_capability
 from hhtools.web.library import upload_resolve
 
 
@@ -50,7 +51,28 @@ def test_local_batch_entries_keep_original_paths(tmp_path: Path, monkeypatch) ->
     assert profile == "auto"
     assert entries[0]["source_path"] == str(clip.resolve())
     assert entries[0]["upload_drop"] == str(source.resolve())
+    assert entries[0]["origin"] == "local"
     assert [path for path in tmp_path.rglob("*") if path.is_file()] == [clip]
+
+
+def test_local_batch_directory_is_replayable(tmp_path: Path) -> None:
+    source = tmp_path / "motions"
+    source.mkdir()
+    spec = build_job_spec(
+        "batch",
+        {
+            "robot": "test_robot",
+            "source": str(source),
+            "profile": "auto",
+            "entry_count": 10_000,
+        },
+    )
+
+    assert replay_capability(spec) == {
+        "available": True,
+        "reason": None,
+        "source_count": 10_000,
+    }
 
 
 def test_local_batch_history_keeps_source_not_entries(tmp_path: Path, monkeypatch) -> None:
