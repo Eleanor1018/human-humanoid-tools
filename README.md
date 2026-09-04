@@ -96,11 +96,10 @@ You can also launch **Human-Humanoid Tools** from the application menu. See the
 ### Frontend development
 
 The WebUI and Electron GUI use one React + TypeScript renderer from
-`hhtools/web/frontend`; Electron-specific operations are exposed through the typed host service,
-so UI components are not forked. The source layout follows a VS Code-style separation:
-`base/` contains lifecycle utilities, `platform/` contains host and event boundaries, and
-`workbench/` composes reusable panels, workflows, and services. Tailwind CSS supplies tokens and
-utilities, while project-owned shadcn/ui primitives live in `src/components/ui`.
+`hhtools/web/frontend`; Electron loads the same page through its local FastAPI sidecar, so there is
+no second GUI renderer. The current frontend is an intentionally empty bootstrap. Tailwind CSS is
+wired into the build, while shadcn/ui primitives will be added only when the first real view needs
+them.
 
 ```bash
 cd hhtools/web/frontend
@@ -111,9 +110,7 @@ npm run build
 ```
 
 The production build is written to `hhtools/web/static`, which is served unchanged by both
-FastAPI and Electron. The existing Three.js/IK workflow runtime is currently loaded through a
-documented compatibility service; new UI state and components should stay in the React workbench
-instead of adding new direct DOM manipulation.
+FastAPI and Electron.
 
 Web jobs are unlimited by default. To enable FIFO admission control on a shared or
 memory-constrained GPU, set positive concurrency and an optional queue capacity:
