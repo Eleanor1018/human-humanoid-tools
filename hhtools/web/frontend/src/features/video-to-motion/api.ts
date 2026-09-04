@@ -250,7 +250,6 @@ export async function waitForVideoToMotion(
     if (job.kind !== "video_to_motion") {
       throw new Error(`Job ${job.id} has kind ${job.kind}; expected video_to_motion.`);
     }
-    options.onUpdate(job);
 
     if (job.status === "done") {
       if (job.scope === "persistent") {
@@ -265,6 +264,7 @@ export async function waitForVideoToMotion(
     if (job.status !== "pending" && job.status !== "running") {
       throw new Error(`Job ${job.id} returned an unknown status.`);
     }
+    options.onUpdate(job);
     await delay(interval, options.signal);
   }
 }

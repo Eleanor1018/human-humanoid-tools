@@ -85,7 +85,7 @@ test("polls progress and returns the completed motion", async () => {
     },
     async () => Response.json(responses.shift()),
   );
-  assert.deepEqual(updates, [1, 1]);
+  assert.deepEqual(updates, [1]);
   assert.equal(result.token, "motion-token");
 });
 
