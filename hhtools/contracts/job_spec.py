@@ -1,6 +1,6 @@
 """Auditable JobSpec v2 contract.
 
-JobSpec v1 remains implemented in :mod:`hhtools.web.job_specs`; this module
+JobSpec v1 remains implemented in :mod:`hhtools.web.jobs.job_specs`; this module
 does not reinterpret or rewrite it.  A v1 replay must register its assets and
 run preflight before a truthful v2 spec can be created.
 """

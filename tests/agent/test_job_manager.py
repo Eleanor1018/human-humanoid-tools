@@ -33,7 +33,7 @@ from hhtools.services.jobs import (
     JobManager,
     JobManagerError,
 )
-from hhtools.web.job_scheduler import JobScheduler
+from hhtools.web.jobs.job_scheduler import JobScheduler
 
 
 def _spec(marker: str = "1", *, run_mode: str = "smoke") -> JobSpecV2:

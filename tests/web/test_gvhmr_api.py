@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from hhtools.integrations import gvhmr
 from hhtools.web import server
+from hhtools.web.server import state as server_state
 
 
 def _create_test_app(tmp_path: Path, monkeypatch):
@@ -14,8 +15,8 @@ def _create_test_app(tmp_path: Path, monkeypatch):
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    monkeypatch.setattr(server, "_tmpdir", local_tmpdir)
-    monkeypatch.setattr(server, "_robot_library_root", lambda: tmp_path / "robots")
+    monkeypatch.setattr(server_state, "_tmpdir", local_tmpdir)
+    monkeypatch.setattr(server_state, "_robot_library_root", lambda: tmp_path / "robots")
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     return server.create_app(
         source_root=tmp_path / "motions",
@@ -33,8 +34,9 @@ def _status(*, ready: bool) -> dict:
         "root": "C:/GVHMR",
         "body_models_root": "C:/GVHMR/inputs/checkpoints/body_models",
         "image": "hhtools-gvhmr:cu128",
+        "runtime": "local",
         "uses_official_weights": True,
-        "supports_custom_weights": True,
+        "supports_custom_weights": False,
         "training_enabled": False,
     }
 
@@ -83,7 +85,7 @@ def test_video_upload_rejects_non_video_extension(tmp_path: Path, monkeypatch) -
     assert not list(app.state.session_state.upload_root.rglob("clip.txt"))
 
 
-def test_video_upload_accepts_arbitrary_custom_checkpoint_as_best_effort(
+def test_video_upload_records_official_weights_for_the_job(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -94,42 +96,10 @@ def test_video_upload_accepts_arbitrary_custom_checkpoint_as_best_effort(
     with TestClient(app) as client:
         response = client.post(
             "/api/video-to-motion/upload",
-            files=[
-                ("files", ("clip.mp4", b"video", "video/mp4")),
-                ("checkpoint", ("weights.zip", b"weights", "application/zip")),
-            ],
+            files=[("files", ("clip.mp4", b"video", "video/mp4"))],
         )
 
         assert response.status_code == 200
         job = app.state.session_state.jobs[response.json()["job_id"]]
-        assert job.request["weights"] == "custom"
-        assert job.request["checkpoint_name"] == "weights.zip"
-
-
-def test_video_upload_records_custom_checkpoint_for_the_job(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    monkeypatch.setattr(gvhmr, "gvhmr_status", lambda: _status(ready=True))
-
-    def stop_after_dispatch(*_args, **_kwargs):
-        raise RuntimeError("stop after dispatch")
-
-    monkeypatch.setattr(gvhmr, "run_gvhmr", stop_after_dispatch)
-    app = _create_test_app(tmp_path, monkeypatch)
-
-    with TestClient(app) as client:
-        response = client.post(
-            "/api/video-to-motion/upload",
-            files=[
-                ("files", ("clip.mp4", b"video", "video/mp4")),
-                (
-                    "checkpoint",
-                    ("trained.ckpt", b"weights", "application/octet-stream"),
-                ),
-            ],
-        )
-        assert response.status_code == 200
-        job = app.state.session_state.jobs[response.json()["job_id"]]
-        assert job.request["weights"] == "custom"
-        assert job.request["checkpoint_name"] == "trained.ckpt"
+        assert job.request["weights"] == "official"
+        assert "checkpoint_name" not in job.request

@@ -1,0 +1,118 @@
+# Frontend Architecture
+
+## Goal
+
+Keep one small React renderer for both WebUI and Electron GUI. Organize code by
+user-facing feature, with explicit dependencies and no legacy runtime bridge.
+Visual implementation follows [Frontend Visual Design](./frontend-design.md).
+
+## Structure
+
+```text
+src/
+├── main.tsx                 # React bootstrap only
+├── App.tsx                  # Composition and small shared state
+├── navigation.ts            # Shared view identities and sidebar data
+├── components/
+│   ├── Navbar.tsx           # Five-item application menu shell
+│   ├── Sidebar.tsx          # Fixed seven-item feature navigation
+│   ├── Inspector.tsx        # Shared fixed right-side page frame
+│   ├── ImportDropzone.tsx   # Shared visual import surface
+│   ├── SearchField.tsx      # Shared compact search control
+│   ├── SegmentedControl.tsx # Shared three-way local selector
+│   ├── WorkflowSteps.tsx    # Shared pipeline and disclosure structure
+│   ├── Field.tsx            # Shared compact form field
+│   ├── RobotPicker.tsx      # Shared robot selection shell
+│   ├── RetargetControls.tsx # Shared retarget settings shell
+│   └── ui/                  # Project-owned shadcn primitives
+├── features/                # One folder per product feature
+│   ├── motion/
+│   │   └── MotionView.tsx   # Motion inspector and local import mode state
+│   ├── robot/
+│   │   └── RobotView.tsx    # Robot import and library shell
+│   ├── h2r/
+│   │   └── HumanToRobotView.tsx
+│   ├── r2r/
+│   │   └── RobotToRobotView.tsx
+│   ├── batch/
+│   │   └── BatchView.tsx    # Local V2M/H2R/R2R shells
+│   ├── video-to-motion/
+│   │   └── VideoToMotionView.tsx
+│   └── analysis/
+│       └── AnalysisView.tsx # Dataset analysis shell
+├── stage/                   # R3F Stage surface and floating view controls
+│   ├── StageCanvas.tsx      # One Canvas, camera, controls, lights and grid
+│   ├── StageEmpty.tsx       # Legacy initial empty-state copy
+│   ├── SkeletonLayer.tsx    # Data-only source skeleton first-frame layer
+│   ├── types.ts             # Stage renderer data contracts
+│   └── StageViewMenu.tsx    # React visibility HUD
+└── styles.css
+```
+
+Directories and files are created only when their first real user exists.
+
+## Dependencies
+
+```text
+main -> App -> features -> components/ui
+             |
+             +-> stage
+```
+
+- `main.tsx` only mounts `App`.
+- `App.tsx` composes views; it does not implement workflows.
+- A feature owns its view and local state.
+- Features do not reach into another feature's internal files.
+- `stage/` and shared components never import from features.
+- Browser code never imports Python, Node, or Electron directly.
+
+### Stage renderer
+
+- `StageCanvas.tsx` owns the single R3F `<Canvas>` and its local orbit control.
+- The scene keeps the legacy camera, transparent renderer, lights, grid, axes,
+  and Z-up world transform; overlays stay ordinary React siblings.
+- `@react-three/drei` is intentionally not installed. Direct Three addon imports
+  keep the first renderer slice small and explicit.
+- Motion, terrain, baked body, and robot payloads will arrive through typed
+  React-owned state. Layer components must not call FastAPI or read `window`.
+
+## Growth Rules
+
+- Start a feature with one view file. Split out `api.ts` or `model.ts` only when
+  that responsibility becomes independently useful or testable.
+- Keep endpoint calls inside the owning feature; add a shared API primitive only
+  after a second real feature needs it.
+- Extract shared code after a second real caller appears.
+- Keep server state authoritative; use React state for presentation state.
+- Add shadcn components individually. Do not prebuild a component library.
+- Keep only tokens and document-wide defaults in `styles.css`; colocate feature
+  and component styling with their JSX using Tailwind utilities.
+- Do not add a router, global store, event bus, DI container, command registry,
+  or plugin lifecycle without a concrete requirement.
+- Comments explain contracts and reasons, not obvious JSX.
+
+## Current Progress
+
+- [x] Empty shared React renderer
+- [x] Five-item top menu and dropdown shells
+- [x] Fixed seven-item left navigation
+- [x] Minimal shadcn foundation and floating Stage view menu
+- [x] Motion inspector visual shell
+- [x] Robot inspector visual shell
+- [x] Video-to-Motion inspector visual shell
+- [x] Human-to-Robot inspector visual shell
+- [x] Robot-to-Robot inspector visual shell
+- [x] Batch inspector visual shell
+- [x] Data Analysis inspector visual shell
+- [x] R3F Stage base scene (camera, controls, lights, axes, grid)
+- [x] R3F source skeleton first-frame layer and V2M result handoff
+- [ ] R3F motion/robot/environment payload layers
+- [ ] Motion backend integration
+
+## References
+
+- [VS Code source organization](https://github.com/microsoft/vscode/wiki/source-code-organization)
+- [Grafana navigation patterns](https://grafana.com/developers/saga/patterns/navigation/)
+- [React state structure](https://react.dev/learn/choosing-the-state-structure)
+- [shadcn Vite setup](https://ui.shadcn.com/docs/installation/vite)
+- [shadcn Toggle Group](https://ui.shadcn.com/docs/components/radix/toggle-group)

@@ -12,6 +12,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from hhtools.agent.api import _error_response, _looks_like_host_path, router
 from hhtools.contracts import (
     ApiError,
     ArtifactDescriptor,
@@ -52,8 +53,8 @@ from hhtools.services.jobs import (
 )
 from hhtools.services.legacy_job_upgrade import LegacyJobUpgradeError
 from hhtools.web import server
-from hhtools.web.agent_api import _error_response, _looks_like_host_path, router
-from hhtools.web.job_scheduler import JobScheduler
+from hhtools.web.jobs.job_scheduler import JobScheduler
+from hhtools.web.server import state as server_state
 
 _DIGEST = "a" * 64
 _ASSET_ID = f"asset:sha256:{_DIGEST}"
@@ -1005,8 +1006,8 @@ def test_full_web_app_registers_agent_api_before_the_static_root(
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    monkeypatch.setattr(server, "_tmpdir", local_tmpdir)
-    monkeypatch.setattr(server, "_robot_library_root", lambda: tmp_path / "robots")
+    monkeypatch.setattr(server_state, "_tmpdir", local_tmpdir)
+    monkeypatch.setattr(server_state, "_robot_library_root", lambda: tmp_path / "robots")
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     monkeypatch.setenv(
         "HHTOOLS_MOTION_LIBRARY_SETTINGS_PATH",
@@ -1202,8 +1203,8 @@ def test_agent_robot_loader_uses_and_releases_an_isolated_manifest_snapshot(
         record_conversion_workspace,
     )
 
-    monkeypatch.setattr(server, "_tmpdir", local_tmpdir)
-    monkeypatch.setattr(server, "_robot_library_root", lambda: robot_library)
+    monkeypatch.setattr(server_state, "_tmpdir", local_tmpdir)
+    monkeypatch.setattr(server_state, "_robot_library_root", lambda: robot_library)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     monkeypatch.setenv(
         "HHTOOLS_MOTION_LIBRARY_SETTINGS_PATH",

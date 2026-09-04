@@ -49,6 +49,7 @@ describe('registerDesktopHandlers', () => {
         gvhmr: {
           requested: false,
           configured: false,
+          runtime: 'local',
           guideUrl: 'https://example.com/gvhmr',
           estimatedAdditionalBytes: 22,
         },
@@ -58,6 +59,7 @@ describe('registerDesktopHandlers', () => {
         state: {
           requested: false,
           configured: false,
+          runtime: 'local',
           guideUrl: 'https://example.com/gvhmr',
           estimatedAdditionalBytes: 22,
         },
@@ -109,6 +111,7 @@ describe('registerDesktopHandlers', () => {
         gvhmr: {
           requested: false,
           configured: false,
+          runtime: 'local',
           guideUrl: 'https://example.com/gvhmr',
           estimatedAdditionalBytes: 22,
         },
@@ -118,6 +121,7 @@ describe('registerDesktopHandlers', () => {
         state: {
           requested: false,
           configured: false,
+          runtime: 'local',
           guideUrl: 'https://example.com/gvhmr',
           estimatedAdditionalBytes: 22,
         },

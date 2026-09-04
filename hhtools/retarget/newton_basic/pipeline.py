@@ -1588,10 +1588,10 @@ class NewtonBasicPipeline:
         below the ground plane.  Anti-floating still uses ankles only so kneeling
         poses are not pulled downward when feet leave the floor.
         """
-        from hhtools.web.serialize import (
-            _ground_contact_zs,
-            _lowest_ankle_z,
-            _quat_xyzw_to_rotmat,
+        from hhtools.robot.foot_geometry import (
+            ground_contact_zs,
+            lowest_ankle_z,
+            quat_xyzw_to_rotmat,
         )
 
         ik_map = dict(self.robot.preset.ik_map) if self.robot.preset.ik_map else {}
@@ -1619,8 +1619,8 @@ class NewtonBasicPipeline:
 
         rest_cfg = {dof_names[i]: 0.0 for i in range(n_dof)}
         self.robot.apply_configuration(rest_cfg)
-        root_rot0 = _quat_xyzw_to_rotmat(out[0, 3:7])
-        rest_ankle = _lowest_ankle_z(self.robot, ik_map, root_rot0)
+        root_rot0 = quat_xyzw_to_rotmat(out[0, 3:7])
+        rest_ankle = lowest_ankle_z(self.robot, ik_map, root_rot0)
         rest_foot_z = float(rest_ankle) if rest_ankle is not None else 0.0
 
         # Signed root-Z correction carried across frames
@@ -1647,14 +1647,14 @@ class NewtonBasicPipeline:
                 for i in range(n_dof)
             }
             self.robot.apply_configuration(cfg)
-            root_rot = _quat_xyzw_to_rotmat(out[f, 3:7])
-            ankle_z = _lowest_ankle_z(self.robot, ik_map, root_rot)
+            root_rot = quat_xyzw_to_rotmat(out[f, 3:7])
+            ankle_z = lowest_ankle_z(self.robot, ik_map, root_rot)
             # Full-body ``trimesh_scene`` min-Z is only needed for the
             # penetration lift.  When the user disables that path (batch CSV
             # export often does), skip mesh entirely — otherwise a 77-clip
             # GPU batch appears "stuck" at 帧 N/N while post-IK walks every
             # vertex of every visual STL for tens of thousands of frames.
-            limb_z, mesh_z = _ground_contact_zs(
+            limb_z, mesh_z = ground_contact_zs(
                 self.robot,
                 ik_map,
                 root_rot,

@@ -45,7 +45,7 @@ from hhtools.contracts import (
     RetargetPreflightRequest,
 )
 from hhtools.retarget.calibration.calibration import normalize_calibration_reference
-from hhtools.web.job_specs import JobSpecError, build_job_spec, normalize_job_spec
+from hhtools.web.jobs.job_specs import JobSpecError, build_job_spec, normalize_job_spec
 
 from .assets import AssetServiceError
 from .retarget import RetargetServiceError

@@ -5,7 +5,8 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from hhtools.web import server
-from hhtools.web.r2r_upload_resolve import r2r_clip_ref_for_path
+from hhtools.web.library.r2r_upload_resolve import r2r_clip_ref_for_path
+from hhtools.web.server import state as server_state
 
 
 def _client(tmp_path: Path, monkeypatch) -> TestClient:
@@ -14,7 +15,7 @@ def _client(tmp_path: Path, monkeypatch) -> TestClient:
         "HHTOOLS_MOTION_LIBRARY_SETTINGS_PATH",
         str(tmp_path / "motion-library-settings.json"),
     )
-    monkeypatch.setattr(server, "_robot_library_root", lambda: tmp_path / "robots")
+    monkeypatch.setattr(server_state, "_robot_library_root", lambda: tmp_path / "robots")
     app = server.create_app(
         source_root=tmp_path / "motions",
         save_dir=tmp_path / "save",

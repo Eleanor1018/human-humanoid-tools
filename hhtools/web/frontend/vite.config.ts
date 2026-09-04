@@ -13,16 +13,15 @@ export default defineConfig({
     },
   },
   server: {
+    host: "127.0.0.1",
     port: 5173,
     proxy: {
       "/api": "http://127.0.0.1:8009",
     },
   },
   build: {
-    // FastAPI and Electron serve this exact output. Host-specific capabilities
-    // are injected behind the preload boundary instead of forking the renderer.
+    // FastAPI and Electron both load this one renderer build.
     outDir: "../static",
-    emptyOutDir: false,
-    sourcemap: true,
+    emptyOutDir: true,
   },
 });

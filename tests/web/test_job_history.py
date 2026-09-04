@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from hhtools.web import server
+from hhtools.web.server import state as server_state
 
 
 def _create_test_app(tmp_path: Path, monkeypatch):
@@ -15,8 +16,8 @@ def _create_test_app(tmp_path: Path, monkeypatch):
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    monkeypatch.setattr(server, "_tmpdir", local_tmpdir)
-    monkeypatch.setattr(server, "_robot_library_root", lambda: tmp_path / "robots")
+    monkeypatch.setattr(server_state, "_tmpdir", local_tmpdir)
+    monkeypatch.setattr(server_state, "_robot_library_root", lambda: tmp_path / "robots")
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     return server.create_app(
@@ -40,7 +41,7 @@ def test_job_list_returns_compact_newest_first_records(
     artifact.write_bytes(b"result")
     wall_now = time.time()
     old_accessed = time.monotonic() - 20
-    older = server.Job(
+    older = server_state.Job(
         id="older",
         kind="retarget",
         request={"robot": "unitree_g1", "backend": "newton"},
@@ -52,7 +53,7 @@ def test_job_list_returns_compact_newest_first_records(
         terminal_since=time.monotonic() - 10,
         last_accessed_at=old_accessed,
     )
-    latest = server.Job(
+    latest = server_state.Job(
         id="latest",
         kind="batch",
         request={"entries": [{"source_path": "a"}, {"source_path": "b"}]},
@@ -99,7 +100,7 @@ def test_job_config_and_status_expose_captured_request(
     app = _create_test_app(tmp_path, monkeypatch)
     state = app.state.session_state
     created = time.time() - 2
-    job = server.Job(
+    job = server_state.Job(
         id="config-job",
         kind="r2r_retarget",
         request={
@@ -156,7 +157,7 @@ def test_job_config_and_status_expose_captured_request(
 
 
 def test_mark_terminal_records_wall_clock_completion() -> None:
-    job = server.Job(id="done-job", kind="test")
+    job = server_state.Job(id="done-job", kind="test")
 
     job.mark_terminal("done")
 
@@ -249,7 +250,7 @@ def test_cli_and_config_download_for_source_backed_h2r_job(
     app = _create_test_app(tmp_path, monkeypatch)
     source = tmp_path / "walk.npz"
     source.write_bytes(b"test")
-    job = server.Job(
+    job = server_state.Job(
         id="cli-job",
         kind="retarget",
         request={
@@ -366,7 +367,7 @@ def test_failed_only_replay_filters_batch_entries(
     second = tmp_path / "second.npz"
     first.write_bytes(b"first")
     second.write_bytes(b"second")
-    original = server.Job(
+    original = server_state.Job(
         id="batch-with-failure",
         kind="batch",
         status="done",

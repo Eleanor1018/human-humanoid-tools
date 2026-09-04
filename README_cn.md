@@ -29,6 +29,7 @@
 - **数据集分析**：Web 端扫描、打标、聚类、子集推荐。
 
 **环境：** Linux，Python 3.12+；预览 CPU 即可，重映射需 **NVIDIA GPU（CUDA 12）**。
+视频转动作还需要一套单独安装、可使用 CUDA 的 GVHMR 环境。
 
 ---
 
@@ -95,10 +96,9 @@ hhtools-desktop
 ### 前端开发
 
 WebUI 与 Electron GUI 共用 `hhtools/web/frontend` 中同一套 React + TypeScript renderer；
-Electron 专属能力通过带类型的 host service 暴露，不复制两套 UI 组件。源码按类似 VS Code 的
-职责分层组织：`base/` 放生命周期基础设施，`platform/` 放宿主与事件边界，`workbench/` 负责
-组合可复用面板、工作流与服务。Tailwind CSS 提供 token 和工具类，项目维护的 shadcn/ui
-基础组件位于 `src/components/ui`。
+Electron 通过本机 FastAPI sidecar 加载同一个页面，不维护第二套 GUI renderer。视频转动作是
+新壳层中第一个完整工作流。Tailwind CSS 已接入构建；shadcn/ui 基础组件只在真实页面需要时
+逐个复制进项目。舞台控制已经存在，新 renderer 仍在接入中。
 
 ```bash
 cd hhtools/web/frontend
@@ -108,9 +108,7 @@ npm test
 npm run build
 ```
 
-生产构建写入 `hhtools/web/static`，FastAPI 与 Electron 原样复用这份产物。现有 Three.js/IK
-工作流运行时暂时通过有明确说明的兼容服务加载；新的 UI 状态与组件应放在 React workbench，
-不要继续增加直接 DOM 操作。
+生产构建写入 `hhtools/web/static`，FastAPI 与 Electron 原样复用这份产物。
 
 Web 后台任务默认不限制并发。共享服务器或显存紧张时，可以显式启用 FIFO 调度：
 
@@ -130,29 +128,43 @@ Electron：降低并发不会中断正在运行的任务，提高上限会立即
 
 | 面板 | 流程 |
 |------|------|
+| **视频 → 动作** | 上传单个视频 → 使用 GVHMR 官方权重推理 → 登记到 Motion Library |
 | **Motion → Robot** | 加载动作 → 选机器人 → 标定（首次）→ Retarget → 下载 CSV/ZIP |
 | **Robot → Robot** | 源机器人 + 轨迹 → 目标 URDF → 标定 → 单条/批量导出 |
 | **数据集可视化分析** | 拖入文件夹 → 分析 → 标签/散点探索 → 导出子集 |
 
-### GVHMR 接口
+### GVHMR 视频转动作
 
-请按照 [GVHMR 上游说明](https://github.com/zju3dv/GVHMR)自行安装和运行。hhtools 不提供第二个
-GVHMR Debian 安装包，也不捆绑 GVHMR 源码、checkpoint 或需要单独授权的人体模型。将 GVHMR
-生成的 `hmr4d_results.pt` 拖入 **Motion**（或用文件选择器打开），即可预览、登记到动作资源库，
-并作为 **Motion → Robot** 的源动作继续重映射。
-转换时仍需要本地已授权的 SMPL 系人体模型；如果它不在 hhtools 默认搜索路径中，
-请用 `HHTOOLS_BODY_MODELS` 指向该模型目录。
+请按照 [GVHMR 上游说明](https://github.com/zju3dv/GVHMR)单独安装。hhtools 不捆绑其源码、
+官方 checkpoint、Python 环境或需要单独授权的 SMPL-X 文件。**视频 → 动作** 只使用官方发布
+权重完成推理，并将生成的 `hmr4d_results.pt` 登记到 Motion Library；不提供自定义权重或训练入口。
+
+Linux 端会用独立子进程直接启动已经安装好的 GVHMR Python 环境：
+
+```bash
+export HHTOOLS_GVHMR_ROOT=/path/to/GVHMR
+export HHTOOLS_GVHMR_PYTHON=/path/to/gvhmr/environment/bin/python
+uv run hhtools web
+```
+
+checkout 需要保留上游的 `inputs/checkpoints` 布局，其中包括已获得授权的
+`inputs/checkpoints/body_models/smplx/SMPLX_NEUTRAL.npz`。所选环境必须具备 GVHMR 依赖与
+CUDA，`ffmpeg` 必须位于 `PATH`。程序会尝试发现 `~/GVHMR`、仓库内 `.venv`/`venv` 以及常见
+位置中名为 `gvhmr` 的 Conda 环境，但显式路径最可靠。可用 `HHTOOLS_GVHMR_TIMEOUT_SECONDS`
+调整默认两小时的推理超时。
+
+Windows 端仍是可选的 Docker 组件。用 `HHTOOLS_GVHMR_ROOT` 指向官方 checkout，
+`HHTOOLS_GVHMR_IMAGE` 指向已准备好的镜像；如授权模型单独存放，可用
+`HHTOOLS_GVHMR_BODY_MODELS` 挂载。hhtools 不会安装或下载这些资源。
+
+已有的 GVHMR 结果仍可拖入 **Motion** 导入。转换过程需要本地已授权的 SMPL 系人体模型；
+如果它不在 hhtools 默认搜索路径中，请用 `HHTOOLS_BODY_MODELS` 指向该目录。
 
 纯命令行用户也可直接将 GVHMR 输出目录转成 hhtools 统一 Motion 格式：
 
 ```bash
 hhtools import run --dataset gvhmr --root /path/to/gvhmr/output --out /path/to/motions
 ```
-
-已经自行准备好 Docker 运行环境的用户仍可使用现有手动接口：设置
-`HHTOOLS_GVHMR_ROOT`、`HHTOOLS_GVHMR_IMAGE`、`HHTOOLS_GVHMR_BODY_MODELS`，并可选设置
-`HHTOOLS_GVHMR_TIMEOUT_SECONDS`。这些变量只负责把 hhtools 连接到外部资源，不会安装或下载
-GVHMR。
 
 参数调优：改 [`configs/robots/unitree_g1/`](configs/robots/unitree_g1/) 或 `~/.config/hhtools/robots/<名称>/robot.yaml`，运行 `hhtools robot validate <名称>`。原理见 [framework.md](framework.md)。
 

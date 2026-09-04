@@ -3,12 +3,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from hhtools.web import server
-from hhtools.web.job_settings import (
+from hhtools.web.jobs.job_settings import (
     JobAdmissionSettings,
     JobAdmissionSettingsStore,
     updated_job_admission_settings,
 )
+from hhtools.web.server import settings as server_settings
 
 
 def test_settings_store_round_trips_atomically(tmp_path: Path) -> None:
@@ -26,12 +26,11 @@ def test_settings_store_round_trips_atomically(tmp_path: Path) -> None:
     assert not list(path.parent.glob("*.tmp"))
 
 
-def test_settings_store_falls_back_for_invalid_content(tmp_path: Path) -> None:
+def test_settings_store_uses_defaults_for_invalid_content(tmp_path: Path) -> None:
     path = tmp_path / "web-settings.json"
     path.write_text('{"schema_version": 1, "max_running_jobs": -1}', encoding="utf-8")
-    fallback = JobAdmissionSettings(max_running_jobs=4, max_queued_jobs=8)
 
-    assert JobAdmissionSettingsStore(path).load(fallback=fallback) == fallback
+    assert JobAdmissionSettingsStore(path).load() == JobAdmissionSettings()
 
 
 def test_settings_patch_is_partial_but_strict() -> None:
@@ -51,12 +50,12 @@ def test_effective_settings_restore_saved_values_and_keep_explicit_overrides(
         JobAdmissionSettings(max_running_jobs=2, max_queued_jobs=32),
     )
 
-    restored, restored_path = server._effective_job_admission_settings(
+    restored, restored_path = server_settings.effective_job_admission_settings(
         max_running_jobs=None,
         max_queued_jobs=None,
         job_settings_path=path,
     )
-    overridden, _ = server._effective_job_admission_settings(
+    overridden, _ = server_settings.effective_job_admission_settings(
         max_running_jobs=8,
         max_queued_jobs=None,
         job_settings_path=path,

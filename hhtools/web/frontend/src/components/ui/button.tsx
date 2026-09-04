@@ -1,54 +1,44 @@
-import { Slot } from "@radix-ui/react-slot";
 import { cva, type VariantProps } from "class-variance-authority";
-import * as React from "react";
+import type { ComponentProps } from "react";
 
 import { cn } from "@/lib/utils";
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-colors outline-none disabled:pointer-events-none disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-ring",
+  "inline-flex min-w-0 cursor-pointer items-center justify-center truncate whitespace-nowrap rounded-md text-xs font-medium tracking-normal transition-colors focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring disabled:cursor-not-allowed disabled:text-muted-foreground",
   {
     variants: {
       variant: {
-        default: "bg-primary text-primary-foreground hover:opacity-90",
-        secondary: "bg-secondary text-secondary-foreground hover:brightness-95",
-        ghost: "hover:bg-muted hover:text-foreground",
-        outline: "border bg-background hover:bg-muted",
-        destructive: "bg-red-600 text-white hover:bg-red-700",
+        primary:
+          "border border-primary bg-primary text-primary-foreground hover:bg-accent-foreground disabled:border-border disabled:bg-surface",
+        outline:
+          "border border-border bg-surface text-foreground hover:border-primary hover:bg-accent disabled:hover:border-border disabled:hover:bg-surface",
+        ghost:
+          "border border-transparent bg-transparent text-muted-foreground hover:bg-accent hover:text-accent-foreground",
       },
       size: {
-        default: "h-9 px-4 py-2",
-        sm: "h-8 rounded-md px-3 text-xs",
-        icon: "size-9",
+        default: "min-h-9 px-3.5 py-2",
+        sm: "min-h-[30px] px-3 py-1.5",
       },
     },
     defaultVariants: {
-      variant: "default",
+      variant: "outline",
       size: "default",
     },
   },
 );
 
-export interface ButtonProps
-  extends React.ButtonHTMLAttributes<HTMLButtonElement>,
-    VariantProps<typeof buttonVariants> {
-  asChild?: boolean;
-}
-
-/** Project-owned shadcn button primitive used by both browser and Electron. */
 export function Button({
   className,
   variant,
   size,
-  asChild = false,
+  type = "button",
   ...props
-}: ButtonProps) {
-  const Component = asChild ? Slot : "button";
+}: ComponentProps<"button"> & VariantProps<typeof buttonVariants>) {
   return (
-    <Component
+    <button
+      type={type}
       className={cn(buttonVariants({ variant, size }), className)}
       {...props}
     />
   );
 }
-
-export { buttonVariants };

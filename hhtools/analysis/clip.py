@@ -82,7 +82,7 @@ def _load_source(source_path: Path, dataset: str = ""):
     does, so heterogeneous formats (``.pkl`` / ``.npy`` / ``.bvh`` / ...) all load.
     Falls back to the plain loader registry when no dataset name is supplied.
     """
-    from hhtools.web.r2r_upload_resolve import _is_robot_export_trajectory
+    from hhtools.web.library.r2r_upload_resolve import _is_robot_export_trajectory
 
     suffix = source_path.suffix.lower()
     is_robot = dataset == "robot" or _is_robot_export_trajectory(source_path)

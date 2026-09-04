@@ -36,11 +36,12 @@ def test_require_web_runtime_dependencies_provides_recovery_commands(monkeypatch
 
 def test_browser_server_checks_dependencies_before_startup(tmp_path, monkeypatch) -> None:
     from hhtools.web import server
+    from hhtools.web.server import launch as server_launch
 
     def fail_preflight() -> None:
         raise dependencies.MissingWebDependenciesError(("uvicorn",))
 
-    monkeypatch.setattr(server, "require_web_runtime_dependencies", fail_preflight)
+    monkeypatch.setattr(server_launch, "require_web_runtime_dependencies", fail_preflight)
 
     with pytest.raises(dependencies.MissingWebDependenciesError):
         server.run_web(source_root=tmp_path, save_dir=tmp_path)
@@ -48,11 +49,12 @@ def test_browser_server_checks_dependencies_before_startup(tmp_path, monkeypatch
 
 def test_desktop_sidecar_checks_dependencies_before_startup(tmp_path, monkeypatch) -> None:
     from hhtools.web import server
+    from hhtools.web.server import launch as server_launch
 
     def fail_preflight() -> None:
         raise dependencies.MissingWebDependenciesError(("fastapi",))
 
-    monkeypatch.setattr(server, "require_web_runtime_dependencies", fail_preflight)
+    monkeypatch.setattr(server_launch, "require_web_runtime_dependencies", fail_preflight)
 
     with pytest.raises(dependencies.MissingWebDependenciesError):
         server.run_desktop_sidecar(

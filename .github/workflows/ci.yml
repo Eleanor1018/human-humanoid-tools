@@ -34,8 +34,37 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[formats,dev]"
 
+      - name: Python architecture boundaries
+        run: python -m pytest -q tests/test_python_package_boundaries.py
+
       - name: Ruff (lint)
         run: ruff check hhtools
 
       - name: Ruff (format)
         run: ruff format --check hhtools
+
+  frontend:
+    name: Frontend architecture & tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hhtools/web/frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: hhtools/web/frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Frontend architecture and unit tests
+        run: npm test
+
+      - name: Build shared Web/Electron renderer
+        run: npm run build

@@ -43,7 +43,7 @@ from hhtools.contracts import (
     PreflightResponse,
     SchedulerCapability,
 )
-from hhtools.web.agent_api import router as agent_router
+from hhtools.agent.api import router as agent_router
 
 _DIGEST = "a" * 64
 _ASSET_ID = f"asset:sha256:{_DIGEST}"

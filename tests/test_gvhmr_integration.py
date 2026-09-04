@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -33,8 +34,7 @@ def test_status_requires_licensed_smplx_model(tmp_path: Path, monkeypatch) -> No
     assert status["checks"]["smplx_neutral"] is False
     assert any("SMPL-X" in item for item in status["missing"])
     assert status["uses_official_weights"] is True
-    assert status["supports_custom_weights"] is True
-    assert status["custom_weights_support"] == "best_effort"
+    assert status["supports_custom_weights"] is False
     assert status["training_enabled"] is False
 
 
@@ -140,72 +140,178 @@ def test_command_rejects_non_video_extension(tmp_path: Path) -> None:
         )
 
 
-def test_command_passes_custom_checkpoint_from_isolated_job_root(
+def test_linux_environment_selects_the_installed_python(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     root = tmp_path / "GVHMR"
-    body_models = tmp_path / "body-models"
+    python = tmp_path / "gvhmr-env" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.touch()
+    monkeypatch.setattr(gvhmr.sys, "platform", "linux")
+    monkeypatch.setenv(gvhmr.GVHMR_ROOT_ENV, str(root))
+    monkeypatch.setenv(gvhmr.GVHMR_PYTHON_ENV, str(python))
+
+    config = gvhmr.GvhmrConfig.from_environment()
+
+    assert config.runtime == "local"
+    assert config.python_executable == python
+
+
+def test_windows_environment_keeps_the_docker_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(gvhmr.sys, "platform", "win32")
+    monkeypatch.setenv(gvhmr.GVHMR_ROOT_ENV, str(tmp_path / "GVHMR"))
+    monkeypatch.setenv(gvhmr.GVHMR_PYTHON_ENV, str(tmp_path / "ignored-python"))
+    monkeypatch.setattr(gvhmr.shutil, "which", lambda _command: "docker")
+
+    config = gvhmr.GvhmrConfig.from_environment()
+
+    assert config.runtime == "docker"
+    assert config.python_executable is None
+    assert config.docker == "docker"
+
+
+def test_local_status_probes_python_and_cuda(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path / "GVHMR"
+    body_models = root / "inputs" / "checkpoints" / "body_models"
     _runtime_tree(root, body_models)
+    python = tmp_path / "gvhmr-env" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.touch()
+    monkeypatch.setattr(
+        gvhmr,
+        "_run_probe",
+        lambda *_args, **_kwargs: (True, 'HHTOOLS_GVHMR_PROBE {"cuda": true}'),
+    )
+    monkeypatch.setattr(gvhmr.shutil, "which", lambda *_args, **_kwargs: "/usr/bin/ffmpeg")
+
+    status = gvhmr.gvhmr_status(
+        gvhmr.GvhmrConfig(
+            root=root,
+            body_models_root=body_models,
+            runtime="local",
+            python_executable=python,
+        )
+    )
+
+    assert status["ready"] is True
+    assert status["runtime"] == "local"
+    assert status["python"] == str(python)
+    assert status["checks"]["python_environment"] is True
+    assert status["checks"]["cuda"] is True
+    assert "docker_engine" not in status["checks"]
+
+
+def test_local_command_uses_external_python_and_packaged_worker(tmp_path: Path) -> None:
+    root = tmp_path / "GVHMR"
+    body_models = root / "inputs" / "checkpoints" / "body_models"
+    _runtime_tree(root, body_models)
+    python = tmp_path / "gvhmr env" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.touch()
     job_root = tmp_path / "job"
-    checkpoint_dir = job_root / "checkpoint"
-    checkpoint_dir.mkdir(parents=True)
-    video = job_root / "source.mp4"
-    checkpoint = checkpoint_dir / "custom.ckpt"
+    job_root.mkdir()
+    video = job_root / "source clip.mp4"
     video.touch()
-    checkpoint.touch()
 
     command = gvhmr.build_gvhmr_command(
-        gvhmr.GvhmrConfig(root=root, body_models_root=body_models),
+        gvhmr.GvhmrConfig(
+            root=root,
+            body_models_root=body_models,
+            runtime="local",
+            python_executable=python,
+        ),
         video_path=video,
         job_root=job_root,
-        checkpoint_path=checkpoint,
+        static_cam=True,
+        f_mm=35,
     )
 
-    assert command[command.index("--checkpoint") + 1] == "/work/checkpoint/custom.ckpt"
+    assert command[0] == str(python.resolve())
+    assert command[1].endswith("hhtools/integrations/gvhmr_worker.py")
+    assert command[command.index("--video") + 1] == str(video.resolve())
+    assert command[command.index("--output-root") + 1] == str(job_root / "output")
+    assert command[-3:] == ["--static-cam", "--f-mm", "35"]
 
 
-def test_command_does_not_restrict_best_effort_checkpoint_suffix(tmp_path: Path) -> None:
+def test_local_environment_drops_the_hhtools_python_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    python = tmp_path / "gvhmr-env" / "bin" / "python"
+    monkeypatch.setenv("VIRTUAL_ENV", "/hhtools/.venv")
+    monkeypatch.setenv("PYTHONHOME", "/hhtools/python")
+    monkeypatch.setenv("PYTHONPATH", "/hhtools/source")
+    config = gvhmr.GvhmrConfig(
+        root=tmp_path / "GVHMR",
+        body_models_root=tmp_path / "body-models",
+        runtime="local",
+        python_executable=python,
+    )
+
+    environment = gvhmr._local_environment(config)  # noqa: SLF001
+
+    assert "VIRTUAL_ENV" not in environment
+    assert "PYTHONHOME" not in environment
+    assert "PYTHONPATH" not in environment
+    assert environment["PATH"].split(gvhmr.os.pathsep)[0] == str(python.parent)
+
+
+def test_local_runtime_executes_the_external_process_protocol(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     root = tmp_path / "GVHMR"
-    body_models = tmp_path / "body-models"
+    body_models = root / "inputs" / "checkpoints" / "body_models"
     _runtime_tree(root, body_models)
-    job_root = tmp_path / "job"
-    checkpoint_dir = job_root / "checkpoint"
-    checkpoint_dir.mkdir(parents=True)
-    video = job_root / "source.mp4"
-    checkpoint = checkpoint_dir / "research-weights.custom"
-    video.touch()
-    checkpoint.touch()
+    python = tmp_path / "gvhmr-env" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text(
+        f"""#!{sys.executable}
+import json
+import sys
+from pathlib import Path
 
-    command = gvhmr.build_gvhmr_command(
-        gvhmr.GvhmrConfig(root=root, body_models_root=body_models),
-        video_path=video,
-        job_root=job_root,
-        checkpoint_path=checkpoint,
+if '-c' in sys.argv:
+    print('HHTOOLS_GVHMR_PROBE {{"cuda": true}}')
+else:
+    output = Path(sys.argv[sys.argv.index('--output-root') + 1]) / 'source'
+    output.mkdir(parents=True, exist_ok=True)
+    result = output / 'hmr4d_results.pt'
+    result.write_bytes(b'motion')
+    print('HHTOOLS_PROGRESS 0.5 running official checkpoint', flush=True)
+    print('HHTOOLS_RESULT ' + json.dumps({{'result_path': str(result)}}), flush=True)
+""",
+        encoding="utf-8",
     )
-
-    assert command[command.index("--checkpoint") + 1] == (
-        "/work/checkpoint/research-weights.custom"
-    )
-
-
-def test_command_rejects_custom_checkpoint_outside_job_root(tmp_path: Path) -> None:
-    root = tmp_path / "GVHMR"
-    body_models = tmp_path / "body-models"
-    _runtime_tree(root, body_models)
+    python.chmod(0o755)
     job_root = tmp_path / "job"
     job_root.mkdir()
     video = job_root / "source.mp4"
-    checkpoint = tmp_path / "outside.ckpt"
-    video.touch()
-    checkpoint.touch()
+    video.write_bytes(b"video")
+    monkeypatch.setattr(gvhmr.shutil, "which", lambda *_args, **_kwargs: "/usr/bin/ffmpeg")
+    progress: list[tuple[float, str]] = []
 
-    with pytest.raises(ValueError):
-        gvhmr.build_gvhmr_command(
-            gvhmr.GvhmrConfig(root=root, body_models_root=body_models),
-            video_path=video,
-            job_root=job_root,
-            checkpoint_path=checkpoint,
-        )
+    result = gvhmr.run_gvhmr(
+        video,
+        job_root,
+        config=gvhmr.GvhmrConfig(
+            root=root,
+            body_models_root=body_models,
+            runtime="local",
+            python_executable=python,
+            timeout_seconds=10,
+        ),
+        progress=lambda value, message: progress.append((value, message)),
+    )
+
+    assert result == (job_root / "output" / "source" / "hmr4d_results.pt").resolve()
+    assert result.read_bytes() == b"motion"
+    assert progress[0] == (0.5, "running official checkpoint")
+    assert progress[-1] == (1.0, "GVHMR motion ready")
 
 
 def test_result_path_is_confined_to_the_job_output(tmp_path: Path) -> None:
@@ -217,6 +323,20 @@ def test_result_path_is_confined_to_the_job_output(tmp_path: Path) -> None:
     )
 
     assert result == (job_root / "output" / "video" / "hmr4d_results.pt").resolve()
+
+
+def test_local_result_path_is_confined_to_the_job_output(tmp_path: Path) -> None:
+    job_root = tmp_path / "job"
+    result = job_root / "output" / "video" / "hmr4d_results.pt"
+
+    resolved = gvhmr._local_result_path(job_root, str(result))  # noqa: SLF001
+
+    assert resolved == result.resolve()
+    with pytest.raises(RuntimeError):
+        gvhmr._local_result_path(  # noqa: SLF001
+            job_root,
+            str(tmp_path / "outside" / "hmr4d_results.pt"),
+        )
 
 
 @pytest.mark.parametrize(

@@ -29,6 +29,7 @@ We welcome suggestions and ideas — please open an issue or discussion anytime.
 - **Dataset analysis** — scan, tag, embed, cluster, and subset human or robot motion libraries in the Web UI.
 
 **Requirements:** Linux, Python 3.12+. Preview on CPU; retarget needs **NVIDIA GPU (CUDA 12)**.
+Video-to-motion additionally needs a separate CUDA-capable GVHMR installation.
 
 ---
 
@@ -96,11 +97,10 @@ You can also launch **Human-Humanoid Tools** from the application menu. See the
 ### Frontend development
 
 The WebUI and Electron GUI use one React + TypeScript renderer from
-`hhtools/web/frontend`; Electron-specific operations are exposed through the typed host service,
-so UI components are not forked. The source layout follows a VS Code-style separation:
-`base/` contains lifecycle utilities, `platform/` contains host and event boundaries, and
-`workbench/` composes reusable panels, workflows, and services. Tailwind CSS supplies tokens and
-utilities, while project-owned shadcn/ui primitives live in `src/components/ui`.
+`hhtools/web/frontend`; Electron loads the same page through its local FastAPI sidecar, so there is
+no second GUI renderer. Video-to-motion is the first complete workflow in the new shell. Tailwind
+CSS is wired into the build, and shadcn/ui primitives are copied into the project only when a real
+view needs them. The Stage controls exist, while the new renderer is still being connected.
 
 ```bash
 cd hhtools/web/frontend
@@ -111,9 +111,7 @@ npm run build
 ```
 
 The production build is written to `hhtools/web/static`, which is served unchanged by both
-FastAPI and Electron. The existing Three.js/IK workflow runtime is currently loaded through a
-documented compatibility service; new UI state and components should stay in the React workbench
-instead of adding new direct DOM manipulation.
+FastAPI and Electron.
 
 Web jobs are unlimited by default. To enable FIFO admission control on a shared or
 memory-constrained GPU, set positive concurrency and an optional queue capacity:
@@ -136,30 +134,46 @@ is admission control rather than a process-wide GPU concurrency guarantee.
 
 | Panel | Flow |
 |-------|------|
+| **Video → Motion** | Upload one video → run official GVHMR → register the result in Motion Library |
 | **Motion → Robot** | Load clip → select robot → calibrate (once) → retarget → download CSV/ZIP |
 | **Robot → Robot** | Source robot + trajectory → target URDF → calibrate → retarget / batch ZIP |
 | **Dataset analysis** | Drop a folder → analyze → explore tags & scatter → export subset |
 
-### GVHMR interoperability
+### GVHMR video-to-motion
 
-Install and run [GVHMR](https://github.com/zju3dv/GVHMR) separately using its upstream instructions.
-hhtools does not provide a second GVHMR Debian package and does not bundle its source, checkpoints,
-or licensed body models. Drag the generated `hmr4d_results.pt` into **Motion** (or select it with the
-file picker) to preview it, register it in the Motion Library, and use it as the source of a
-**Motion → Robot** workflow.
-The conversion still needs a locally licensed SMPL-family model; if it is not in an existing
-hhtools search path, point `HHTOOLS_BODY_MODELS` at that model directory.
+Install [GVHMR](https://github.com/zju3dv/GVHMR) separately using its upstream instructions. hhtools
+does not bundle its source, official checkpoints, Python environment, or licensed SMPL-X assets.
+The **Video → Motion** view runs inference with the official released weights and publishes the
+generated `hmr4d_results.pt` to the Motion Library. Custom checkpoints and training are not exposed.
+
+On Linux, hhtools launches the installed GVHMR environment as an isolated subprocess:
+
+```bash
+export HHTOOLS_GVHMR_ROOT=/path/to/GVHMR
+export HHTOOLS_GVHMR_PYTHON=/path/to/gvhmr/environment/bin/python
+uv run hhtools web
+```
+
+The checkout must keep the upstream `inputs/checkpoints` layout, including the licensed
+`inputs/checkpoints/body_models/smplx/SMPLX_NEUTRAL.npz`. The selected environment must provide the
+GVHMR dependencies and CUDA, and `ffmpeg` must be on `PATH`. `~/GVHMR`, repository `.venv`/`venv`,
+and common Conda environments named `gvhmr` are auto-discovered; explicit paths are more reliable.
+`HHTOOLS_GVHMR_TIMEOUT_SECONDS` optionally changes the two-hour inference timeout.
+
+On Windows, GVHMR remains an optional Docker-backed component. Set `HHTOOLS_GVHMR_ROOT` to the
+official checkout and `HHTOOLS_GVHMR_IMAGE` to the prepared image;
+`HHTOOLS_GVHMR_BODY_MODELS` can mount separately stored licensed assets. hhtools does not install or
+download any of these resources.
+
+An existing GVHMR result can still be dragged into **Motion** for import. Conversion requires a
+locally licensed SMPL-family model; if it is outside hhtools' search paths, set
+`HHTOOLS_BODY_MODELS` to that directory.
 
 For a terminal-only workflow, convert a GVHMR output directory to hhtools' unified Motion format:
 
 ```bash
 hhtools import run --dataset gvhmr --root /path/to/gvhmr/output --out /path/to/motions
 ```
-
-The existing manual Docker bridge is still available for an already prepared runtime through
-`HHTOOLS_GVHMR_ROOT`, `HHTOOLS_GVHMR_IMAGE`, `HHTOOLS_GVHMR_BODY_MODELS`, and the optional
-`HHTOOLS_GVHMR_TIMEOUT_SECONDS`. These settings only connect hhtools to external resources; they do
-not install or download GVHMR.
 
 Robot tuning: edit [`configs/robots/unitree_g1/`](configs/robots/unitree_g1/) or uploaded `~/.config/hhtools/robots/<name>/robot.yaml`; run `hhtools robot validate <name>`. Details in [framework.md](framework.md).
 

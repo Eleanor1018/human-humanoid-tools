@@ -36,7 +36,7 @@ RUN python3.10 -m pip install --no-cache-dir \
         --no-build-isolation \
         "git+https://github.com/facebookresearch/pytorch3d.git@stable"
 
-COPY docker/gvhmr/run_video.py /opt/hhtools-gvhmr/run_video.py
+COPY hhtools/integrations/gvhmr_worker.py /opt/hhtools-gvhmr/run_video.py
 
 WORKDIR /workspace/gvhmr
 ENTRYPOINT ["python3.10", "/opt/hhtools-gvhmr/run_video.py"]

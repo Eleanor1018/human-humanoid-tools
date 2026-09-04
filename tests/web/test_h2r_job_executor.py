@@ -24,7 +24,7 @@ from hhtools.contracts import (
 from hhtools.services.artifacts import ArtifactStore
 from hhtools.services.jobs import JobCancelledError, JobExecutionContext, JobExecutionError
 from hhtools.services.retarget import RetargetServiceError
-from hhtools.web.h2r_job_executor import (
+from hhtools.agent.h2r_job_executor import (
     H2RExecutorBindings,
     H2RJobExecutor,
     H2RPreview,

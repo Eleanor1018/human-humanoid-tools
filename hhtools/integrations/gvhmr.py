@@ -1,8 +1,7 @@
 """Isolated GVHMR video-to-motion runtime.
 
-GVHMR has a large, Linux/CUDA-specific dependency graph that should not be
-imported into the hhtools web process. This module validates the local official
-checkout and invokes a pinned Docker image with argument lists (never a shell).
+Linux runs the user's installed GVHMR Python environment. Windows keeps the
+optional Docker runtime. Neither backend imports GVHMR into the hhtools process.
 """
 
 from __future__ import annotations
@@ -12,18 +11,21 @@ import os
 import queue
 import re
 import shutil
+import signal
 import subprocess
+import sys
 import threading
 import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Literal
 
 GVHMR_ROOT_ENV = "HHTOOLS_GVHMR_ROOT"
 GVHMR_IMAGE_ENV = "HHTOOLS_GVHMR_IMAGE"
 GVHMR_BODY_MODELS_ENV = "HHTOOLS_GVHMR_BODY_MODELS"
+GVHMR_PYTHON_ENV = "HHTOOLS_GVHMR_PYTHON"
 GVHMR_TIMEOUT_ENV = "HHTOOLS_GVHMR_TIMEOUT_SECONDS"
 
 DEFAULT_IMAGE = "hhtools-gvhmr:cu128"
@@ -76,16 +78,22 @@ class GvhmrConfig:
     docker: str = "docker"
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS
     cuda_visible_devices: str | None = None
+    runtime: Literal["local", "docker"] = "docker"
+    python_executable: Path | None = None
 
     @classmethod
     def from_environment(cls) -> GvhmrConfig:
         root = _default_root()
-        body_models = Path(
-            os.environ.get(
-                GVHMR_BODY_MODELS_ENV,
-                root / "inputs" / "checkpoints" / "body_models",
-            )
-        ).expanduser()
+        runtime: Literal["local", "docker"] = (
+            "local" if sys.platform.startswith("linux") else "docker"
+        )
+        default_body_models = root / "inputs" / "checkpoints" / "body_models"
+        body_models_value = (
+            os.environ.get(GVHMR_BODY_MODELS_ENV, default_body_models)
+            if runtime == "docker"
+            else default_body_models
+        )
+        body_models = Path(body_models_value).expanduser()
         raw_timeout = os.environ.get(GVHMR_TIMEOUT_ENV, str(DEFAULT_TIMEOUT_SECONDS))
         try:
             timeout = max(60, int(raw_timeout))
@@ -98,6 +106,8 @@ class GvhmrConfig:
             docker=shutil.which("docker") or "docker",
             timeout_seconds=timeout,
             cuda_visible_devices=(os.environ.get("CUDA_VISIBLE_DEVICES") or None),
+            runtime=runtime,
+            python_executable=_default_python(root) if runtime == "local" else None,
         )
 
 
@@ -111,7 +121,48 @@ def _default_root() -> Path:
     return Path.home() / "GVHMR"
 
 
-def _run_probe(args: list[str], *, timeout: float = 10.0) -> tuple[bool, str]:
+def _default_python(root: Path) -> Path | None:
+    override = os.environ.get(GVHMR_PYTHON_ENV)
+    if override:
+        return Path(override).expanduser()
+
+    home = Path.home()
+    candidates = (
+        root / ".venv" / "bin" / "python",
+        root / "venv" / "bin" / "python",
+        home / ".conda" / "envs" / "gvhmr" / "bin" / "python",
+        home / "anaconda3" / "envs" / "gvhmr" / "bin" / "python",
+        home / "miniconda3" / "envs" / "gvhmr" / "bin" / "python",
+    )
+    return next((candidate for candidate in candidates if candidate.is_file()), None)
+
+
+def _local_environment(config: GvhmrConfig) -> dict[str, str]:
+    """Build an environment owned by the external GVHMR interpreter."""
+
+    environment = dict(os.environ)
+    for name in ("PYTHONHOME", "PYTHONPATH", "VIRTUAL_ENV"):
+        environment.pop(name, None)
+    environment["PYTHONNOUSERSITE"] = "1"
+    environment["PYTHONUNBUFFERED"] = "1"
+    environment["TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"] = "1"
+    if config.python_executable is not None:
+        current_path = environment.get("PATH", "")
+        environment["PATH"] = os.pathsep.join(
+            part for part in (str(config.python_executable.parent), current_path) if part
+        )
+    if config.cuda_visible_devices:
+        environment["CUDA_VISIBLE_DEVICES"] = config.cuda_visible_devices
+    return environment
+
+
+def _run_probe(
+    args: list[str],
+    *,
+    timeout: float = 10.0,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> tuple[bool, str]:
     try:
         completed = subprocess.run(
             args,
@@ -120,6 +171,8 @@ def _run_probe(args: list[str], *, timeout: float = 10.0) -> tuple[bool, str]:
             encoding="utf-8",
             errors="replace",
             timeout=timeout,
+            cwd=cwd,
+            env=env,
         )
     except (OSError, subprocess.TimeoutExpired) as err:
         return False, str(err)
@@ -134,7 +187,6 @@ def gvhmr_status(config: GvhmrConfig | None = None) -> dict[str, Any]:
     checkpoint_root = cfg.root / "inputs" / "checkpoints"
     checks: dict[str, bool] = {
         "official_repo": (cfg.root / "tools" / "demo" / "demo.py").is_file(),
-        "docker_cli": shutil.which(cfg.docker) is not None or Path(cfg.docker).is_file(),
     }
     missing: list[str] = []
     if not checks["official_repo"]:
@@ -155,22 +207,66 @@ def gvhmr_status(config: GvhmrConfig | None = None) -> dict[str, Any]:
             f"{smplx} (download after accepting the official SMPL-X license)"
         )
 
-    docker_ready = False
-    image_ready = False
-    if checks["docker_cli"]:
-        docker_ready, _ = _run_probe(
-            [cfg.docker, "version", "--format", "{{.Server.Version}}"],
-        )
-        if docker_ready:
-            image_ready, _ = _run_probe(
-                [cfg.docker, "image", "inspect", cfg.image, "--format", "{{.Id}}"],
+    if cfg.runtime == "local":
+        python = cfg.python_executable
+        local_environment = _local_environment(cfg)
+        checks["python_executable"] = python is not None and python.is_file()
+        checks["ffmpeg"] = shutil.which("ffmpeg", path=local_environment.get("PATH")) is not None
+        if not checks["ffmpeg"]:
+            missing.append("ffmpeg executable in the GVHMR environment PATH")
+        if not checks["python_executable"]:
+            missing.append(
+                "GVHMR Python executable: set "
+                f"{GVHMR_PYTHON_ENV} to the installed environment's Python"
             )
-    checks["docker_engine"] = docker_ready
-    checks["runtime_image"] = image_ready
-    if not docker_ready:
-        missing.append("running Docker Desktop Linux engine")
-    elif not image_ready:
-        missing.append(f"GVHMR runtime image: {cfg.image}")
+        environment_ready = False
+        cuda_ready = False
+        if checks["python_executable"] and checks["official_repo"]:
+            probe = (
+                "import json, cv2, hydra, hmr4d, pytorch3d, torch; "
+                "print('HHTOOLS_GVHMR_PROBE ' + "
+                "json.dumps({'cuda': bool(torch.cuda.is_available())}))"
+            )
+            environment_ready, output = _run_probe(
+                [str(python), "-c", probe],
+                timeout=30,
+                cwd=cfg.root,
+                env=local_environment,
+            )
+            if environment_ready:
+                try:
+                    payload = next(
+                        line.removeprefix("HHTOOLS_GVHMR_PROBE ")
+                        for line in reversed(output.splitlines())
+                        if line.startswith("HHTOOLS_GVHMR_PROBE ")
+                    )
+                    cuda_ready = bool(json.loads(payload)["cuda"])
+                except (KeyError, StopIteration, TypeError, ValueError):
+                    environment_ready = False
+        checks["python_environment"] = environment_ready
+        checks["cuda"] = cuda_ready
+        if checks["python_executable"] and not environment_ready:
+            missing.append("GVHMR Python cannot import the installed inference dependencies")
+        if environment_ready and not cuda_ready:
+            missing.append("CUDA is not available in the GVHMR Python environment")
+    else:
+        checks["docker_cli"] = shutil.which(cfg.docker) is not None or Path(cfg.docker).is_file()
+        docker_ready = False
+        image_ready = False
+        if checks["docker_cli"]:
+            docker_ready, _ = _run_probe(
+                [cfg.docker, "version", "--format", "{{.Server.Version}}"],
+            )
+            if docker_ready:
+                image_ready, _ = _run_probe(
+                    [cfg.docker, "image", "inspect", cfg.image, "--format", "{{.Id}}"],
+                )
+        checks["docker_engine"] = docker_ready
+        checks["runtime_image"] = image_ready
+        if not docker_ready:
+            missing.append("running Docker engine")
+        elif not image_ready:
+            missing.append(f"GVHMR runtime image: {cfg.image}")
 
     return {
         "ready": all(checks.values()),
@@ -179,10 +275,11 @@ def gvhmr_status(config: GvhmrConfig | None = None) -> dict[str, Any]:
         "root": str(cfg.root),
         "body_models_root": str(cfg.body_models_root),
         "image": cfg.image,
+        "python": str(cfg.python_executable) if cfg.python_executable else None,
+        "runtime": cfg.runtime,
         "cuda_visible_devices": cfg.cuda_visible_devices,
         "uses_official_weights": True,
-        "supports_custom_weights": True,
-        "custom_weights_support": "best_effort",
+        "supports_custom_weights": False,
         "training_enabled": False,
     }
 
@@ -229,12 +326,35 @@ def _host_result_path(job_root: Path, container_path: str) -> Path:
     return result
 
 
-def build_gvhmr_command(
+def _local_result_path(job_root: Path, published_path: str) -> Path:
+    """Resolve a native worker result inside this job's output directory."""
+
+    work_root = job_root.resolve()
+    raw_output_root = work_root / "output"
+    if raw_output_root.is_symlink():
+        raise RuntimeError("GVHMR job output directory must not be a symlink")
+    output_root = raw_output_root.resolve()
+    try:
+        output_root.relative_to(work_root)
+    except ValueError as err:
+        raise RuntimeError("GVHMR output directory resolves outside the job") from err
+
+    published = Path(published_path)
+    result = published.resolve() if published.is_absolute() else (output_root / published).resolve()
+    if result.name != "hmr4d_results.pt":
+        raise RuntimeError("GVHMR published an invalid result path")
+    try:
+        result.relative_to(output_root)
+    except ValueError as err:
+        raise RuntimeError("GVHMR result resolves outside the job output directory") from err
+    return result
+
+
+def _build_docker_gvhmr_command(
     config: GvhmrConfig,
     *,
     video_path: Path,
     job_root: Path,
-    checkpoint_path: Path | None = None,
     static_cam: bool = True,
     f_mm: int | None = None,
 ) -> list[str]:
@@ -247,12 +367,6 @@ def build_gvhmr_command(
     video.relative_to(work)
     if video.suffix.lower() not in _VIDEO_SUFFIXES:
         raise ValueError(f"unsupported video extension: {video.suffix or '<none>'}")
-    checkpoint: Path | None = None
-    if checkpoint_path is not None:
-        checkpoint = checkpoint_path.resolve()
-        checkpoint.relative_to(work)
-        if not checkpoint.is_file():
-            raise FileNotFoundError(f"custom checkpoint does not exist: {checkpoint}")
     output = work / "output"
     output.mkdir(parents=True, exist_ok=True)
     isolation_args = _docker_isolation_args(home="/work/.container-home")
@@ -293,8 +407,6 @@ def build_gvhmr_command(
             "/work/output",
         ]
     )
-    if checkpoint is not None:
-        command.extend(["--checkpoint", _container_path(checkpoint, work, "/work")])
     if static_cam:
         command.append("--static-cam")
     if f_mm is not None:
@@ -304,11 +416,93 @@ def build_gvhmr_command(
     return command
 
 
+def _build_local_gvhmr_command(
+    config: GvhmrConfig,
+    *,
+    video_path: Path,
+    job_root: Path,
+    static_cam: bool = True,
+    f_mm: int | None = None,
+) -> list[str]:
+    python = config.python_executable
+    if python is None:
+        raise RuntimeError(f"{GVHMR_PYTHON_ENV} is not configured")
+    video = video_path.resolve()
+    work = job_root.resolve()
+    video.relative_to(work)
+    if video.suffix.lower() not in _VIDEO_SUFFIXES:
+        raise ValueError(f"unsupported video extension: {video.suffix or '<none>'}")
+    output = work / "output"
+    output.mkdir(parents=True, exist_ok=True)
+    worker = Path(__file__).with_name("gvhmr_worker.py").resolve()
+    if not worker.is_file():
+        raise RuntimeError(f"GVHMR worker is missing: {worker}")
+    command = [
+        str(python.resolve()),
+        str(worker),
+        "--video",
+        str(video),
+        "--output-root",
+        str(output),
+    ]
+    if static_cam:
+        command.append("--static-cam")
+    if f_mm is not None:
+        if f_mm <= 0:
+            raise ValueError("f_mm must be positive")
+        command.extend(["--f-mm", str(f_mm)])
+    return command
+
+
+def build_gvhmr_command(
+    config: GvhmrConfig,
+    *,
+    video_path: Path,
+    job_root: Path,
+    static_cam: bool = True,
+    f_mm: int | None = None,
+) -> list[str]:
+    """Build the argv for the platform-selected isolated GVHMR runtime."""
+
+    builder = (
+        _build_local_gvhmr_command if config.runtime == "local" else _build_docker_gvhmr_command
+    )
+    return builder(
+        config,
+        video_path=video_path,
+        job_root=job_root,
+        static_cam=static_cam,
+        f_mm=f_mm,
+    )
+
+
+def _stop_runtime_process(
+    process: subprocess.Popen[str],
+    config: GvhmrConfig,
+    command: list[str],
+) -> None:
+    if process.poll() is None:
+        if config.runtime == "local" and os.name == "posix":
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        else:
+            process.kill()
+    process.wait(timeout=30)
+    if config.runtime != "docker":
+        return
+    try:
+        container_name = command[command.index("--name") + 1]
+        _run_probe([config.docker, "rm", "--force", container_name], timeout=30)
+    except (ValueError, IndexError):
+        pass
+
+
 def run_gvhmr(
     video_path: Path,
     job_root: Path,
     *,
-    checkpoint_path: Path | None = None,
     static_cam: bool = True,
     f_mm: int | None = None,
     config: GvhmrConfig | None = None,
@@ -321,10 +515,10 @@ def run_gvhmr(
         cfg,
         video_path=video_path,
         job_root=job_root,
-        checkpoint_path=checkpoint_path,
         static_cam=static_cam,
         f_mm=f_mm,
     )
+    local = cfg.runtime == "local"
     process = subprocess.Popen(
         command,
         stdout=subprocess.PIPE,
@@ -332,8 +526,11 @@ def run_gvhmr(
         text=True,
         encoding="utf-8",
         errors="replace",
+        cwd=cfg.root if local else None,
+        env=_local_environment(cfg) if local else None,
+        start_new_session=local and os.name == "posix",
     )
-    result_container_path: str | None = None
+    published_result_path: str | None = None
     recent: list[str] = []
     output_lines: queue.Queue[str | None] = queue.Queue()
 
@@ -372,25 +569,25 @@ def run_gvhmr(
                 progress(float(match.group(1)), match.group(2))
             elif line.startswith(_RESULT_PREFIX):
                 payload = json.loads(line[len(_RESULT_PREFIX) :])
-                result_container_path = str(payload["result_path"])
+                published_result_path = str(payload["result_path"])
         if timed_out:
             raise TimeoutError(f"GVHMR exceeded the {cfg.timeout_seconds}-second inference timeout")
         return_code = process.wait(timeout=max(1.0, deadline - time.monotonic()))
     except BaseException:
-        process.kill()
-        process.wait(timeout=30)
-        try:
-            container_name = command[command.index("--name") + 1]
-            _run_probe([cfg.docker, "rm", "--force", container_name], timeout=30)
-        except (ValueError, IndexError):
-            pass
+        _stop_runtime_process(process, cfg, command)
         raise
     if return_code != 0:
         diagnostic = "\n".join(recent[-12:])
-        raise RuntimeError(f"GVHMR container exited with code {return_code}.\n{diagnostic}")
-    if not result_container_path:
+        raise RuntimeError(
+            f"GVHMR {cfg.runtime} runtime exited with code {return_code}.\n{diagnostic}"
+        )
+    if not published_result_path:
         raise RuntimeError("GVHMR completed without publishing a result path")
-    result = _host_result_path(job_root, result_container_path)
+    result = (
+        _local_result_path(job_root, published_result_path)
+        if local
+        else _host_result_path(job_root, published_result_path)
+    )
     if not result.is_file():
         raise RuntimeError(f"GVHMR result was not found on the host: {result}")
     if progress is not None:
@@ -402,6 +599,7 @@ __all__ = [
     "DEFAULT_IMAGE",
     "GVHMR_BODY_MODELS_ENV",
     "GVHMR_IMAGE_ENV",
+    "GVHMR_PYTHON_ENV",
     "GVHMR_ROOT_ENV",
     "GvhmrConfig",
     "build_gvhmr_command",

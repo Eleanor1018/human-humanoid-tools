@@ -360,7 +360,7 @@ def retarget(
         else:
             out_path = output / f"{motion.name or src.stem}.csv"
 
-        from hhtools.web.export_bundle import bake_export_root_z
+        from hhtools.web.output.export_bundle import bake_export_root_z
 
         joint_q, lift = bake_export_root_z(robot_model, retargeted, source_motion=motion)
         meta_out = {
@@ -541,7 +541,7 @@ def interaction_mesh_run(
         )
         ret = pipe.run(motion)
         out_path = output if output_is_file else output / f"{motion.name or src.stem}.csv"
-        from hhtools.web.export_bundle import bake_export_root_z
+        from hhtools.web.output.export_bundle import bake_export_root_z
 
         joint_q, lift = bake_export_root_z(robot_model, ret, source_motion=motion)
         meta_out = {
