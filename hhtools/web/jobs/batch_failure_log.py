@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 hhtools contributors
 # SPDX-License-Identifier: Apache-2.0
-"""Persist failed batch-retarget clips for easy re-import."""
+"""Persist batch-retarget failure metadata and uploaded source copies."""
 
 from __future__ import annotations
 
@@ -37,15 +37,19 @@ class BatchFailureLog:
             "stage": stage,
             "reason": str(reason),
             "reference": reference,
+            "origin": entry.get("origin"),
             "dataset": entry.get("dataset"),
             "source_path": entry.get("source_path"),
             "log_rel": None,
         }
-        try:
-            log_rel = stash_failed_clip(entry, self.root)
-            item["log_rel"] = log_rel.as_posix()
-        except Exception as err:  # noqa: BLE001 — still surface the retarget error
-            item["stash_error"] = str(err)
+        # Directory-backed batches keep their source files in place. Copying a
+        # failed local clip could duplicate an arbitrarily large dataset.
+        if entry.get("origin") != "local":
+            try:
+                log_rel = stash_failed_clip(entry, self.root)
+                item["log_rel"] = log_rel.as_posix()
+            except Exception as err:  # noqa: BLE001 — still surface retarget error
+                item["stash_error"] = str(err)
         self.items.append(item)
         return item
 
@@ -69,10 +73,8 @@ class BatchFailureLog:
             f"失败数量: {len(self.items)}",
             f"目录: {self.root}",
             "",
-            "每条失败 clip 已按导入时的相对路径复制到本目录下。",
-            "修复后可直接：",
-            "  1) 把整个 batch_failures/... 文件夹（或其中子目录）拖入 Web「批量」篮子；",
-            "  2) 或在本目录中找到对应 clip 文件/文件夹再拖入。",
+            "本地目录来源不会复制；明细保留原始文件路径。",
+            "上传来源如有副本，则保存在本目录的对应相对路径下。",
             "",
             "明细：",
         ]
@@ -80,7 +82,9 @@ class BatchFailureLog:
             lines.append(
                 f"{i}. {f['stem']}  [{f['stage']}]  {f['reason']}"
             )
-            lines.append(f"   → {f['log_rel']}")
+            location = f["log_rel"] or f["source_path"] or "未知路径"
+            label = "失败副本" if f["log_rel"] else "原始文件"
+            lines.append(f"   {label}: {location}")
         (self.root / "失败说明.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
