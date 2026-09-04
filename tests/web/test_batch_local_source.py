@@ -100,6 +100,7 @@ def test_local_batch_history_keeps_source_not_entries(tmp_path: Path, monkeypatc
                 "profile": "auto",
                 "robot": "test_robot",
                 "backend": "interaction_mesh",
+                "entries": [{"source_path": "ignored-by-directory-mode"}],
             },
         )
         assert response.status_code == 200
@@ -116,3 +117,70 @@ def test_local_batch_history_keeps_source_not_entries(tmp_path: Path, monkeypatc
         assert request["profile"] == "auto"
         assert request["entry_count"] == 0
         assert "entries" not in request
+
+
+def test_local_batch_does_not_offer_failed_only_replay(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source = tmp_path / "motions"
+    source.mkdir()
+    app = _create_test_app(tmp_path, monkeypatch)
+    job = server_state.Job(
+        id="directory-batch-with-failure",
+        kind="batch",
+        status="done",
+        progress=1.0,
+        request={
+            "robot": "test_robot",
+            "source": str(source),
+            "profile": "auto",
+            "entry_count": 1,
+            "entries": [{"source_path": str(source / "stale-entry.npz")}],
+        },
+        result={
+            "failures": [
+                {
+                    "source_path": str(source / "broken.npz"),
+                    "stage": "load",
+                    "reason": "invalid clip",
+                }
+            ]
+        },
+    )
+    with app.state.session_state.job_lock:
+        app.state.session_state.jobs[job.id] = job
+
+    with TestClient(app) as client:
+        listing = client.get("/api/jobs").json()
+        live_record = next(item for item in listing["jobs"] if item["id"] == job.id)
+
+        with app.state.session_state.job_lock:
+            app.state.session_state.jobs.pop(job.id)
+        app.state.session_state.job_history.put(
+            {
+                "id": job.id,
+                "kind": job.kind,
+                "status": job.status,
+                "progress": job.progress,
+                "created_at": job.created_wall_time,
+                "request": job.request,
+                "failures": job.result["failures"],
+            }
+        )
+        persisted_listing = client.get("/api/jobs").json()
+        persisted_record = next(
+            item for item in persisted_listing["jobs"] if item["id"] == job.id
+        )
+        response = client.post(
+            "/api/jobs/replay",
+            json={"job_id": job.id, "failed_only": True},
+        )
+
+    assert live_record["can_retry"] is True
+    assert live_record["can_retry_failed"] is False
+    assert persisted_record["scope"] == "persistent"
+    assert persisted_record["can_retry"] is True
+    assert persisted_record["can_retry_failed"] is False
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "failed_subset_unavailable"

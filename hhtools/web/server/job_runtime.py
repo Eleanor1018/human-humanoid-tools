@@ -31,6 +31,17 @@ _log = logging.getLogger(__name__)
 _ACTIVE_JOB_STATUSES = frozenset({"pending", "running"})
 
 
+def _has_retryable_batch_entries(kind: object, request: object) -> bool:
+    """Whether failed clips can be reconstructed without rescanning a directory."""
+    if kind != "batch" or not isinstance(request, dict):
+        return False
+    source = request.get("source")
+    if isinstance(source, str) and source.strip():
+        return False
+    entries = request.get("entries")
+    return isinstance(entries, list) and bool(entries)
+
+
 class WebJobRuntime:
     """Own the mutable legacy Web job lifecycle for one application instance."""
 
@@ -481,7 +492,7 @@ class WebJobRuntime:
                 "任务仍在排队或运行中。" if job.status in _ACTIVE_JOB_STATUSES else replay["reason"]
             ),
             "can_retry_failed": (
-                job.kind == "batch"
+                _has_retryable_batch_entries(job.kind, job.request)
                 and job.status not in _ACTIVE_JOB_STATUSES
                 and failed_item_count > 0
                 and bool(replay["available"])
@@ -558,7 +569,10 @@ class WebJobRuntime:
                 "can_retry": bool(replay["available"]),
                 "retry_reason": replay["reason"],
                 "can_retry_failed": (
-                    record.get("kind") == "batch"
+                    _has_retryable_batch_entries(
+                        record.get("kind"),
+                        record.get("request"),
+                    )
                     and failed_item_count > 0
                     and bool(replay["available"])
                 ),

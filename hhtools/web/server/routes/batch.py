@@ -393,6 +393,7 @@ def register_batch_routes(app, *, state, jobs) -> BatchRouteOperations:
             except ValueError as err:
                 raise HTTPException(status_code=400, detail=str(err)) from err
             request["profile"] = _normalise_batch_profile(request.get("profile"))
+            request.pop("entries", None)
         job = _schedule_job("batch", request, _run_batch_job, args=(request,))
         return {"job_id": job.id}
 

@@ -197,12 +197,20 @@ def register_job_routes(
                 status_code=400,
                 detail={"code": "not_batch", "msg": "只有批处理任务支持仅重试失败项。"},
             )
+        request = dict(spec["request"])
+        if isinstance(request.get("source"), str) and request["source"].strip():
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "failed_subset_unavailable",
+                    "msg": "目录批处理不保存文件清单；请重新运行整个目录。",
+                },
+            )
         failed_paths = {
             str(Path(str(item["source_path"])).expanduser().resolve())
             for item in failures
             if isinstance(item, dict) and item.get("source_path")
         }
-        request = dict(spec["request"])
         entries = [
             entry
             for entry in request.get("entries") or []
