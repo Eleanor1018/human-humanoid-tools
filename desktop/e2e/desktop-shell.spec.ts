@@ -70,11 +70,20 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
       'Settings',
       'Help'
     ])
-    await menu.getByRole('button', { name: 'Workflows' }).click()
-    await expect(menu.getByRole('button', { name: 'Workflows' })).toHaveAttribute(
-      'aria-pressed',
-      'true'
-    )
+    const workflowsMenu = page.getByRole('menu', { name: 'Workflows' })
+    await menu.getByRole('button', { name: 'Workflows', exact: true }).hover()
+    await expect(workflowsMenu).toBeVisible()
+    await expect(workflowsMenu.getByRole('menuitem')).toHaveText([
+      'Video to MotionAlt+7',
+      'Human to RobotAlt+3',
+      'Robot to RobotAlt+4',
+      'BatchAlt+5'
+    ])
+    await menu.getByRole('button', { name: 'Analysis', exact: true }).hover()
+    await expect(workflowsMenu).toBeHidden()
+    await expect(page.getByRole('menu', { name: 'Analysis' })).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(page.getByRole('menu', { name: 'Analysis' })).toBeHidden()
     await expect
       .poll(() =>
         page.evaluate(() =>
