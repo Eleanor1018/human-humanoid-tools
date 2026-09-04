@@ -65,7 +65,6 @@ const layerRows: readonly (readonly StageLayer[])[] = [
       label: "Robot",
       title: "Show or hide the retargeted robot",
       family: "robot",
-      disabled: true,
     },
   ],
 ];
@@ -79,9 +78,14 @@ const activeFamilyClass: Record<StageLayer["family"], string> = {
 interface StageViewMenuProps {
   value: StageLayerId[];
   onValueChange(value: StageLayerId[]): void;
+  robotAvailable?: boolean;
 }
 
-export function StageViewMenu({ value, onValueChange }: StageViewMenuProps) {
+export function StageViewMenu({
+  value,
+  onValueChange,
+  robotAvailable = false,
+}: StageViewMenuProps) {
   return (
     <ToggleGroup
       type="multiple"
@@ -100,7 +104,7 @@ export function StageViewMenu({ value, onValueChange }: StageViewMenuProps) {
             <ToggleGroupItem
               key={layer.id}
               value={layer.id}
-              disabled={layer.disabled}
+              disabled={layer.disabled || (layer.id === "robot" && !robotAvailable)}
               title={layer.title}
               aria-label={layer.accessibleLabel ?? layer.label}
               data-family={layer.family}

@@ -3,9 +3,10 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
+import { RobotLayer } from "./RobotLayer";
 import { SkeletonLayer } from "./SkeletonLayer";
 import type { StageLayerId } from "./StageViewMenu";
-import type { StageMotionPayload } from "./types";
+import type { StageMotionPayload, StageRobotPayload } from "./types";
 /**
  * Owns the orbit controller for the one R3F canvas. R3F owns rendering and
  * resize observation; this small adapter keeps the old interaction settings
@@ -88,14 +89,17 @@ function GroundGrid() {
 /** Static scene content migrated from the legacy renderer bootstrap. */
 function StageScene({
   motion,
+  robot,
   visibleLayers,
 }: {
   motion: StageMotionPayload | null;
+  robot: StageRobotPayload | null;
   visibleLayers: readonly StageLayerId[];
 }) {
   const skeletonVisible =
     visibleLayers.includes("skeleton") ||
     (motion !== null && visibleLayers.includes("body"));
+  const robotVisible = robot !== null && visibleLayers.includes("robot");
 
   return (
     <>
@@ -109,6 +113,7 @@ function StageScene({
       <group name="hhtools-world" rotation={[-Math.PI / 2, 0, 0]}>
         <axesHelper args={[1.2]} />
         <SkeletonLayer motion={motion} visible={skeletonVisible} />
+        <RobotLayer robot={robot} visible={robotVisible} />
       </group>
     </>
   );
@@ -116,13 +121,16 @@ function StageScene({
 
 export function StageCanvas({
   motion,
+  robot = null,
   visibleLayers,
 }: {
   motion: StageMotionPayload | null;
+  robot?: StageRobotPayload | null;
   visibleLayers: readonly StageLayerId[];
 }) {
   return (
     <Canvas
+      id="three-canvas"
       data-stage-renderer="react-three-fiber"
       className="absolute inset-0 block h-full w-full"
       flat
@@ -139,7 +147,11 @@ export function StageCanvas({
         gl.setClearColor(0x000000, 0);
       }}
     >
-      <StageScene motion={motion} visibleLayers={visibleLayers} />
+      <StageScene
+        motion={motion}
+        robot={robot}
+        visibleLayers={visibleLayers}
+      />
     </Canvas>
   );
 }

@@ -12,7 +12,7 @@ import { RobotToRobotView } from "./features/r2r/RobotToRobotView";
 import { VideoToMotionView } from "./features/video-to-motion/VideoToMotionView";
 import type { ViewId } from "./navigation";
 import { Stage } from "./stage/Stage";
-import type { StageMotionPayload } from "./stage/types";
+import type { StageMotionPayload, StageRobotPayload } from "./stage/types";
 
 const inspectorViews: Record<ViewId, ComponentType> = {
   motion: MotionView,
@@ -27,7 +27,22 @@ const inspectorViews: Record<ViewId, ComponentType> = {
 export function App() {
   const [activeView, setActiveView] = useState<ViewId>("motion");
   const [stageMotion, setStageMotion] = useState<StageMotionPayload | null>(null);
+  const [stageRobot, setStageRobot] = useState<StageRobotPayload | null>(null);
   const ActiveInspector = inspectorViews[activeView];
+
+  // Feature panels own transport; App owns the two payloads shared by the
+  // inspector and the single R3F stage. This keeps views independent while
+  // making a successful load immediately visible from any navigation tab.
+  const inspector =
+    activeView === "motion" ? (
+      <MotionView onMotionLoaded={setStageMotion} />
+    ) : activeView === "robot-assets" ? (
+      <RobotView onRobotLoaded={setStageRobot} />
+    ) : activeView === "video-to-motion" ? (
+      <VideoToMotionView onMotionLoaded={setStageMotion} />
+    ) : (
+      <ActiveInspector />
+    );
 
   return (
     <div
@@ -38,14 +53,8 @@ export function App() {
     >
       <Navbar />
       <Sidebar activeView={activeView} onSelect={setActiveView} />
-      <Stage motion={stageMotion} />
-      <Inspector>
-        {activeView === "video-to-motion" ? (
-          <VideoToMotionView onMotionLoaded={setStageMotion} />
-        ) : (
-          <ActiveInspector />
-        )}
-      </Inspector>
+      <Stage motion={stageMotion} robot={stageRobot} />
+      <Inspector>{inspector}</Inspector>
     </div>
   );
 }

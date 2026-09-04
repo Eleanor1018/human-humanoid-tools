@@ -27,9 +27,11 @@ src/
 │   └── ui/                  # Project-owned shadcn primitives
 ├── features/                # One folder per product feature
 │   ├── motion/
-│   │   └── MotionView.tsx   # Motion inspector and local import mode state
+│   │   ├── MotionView.tsx   # Motion inspector and local presentation state
+│   │   └── api.ts           # Motion Library/upload/job transport
 │   ├── robot/
-│   │   └── RobotView.tsx    # Robot import and library shell
+│   │   ├── RobotView.tsx    # Robot import and library view
+│   │   └── api.ts           # Robot catalog/selection transport
 │   ├── h2r/
 │   │   └── HumanToRobotView.tsx
 │   ├── r2r/
@@ -44,6 +46,7 @@ src/
 │   ├── StageCanvas.tsx      # One Canvas, camera, controls, lights and grid
 │   ├── StageEmpty.tsx       # Legacy initial empty-state copy
 │   ├── SkeletonLayer.tsx    # Data-only source skeleton first-frame layer
+│   ├── RobotLayer.tsx       # Zero-pose GLB/fallback robot layer
 │   ├── types.ts             # Stage renderer data contracts
 │   └── StageViewMenu.tsx    # React visibility HUD
 └── styles.css
@@ -55,8 +58,9 @@ Directories and files are created only when their first real user exists.
 
 ```text
 main -> App -> features -> components/ui
-             |
-             +-> stage
+             |\
+             +-> stage       # typed payloads only
+             +-> lib/api     # shared HTTP/error/job mechanics
 ```
 
 - `main.tsx` only mounts `App`.
@@ -106,8 +110,14 @@ main -> App -> features -> components/ui
 - [x] Data Analysis inspector visual shell
 - [x] R3F Stage base scene (camera, controls, lights, axes, grid)
 - [x] R3F source skeleton first-frame layer and V2M result handoff
-- [ ] R3F motion/robot/environment payload layers
-- [ ] Motion backend integration
+- [x] Motion Library list, upload, job polling, and Stage handoff
+- [x] Robot catalog, zero-pose selection, GLB parsing, and Stage handoff
+- [ ] R3F environment/body playback layers
+
+Robot selection is intentionally server-authoritative. A clean checkout only
+contains the robot scaffold, so `/api/robots` can be empty until URDF + mesh
+folders are provisioned through `HHTOOLS_ROBOT_PATH` or the user robot library.
+The six curated names are presentation metadata, not fabricated availability.
 
 ## References
 

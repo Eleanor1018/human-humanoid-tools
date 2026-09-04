@@ -1,0 +1,68 @@
+/** Robot-specific types and request functions for the inspector. */
+
+import { requestJson, type Fetcher } from "@/lib/api";
+import type { StageRobotPayload } from "@/stage/types";
+
+export interface RobotSummary {
+  readonly name: string;
+  readonly display_name: string;
+  readonly has_urdf: boolean;
+  readonly num_dof: number;
+  readonly builtin?: boolean;
+  readonly deletable: boolean;
+}
+
+export interface RobotsResponse {
+  readonly robots: readonly RobotSummary[];
+  readonly library_dir: string;
+}
+
+/** Complete zero-pose payload returned by POST /api/robot/select. */
+export type RobotPayload = StageRobotPayload;
+
+export interface RobotRequestOptions {
+  readonly signal?: AbortSignal;
+  readonly fetcher?: Fetcher;
+}
+
+/** Read the current catalog; the backend remains authoritative for availability. */
+export async function getRobotLibrary(
+  options: RobotRequestOptions = {},
+): Promise<RobotsResponse> {
+  const response = await requestJson<RobotsResponse>(
+    "/api/robots",
+    { signal: options.signal },
+    options.fetcher,
+  );
+  return {
+    library_dir:
+      typeof response.library_dir === "string" ? response.library_dir : "",
+    robots: Array.isArray(response.robots)
+      ? response.robots.filter(
+          (robot): robot is RobotSummary =>
+            Boolean(robot) &&
+            typeof robot.name === "string" &&
+            typeof robot.display_name === "string",
+        )
+      : [],
+  };
+}
+
+/** Load one robot and return its serialized zero-pose model for the Stage. */
+export async function loadRobot(
+  name: string,
+  options: RobotRequestOptions = {},
+): Promise<RobotPayload> {
+  const normalized = name.trim();
+  if (!normalized) throw new Error("Select a robot first.");
+  return requestJson<RobotPayload>(
+    "/api/robot/select",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: normalized }),
+      signal: options.signal,
+    },
+    options.fetcher,
+  );
+}
