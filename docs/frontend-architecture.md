@@ -12,8 +12,10 @@ Visual implementation follows [Frontend Visual Design](./frontend-design.md).
 src/
 ├── main.tsx                 # React bootstrap only
 ├── App.tsx                  # Composition and small shared state
+├── navigation.ts            # Shared view identities and sidebar data
 ├── components/
 │   ├── Navbar.tsx           # Five-item application menu shell
+│   ├── Sidebar.tsx          # Fixed seven-item feature navigation
 │   └── ui/                  # shadcn primitives, added only when used
 ├── features/                # One folder per product feature
 │   ├── motion/
@@ -62,6 +64,7 @@ main -> App -> features -> api -> FastAPI
 
 - [x] Empty shared React renderer
 - [x] Five-item top menu and dropdown shells
+- [x] Fixed seven-item left navigation
 - [ ] Motion feature
 
 ## References
