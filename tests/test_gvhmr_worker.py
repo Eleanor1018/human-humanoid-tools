@@ -8,7 +8,7 @@ import pytest
 
 
 def _load_worker() -> ModuleType:
-    worker_path = Path(__file__).parents[1] / "docker" / "gvhmr" / "run_video.py"
+    worker_path = Path(__file__).parents[1] / "hhtools" / "integrations" / "gvhmr_worker.py"
     spec = importlib.util.spec_from_file_location("hhtools_gvhmr_worker", worker_path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
