@@ -66,6 +66,19 @@ export class BakedMeshView {
     this.#resourceDisposer = options.resourceDisposer ?? new ThreeResourceDisposer();
   }
 
+  /**
+   * Revoke an escaped decoder without clearing the currently committed mesh.
+   *
+   * A higher-level motion-selection owner calls this as soon as newer user
+   * intent wins, which can happen before the replacement payload is available.
+   * The old async continuation becomes stale immediately while the stable View
+   * remains usable until that owner is ready to replace it.
+   */
+  claimLoadGeneration(): number {
+    this.#loadGeneration += 1;
+    return this.#loadGeneration;
+  }
+
   clear(): void {
     // DecompressionStream exposes no cancellation handle. Invalidate first so
     // even a completion racing resource disposal observes a terminal generation.

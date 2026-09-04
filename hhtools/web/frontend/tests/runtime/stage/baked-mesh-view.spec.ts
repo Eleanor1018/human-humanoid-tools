@@ -132,6 +132,39 @@ describe("BakedMeshView", () => {
     expect(view.group.children).toEqual([currentMesh]);
   });
 
+  it("invalidates an escaped decoder without clearing stable content", async () => {
+    const replacement = deferred<Float32Array>();
+    const decodeVertices = vi
+      .fn()
+      .mockResolvedValueOnce(twoFrameVertices())
+      .mockReturnValueOnce(replacement.promise);
+    const view = new BakedMeshView({ decodeVertices });
+
+    await view.load(bodyMesh("stable"));
+    const stableMesh = view.mesh;
+    const stableGeometry = stableMesh!.geometry;
+    const stableMaterial = stableMesh!.material;
+    const disposeGeometry = vi.spyOn(stableGeometry, "dispose");
+    const disposeMaterial = vi.spyOn(stableMaterial, "dispose");
+
+    const firstClaim = view.claimLoadGeneration();
+    const secondClaim = view.claimLoadGeneration();
+
+    expect(secondClaim).toBe(firstClaim + 1);
+    expect(view.mesh).toBe(stableMesh);
+    expect(view.group.children).toEqual([stableMesh]);
+    expect(disposeGeometry).not.toHaveBeenCalled();
+    expect(disposeMaterial).not.toHaveBeenCalled();
+
+    const escapedLoad = view.load(bodyMesh("escaped"));
+    view.claimLoadGeneration();
+    replacement.resolve(twoFrameVertices(30));
+
+    await expect(escapedLoad).resolves.toBe("stale");
+    expect(view.mesh).toBeNull();
+    expect(view.group.children).toHaveLength(0);
+  });
+
   it("does not adopt a generation started re-entrantly during clear", async () => {
     const currentDecode = deferred<Float32Array>();
     const decodeVertices = vi.fn((encodedVertices: string) => {
