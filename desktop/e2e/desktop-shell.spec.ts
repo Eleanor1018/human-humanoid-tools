@@ -163,6 +163,17 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
     await expect(batchMode.getByRole('radio', { name: 'H2R' })).toBeChecked()
     await batchMode.getByRole('radio', { name: 'R2R' }).click()
     await expect(inspector.getByText('1. Source trajectories')).toBeVisible()
+
+    await sidebar.getByRole('button', { name: 'Data Analysis' }).click()
+    await expect(inspector.getByRole('heading', { name: 'Data Analysis' })).toBeVisible()
+    await expect(page.getByRole('list', { name: 'Data Analysis pipeline' })).toBeVisible()
+    await expect(inspector.locator('details')).toHaveCount(5)
+    await expect(
+      inspector.getByRole('group', { name: 'Motion dataset import area' })
+    ).toBeVisible()
+    await expect(
+      inspector.getByRole('group', { name: 'Robot trajectory import area' })
+    ).toBeVisible()
     await expect(page.locator('.workspace-drawer-handle, .col-resizer')).toHaveCount(0)
 
     const stage = page.getByRole('main', { name: 'Workspace content' })

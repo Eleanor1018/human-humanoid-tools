@@ -5,6 +5,7 @@ import { Navbar } from "./components/Navbar";
 import { Sidebar } from "./components/Sidebar";
 import { MotionView } from "./features/motion/MotionView";
 import { BatchView } from "./features/batch/BatchView";
+import { AnalysisView } from "./features/analysis/AnalysisView";
 import { RobotView } from "./features/robot/RobotView";
 import { HumanToRobotView } from "./features/h2r/HumanToRobotView";
 import { RobotToRobotView } from "./features/r2r/RobotToRobotView";
@@ -20,6 +21,7 @@ const inspectorViews: Partial<Record<ViewId, ComponentType>> = {
   h2r: HumanToRobotView,
   r2r: RobotToRobotView,
   batch: BatchView,
+  "dataset-viz": AnalysisView,
 };
 
 export function App() {

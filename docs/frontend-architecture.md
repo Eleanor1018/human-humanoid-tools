@@ -36,9 +36,10 @@ src/
 │   │   └── RobotToRobotView.tsx
 │   ├── batch/
 │   │   └── BatchView.tsx    # Local V2M/H2R/R2R shells
-│   ├── video2motion/
+│   ├── video-to-motion/
 │   │   └── VideoToMotionView.tsx
 │   └── analysis/
+│       └── AnalysisView.tsx # Dataset analysis shell
 ├── stage/                   # Stage surface and floating view controls
 ├── api.ts                   # Shared HTTP primitives only
 ├── host.ts                  # Web/Electron boundary only
@@ -88,6 +89,7 @@ main -> App -> features -> api -> FastAPI
 - [x] Human-to-Robot inspector visual shell
 - [x] Robot-to-Robot inspector visual shell
 - [x] Batch inspector visual shell
+- [x] Data Analysis inspector visual shell
 - [ ] Motion backend integration
 
 ## References
