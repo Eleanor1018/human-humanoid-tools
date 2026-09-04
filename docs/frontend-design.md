@@ -71,4 +71,5 @@
 - [x] 建立 Video → Motion pipeline 与步骤样式壳
 - [x] 建立 Human → Robot pipeline 与步骤样式壳
 - [x] 建立 Robot → Robot pipeline 与步骤样式壳
+- [x] 建立 Batch 三模式右侧面板样式壳
 - [ ] 后续功能页面遵循本规范

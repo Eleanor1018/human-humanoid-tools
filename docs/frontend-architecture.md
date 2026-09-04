@@ -19,6 +19,7 @@ src/
 │   ├── Inspector.tsx        # Shared fixed right-side page frame
 │   ├── ImportDropzone.tsx   # Shared visual import surface
 │   ├── SearchField.tsx      # Shared compact search control
+│   ├── SegmentedControl.tsx # Shared three-way local selector
 │   ├── WorkflowSteps.tsx    # Shared pipeline and disclosure structure
 │   ├── Field.tsx            # Shared compact form field
 │   ├── RobotPicker.tsx      # Shared robot selection shell
@@ -34,6 +35,7 @@ src/
 │   ├── r2r/
 │   │   └── RobotToRobotView.tsx
 │   ├── batch/
+│   │   └── BatchView.tsx    # Local V2M/H2R/R2R shells
 │   ├── video2motion/
 │   │   └── VideoToMotionView.tsx
 │   └── analysis/
@@ -85,6 +87,7 @@ main -> App -> features -> api -> FastAPI
 - [x] Video-to-Motion inspector visual shell
 - [x] Human-to-Robot inspector visual shell
 - [x] Robot-to-Robot inspector visual shell
+- [x] Batch inspector visual shell
 - [ ] Motion backend integration
 
 ## References

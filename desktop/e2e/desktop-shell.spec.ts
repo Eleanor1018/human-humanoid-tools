@@ -156,6 +156,13 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
     await expect(page.getByRole('list', { name: 'Robot to Robot pipeline' })).toBeVisible()
     await expect(inspector.locator('details')).toHaveCount(5)
     await expect(inspector.getByText('No source robot loaded.')).toBeVisible()
+
+    await sidebar.getByRole('button', { name: 'Batch', exact: true }).click()
+    await expect(inspector.getByRole('heading', { name: 'Batch' })).toBeVisible()
+    const batchMode = inspector.getByRole('radiogroup', { name: 'Batch workflow' })
+    await expect(batchMode.getByRole('radio', { name: 'H2R' })).toBeChecked()
+    await batchMode.getByRole('radio', { name: 'R2R' }).click()
+    await expect(inspector.getByText('1. Source trajectories')).toBeVisible()
     await expect(page.locator('.workspace-drawer-handle, .col-resizer')).toHaveCount(0)
 
     const stage = page.getByRole('main', { name: 'Workspace content' })

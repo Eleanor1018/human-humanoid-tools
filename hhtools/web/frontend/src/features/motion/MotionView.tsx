@@ -4,15 +4,13 @@ import { ImportDropzone } from "@/components/ImportDropzone";
 import { InspectorPage } from "@/components/Inspector";
 import { SearchField } from "@/components/SearchField";
 import { Button } from "@/components/ui/button";
-import {
-  ToggleGroup,
-  ToggleGroupItem,
-} from "@/components/ui/toggle-group";
+import { SegmentedControl } from "@/components/SegmentedControl";
 
 type MotionProfile = "mimic" | "intermimic" | "meshmimic";
 
 interface MotionProfileOption {
   id: MotionProfile;
+  label: string;
   prompt: string;
   icon: string;
   acceptsFile: boolean;
@@ -21,18 +19,21 @@ interface MotionProfileOption {
 const profiles: readonly MotionProfileOption[] = [
   {
     id: "mimic",
+    label: "mimic",
     prompt: "Drop a motion file or folder",
     icon: "/icons/motion/film.svg",
     acceptsFile: true,
   },
   {
     id: "intermimic",
+    label: "intermimic",
     prompt: "Drop an object-interaction motion folder",
     icon: "/icons/motion/package.svg",
     acceptsFile: false,
   },
   {
     id: "meshmimic",
+    label: "meshmimic",
     prompt: "Drop a terrain-motion folder",
     icon: "/icons/motion/mountain.svg",
     acceptsFile: false,
@@ -42,10 +43,6 @@ const profiles: readonly MotionProfileOption[] = [
 const fieldClass =
   "min-h-[30px] min-w-0 truncate rounded-md border border-border bg-surface px-3 py-1.5 text-xs font-medium text-foreground disabled:cursor-not-allowed disabled:text-muted-foreground";
 
-function isMotionProfile(value: string): value is MotionProfile {
-  return profiles.some((profile) => profile.id === value);
-}
-
 export function MotionView() {
   // This selection only changes the import shell; file handling arrives with the API hookup.
   const [profile, setProfile] = useState<MotionProfile>("mimic");
@@ -54,25 +51,12 @@ export function MotionView() {
   return (
     <InspectorPage title="Motion">
       <div className="flex shrink-0 flex-col gap-2.5">
-        <ToggleGroup
-          type="single"
+        <SegmentedControl
+          label="Motion import type"
+          items={profiles}
           value={profile}
-          onValueChange={(value) => {
-            if (isMotionProfile(value)) setProfile(value);
-          }}
-          aria-label="Motion import type"
-          className="grid w-full grid-cols-3 gap-1.5"
-        >
-          {profiles.map((item) => (
-            <ToggleGroupItem
-              key={item.id}
-              value={item.id}
-              className="h-8 min-h-8 min-w-0 w-full rounded-md border border-border-subtle bg-surface px-1.5 py-1.5 text-[11px] leading-none font-semibold text-muted-foreground hover:border-border hover:bg-background hover:text-foreground data-[state=on]:border-primary data-[state=on]:bg-accent data-[state=on]:text-accent-foreground data-[state=on]:hover:bg-accent"
-            >
-              {item.id}
-            </ToggleGroupItem>
-          ))}
-        </ToggleGroup>
+          onValueChange={setProfile}
+        />
 
         <ImportDropzone
           label={`${profile} import area`}
