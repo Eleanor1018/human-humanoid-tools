@@ -229,7 +229,6 @@ declare global {
     "hhtools:job-history-command": CustomEvent<JobHistoryCommandDetail>;
     "hhtools:job-history-state": CustomEvent<JobHistoryStateDetail>;
     "hhtools:import-command": CustomEvent<ImportCommandDetail>;
-    "hhtools:job-spec-import-request": CustomEvent<void>;
     "hhtools:motion-profile-request": CustomEvent<
       "mimic" | "intermimic" | "meshmimic"
     >;

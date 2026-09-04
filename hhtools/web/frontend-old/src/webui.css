@@ -974,83 +974,6 @@ button { font-family: inherit; cursor: pointer; }
 }
 .job-action-btn:disabled:hover { background: transparent; }
 
-.job-spec-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 250;
-  display: grid;
-  place-items: center;
-  padding: 24px;
-  background: rgba(4, 12, 24, 0.46);
-  backdrop-filter: blur(5px);
-  -webkit-backdrop-filter: blur(5px);
-}
-.job-spec-dialog {
-  width: min(760px, calc(100vw - 32px));
-  max-height: min(760px, calc(100vh - 48px));
-  display: grid;
-  grid-template-rows: auto minmax(260px, 1fr) auto auto;
-  overflow: hidden;
-  border: 1px solid var(--hairline);
-  border-radius: 8px;
-  background: var(--panel-solid);
-  color: var(--ink);
-  box-shadow: 0 22px 70px rgba(4, 12, 24, 0.28);
-}
-.job-spec-dialog-head {
-  min-height: 56px;
-  padding: 10px 12px 10px 16px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  border-bottom: 1px solid var(--hairline);
-}
-.job-spec-dialog-head > div {
-  min-width: 0;
-  display: grid;
-  gap: 3px;
-}
-.job-spec-dialog-head strong { font-size: 14px; }
-.job-spec-dialog-head span { color: var(--ink-tertiary); font-size: 10px; }
-.job-spec-editor {
-  width: 100%;
-  min-height: 300px;
-  padding: 14px 16px;
-  resize: vertical;
-  border: 0;
-  border-bottom: 1px solid var(--hairline);
-  outline: 0;
-  background: var(--code-bg);
-  color: var(--ink);
-  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
-  font-size: 11px;
-  line-height: 1.55;
-  tab-size: 2;
-}
-.job-spec-editor:focus { box-shadow: inset 0 0 0 1px var(--accent); }
-.job-spec-feedback {
-  min-height: 44px;
-  padding: 9px 16px;
-  display: flex;
-  align-items: center;
-  color: var(--ink-secondary);
-  font-size: 11px;
-  line-height: 1.45;
-}
-.job-spec-feedback .ok { color: var(--green); }
-.job-spec-feedback .warning { color: var(--orange); }
-.job-spec-feedback .error { color: var(--red); }
-.job-spec-dialog-actions {
-  min-height: 50px;
-  padding: 10px 12px;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  border-top: 1px solid var(--hairline);
-}
-
 @media (max-width: 1040px) {
   .job-summary-count.state-done { display: none; }
   .job-row { grid-template-columns: 10px minmax(0, 1fr); }
@@ -4304,7 +4227,6 @@ body.tour-active { overflow: hidden; }
 
 .command-palette,
 .motion-picker-dialog,
-.job-spec-dialog,
 .workspace-settings-dialog {
   border-radius: var(--menu-radius);
 }

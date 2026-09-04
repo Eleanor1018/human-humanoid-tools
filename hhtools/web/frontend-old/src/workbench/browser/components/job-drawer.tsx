@@ -5,19 +5,15 @@ import {
   type CSSProperties,
   type PointerEvent,
 } from "react";
-import { createPortal } from "react-dom";
-import { ChevronDown, ChevronUp, RefreshCw, X } from "lucide-react";
+import { ChevronDown, ChevronUp, RefreshCw } from "lucide-react";
 
 import { useLocaleText } from "@/workbench/services/localization/browser/use-locale-text";
 import { useWindowEvent } from "@/platform/events/browser/use-window-event";
 import { cn } from "@/lib/utils";
 import { windowEventBus } from "@/platform/events/browser/window-event-bus";
 import type {
-  JobConfigResponse,
   JobHistoryRecord,
   JobParameterValue,
-  JobReplayCapability,
-  JobSpecValidationResponse,
   JobStatus,
 } from "@/domain/jobs/job";
 import type { JobHistoryCommandDetail } from "@/runtime/types";
@@ -69,7 +65,7 @@ const PARAMETER_LABELS: Record<string, [string, string]> = {
   file_count: ["Files", "文件"],
 };
 
-/** Bottom task panel and JobSpec editor, modelled after VS Code's docked panel. */
+/** Bottom task history panel with result export, modelled after VS Code's docked panel. */
 export function JobDrawer({ locale }: { locale: WorkspaceLocale }) {
   const text = useLocaleText(locale);
   const [open, setOpen] = useState(false);
@@ -79,32 +75,12 @@ export function JobDrawer({ locale }: { locale: WorkspaceLocale }) {
   const [jobs, setJobs] = useState<JobHistoryRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [editorOpen, setEditorOpen] = useState(false);
-  const [editorTitle, setEditorTitle] = useState("");
-  const [editorText, setEditorText] = useState("");
-  const [editorBusy, setEditorBusy] = useState(false);
-  const [editorError, setEditorError] = useState<string | null>(null);
-  const [editorValidation, setEditorValidation] =
-    useState<JobReplayCapability | null>(null);
-  const importInput = useRef<HTMLInputElement>(null);
   const stopResizeRef = useRef<(() => void) | null>(null);
 
   // Job history has one runtime-owned poller. This view consumes immutable
   // snapshots and emits commands, avoiding a second polling/download layer.
   const dispatch = (detail: JobHistoryCommandDetail) =>
     windowEventBus.emit("hhtools:job-history-command", detail);
-  const bridge = () => {
-    if (!window.__hhApp)
-      throw new Error(
-        text(
-          "The WebUI is not ready yet. Try again shortly.",
-          "WebUI 尚未准备完成，请稍后重试",
-        ),
-      );
-    return window.__hhApp;
-  };
-  const messageOf = (value: unknown) =>
-    value instanceof Error ? value.message : String(value);
   const localized = (labels: [string, string] | undefined, fallback: string) =>
     labels ? text(labels[0], labels[1]) : fallback;
 
@@ -120,16 +96,10 @@ export function JobDrawer({ locale }: { locale: WorkspaceLocale }) {
         setOpen((current) => !current);
       }
     };
-    const importRequest = () => importInput.current?.click();
     window.addEventListener("keydown", keydown);
-    window.addEventListener("hhtools:job-spec-import-request", importRequest);
     dispatch({ command: "refresh" });
     return () => {
       window.removeEventListener("keydown", keydown);
-      window.removeEventListener(
-        "hhtools:job-spec-import-request",
-        importRequest,
-      );
       stopResizeRef.current?.();
     };
   }, []);
@@ -170,115 +140,6 @@ export function JobDrawer({ locale }: { locale: WorkspaceLocale }) {
     window.addEventListener("pointercancel", stop, { once: true });
   };
 
-  const resetEditorValidation = () => {
-    setEditorError(null);
-    setEditorValidation(null);
-  };
-  const openEditor = (title: string, value: unknown) => {
-    // Imported full configs and duplicated jobs converge on one JobSpec editor;
-    // server validation normalizes both before replay is allowed.
-    setEditorTitle(title);
-    setEditorText(JSON.stringify(value, null, 2));
-    resetEditorValidation();
-    setEditorOpen(true);
-  };
-  const closeEditor = () => {
-    if (!editorBusy) setEditorOpen(false);
-  };
-  const importConfig = async (file: File | undefined) => {
-    if (!file) return;
-    try {
-      openEditor(
-        `${text("Import configuration", "导入配置")} · ${file.name}`,
-        JSON.parse(await file.text()) as unknown,
-      );
-    } catch (cause) {
-      bridge().toast(
-        `${text("Unable to read configuration", "读取配置失败")}：${messageOf(cause)}`,
-        true,
-      );
-    }
-  };
-  const duplicateForEdit = async (job: JobHistoryRecord) => {
-    try {
-      const config: JobConfigResponse = await bridge().API.get(
-        `/api/job/${job.id}/config`,
-      );
-      openEditor(
-        `${text("Duplicate and edit", "复制编辑")} · ${localized(KIND_LABELS[job.kind], job.kind)}`,
-        config.spec,
-      );
-    } catch (cause) {
-      bridge().toast(
-        `${text("Unable to read task configuration", "读取任务配置失败")}：${messageOf(cause)}`,
-        true,
-      );
-    }
-  };
-  const validateEditor =
-    async (): Promise<JobSpecValidationResponse | null> => {
-      setEditorBusy(true);
-      resetEditorValidation();
-      try {
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(editorText) as unknown;
-        } catch (cause) {
-          throw new Error(
-            `${text("Invalid JSON", "JSON 格式错误")}：${messageOf(cause)}`,
-          );
-        }
-        // The server, not the client, decides whether referenced source files are
-        // still replayable. React only presents that capability result.
-        const result = await bridge().API.post(
-          "/api/jobs/spec/validate",
-          parsed,
-        );
-        setEditorValidation(result.replay);
-        setEditorText(JSON.stringify(result.spec, null, 2));
-        return result;
-      } catch (cause) {
-        setEditorError(messageOf(cause));
-        return null;
-      } finally {
-        setEditorBusy(false);
-      }
-    };
-  const runEditor = async () => {
-    const validated = await validateEditor();
-    if (!validated?.replay.available) return;
-    setEditorBusy(true);
-    try {
-      const started = await bridge().API.post("/api/jobs/replay", {
-        spec: validated.spec,
-      });
-      bridge().toast(`${text("Created task", "已创建任务")} ${started.job_id}`);
-      setEditorOpen(false);
-      dispatch({ command: "refresh" });
-    } catch (cause) {
-      setEditorError(messageOf(cause));
-    } finally {
-      setEditorBusy(false);
-    }
-  };
-  const retry = async (job: JobHistoryRecord, failedOnly = false) => {
-    if (failedOnly ? !job.can_retry_failed : !job.can_retry) return;
-    try {
-      const started = await bridge().API.post("/api/jobs/replay", {
-        job_id: job.id,
-        failed_only: failedOnly,
-      });
-      bridge().toast(
-        `${text(failedOnly ? "Created failed-item retry task" : "Created retry task", failedOnly ? "已创建失败项重试任务" : "已创建重试任务")} ${started.job_id}`,
-      );
-      dispatch({ command: "refresh" });
-    } catch (cause) {
-      bridge().toast(
-        `${text("Retry failed", "重试失败")}：${messageOf(cause)}`,
-        true,
-      );
-    }
-  };
   const formatTime = (timestamp: number) =>
     !Number.isFinite(timestamp) || timestamp <= 0
       ? text("Unknown time", "时间未知")
@@ -322,12 +183,11 @@ export function JobDrawer({ locale }: { locale: WorkspaceLocale }) {
     : undefined;
 
   return (
-    <>
-      <section
-        className={cn("job-drawer docked-job-panel", open && "open")}
-        style={style}
-        aria-label={text("Task history", "任务历史")}
-      >
+    <section
+      className={cn("job-drawer docked-job-panel", open && "open")}
+      style={style}
+      aria-label={text("Task history", "任务历史")}
+    >
         {open && (
           <div
             className="job-panel-resizer"
@@ -364,17 +224,6 @@ export function JobDrawer({ locale }: { locale: WorkspaceLocale }) {
                 </span>
               </div>
               <div className="job-drawer-head-actions">
-                <input
-                  ref={importInput}
-                  className="sr-only"
-                  type="file"
-                  accept="application/json,.json"
-                  onChange={(event) => {
-                    const file = event.currentTarget.files?.[0];
-                    event.currentTarget.value = "";
-                    void importConfig(file);
-                  }}
-                />
                 <button
                   type="button"
                   className="job-icon-btn"
@@ -483,73 +332,8 @@ export function JobDrawer({ locale }: { locale: WorkspaceLocale }) {
                         </div>
                       )}
                     </div>
-                    <div className="job-row-actions">
-                      <button
-                        type="button"
-                        className="job-action-btn primary"
-                        disabled={!job.can_retry}
-                        title={
-                          job.can_retry
-                            ? text(
-                                "Create a new task from saved sources and effective parameters",
-                                "使用保存的源文件和有效参数创建新任务",
-                              )
-                            : job.retry_reason || undefined
-                        }
-                        onClick={() => void retry(job)}
-                      >
-                        {text("Retry", "重试")}
-                      </button>
-                      {job.can_retry_failed && (
-                        <button
-                          type="button"
-                          className="job-action-btn"
-                          onClick={() => void retry(job, true)}
-                        >
-                          {text("Retry failed only", "仅重试失败项")} (
-                          {job.failed_item_count})
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        className="job-action-btn"
-                        onClick={() => void duplicateForEdit(job)}
-                      >
-                        {text("Duplicate & Edit", "复制编辑")}
-                      </button>
-                      {job.can_copy_cli && (
-                        <button
-                          type="button"
-                          className="job-action-btn"
-                          onClick={() =>
-                            dispatch({ command: "copy-cli", jobId: job.id })
-                          }
-                        >
-                          {text("Copy CLI", "复制 CLI")}
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        className="job-action-btn"
-                        onClick={() =>
-                          dispatch({ command: "copy-config", jobId: job.id })
-                        }
-                      >
-                        {text("Copy Config", "复制配置")}
-                      </button>
-                      <button
-                        type="button"
-                        className="job-action-btn"
-                        onClick={() =>
-                          dispatch({
-                            command: "download-config",
-                            jobId: job.id,
-                          })
-                        }
-                      >
-                        {text("Save Config", "保存配置")}
-                      </button>
-                      {job.can_download && (
+                    {job.can_download && (
+                      <div className="job-row-actions">
                         <button
                           type="button"
                           className="job-action-btn primary"
@@ -565,124 +349,16 @@ export function JobDrawer({ locale }: { locale: WorkspaceLocale }) {
                             })
                           }
                         >
-                          {text("Download Result", "下载结果")}
+                          {text("Export Result", "导出结果")}
                         </button>
-                      )}
-                    </div>
+                      </div>
+                    )}
                   </article>
                 );
               })}
             </div>
           </div>
         )}
-      </section>
-      {editorOpen &&
-        createPortal(
-          <div
-            className="job-spec-backdrop"
-            onMouseDown={(event) => {
-              if (event.target === event.currentTarget) closeEditor();
-            }}
-          >
-            <section
-              className="job-spec-dialog"
-              role="dialog"
-              aria-modal="true"
-              aria-label={editorTitle}
-            >
-              <header className="job-spec-dialog-head">
-                <div>
-                  <strong>{editorTitle}</strong>
-                  <span>
-                    JobSpec v1 ·{" "}
-                    {text(
-                      "Validate changes before running a new task",
-                      "修改后先验证，再作为新任务运行",
-                    )}
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  className="job-icon-btn"
-                  title={text("Close", "关闭")}
-                  aria-label={text("Close", "关闭")}
-                  disabled={editorBusy}
-                  onClick={closeEditor}
-                >
-                  <X aria-hidden="true" />
-                </button>
-              </header>
-              <textarea
-                className="job-spec-editor"
-                spellCheck="false"
-                aria-label="JobSpec JSON"
-                value={editorText}
-                onChange={(event) => {
-                  setEditorText(event.currentTarget.value);
-                  resetEditorValidation();
-                }}
-              />
-              <div className="job-spec-feedback" aria-live="polite">
-                {editorError ? (
-                  <p className="error">{editorError}</p>
-                ) : editorValidation?.available ? (
-                  <p className="ok">
-                    {text(
-                      "Configuration is valid and can rerun from",
-                      "配置有效，可从",
-                    )}{" "}
-                    {editorValidation.source_count}{" "}
-                    {text("local source files.", "个本地源文件重新运行。")}
-                  </p>
-                ) : editorValidation ? (
-                  <p className="warning">
-                    {text(
-                      "The configuration is valid but cannot run directly",
-                      "配置格式有效，但不能直接运行",
-                    )}
-                    ：{editorValidation.reason}
-                  </p>
-                ) : (
-                  <p>
-                    {text(
-                      "Import a full configuration downloaded from task history or a standalone JobSpec JSON.",
-                      "支持导入从任务历史下载的完整配置，或独立 JobSpec JSON。",
-                    )}
-                  </p>
-                )}
-              </div>
-              <footer className="job-spec-dialog-actions">
-                <button
-                  type="button"
-                  className="job-action-btn"
-                  disabled={editorBusy}
-                  onClick={closeEditor}
-                >
-                  {text("Cancel", "取消")}
-                </button>
-                <button
-                  type="button"
-                  className="job-action-btn"
-                  disabled={editorBusy}
-                  onClick={() => void validateEditor()}
-                >
-                  {editorBusy
-                    ? text("Validating…", "验证中…")
-                    : text("Validate Config", "验证配置")}
-                </button>
-                <button
-                  type="button"
-                  className="job-action-btn primary"
-                  disabled={editorBusy || editorValidation?.available === false}
-                  onClick={() => void runEditor()}
-                >
-                  {text("Run as New Task", "作为新任务运行")}
-                </button>
-              </footer>
-            </section>
-          </div>,
-          document.body,
-        )}
-    </>
+    </section>
   );
 }

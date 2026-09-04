@@ -74,9 +74,6 @@ export type ImportCommandTarget =
   | 'video-file'
   | 'robot-urdf'
   | 'robot-mesh-folder'
-  | 'robot-trajectory'
-  | 'dataset-folder'
-  | 'job-spec'
 
 export interface ImportCommandDetail {
   target: ImportCommandTarget

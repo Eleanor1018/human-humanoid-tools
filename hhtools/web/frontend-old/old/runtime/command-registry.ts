@@ -201,25 +201,6 @@ export function createApplicationCommands(
         detail: localize(locale, 'Select the mesh folder referenced by the URDF', '选择与 URDF 配套的 meshes 目录'),
         target: 'robot-mesh-folder',
       }, locale),
-      importCommand({
-        id: 'import-robot-trajectory',
-        label: localize(locale, 'Import Robot Trajectory', '导入机器人轨迹'),
-        detail: localize(locale, 'Import the source robot trajectory for R2R', '导入 R2R 源机器人轨迹'),
-        target: 'robot-trajectory',
-        dividerBefore: true,
-      }, locale),
-      importCommand({
-        id: 'import-dataset-folder',
-        label: localize(locale, 'Import Dataset Folder', '导入数据集文件夹'),
-        detail: localize(locale, 'Select a dataset folder to analyze', '选择要分析的数据集目录'),
-        target: 'dataset-folder',
-      }, locale),
-      importCommand({
-        id: 'import-job-spec',
-        label: localize(locale, 'Import JobSpec', '导入 JobSpec'),
-        detail: localize(locale, 'Import a reproducible JobSpec JSON file', '导入可验证和重放的 JobSpec JSON'),
-        target: 'job-spec',
-      }, locale),
       {
         id: 'export-current-result',
         group: localize(locale, 'File', '文件'),

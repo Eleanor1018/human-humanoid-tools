@@ -4,13 +4,11 @@ import {
   fireEvent,
   render,
   screen,
-  waitFor,
 } from "@testing-library/react";
 import { Profiler } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { JobHistoryRecord } from "../../src/domain/jobs/job";
-import type { HhAppBridge } from "../../src/runtime/types";
 import { H2rStageLayerControls } from "../../src/workbench/browser/components/h2r-stage-layer-controls";
 import { PlaybackBar } from "../../src/workbench/browser/components/playback-bar";
 import { SearchField } from "../../src/workbench/browser/components/search-field";
@@ -422,7 +420,7 @@ describe("React workbench components", () => {
     stageModel.dispose();
   });
 
-  it("keeps JobSpec duplicate, validate, and rerun actions available", async () => {
+  it("keeps only result export in each task row", () => {
     const job: JobHistoryRecord = {
       id: "job-1",
       kind: "retarget",
@@ -435,31 +433,16 @@ describe("React workbench components", () => {
       finished_at: 1_700_000_001,
       duration_seconds: 1,
       parameters: { robot: "unitree_g1" },
-      result_summary: {},
-      can_download: false,
+      result_summary: { download_name: "retarget.zip" },
+      can_download: true,
       can_copy_cli: true,
       can_retry: true,
       retry_reason: null,
-      can_retry_failed: false,
-      failed_item_count: 0,
+      can_retry_failed: true,
+      failed_item_count: 1,
       parent_job_id: null,
       scope: "persistent",
     };
-    const get = vi.fn().mockResolvedValue({
-      spec: { schema_version: 1, kind: "retarget", request: {} },
-    });
-    const post = vi
-      .fn()
-      .mockResolvedValueOnce({
-        spec: { schema_version: 1, kind: "retarget", request: {} },
-        replay: { available: true, reason: null, source_count: 1 },
-      })
-      .mockResolvedValueOnce({ job_id: "job-2" });
-    window.__hhApp = {
-      API: { get, post },
-      toast: vi.fn(),
-    } as unknown as HhAppBridge;
-
     render(<JobDrawer locale="en" />);
     fireEvent.click(screen.getByText("Tasks"));
     act(() =>
@@ -469,19 +452,9 @@ describe("React workbench components", () => {
         }),
       ),
     );
-    fireEvent.click(screen.getByText("Duplicate & Edit"));
-
-    expect(await screen.findByRole("dialog")).toBeInTheDocument();
-    expect(get).toHaveBeenCalledWith("/api/job/job-1/config");
-    fireEvent.click(screen.getByText("Run as New Task"));
-    await waitFor(() => expect(post).toHaveBeenCalledTimes(2));
-    expect(post).toHaveBeenNthCalledWith(1, "/api/jobs/spec/validate", {
-      schema_version: 1,
-      kind: "retarget",
-      request: {},
-    });
-    expect(post).toHaveBeenNthCalledWith(2, "/api/jobs/replay", {
-      spec: { schema_version: 1, kind: "retarget", request: {} },
-    });
+    const actions = document.querySelector(".job-row-actions");
+    expect(actions).not.toBeNull();
+    expect(actions?.querySelectorAll("button")).toHaveLength(1);
+    expect(screen.getByText("Export Result")).toBeInTheDocument();
   });
 });

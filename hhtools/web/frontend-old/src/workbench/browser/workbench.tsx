@@ -52,7 +52,7 @@ import type {
 // Unmigrated command-palette imports still resolve to compatibility elements.
 // Migrated features such as V2M register commands instead of entering this map.
 const importTargets: Record<
-  Exclude<ImportCommandTarget, "job-spec" | "video-file">,
+  Exclude<ImportCommandTarget, "video-file">,
   {
     panel: WorkspacePanelId;
     selector: string;
@@ -74,11 +74,6 @@ const importTargets: Record<
     panel: "robot-assets",
     selector: "#robot-pick-mesh-folder",
   },
-  "robot-trajectory": {
-    panel: "r2r",
-    selector: '[data-r2r-pick="mimic"]:not([data-folder])',
-  },
-  "dataset-folder": { panel: "dataset-viz", selector: "#dv-pick-folder" },
 };
 
 /**
@@ -274,12 +269,6 @@ export function Workbench({
     const importSubscription = windowEventBus.on(
       "hhtools:import-command",
       (event) => {
-        if (event.detail.target === "job-spec") {
-          window.dispatchEvent(
-            new CustomEvent("hhtools:job-spec-import-request"),
-          );
-          return;
-        }
         if (event.detail.target === "video-file") {
           // The contributed V2M view stays mounted and owns this command.
           // Request the panel first so leaving R2R also returns Stage ownership,
