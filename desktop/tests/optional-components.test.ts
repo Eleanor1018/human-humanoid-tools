@@ -40,17 +40,43 @@ describe('OptionalComponentStore', () => {
     const root = mkdtempSync(join(tmpdir(), 'hhtools-components-config-'))
     const userData = join(root, 'user-data')
     const checkout = createGvhmrCheckout(root)
-    const store = new OptionalComponentStore({ userData, env: {} })
+    const python = join(root, 'gvhmr-env', 'bin', 'python')
+    mkdirSync(join(root, 'gvhmr-env', 'bin'), { recursive: true })
+    writeFileSync(python, '', 'utf8')
+    const store = new OptionalComponentStore({ userData, env: {}, platform: 'linux' })
 
-    expect(store.configureGvhmr(checkout)).toMatchObject({
+    expect(store.configureGvhmr(checkout, python)).toMatchObject({
       configured: true,
       requested: false,
       root: checkout,
+      python,
+      runtime: 'local',
+    })
+    expect(store.sidecarEnvironment({})).toEqual({
+      HHTOOLS_GVHMR_ROOT: checkout,
+      HHTOOLS_GVHMR_PYTHON: python,
+    })
+
+    const restored = new OptionalComponentStore({ userData, env: {}, platform: 'linux' })
+    expect(restored.getState({}).gvhmr.root).toBe(checkout)
+    expect(restored.getState({}).gvhmr.python).toBe(python)
+  })
+
+  it('keeps the Windows Docker setup independent from a Python path', () => {
+    const root = mkdtempSync(join(tmpdir(), 'hhtools-components-windows-'))
+    const checkout = createGvhmrCheckout(root)
+    const store = new OptionalComponentStore({
+      userData: join(root, 'user-data'),
+      env: {},
+      platform: 'win32',
+    })
+
+    expect(store.configureGvhmr(checkout)).toMatchObject({
+      configured: true,
+      root: checkout,
+      runtime: 'docker',
     })
     expect(store.sidecarEnvironment({})).toEqual({ HHTOOLS_GVHMR_ROOT: checkout })
-
-    const restored = new OptionalComponentStore({ userData, env: {} })
-    expect(restored.getState({}).gvhmr.root).toBe(checkout)
   })
 
   it('rejects a folder that is not an official GVHMR checkout', () => {

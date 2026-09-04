@@ -14,6 +14,8 @@ export interface GvhmrOptionalComponentState {
   requested: boolean
   configured: boolean
   root?: string
+  python?: string
+  runtime: 'local' | 'docker'
   guideUrl: string
   estimatedAdditionalBytes: number
 }
