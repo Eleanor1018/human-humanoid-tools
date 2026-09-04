@@ -472,7 +472,7 @@ def _create_app_owned(
 
     from hhtools.utils.paths import user_job_history_dir
     from hhtools.viewer.cache import EphemeralCache
-    from hhtools.web.agent_boundary import (
+    from hhtools.agent.boundary import (
         AgentBoundaryMiddleware,
         agent_error_response,
         is_agent_path,
@@ -1338,8 +1338,8 @@ def _create_app_owned(
         RetargetService,
         RetargetServiceError,
     )
-    from hhtools.web.agent_api import router as agent_router
-    from hhtools.web.h2r_job_executor import (
+    from hhtools.agent.api import router as agent_router
+    from hhtools.agent.h2r_job_executor import (
         H2RExecutorBindings,
         H2RJobExecutor,
         H2RPreview,

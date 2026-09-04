@@ -38,6 +38,7 @@ ALLOWED_DEPENDENCIES: dict[str, frozenset[str]] = {
     "utils": frozenset(),
     "contracts": frozenset(),
     "core": frozenset(),
+    "agent": frozenset({"contracts", "services"}),
     "bodymodels": frozenset({"core", "utils"}),
     "human": frozenset(),
     "robot": frozenset({"core", "utils"}),
@@ -49,6 +50,7 @@ ALLOWED_DEPENDENCIES: dict[str, frozenset[str]] = {
     "web": frozenset(
         {
             "analysis",
+            "agent",
             "contracts",
             "core",
             "integrations",

@@ -55,7 +55,7 @@ from hhtools.services.artifacts import StoredArtifact
 from hhtools.services.assets import AssetServiceError
 from hhtools.services.jobs import JobManagerError
 from hhtools.services.legacy_job_upgrade import LegacyJobUpgradeError
-from hhtools.web.agent_artifact_response import verified_artifact_response
+from hhtools.agent.artifact_response import verified_artifact_response
 
 _log = logging.getLogger(__name__)
 

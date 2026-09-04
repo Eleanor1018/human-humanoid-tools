@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
-from hhtools.web.agent_boundary import (
+from hhtools.agent.boundary import (
     AGENT_MAX_BODY_BYTES,
     LEGACY_UPGRADE_MAX_BODY_BYTES,
     AgentBoundaryMiddleware,

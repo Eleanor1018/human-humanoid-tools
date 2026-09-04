@@ -52,7 +52,7 @@ from hhtools.services.jobs import (
 )
 from hhtools.services.legacy_job_upgrade import LegacyJobUpgradeError
 from hhtools.web import server
-from hhtools.web.agent_api import _error_response, _looks_like_host_path, router
+from hhtools.agent.api import _error_response, _looks_like_host_path, router
 from hhtools.web.job_scheduler import JobScheduler
 
 _DIGEST = "a" * 64
