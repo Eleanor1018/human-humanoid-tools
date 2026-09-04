@@ -56,6 +56,8 @@ main -> App -> features -> api -> FastAPI
 - Extract shared code after a second real caller appears.
 - Keep server state authoritative; use React state for presentation state.
 - Add shadcn components individually. Do not prebuild a component library.
+- Keep only tokens and document-wide defaults in `styles.css`; colocate feature
+  and component styling with their JSX using Tailwind utilities.
 - Do not add a router, global store, event bus, DI container, command registry,
   or plugin lifecycle without a concrete requirement.
 - Comments explain contracts and reasons, not obvious JSX.

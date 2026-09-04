@@ -12,7 +12,7 @@ export function App() {
   return (
     <div
       id="app"
-      className="workspace-shell"
+      className="grid h-dvh min-h-0 min-w-0 grid-cols-[208px_minmax(0,1fr)] grid-rows-[40px_minmax(0,1fr)]"
       data-hhtools-ready="true"
       data-active-view={activeView}
     >

@@ -1,5 +1,7 @@
 import type { CSSProperties } from "react";
 
+import { cn } from "@/lib/utils";
+
 import { navigationGroups, type ViewId } from "../navigation";
 
 interface SidebarProps {
@@ -11,25 +13,33 @@ type IconStyle = CSSProperties & { "--sidebar-icon": string };
 
 export function Sidebar({ activeView, onSelect }: SidebarProps) {
   return (
-    <aside id="sidebar" aria-label="Workspace navigation">
-      <nav className="sidebar-body">
-        <div className="nav-groups">
+    <aside
+      id="sidebar"
+      className="col-start-1 row-start-2 min-h-0 min-w-0 overflow-hidden border-r border-border-subtle bg-surface"
+      aria-label="Workspace navigation"
+    >
+      <nav className="h-full min-h-0 min-w-0 overflow-y-auto px-3 py-3.5">
+        <div className="flex flex-col gap-3.5">
           {navigationGroups.map((group) => (
             <section
               key={group.label}
-              className="nav-group"
+              className="flex flex-col gap-[3px]"
               aria-label={group.label}
             >
               {group.items.map((item) => (
                 <button
                   key={item.id}
                   type="button"
-                  className={`nav-item${activeView === item.id ? " active" : ""}`}
+                  className={cn(
+                    "flex w-full cursor-pointer items-center gap-3 rounded-md border-0 bg-transparent px-[13px] py-2.5 text-left text-sm font-medium tracking-normal text-muted-foreground hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring",
+                    activeView === item.id &&
+                      "bg-accent text-accent-foreground",
+                  )}
                   aria-current={activeView === item.id ? "page" : undefined}
                   onClick={() => onSelect(item.id)}
                 >
                   <span
-                    className="sidebar-icon"
+                    className="sidebar-icon size-5 shrink-0 bg-current [mask:var(--sidebar-icon)_center/18px_18px_no-repeat] [-webkit-mask:var(--sidebar-icon)_center/18px_18px_no-repeat]"
                     style={
                       {
                         "--sidebar-icon": `url(${item.icon})`,
@@ -37,7 +47,7 @@ export function Sidebar({ activeView, onSelect }: SidebarProps) {
                     }
                     aria-hidden="true"
                   />
-                  <span className="nav-item-label">{item.label}</span>
+                  <span className="min-w-0 truncate">{item.label}</span>
                 </button>
               ))}
             </section>

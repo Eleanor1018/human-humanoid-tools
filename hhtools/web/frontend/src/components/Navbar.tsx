@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
+import { cn } from "@/lib/utils";
+
 interface MenuCommand {
   label: string;
   shortcut?: string;
@@ -79,22 +81,31 @@ export function Navbar() {
   }, []);
 
   return (
-    <header id="topbar">
-      <div className="logo" aria-label="HHTOOLS">
-        <img className="desktop-logo-mark" src="/hhtools-robot.svg" alt="" />
-        <span className="desktop-brand-name">HHTOOLS</span>
+    <header
+      id="topbar"
+      className="col-span-full row-start-1 z-[200] flex items-center border-b border-border-subtle bg-surface py-0 pr-3 pl-[25px]"
+    >
+      <div
+        className="flex basis-[201px] shrink-0 items-center gap-2 text-lg font-bold tracking-normal text-foreground"
+        aria-label="HHTOOLS"
+      >
+        <img className="size-6 object-contain" src="/hhtools-robot.svg" alt="" />
+        <span>HHTOOLS</span>
       </div>
 
       <nav
         ref={root}
-        className="desktop-menubar"
+        className="flex self-stretch items-stretch gap-2"
         aria-label="Application menu"
       >
         {menus.map((menu) => (
-          <div key={menu.id} className="desktop-menu-root">
+          <div key={menu.id} className="relative flex items-center">
             <button
               type="button"
-              className={`desktop-menu-trigger${openMenu === menu.id ? " active" : ""}`}
+              className={cn(
+                "h-7 cursor-pointer whitespace-nowrap rounded-sm border-0 bg-transparent px-2.5 text-xs font-medium tracking-normal text-muted-foreground hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring",
+                openMenu === menu.id && "bg-accent text-accent-foreground",
+              )}
               aria-haspopup="menu"
               aria-expanded={openMenu === menu.id}
               onMouseEnter={() => setOpenMenu(menu.id)}
@@ -105,32 +116,34 @@ export function Navbar() {
             </button>
             {openMenu === menu.id && (
               <div
-                className="desktop-menu-popup"
+                className="absolute top-[calc(100%+3px)] left-0 z-[120] min-w-[286px] max-w-[340px] rounded-lg border border-border-subtle bg-surface p-[5px] shadow-[var(--shadow-menu)]"
                 role="menu"
                 aria-label={menu.label}
               >
                 {menu.commands.map((command) => (
-                  <div
-                    key={command.label}
-                    className={
-                      command.dividerBefore
-                        ? "desktop-menu-divider-group"
-                        : undefined
-                    }
-                  >
+                  <div key={command.label}>
                     {command.dividerBefore && (
-                      <div className="desktop-menu-separator" role="separator" />
+                      <div
+                        className="mx-1.5 my-1 h-px bg-border-subtle"
+                        role="separator"
+                      />
                     )}
                     <button
                       type="button"
-                      className="desktop-menu-item"
+                      className="flex min-h-9 w-full cursor-pointer items-center justify-between gap-3 rounded-sm border-0 bg-transparent px-2 py-1.5 text-left text-foreground hover:bg-accent focus-visible:bg-accent focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring"
                       role="menuitem"
                       onClick={() => setOpenMenu(null)}
                     >
-                      <span className="desktop-menu-item-copy">
-                        <span>{command.label}</span>
+                      <span className="grid min-w-0 gap-0.5">
+                        <span className="truncate text-[13px] font-semibold">
+                          {command.label}
+                        </span>
                       </span>
-                      {command.shortcut && <kbd>{command.shortcut}</kbd>}
+                      {command.shortcut && (
+                        <kbd className="shrink-0 font-sans text-[10px] text-muted-foreground opacity-70">
+                          {command.shortcut}
+                        </kbd>
+                      )}
                     </button>
                   </div>
                 ))}
@@ -139,7 +152,7 @@ export function Navbar() {
           </div>
         ))}
       </nav>
-      <div className="spacer" />
+      <div className="flex-1" />
     </header>
   );
 }

@@ -5,7 +5,7 @@ import type { ComponentProps } from "react";
 import { cn } from "@/lib/utils";
 
 const toggleVariants = cva(
-  "inline-flex items-center justify-center whitespace-nowrap rounded-sm text-xs font-semibold outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-35 data-[state=on]:bg-primary data-[state=on]:text-primary-foreground",
+  "inline-flex cursor-pointer items-center justify-center whitespace-nowrap rounded-sm text-xs font-semibold outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-35 data-[state=on]:bg-primary data-[state=on]:text-primary-foreground",
   {
     variants: {
       variant: {

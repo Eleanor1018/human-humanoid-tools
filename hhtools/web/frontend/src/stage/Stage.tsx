@@ -7,7 +7,10 @@ export function Stage() {
   const [visibleLayers, setVisibleLayers] = useState<StageLayerId[]>(["body"]);
 
   return (
-    <main className="app-content" aria-label="Workspace content">
+    <main
+      className="app-content @container relative col-start-2 row-start-2 min-h-0 min-w-0 overflow-hidden bg-canvas"
+      aria-label="Workspace content"
+    >
       <StageViewMenu
         value={visibleLayers}
         onValueChange={setVisibleLayers}

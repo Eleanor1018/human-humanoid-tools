@@ -10,19 +10,21 @@
 
 | 语义 | Token | 色值 |
 |---|---|---|
-| 应用底色 | `--canvas` | `#F7FBFE` |
+| 应用底色 | `--canvas` | `#F6F8FA` |
 | 主表面 | `--surface` | `#FFFFFF` |
-| 浅表面 / 选中底色 | `--surface-subtle` | `#E6EEF9` |
+| 浅表面 | `--surface-subtle` | `#F1F4F7` |
 | 主文字 | `--text` | `#02122E` |
-| 次要文字 | `--text-muted` | `#64748B` |
-| 浅边框 | `--border-subtle` | `#E6EEF9` |
-| 强边框 | `--border` | `#CCDDF3` |
-| 强调色 | `--accent` | `#3F78C7` |
-| 强调色 hover | `--accent-hover` | `#0A3C96` |
-| 焦点环 | `--focus` | `#6FA0DA` |
+| 次要文字 | `--text-muted` | `#667085` |
+| 浅边框 | `--border-subtle` | `#E5EAF0` |
+| 强边框 | `--border` | `#D0D7DE` |
+| 强调色 | `--accent` | `#0071E3` |
+| 强调色 hover | `--accent-hover` | `#005BB5` |
+| 强调浅底 | `--accent-soft` | `#E8F2FF` |
+| 焦点环 | `--focus` | `#218BFF` |
 
-色值来源：`Roboparty_lab/app/assets/css/main.css`。Roboparty Lab 没有自定义完整的状态色，
-因此成功、警告和错误色等真实组件出现后再单独定义。
+深色文字保留 Roboparty Lab 的品牌基因；交互蓝回到旧版 HHTOOLS 的鲜明方向。
+中性色与语义分层参考 Primer，焦点与工具栏对比参考 VS Code；不直接复制任何完整主题。
+成功、警告和错误色等真实状态出现后再单独定义。
 
 ## 形状与间距
 
@@ -50,6 +52,7 @@
 ## 实施规则
 
 - 组件只使用语义 token，不直接写品牌色 hex。
+- `styles.css` 只保存 token 和页面级基础；组件私有样式写在组件内的 Tailwind class。
 - shadcn 组件按需加入，并统一映射到本规范的 token。
 - 有标准含义的图标统一使用 Lucide。
 - 不使用渐变装饰、彩色光球、重阴影、超大标题和应用内说明文案。
