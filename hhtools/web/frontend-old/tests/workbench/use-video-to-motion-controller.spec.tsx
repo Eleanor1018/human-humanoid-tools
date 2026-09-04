@@ -21,7 +21,12 @@ import type {
 } from "../../src/workbench/contrib/video-to-motion/browser/video-to-motion-controller";
 import { useVideoToMotionController } from "../../src/workbench/contrib/video-to-motion/browser/use-video-to-motion-controller";
 import type { WaitForJobOptions } from "../../src/workbench/services/jobs/common/job-service";
-import type { MotionPresentationResult } from "../../src/workbench/services/motion/common/motion-result-presentation-service";
+import type {
+  HumanMotionPresentationIntent,
+  IHumanMotionPresentationReservation,
+  MotionPresentationReservationOptions,
+  MotionPresentationResult,
+} from "../../src/workbench/services/motion/common/motion-result-presentation-service";
 
 interface GetCall {
   readonly url: string;
@@ -86,11 +91,17 @@ class FakeJobService implements VideoToMotionJobPort {
 class FakePresentationService implements VideoToMotionPresentationPort {
   readonly calls: MotionPayload[] = [];
 
-  async presentHumanMotion(
-    payload: MotionPayload,
-  ): Promise<MotionPresentationResult> {
-    this.calls.push(payload);
-    return "presented";
+  async reserveHumanMotionPresentation(
+    _intent: HumanMotionPresentationIntent,
+    _options?: MotionPresentationReservationOptions,
+  ): Promise<IHumanMotionPresentationReservation> {
+    return {
+      commit: async (payload: MotionPayload): Promise<MotionPresentationResult> => {
+        this.calls.push(payload);
+        return "presented";
+      },
+      dispose: () => {},
+    };
   }
 }
 

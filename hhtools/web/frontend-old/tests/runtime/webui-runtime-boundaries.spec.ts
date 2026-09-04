@@ -354,7 +354,7 @@ describe("legacy runtime ownership boundaries", () => {
     expect(latestAttemptOwnerSource).toContain("export class LatestAsyncAttemptOwner");
 
     const bootstrapDefinitions = runtimeSource.slice(
-      runtimeSource.indexOf("interface H2rCalibrationPairIdentity"),
+      runtimeSource.indexOf("interface H2rCalibrationDomainIdentity"),
       runtimeSource.indexOf("async function enterCalibrationMode"),
     );
     for (const identityCheck of [
@@ -367,6 +367,12 @@ describe("legacy runtime ownership boundaries", () => {
     ]) {
       expect(bootstrapDefinitions).toContain(identityCheck);
     }
+    expect(bootstrapDefinitions).toContain(
+      "calibrationPresentationEpoch === identity.presentationEpoch",
+    );
+    expect(bootstrapDefinitions).toContain(
+      "h2rScaledPairRevision === identity.scaledPairRevision",
+    );
 
     const entry = runtimeSource.slice(
       runtimeSource.indexOf("async function enterCalibrationMode"),
@@ -376,7 +382,10 @@ describe("legacy runtime ownership boundaries", () => {
     expect(entry.indexOf("calibrationPresentationEpoch += 1"))
       .toBeLessThan(beginAttempt);
     const request = entry.indexOf('await API.post("/api/calibration/session"');
-    const awaitGuard = entry.indexOf('if (!isCurrent()) return "stale"', request);
+    const awaitGuard = entry.indexOf(
+      'if (!requestMayPublish()) return "stale"',
+      request,
+    );
     const referenceValidation = entry.indexOf("if (!session.reference)", awaitGuard);
     const reservation = entry.indexOf("reserveCalibrationManipulatorSession(", referenceValidation);
     const firstSessionMutation = entry.indexOf("state.calibRestore = _snapshotVis()", reservation);
@@ -395,7 +404,7 @@ describe("legacy runtime ownership boundaries", () => {
       "orbit.zoomSpeed = 0.022",
       "robot.groundOffset =",
       "updateCalibBanner(",
-      "_applyCalibSceneLayout()",
+      "_applyCalibSceneLayout(",
       "updateCalibRestoreButton()",
     ]) {
       expect(
@@ -413,22 +422,41 @@ describe("legacy runtime ownership boundaries", () => {
     expect(entry).toContain("reference: attempt.identity.reference");
     expect(entry).toContain("motion_token: attempt.identity.motionToken");
     expect(entry).toContain("robotGroundOffset: robot.groundOffset");
+    expect(entry).toContain(
+      "const presentationEpoch = ++calibrationPresentationEpoch",
+    );
+    expect(entry).toContain("presentationEpoch,");
     expect(entry).not.toContain("robot: state.robot.name");
     expect(entry).not.toContain("motion_token: state.motion?.token");
     expect(entry.match(/state\.calibOrbitSaved = \{/g)).toHaveLength(1);
     expect(entry).toContain("if (enteringFresh) {");
     const catchStart = entry.lastIndexOf("} catch (error) {");
-    const staleCatchGuard = entry.indexOf('if (!isCurrent()) return "stale"', catchStart);
+    const failureAuthority = entry.indexOf(
+      "const failureWasCurrent = requestMayPublish()",
+      catchStart,
+    );
     const rollbackCall = entry.indexOf("rollbackH2rCalibrationBootstrap(", catchStart);
-    expect(staleCatchGuard).toBeGreaterThan(catchStart);
-    expect(rollbackCall).toBeGreaterThan(staleCatchGuard);
+    expect(failureAuthority).toBeGreaterThan(catchStart);
+    expect(rollbackCall).toBeGreaterThan(failureAuthority);
+    expect(entry).toContain("const bootstrapOwnsInstalledState = (): boolean");
+    expect(entry).toContain("const requestMayPublish = (): boolean");
+    expectTokensInOrder(entry, [
+      "const bootstrapOwnsInstalledState",
+      "h2rCalibrationBootstrapAttempts.isCurrent(attempt)",
+      "const requestMayPublish",
+      "bootstrapOwnsInstalledState()",
+      "h2rInspectorPanelIsActive()",
+      "ownsPairMutation()",
+    ]);
 
     const rollback = runtimeSource.slice(
       runtimeSource.indexOf("function rollbackH2rCalibrationBootstrap"),
       runtimeSource.indexOf("async function enterCalibrationMode"),
     );
     expect(rollback).toContain("): boolean {");
-    expect(rollback.indexOf("h2rCalibrationBootstrapAttempts.isCurrent(attempt)"))
+    expect(rollback).toContain("ownsInstalledState: () => boolean");
+    expect(rollback).toContain("requestMayReport: () => boolean");
+    expect(rollback.indexOf("if (!ownsInstalledState()) return abandonAttempt()"))
       .toBeLessThan(rollback.indexOf("h2rCalibrationFkPreview.stop()"));
     expect(rollback.indexOf("h2rCalibrationManipulatorSession = null"))
       .toBeLessThan(rollback.indexOf("calibManip.stop(manipulatorSession)"));
@@ -456,11 +484,27 @@ describe("legacy runtime ownership boundaries", () => {
     expect(entry).not.toContain(
       '?? activeCalibrationManipulatorSession("h2r")',
     );
-    expect(entry).toContain(
-      "rollbackH2rCalibrationBootstrap(attempt, error, manipulatorSession)",
-    );
-    expect(entry).toContain(
-      'stopCalibrationManipulatorSession("h2r", manipulatorSession)',
+    expectTokensInOrder(entry.slice(rollbackCall), [
+      "rollbackH2rCalibrationBootstrap(",
+      "attempt,",
+      "error,",
+      "manipulatorSession,",
+      "bootstrapOwnsInstalledState,",
+      "requestMayPublish,",
+    ]);
+    expect(entry).toContain("let terminalCleanupAttempted = false");
+    const finallyStart = entry.indexOf("} finally {");
+    expect(finallyStart).toBeGreaterThan(rollbackCall);
+    expectTokensInOrder(entry.slice(finallyStart), [
+      "if (!manipulatorCommitted && !terminalCleanupAttempted)",
+      "if (manipulatorSession)",
+      "rollbackH2rCalibrationBootstrap(",
+      "null,",
+      "bootstrapOwnsInstalledState,",
+      "requestMayPublish,",
+    ]);
+    expect(entry.slice(finallyStart)).toContain(
+      "h2rCalibrationBootstrapAttempts.abandon(attempt)",
     );
     expect(entry).toContain("if (!manipulatorSession) {");
     expect(entry).toContain("if (!buildCalibSliders(");
@@ -508,13 +552,19 @@ describe("legacy runtime ownership boundaries", () => {
       runtimeSource.indexOf("export async function presentHumanMotion"),
     );
     expect(motionLoad).toContain("const wasCalibrating = state.calibrationMode");
-    expect(motionLoad).toContain("await enterCalibrationMode(calibrationDraft)");
+    expectTokensInOrder(motionLoad, [
+      "const entryResult = await enterCalibrationMode(",
+      "calibrationDraft,",
+      "motionOwnsScaledPair,",
+      "_applyCalibSceneLayout(motionOwnsScaledPair)",
+      "refreshRetargetPanel(motionLoadIsCurrent, scaledPairRevision)",
+    ]);
     expect(motionLoad).toContain("calibrationMotionLoadDisposition(");
     expect(motionLoad).toContain("state.calibrationMode,");
     expect(motionLoad).toContain('if (disposition === "stale") return "stale"');
     expect(motionLoad).toContain('if (disposition === "calibration")');
     expect(motionLoad).toContain("(state.motion?.token ?? null) === calibrationMotionToken");
-    expect(motionLoad).toContain('state.motion?.token !== payload.token) return "stale"');
+    expect(motionLoad).toContain("|| state.motion?.token !== payload.token");
     expect(motionLoad).toContain("exitCalibrationMode()");
 
     const statusRefreshStart = runtimeSource.indexOf("async function refreshRetargetPanel");
@@ -534,6 +584,32 @@ describe("legacy runtime ownership boundaries", () => {
     expect(statusRefresh).toContain("h2rCalibrationStatusAttempts.begin({");
     expect(statusRefresh).toContain("motion: state.motion");
     expect(statusRefresh).toContain("motionToken: state.motion?.token ?? null");
+    expect(statusRefresh).toContain(
+      "scaledPairRevision: refreshScaledPairRevision",
+    );
+    expect(statusRefresh).toContain(
+      "?? ++h2rScaledPairRevision",
+    );
+    expectTokensInOrder(statusRefresh, [
+      "claimedScaledPairRevision === undefined",
+      "clearH2rScaledPreview(ownsRefreshScaledPair)",
+      "if (!refreshIsCurrent() || !ownsRefreshScaledPair()) return",
+      "h2rCalibrationStatusAttempts.invalidate()",
+    ]);
+    expect(statusRefresh).toContain("h2rInspectorPanelIsActive()");
+    expectTokensInOrder(statusRefresh, [
+      "const unclaimedPairWriterIsPending",
+      "h2rMotionSelectionIsPending()",
+      "h2rRobotExportPreviewIsPending()",
+      "h2rRunState === \"running\"",
+      "publishH2rWorkflowState()",
+      "return",
+      "h2rCalibrationStatusAttempts.invalidate()",
+    ]);
+    expect(statusRefresh).toContain(
+      "await refreshScaledPreview(statusAttempt.identity.scaledPairRevision)",
+    );
+    expect(statusRefresh).toContain("ownsRefreshScaledPair");
 
     const recalibrate = runtimeSource.slice(
       runtimeSource.indexOf('document.getElementById("recalib-btn").onclick'),
@@ -544,9 +620,13 @@ describe("legacy runtime ownership boundaries", () => {
       "h2rCalibrationStatusAttempts.isCurrent(statusAttempt)",
       recalibrateAwait,
     );
-    const recalibrateEntry = recalibrate.indexOf("await enterCalibrationMode(jq)");
+    const recalibrateEntry = recalibrate.indexOf("await enterCalibrationMode(");
     expect(recalibrateGuard).toBeGreaterThan(recalibrateAwait);
     expect(recalibrateEntry).toBeGreaterThan(recalibrateGuard);
+    expectTokensInOrder(recalibrate.slice(recalibrateEntry), [
+      "jq,",
+      "() => scaledPairRevision === h2rScaledPairRevision",
+    ]);
     expect(recalibrate).toContain("motion: activeMotion");
     expect(recalibrate).toContain("motionToken: activeMotion?.token ?? null");
 
@@ -1169,6 +1249,87 @@ describe("legacy runtime ownership boundaries", () => {
       const classSource = runtimeSource.slice(classStart, classEnd);
       expect(classStart, `${view.className} start`).toBeGreaterThanOrEqual(0);
       expect(classEnd, `${view.className} end`).toBeGreaterThan(classStart);
+      if (view.className === "EnvView") {
+        expect(classSource).toContain("private preparationGeneration = 0");
+        expect(classSource).toContain(
+          "private readonly generations = new WeakMap<EnvViewRetirement, EnvViewGeneration>()",
+        );
+        expect(classSource).toContain(
+          "private readonly disposedWithGeneration = new WeakSet<THREE.Object3D>()",
+        );
+        const clearSource = classSource.slice(
+          classSource.indexOf("clear(): void {"),
+          classSource.indexOf("\n  prepare("),
+        );
+        expectTokensInOrder(clearSource, [
+          "this.preparationGeneration += 1",
+          "const retired = this.content?.retirement ?? null",
+          "this.content.root.visible = false",
+          "this.content = null",
+          "this.releaseAliases()",
+          "this.retire(retired)",
+        ]);
+        expect(clearSource).not.toContain("this.group.clear()");
+        expect(clearSource).not.toContain("disposeObject3DChildren");
+
+        const prepareSource = classSource.slice(
+          classSource.indexOf("\n  prepare("),
+          classSource.indexOf("\n  retire("),
+        );
+        expectTokensInOrder(prepareSource, [
+          "const root = new THREE.Group()",
+          "root.visible = false",
+          "const ownedChildren = new Set<THREE.Object3D>()",
+          "object.traverse((node) => { ownedChildren.add(node); })",
+          "root.add(placeholder)",
+          "new DetachedSourceViewPreparation(",
+        ]);
+
+        const loadSource = classSource.slice(
+          classSource.indexOf("\n  load("),
+          classSource.indexOf("\n  get numFrames"),
+        );
+        expectTokensInOrder(loadSource, [
+          "const prepared = this.prepare(motion)",
+          'prepared.stage() !== "staged"',
+          "const retired = prepared.publish()",
+          "this.retire(retired)",
+          "prepared.activate()",
+          "prepared.abandon()",
+        ]);
+
+        const replacementSource = classSource.slice(
+          classSource.indexOf("private commitObjectMesh("),
+          classSource.indexOf("private disposeGeneration("),
+        );
+        expectTokensInOrder(replacementSource, [
+          "const realOwnedSnapshot: THREE.Object3D[] = []",
+          "real.traverse((node) => { realOwnedSnapshot.push(node); })",
+          "for (const node of realOwnedSnapshot) generation.ownedChildren.add(node)",
+          "generation.root.add(real)",
+          "real.parent !== generation.root",
+          "generation.root.remove(placeholder)",
+          "generation.objectMeshes[index] !== placeholder",
+          "generation.objectMeshes[index] = real",
+          "this.releaseGenerationObject(",
+          "placeholder",
+          '"environment placeholder cleanup failed"',
+        ]);
+        const releaseSource = replacementSource.slice(
+          replacementSource.indexOf("private releaseGenerationObject("),
+        );
+        expectTokensInOrder(releaseSource, [
+          "for (const node of knownSubtree)",
+          "generation.ownedChildren.delete(node)",
+          "this.disposedWithGeneration.has(node)",
+          "retireThreeContentRoot(",
+          "unsettledKnownSubtree",
+        ]);
+        expect(replacementSource).toContain(
+          "placeholder.parent === generation.root",
+        );
+        continue;
+      }
       expect(classSource).toContain("private _loadGeneration = 0");
       if (view.className === "ScaledEnvView") {
         expect(classSource).toContain("const m = buildTerrainMesh(");
@@ -1275,40 +1436,10 @@ describe("legacy runtime ownership boundaries", () => {
         expect(meshGuard).not.toContain("isCurrent()");
         continue;
       }
-      expect(loadSource).toContain("const generation = this._loadGeneration");
-      expect(loadSource).toContain(view.invocation);
-      expect(buildSource).toContain("generation: number");
-
-      const staleCheck = buildSource.indexOf(
-        "this._loadGeneration !== generation",
-      );
-      const identityCheck = buildSource.indexOf(
-        "this.objectMeshes[i] !== box",
-        staleCheck,
-      );
-      const staleDispose = buildSource.indexOf(view.staleContext, identityCheck);
-      const staleReturn = buildSource.indexOf("return;", staleDispose);
-      const attach = buildSource.indexOf("this.group.add(real)", staleReturn);
-      const publish = buildSource.indexOf("this.objectMeshes[i] = real", attach);
-      const detachPlaceholder = buildSource.indexOf("this.group.remove(box)", publish);
-      const disposePlaceholder = buildSource.indexOf(
-        view.placeholderContext,
-        detachPlaceholder,
-      );
-      expect(staleCheck, `${view.className} generation guard`).toBeGreaterThanOrEqual(0);
-      expect(identityCheck, `${view.className} placeholder guard`).toBeGreaterThan(staleCheck);
-      expect(staleDispose, `${view.className} stale disposal`).toBeGreaterThan(identityCheck);
-      expect(staleReturn, `${view.className} stale return`).toBeGreaterThan(staleDispose);
-      expect(attach, `${view.className} attach`).toBeGreaterThan(staleReturn);
-      expect(publish, `${view.className} publish`).toBeGreaterThan(attach);
-      expect(detachPlaceholder, `${view.className} placeholder detach`).toBeGreaterThan(publish);
-      expect(disposePlaceholder, `${view.className} placeholder disposal`).toBeGreaterThan(
-        detachPlaceholder,
-      );
     }
   });
 
-  it("terminally disposes synchronous Stage View children before clearing aliases", () => {
+  it("stages synchronous source Views under exact detached generation roots", () => {
     expect(runtimeSource).toContain(
       'import { ThreeResourceDisposer } from "@/platform/graphics/common/three-resource-disposer"',
     );
@@ -1320,13 +1451,7 @@ describe("legacy runtime ownership boundaries", () => {
       {
         className: "SkeletonView",
         endMarker: "class EnvView",
-        inventory: [
-          "...this.spheres.map((sphere) => sphere.geometry)",
-          "...(this.lineGeom ? [this.lineGeom] : [])",
-          "...this.spheres.map((sphere) => sphere.material)",
-          "...(this.lines ? [this.lines.material] : [])",
-        ],
-        cleanup: ["this.group.clear()"],
+        ownedChildren: ["ownedChildren.add(sphere)", "ownedChildren.add(lines)"],
         aliasReleases: [
           "this.lineGeom = null",
           "this.lines = null",
@@ -1340,11 +1465,7 @@ describe("legacy runtime ownership boundaries", () => {
       {
         className: "CapsuleMeshView",
         endMarker: "class ScaledSkeletonView",
-        inventory: [
-          "geometries: this.mesh ? [this.mesh.geometry] : []",
-          "materials: this.mesh ? [this.mesh.material] : []",
-        ],
-        cleanup: ["this.group.clear()"],
+        ownedChildren: ["ownedChildren.add(mesh)"],
         aliasReleases: [
           "this.mesh = null",
           "this.joints = null",
@@ -1360,57 +1481,106 @@ describe("legacy runtime ownership boundaries", () => {
     for (const {
       className,
       endMarker,
-      inventory,
-      cleanup,
+      ownedChildren,
       aliasReleases,
     } of synchronousViews) {
       const classStart = runtimeSource.indexOf(`class ${className}`);
       const classEnd = runtimeSource.indexOf(endMarker, classStart);
       const classSource = runtimeSource.slice(classStart, classEnd);
       const clearStart = classSource.indexOf("clear(): void {");
-      const clearEnd = classSource.indexOf("\n  load(", clearStart);
+      const clearEnd = classSource.indexOf("\n  prepare(", clearStart);
       const clearSource = classSource.slice(clearStart, clearEnd);
+      const prepareStart = clearEnd;
+      const retireStart = classSource.indexOf("\n  retire(", prepareStart);
+      const prepareSource = classSource.slice(prepareStart, retireStart);
+      const disposeStart = classSource.indexOf("private disposeGeneration(");
+      const releaseStart = classSource.indexOf("private releaseAliases(");
+      const releaseSource = classSource.slice(releaseStart);
 
       expect(classStart, `${className} start`).toBeGreaterThanOrEqual(0);
       expect(classEnd, `${className} end`).toBeGreaterThan(classStart);
       expect(clearStart, `${className}.clear start`).toBeGreaterThanOrEqual(0);
       expect(clearEnd, `${className}.clear end`).toBeGreaterThan(clearStart);
-      const disposal = clearSource.indexOf(
-        "threeResourceDisposer.disposeObject3DChildren(this.group",
-      );
-      const finallyBlock = clearSource.indexOf("finally {");
-      expect(disposal, `${className} disposal`).toBeGreaterThanOrEqual(0);
-      expect(finallyBlock, `${className} finally`).toBeGreaterThan(disposal);
+      expect(prepareStart, `${className}.prepare start`).toBeGreaterThanOrEqual(clearEnd);
+      expect(retireStart, `${className}.retire start`).toBeGreaterThan(prepareStart);
+      expect(disposeStart, `${className}.dispose start`).toBeGreaterThan(retireStart);
+      expect(releaseStart, `${className}.release start`).toBeGreaterThan(disposeStart);
+
+      expectTokensInOrder(clearSource, [
+        "this.preparationGeneration += 1",
+        "const retired = this.content?.retirement ?? null",
+        "this.content.root.visible = false",
+        "this.content = null",
+        "this.releaseAliases()",
+        "this.retire(retired)",
+      ]);
       expect(clearSource).not.toContain("while (this.group.children.length)");
+      expect(clearSource).not.toContain("this.group.clear()");
+      expect(clearSource).not.toContain("disposeObject3DChildren");
 
-      const disposalSource = clearSource.slice(disposal, finallyBlock);
-      for (const ownedResource of inventory) {
-        expect(disposalSource, `${className}: ${ownedResource}`).toContain(
-          ownedResource,
-        );
+      expectTokensInOrder(prepareSource, [
+        "const root = new THREE.Group()",
+        "root.visible = false",
+        "const ownedChildren = new Set<THREE.Object3D>()",
+        "new DetachedSourceViewPreparation(",
+      ]);
+      for (const ownedChild of ownedChildren) {
+        expect(prepareSource, `${className}: ${ownedChild}`).toContain(ownedChild);
       }
+      expect(prepareSource).toContain("() => this.publishGeneration(candidate)");
+      expect(prepareSource).toContain("() => this.disposeGeneration(candidate)");
 
-      // One outer finally enters cleanup; one nested finally per fallible
-      // cleanup guarantees the alias-release block remains reachable.
-      expect(clearSource.match(/finally \{/g)).toHaveLength(cleanup.length + 1);
-      let previousCleanup = finallyBlock;
-      for (const cleanupCall of cleanup) {
-        const cleanupIndex = clearSource.indexOf(
-          cleanupCall,
-          previousCleanup + 1,
-        );
-        expect(cleanupIndex, `${className}: ${cleanupCall}`).toBeGreaterThan(
-          previousCleanup,
-        );
-        previousCleanup = cleanupIndex;
-      }
+      const disposeSource = classSource.slice(disposeStart, releaseStart);
+      expectTokensInOrder(disposeSource, [
+        "if (generation.retired) return",
+        "generation.retired = true",
+        "this.generations.delete(generation.retirement)",
+        "retireThreeContentRoot(",
+        "generation.root",
+        "[...generation.ownedChildren]",
+        "generation.extras",
+      ]);
       for (const aliasRelease of aliasReleases) {
-        expect(
-          clearSource.indexOf(aliasRelease, previousCleanup + 1),
-          `${className}: ${aliasRelease}`,
-        ).toBeGreaterThan(previousCleanup);
+        expect(releaseSource, `${className}: ${aliasRelease}`).toContain(aliasRelease);
       }
+      expect(classSource).not.toContain("this.group.clear()");
+      expect(classSource).not.toContain("disposeObject3DChildren(this.group");
     }
+
+    const preparationSource = runtimeSource.slice(
+      runtimeSource.indexOf("class DetachedSourceViewPreparation"),
+      runtimeSource.indexOf("// =================================================================  SKELETON"),
+    );
+    const stageSource = preparationSource.slice(
+      preparationSource.indexOf("stage("),
+      preparationSource.indexOf("\n  publish("),
+    );
+    const publishSource = preparationSource.slice(
+      preparationSource.indexOf("\n  publish("),
+      preparationSource.indexOf("\n  abandon("),
+    );
+    expectTokensInOrder(stageSource, [
+      'this.state = "staging"',
+      "this.stableOwner.add(this.candidateRoot)",
+      "this.candidateRoot.parent !== this.stableOwner",
+      "this.abandon()",
+      'this.state = "staged"',
+    ]);
+    expect(publishSource).toContain("this.publishGeneration()");
+    expect(publishSource).toContain("!this.canPublish()");
+    expect(publishSource).not.toContain("stableOwner.add");
+    expect(publishSource).not.toContain("stableOwner.remove");
+    expect(publishSource).not.toContain("disposeCandidate");
+    const canPublishSource = preparationSource.slice(
+      preparationSource.indexOf("\n  canPublish("),
+      preparationSource.indexOf("\n  abandon("),
+    );
+    expect(canPublishSource).toContain('this.state === "staged"');
+    expect(canPublishSource).toContain(
+      "this.candidateRoot.parent === this.stableOwner",
+    );
+    expect(canPublishSource).toContain("this.preparationIsCurrent()");
+    expect(canPublishSource).not.toContain("isCurrent()");
 
     const scaledSkeletonStart = runtimeSource.indexOf(
       "class ScaledSkeletonView",
@@ -1868,75 +2038,180 @@ describe("legacy runtime ownership boundaries", () => {
   });
 
   it("presents generated motion through one ordered aggregate boundary", () => {
-    const start = runtimeSource.indexOf(
+    const reservationStart = runtimeSource.indexOf(
+      "export function reserveHumanMotionPresentation",
+    );
+    const presentationStart = runtimeSource.indexOf(
+      "async function presentReservedHumanMotion",
+      reservationStart,
+    );
+    const facadeStart = runtimeSource.indexOf(
       "export async function presentHumanMotion",
+      presentationStart,
     );
-    const end = runtimeSource.indexOf("function datasetSceneGlbUrl", start);
-    const facade = runtimeSource.slice(start, end);
-    const load = facade.indexOf("await loadMotionPayload(payload)");
-    const staleGuard = facade.indexOf(
-      'if (loadResult === "stale") return "superseded"',
-    );
-    const refresh = facade.indexOf("await refreshLibrary()");
-    const basket = facade.indexOf("addToBasket([payload.library_entry]");
+    const end = runtimeSource.indexOf("function datasetSceneGlbUrl", facadeStart);
+    const reservation = runtimeSource.slice(reservationStart, presentationStart);
+    const presentation = runtimeSource.slice(presentationStart, facadeStart);
+    const facade = runtimeSource.slice(facadeStart, end);
 
-    expect(start).toBeGreaterThanOrEqual(0);
-    expect(end).toBeGreaterThan(start);
-    expect(load).toBeGreaterThanOrEqual(0);
-    expect(staleGuard).toBeGreaterThan(load);
-    expect(refresh).toBeGreaterThan(staleGuard);
-    expect(basket).toBeGreaterThan(refresh);
-    expect(facade).toContain("{ silent: true }");
-    expect(facade).toContain('return "presented"');
+    expect(reservationStart).toBeGreaterThanOrEqual(0);
+    expect(presentationStart).toBeGreaterThan(reservationStart);
+    expect(facadeStart).toBeGreaterThan(presentationStart);
+    expect(end).toBeGreaterThan(facadeStart);
+    expectTokensInOrder(reservation, [
+      'beginH2rMotionSelection("presentation", label)',
+      "publishH2rWorkflowState()",
+      "if (commitPromise) return commitPromise",
+      "commitPromise = presentReservedHumanMotion(payload, attempt)",
+      "h2rMotionSelectionAttempts.abandon(attempt)",
+    ]);
+    expect(presentation).not.toContain("beginH2rMotionSelection(");
+    expectTokensInOrder(presentation, [
+      "await loadMotionPayload(payload, attempt)",
+      'loadResult === "stale"',
+      "await refreshLibrary()",
+      "addToBasket([payload.library_entry]",
+      "finishH2rMotionSelection(attempt)",
+      "publishLatestH2rMotionSelectionCompletion(attempt)",
+      "h2rMotionSelectionLeaseIsLatest(attempt)",
+      'return "presented"',
+    ]);
+    expect(presentation).toContain("{ silent: true }");
+    expectTokensInOrder(facade, [
+      'reserveHumanMotionPresentation("generated motion")',
+      "await reservation.commit(payload)",
+      "reservation.dispose()",
+    ]);
   });
 
-  it("stops every motion-load caller after a stale baked-mesh generation", () => {
+  it("reserves one owner across every H2R motion acquisition path", () => {
+    const ownership = runtimeSource.slice(
+      runtimeSource.indexOf("type H2rMotionSelectionKind"),
+      runtimeSource.indexOf("function datasetSceneGlbUrl"),
+    );
+    expect(ownership).toContain(
+      "new LatestAsyncCompletionLeaseOwner<\n  H2rMotionSelectionIdentity",
+    );
+    const begin = ownership.slice(
+      ownership.indexOf("function beginH2rMotionSelection"),
+      ownership.indexOf("function h2rMotionSelectionIsCurrent"),
+    );
+    expectTokensInOrder(begin, [
+      "const motionInputRevision = ++h2rMotionInputRevision",
+      "const scaledPairRevision = ++h2rScaledPairRevision",
+      "const loadingOverlayClaim = claimLoadingOverlayPresentation()",
+      "h2rMotionSelectionAttempts.begin(",
+      'h2rRunState = "idle"',
+      "pendingH2rPlayback = null",
+    ]);
+    const pairPreparation = ownership.slice(
+      ownership.indexOf("function prepareH2rMotionSelection"),
+      ownership.indexOf("function finishH2rMotionSelection"),
+    );
+    expect(pairPreparation).toContain(
+      "clearH2rScaledPreview(ownsPairMutation)",
+    );
+
+    const library = runtimeSource.slice(
+      runtimeSource.indexOf("async function loadLibraryEntryRequest"),
+      runtimeSource.indexOf("async function loadLibraryEntry("),
+    );
+    expectTokensInOrder(library, [
+      'beginH2rMotionSelection("library", "library motion")',
+      "const label = entry.stem",
+      "showLoading(",
+      'API.post("/api/motion/load_library"',
+      "await waitMotionJob<MotionPayload>",
+      "await loadMotionPayload(payload, attempt)",
+      "finishH2rMotionSelection(attempt)",
+    ]);
+
+    const ingest = runtimeSource.slice(
+      runtimeSource.indexOf("async function ingestMotionFiles"),
+      runtimeSource.indexOf("function initMotionImportZone"),
+    );
+    expectTokensInOrder(ingest, [
+      "beginH2rMotionSelection(",
+      "inferLibraryFolderLabel(files)",
+      "showLoading(",
+      "await uploadFilesXHR(",
+      "await waitMotionJob<MotionPayload>",
+      "await loadMotionPayload(payload, attempt)",
+      "finishH2rMotionSelection(attempt)",
+    ]);
+    expect(runtimeSource).toContain(
+      "if (h2rMotionSelectionIsPending()) return runtimeText(",
+    );
+    const retarget = runtimeSource.slice(
+      runtimeSource.indexOf('document.getElementById("retarget-btn").onclick'),
+      runtimeSource.indexOf("function csvHeaderEnabled"),
+    );
+    expectTokensInOrder(retarget, [
+      "h2rMotionSelectionIsPending()",
+      "h2rRobotExportPreviewIsPending()",
+      "const retargetMotionInputRevision = h2rMotionInputRevision",
+      "const retargetScaledPairRevision = ++h2rScaledPairRevision",
+      "retargetMotionInputRevision === h2rMotionInputRevision",
+      "retargetScaledPairRevision === h2rScaledPairRevision",
+    ]);
+  });
+
+  it("publishes one complete H2R source bundle before fallible presentation", () => {
     const motionLoad = runtimeSource.slice(
       runtimeSource.indexOf("async function loadMotionPayload"),
-      runtimeSource.indexOf("export async function presentHumanMotion"),
+      runtimeSource.indexOf("export interface HumanMotionPresentationReservation"),
     );
-    const bakedLoad = motionLoad.indexOf(
-      "const skinLoadResult = await skin.load(payload.body_mesh)",
-    );
-    const bakedGuard = motionLoad.indexOf(
-      'if (skinLoadResult === "stale") return "stale"',
-      bakedLoad,
-    );
-    const backendPublication = motionLoad.indexOf("payload.suggested_backend");
-    const calibrationStart = motionLoad.indexOf(
+    const commitStart = motionLoad.indexOf("async function commitMotionPayload");
+    const preparation = motionLoad.slice(0, commitStart);
+    const commit = motionLoad.slice(commitStart);
+
+    expectTokensInOrder(preparation, [
+      "prepared.skeleton = skel.prepare(payload, 0x0a84ff)",
+      "prepared.capsule = mesh.prepare(payload)",
+      "prepared.environment = envView.prepare(payload)",
+      "await skin.prepareDetached(",
+      'skinPreparation.status === "stale"',
+      "prepared.skin = skinPreparation.preparation",
+      "return await commitMotionPayload(",
+      "abandonH2rSourceBundle(prepared)",
+    ]);
+    expectTokensInOrder(commit, [
+      "stageH2rSourceBundle(preparedSource, motionLoadIsCurrent)",
+      "h2rSourceBundleCanPublish(preparedSource)",
+      "publishH2rSourceBundle(preparedSource)",
+      "state.motion = payload",
+      "state.robotTrajectory = null",
+      "state.exportToken = null",
+      "robot.trajectory = null",
+      "applyLoadedH2rMotionVisibility(payload)",
+      "h2rSourceBundleIsPublishedCurrent(preparedSource)",
+      "markH2rStageDisplayChanged()",
+      "retireH2rSourceBundle(retiredSource)",
+      "preparedSource.environment.activate()",
+      "syncRefSelect()",
       "if (wasCalibrating)",
-    );
-    const calibrationSkinClear = motionLoad.indexOf(
-      "skin.clear()",
-      calibrationStart,
-    );
-    const calibrationReturn = motionLoad.indexOf(
-      'return "committed"',
-      calibrationSkinClear,
-    );
-    expect(calibrationStart).toBeGreaterThanOrEqual(0);
-    expect(calibrationSkinClear).toBeGreaterThan(calibrationStart);
-    expect(calibrationReturn).toBeGreaterThan(calibrationSkinClear);
-    expect(calibrationReturn).toBeLessThan(bakedLoad);
-    expect(bakedLoad).toBeGreaterThanOrEqual(0);
-    expect(bakedGuard).toBeGreaterThan(bakedLoad);
-    expect(backendPublication).toBeGreaterThan(bakedGuard);
+      "payload.suggested_backend",
+    ]);
+    expect(commit).not.toContain("skel.load(");
+    expect(commit).not.toContain("mesh.load(");
+    expect(commit).not.toContain("envView.load(");
+    expect(commit).not.toContain("skin.clear()");
+    expect(commit).not.toContain("preparedSource.skin.commit(");
 
     const libraryLoad = runtimeSource.slice(
       runtimeSource.indexOf("async function loadLibraryEntryRequest"),
       runtimeSource.indexOf("async function loadLibraryEntry(",
         runtimeSource.indexOf("async function loadLibraryEntryRequest")),
     );
-    expect(libraryLoad).toContain(
-      'if (loadResult === "stale") return "stale"',
-    );
+    expect(libraryLoad).toContain('loadResult === "stale"');
+    expect(libraryLoad).toContain("loadMotionPayload(payload, attempt)");
 
     const ingest = runtimeSource.slice(
       runtimeSource.indexOf("async function ingestMotionFiles"),
       runtimeSource.indexOf("function initMotionImportZone"),
     );
     const ingestGuard = ingest.indexOf(
-      'if (loadResult === "stale") return null',
+      'loadResult === "stale"',
     );
     expect(ingestGuard).toBeGreaterThanOrEqual(0);
     expect(ingest.indexOf("await refreshLibrary()", ingestGuard)).toBeGreaterThan(
@@ -2195,6 +2470,14 @@ describe("legacy runtime ownership boundaries", () => {
     expect(navigation).toContain("window.__hhUi?.setActivePanel(intent.panelId)");
     expect(navigation).toContain("if (!authority.isCurrent()) return");
     expect(navigation).toContain("appliedPanelPresentationOwnsStage({");
+    expect(navigation).toContain('operation.value.panelId !== "h2r"');
+    expect(navigation).toContain("h2rPanelRefreshDeferred = true");
+    expect(navigation).toContain("h2rMotionSelectionIsPending()");
+    expect(navigation).toContain("h2rRobotExportPreviewIsPending()");
+    expect(navigation).toContain("const panelIsCurrent = (): boolean => (");
+    expect(navigation).toContain(
+      "panelPresentationCoordinator.isCurrent(operation)",
+    );
     expect(runtimeSource.match(/__hhUi\?\.setActivePanel/g)).toHaveLength(1);
     expect(runtimeSource).not.toContain("inspectorPanelSwitchHook");
     expect(runtimeSource).not.toContain("panelSwitchReceiptIsCurrent");
@@ -3173,9 +3456,9 @@ describe("legacy runtime ownership boundaries", () => {
       runtimeSource.indexOf("async function onReferenceChange"),
       runtimeSource.indexOf("function updatePills"),
     );
-    const motionLoad = runtimeSource.slice(
-      runtimeSource.indexOf("async function loadMotionPayload"),
-      runtimeSource.indexOf("export async function presentHumanMotion"),
+    const motionSelectionPreparation = runtimeSource.slice(
+      runtimeSource.indexOf("function prepareH2rMotionSelection"),
+      runtimeSource.indexOf("function finishH2rMotionSelection"),
     );
     const robotLoad = runtimeSource.slice(
       runtimeSource.indexOf("async function applyRobot"),
@@ -3186,13 +3469,12 @@ describe("legacy runtime ownership boundaries", () => {
       runtimeSource.indexOf("const robotSearchInput"),
     );
 
-    for (const identityCommit of [
-      referenceChange,
-      motionLoad,
-      robotLoad,
-    ]) {
+    for (const identityCommit of [referenceChange, robotLoad]) {
       expect(identityCommit).toContain("clearH2rScaledPreview()");
     }
+    expect(motionSelectionPreparation).toContain(
+      "clearH2rScaledPreview(ownsPairMutation)",
+    );
     expect(robotDelete).toContain(
       'clearH2rRobotAfterViewLoss("deleted robot")',
     );
@@ -3210,14 +3492,16 @@ describe("legacy runtime ownership boundaries", () => {
     );
     const finalGuard = retarget.lastIndexOf("if (discardStaleResult()) return");
     const trajectoryCommit = retarget.indexOf(
-      "state.robotTrajectory = j.result.trajectory",
+      "state.robotTrajectory = candidateTrajectory",
     );
 
     expect(finalGuard).toBeGreaterThanOrEqual(0);
     expect(trajectoryCommit).toBeGreaterThan(finalGuard);
     expectTokensInOrder(retarget.slice(finalGuard), [
-      "state.robotTrajectory = j.result.trajectory",
-      "robot.setTrajectory(j.result.trajectory)",
+      "candidateTrajectory = j.result.trajectory",
+      "trajectoryMutationStarted = true",
+      "robot.setTrajectory(candidateTrajectory)",
+      "state.robotTrajectory = candidateTrajectory",
       "state.exportToken = j.result.export_token",
       'h2rRunState = "completed"',
       "pendingH2rPlayback = Object.freeze({",
@@ -3227,6 +3511,21 @@ describe("legacy runtime ownership boundaries", () => {
       "presentPendingH2rPlayback()",
     ]);
     expect(retarget).toContain("if (resultCommitted)");
+    expect(retarget).toContain("const retargetOwnsRun = (): boolean");
+    expect(retarget).toContain("const retargetMayPublish = (): boolean");
+    const rawRunOwner = retarget.slice(
+      retarget.indexOf("const retargetOwnsRun = (): boolean"),
+      retarget.indexOf("const retargetMayPublish = (): boolean"),
+    );
+    expect(rawRunOwner).toContain(
+      "retargetRevision === h2rRetargetRevision",
+    );
+    expect(rawRunOwner).not.toContain("h2rMotionInputRevision");
+    expect(rawRunOwner).not.toContain("h2rScaledPairRevision");
+    const retargetFinally = retarget.slice(retarget.indexOf("} finally {"));
+    expect(retargetFinally).toContain(
+      'if (retargetOwnsRun() && h2rRunState === "running")',
+    );
   });
 
   it("does not publish RobotView caller state after a stale load", () => {

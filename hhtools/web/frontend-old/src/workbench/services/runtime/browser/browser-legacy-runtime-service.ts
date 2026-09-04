@@ -1,7 +1,10 @@
 import { toDisposable, type IDisposable } from "@/base/common/disposable";
 import type { MotionPayload } from "@/domain/motion/common/motion";
 import type {
+  HumanMotionPresentationIntent,
+  IHumanMotionPresentationReservation,
   IMotionResultPresentationService,
+  MotionPresentationReservationOptions,
   MotionPresentationResult,
 } from "@/workbench/services/motion/common/motion-result-presentation-service";
 import type {
@@ -11,12 +14,81 @@ import type {
 import type { StageLayerId } from "@/workbench/services/stage/common/stage-service";
 import type { ILegacyRuntimeService } from "../common/legacy-runtime-service";
 
-interface LoadedLegacyRuntime extends IMotionResultPresentationService {
+interface LoadedLegacyRuntime {
+  reserveHumanMotionPresentation(
+    label?: string,
+  ): IHumanMotionPresentationReservation;
   resetStageView(): void;
   toggleH2rStageLayer(layerId: StageLayerId): void;
   subscribeH2rStageDisplayState(
     listener: (snapshot: LegacyH2rStageDisplaySnapshot) => void,
   ): () => void;
+}
+
+function abortError(): DOMException {
+  return new DOMException("The operation was aborted.", "AbortError");
+}
+
+function abortReason(signal: AbortSignal): unknown {
+  return signal.reason instanceof Error ? signal.reason : abortError();
+}
+
+function waitWithAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(abortReason(signal));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      signal.removeEventListener("abort", onAbort);
+      reject(abortReason(signal));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
+/** Transfer a synchronously reserved capability only if acquisition still owns it. */
+function deliverWithAbort<T extends IDisposable>(
+  value: T,
+  signal?: AbortSignal,
+): Promise<T> {
+  if (!signal) return Promise.resolve(value);
+  const release = () => {
+    try {
+      value.dispose();
+    } catch (error) {
+      console.warn("Aborted runtime reservation cleanup failed", error);
+    }
+  };
+  if (signal.aborted) {
+    release();
+    return Promise.reject(abortReason(signal));
+  }
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener("abort", onAbort);
+      release();
+      reject(abortReason(signal));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    void Promise.resolve().then(() => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener("abort", onAbort);
+      resolve(value);
+    });
+  });
 }
 
 /**
@@ -42,16 +114,32 @@ export class BrowserLegacyRuntimeService
     return this.#startPromise;
   }
 
+  reserveHumanMotionPresentation(
+    intent: HumanMotionPresentationIntent,
+    options: MotionPresentationReservationOptions = {},
+  ): Promise<IHumanMotionPresentationReservation> {
+    const { signal } = options;
+    if (signal?.aborted) return Promise.reject(abortReason(signal));
+    if (this.#runtime) {
+      // Reserve synchronously on the hot path. This keeps a state observer or
+      // same-turn Library action from slipping ahead of the user's V2M intent.
+      return this.#reserveLoadedRuntime(intent, signal);
+    }
+    return this.#reserveAfterStart(intent, signal);
+  }
+
+  /** Compatibility aggregate for callers not yet migrated to reservations. */
   async presentHumanMotion(
     payload: MotionPayload,
   ): Promise<MotionPresentationResult> {
-    // Presentation can race the Restored contribution. Joining start() makes
-    // readiness explicit instead of relying on registration order or timing.
-    await this.start();
-    if (!this.#runtime) {
-      throw new Error("Legacy runtime did not finish initialization");
+    const reservation = await this.reserveHumanMotionPresentation({
+      label: payload.name || "generated motion",
+    });
+    try {
+      return await reservation.commit(payload);
+    } finally {
+      reservation.dispose();
     }
-    return this.#runtime.presentHumanMotion(payload);
   }
 
   /** Browser-only migration capability; intentionally absent from the common
@@ -106,5 +194,37 @@ export class BrowserLegacyRuntimeService
       this.#startPromise = null;
       throw error;
     }
+  }
+
+  #reserveLoadedRuntime(
+    intent: HumanMotionPresentationIntent,
+    signal?: AbortSignal,
+  ): Promise<IHumanMotionPresentationReservation> {
+    try {
+      const runtime = this.#runtime;
+      if (!runtime) {
+        return Promise.reject(
+          new Error("Legacy runtime did not finish initialization"),
+        );
+      }
+      const reservation = runtime.reserveHumanMotionPresentation(intent.label);
+      return deliverWithAbort(reservation, signal);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  }
+
+  async #reserveAfterStart(
+    intent: HumanMotionPresentationIntent,
+    signal?: AbortSignal,
+  ): Promise<IHumanMotionPresentationReservation> {
+    await waitWithAbort(this.start(), signal);
+    if (signal?.aborted) throw abortReason(signal);
+    const reservation = await this.#reserveLoadedRuntime(intent, signal);
+    if (signal?.aborted) {
+      reservation.dispose();
+      throw abortReason(signal);
+    }
+    return reservation;
   }
 }

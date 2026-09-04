@@ -19,7 +19,12 @@ import type {
   JobStatusResponse,
   WaitForJobOptions,
 } from "../../src/workbench/services/jobs/common/job-service";
-import type { MotionPresentationResult } from "../../src/workbench/services/motion/common/motion-result-presentation-service";
+import type {
+  HumanMotionPresentationIntent,
+  IHumanMotionPresentationReservation,
+  MotionPresentationReservationOptions,
+  MotionPresentationResult,
+} from "../../src/workbench/services/motion/common/motion-result-presentation-service";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -94,15 +99,87 @@ class FakeJobService implements VideoToMotionJobPort {
   }
 }
 
+interface PresentationReservationCall {
+  readonly intent: HumanMotionPresentationIntent;
+  readonly options?: MotionPresentationReservationOptions;
+}
+
+class FakePresentationReservation
+  implements IHumanMotionPresentationReservation
+{
+  readonly dispose = vi.fn();
+
+  constructor(readonly service: FakePresentationService) {}
+
+  commit(payload: MotionPayload): Promise<MotionPresentationResult> {
+    this.service.calls.push(payload);
+    return this.service.presentHandler(payload);
+  }
+}
+
 class FakePresentationService implements VideoToMotionPresentationPort {
   readonly calls: MotionPayload[] = [];
+  readonly reservationCalls: PresentationReservationCall[] = [];
+  readonly reservations: FakePresentationReservation[] = [];
   presentHandler: (
     payload: MotionPayload,
   ) => Promise<MotionPresentationResult> = async () => "presented";
+  reserveHandler: (
+    call: PresentationReservationCall,
+  ) => Promise<IHumanMotionPresentationReservation> = async () => (
+    this.createReservation()
+  );
 
-  presentHumanMotion(payload: MotionPayload): Promise<MotionPresentationResult> {
-    this.calls.push(payload);
-    return this.presentHandler(payload);
+  reserveHumanMotionPresentation(
+    intent: HumanMotionPresentationIntent,
+    options?: MotionPresentationReservationOptions,
+  ): Promise<IHumanMotionPresentationReservation> {
+    const call = { intent, options };
+    this.reservationCalls.push(call);
+    return this.reserveHandler(call);
+  }
+
+  createReservation(): FakePresentationReservation {
+    const reservation = new FakePresentationReservation(this);
+    this.reservations.push(reservation);
+    return reservation;
+  }
+}
+
+/** Small executable model of the shared latest-intent presentation boundary. */
+class LatestIntentPresentationService extends FakePresentationService {
+  #generation = 0;
+  currentLabel: string | null = null;
+  committedPayload: MotionPayload | null = null;
+  readonly latestReservations: IHumanMotionPresentationReservation[] = [];
+
+  override reserveHumanMotionPresentation(
+    intent: HumanMotionPresentationIntent,
+    options?: MotionPresentationReservationOptions,
+  ): Promise<IHumanMotionPresentationReservation> {
+    this.reservationCalls.push({ intent, options });
+    const generation = ++this.#generation;
+    this.currentLabel = intent.label;
+    let disposed = false;
+    const reservation: IHumanMotionPresentationReservation = {
+      commit: vi.fn(async (payload: MotionPayload) => {
+        if (generation !== this.#generation) return "superseded";
+        this.committedPayload = payload;
+        return "presented";
+      }),
+      dispose: vi.fn(() => {
+        if (disposed) return;
+        disposed = true;
+        if (generation === this.#generation) this.currentLabel = null;
+      }),
+    };
+    this.latestReservations.push(reservation);
+    return Promise.resolve(reservation);
+  }
+
+  selectLibrary(label: string): void {
+    this.#generation += 1;
+    this.currentLabel = label;
   }
 }
 
@@ -160,10 +237,11 @@ function runningJob(
   };
 }
 
-function createHarness() {
+function createHarness(
+  presentationService: FakePresentationService = new FakePresentationService(),
+) {
   const requestService = new FakeRequestService();
   const jobService = new FakeJobService();
-  const presentationService = new FakePresentationService();
   let nextUrl = 1;
   const previewUrls: VideoPreviewUrlPort = {
     createObjectURL: vi.fn(() => `blob:test-${nextUrl++}`),
@@ -364,6 +442,13 @@ describe("VideoToMotionController", () => {
     harness.jobService.waitHandler = () => completed.promise;
 
     const imported = harness.controller.importResult(source);
+    await vi.waitFor(() =>
+      expect(harness.requestService.uploadCalls).toHaveLength(1),
+    );
+    expect(harness.presentationService.reservationCalls).toHaveLength(1);
+    expect(harness.presentationService.reservationCalls[0]?.intent).toEqual({
+      label: "recording.PT",
+    });
     const uploadCall = harness.requestService.uploadCalls[0]!;
     expect(uploadCall).toMatchObject({
       url: "/api/motion/upload?profile=mimic",
@@ -409,6 +494,9 @@ describe("VideoToMotionController", () => {
     await expect(imported).resolves.toBe(payload);
 
     expect(harness.presentationService.calls).toEqual([payload]);
+    expect(
+      harness.presentationService.reservations[0]?.dispose,
+    ).toHaveBeenCalledOnce();
     expect(harness.controller.state).toMatchObject({
       operation: "import",
       stage: "completed",
@@ -460,6 +548,9 @@ describe("VideoToMotionController", () => {
       stage: "failed",
       error: "motion parser rejected result",
     });
+    expect(
+      harness.presentationService.reservations[0]?.dispose,
+    ).toHaveBeenCalledOnce();
   });
 
   it("runs the exact multipart protocol and composes progress only once", async () => {
@@ -481,7 +572,17 @@ describe("VideoToMotionController", () => {
     harness.presentationService.presentHandler = () => presented.promise;
 
     const run = harness.controller.run();
+    await vi.waitFor(() =>
+      expect(harness.requestService.uploadCalls).toHaveLength(1),
+    );
     const uploadCall = harness.requestService.uploadCalls[0]!;
+    expect(harness.presentationService.reservationCalls).toHaveLength(1);
+    expect(harness.presentationService.reservationCalls[0]?.intent).toEqual({
+      label: "clip.mp4",
+    });
+    expect(
+      harness.presentationService.reservationCalls[0]?.options?.signal,
+    ).toBe(uploadCall.options?.signal);
     expect(uploadCall.url).toBe(
       "/api/video-to-motion/upload?static_cam=false&f_mm=35",
     );
@@ -572,6 +673,171 @@ describe("VideoToMotionController", () => {
     });
     expect(harness.controller.busy).toBe(false);
     expect(harness.controller.canRun).toBe(true);
+    expect(
+      harness.presentationService.reservations[0]?.dispose,
+    ).toHaveBeenCalledOnce();
+  });
+
+  it("does not upload until its presentation intent is reserved", async () => {
+    const harness = createHarness();
+    await prepareReadyController(harness);
+    const reservationReady = deferred<IHumanMotionPresentationReservation>();
+    const upload = deferred<{ job_id: string }>();
+    harness.presentationService.reserveHandler = () => reservationReady.promise;
+    harness.requestService.uploadHandler = () => upload.promise;
+
+    const run = harness.controller.run();
+
+    expect(harness.presentationService.reservationCalls).toHaveLength(1);
+    expect(harness.requestService.uploadCalls).toHaveLength(0);
+    expect(harness.controller.state).toMatchObject({
+      operation: "generate",
+      stage: "reserving",
+    });
+    expect(harness.controller.busy).toBe(true);
+    const reservation = harness.presentationService.createReservation();
+    reservationReady.resolve(reservation);
+    await vi.waitFor(() =>
+      expect(harness.requestService.uploadCalls).toHaveLength(1),
+    );
+
+    harness.controller.dispose();
+    expect(reservation.dispose).toHaveBeenCalledOnce();
+    upload.resolve({ job_id: "ignored" });
+    await expect(run).rejects.toMatchObject({ name: "AbortError" });
+    expect(reservation.dispose).toHaveBeenCalledOnce();
+  });
+
+  it("blocks a successor during reservation acquisition", async () => {
+    const harness = createHarness();
+    await prepareReadyController(harness);
+    const upload = deferred<{ job_id: string }>();
+    harness.requestService.uploadHandler = () => upload.promise;
+    const imported = new File(["result"], "successor.pt");
+    let successorError: unknown = null;
+    let successorAttempt: Promise<MotionPayload> | null = null;
+    harness.presentationService.reserveHandler = () => {
+      const reservation = harness.presentationService.createReservation();
+      successorAttempt = harness.controller.importResult(imported);
+      void successorAttempt.catch((error: unknown) => {
+        successorError = error;
+      });
+      return Promise.resolve(reservation);
+    };
+
+    const run = harness.controller.run();
+
+    await vi.waitFor(() => {
+      expect(harness.controller.state).toMatchObject({
+        operation: "generate",
+        stage: "uploading",
+      });
+    });
+    await vi.waitFor(() => {
+      expect(successorError).toMatchObject({ code: "operation-in-progress" });
+    });
+    await expect(successorAttempt).rejects.toMatchObject({
+      code: "operation-in-progress",
+    });
+    expect(harness.presentationService.reservationCalls).toHaveLength(1);
+    expect(harness.requestService.uploadCalls).toHaveLength(1);
+
+    harness.controller.dispose();
+    upload.resolve({ job_id: "ignored" });
+    await expect(run).rejects.toMatchObject({ name: "AbortError" });
+    expect(
+      harness.presentationService.reservations[0]?.dispose,
+    ).toHaveBeenCalledOnce();
+  });
+
+  it("releases a reservation that resolves after owner disposal", async () => {
+    const harness = createHarness();
+    await prepareReadyController(harness);
+    const reservationReady = deferred<IHumanMotionPresentationReservation>();
+    harness.presentationService.reserveHandler = () => reservationReady.promise;
+
+    const run = harness.controller.run();
+    expect(harness.presentationService.reservationCalls).toHaveLength(1);
+    harness.controller.dispose();
+    const reservation = harness.presentationService.createReservation();
+    reservationReady.resolve(reservation);
+
+    await expect(run).rejects.toMatchObject({ name: "AbortError" });
+    expect(harness.requestService.uploadCalls).toHaveLength(0);
+    expect(harness.jobService.calls).toHaveLength(0);
+    expect(reservation.dispose).toHaveBeenCalledOnce();
+  });
+
+  it("releases a reservation returned by a synchronously disposing port", async () => {
+    const harness = createHarness();
+    await prepareReadyController(harness);
+    const reservation = harness.presentationService.createReservation();
+    harness.presentationService.reserveHandler = () => {
+      harness.controller.dispose();
+      return Promise.resolve(reservation);
+    };
+
+    await expect(harness.controller.run()).rejects.toMatchObject({
+      name: "AbortError",
+    });
+
+    expect(harness.requestService.uploadCalls).toHaveLength(0);
+    expect(harness.jobService.calls).toHaveLength(0);
+    expect(reservation.dispose).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a later Library intent when an older V2M result completes", async () => {
+    const presentationService = new LatestIntentPresentationService();
+    const harness = createHarness(presentationService);
+    await prepareReadyController(harness);
+    const payload = motionResult("late V2M motion");
+    harness.requestService.uploadHandler = async () => ({ job_id: "job-42" });
+    harness.jobService.waitHandler = async () => payload;
+    let librarySelected = false;
+    harness.controller.onDidChangeState((state) => {
+      if (state.stage !== "uploading" || librarySelected) return;
+      librarySelected = true;
+      presentationService.selectLibrary("library motion B");
+    });
+
+    await expect(harness.controller.run()).rejects.toMatchObject({
+      name: "AbortError",
+    });
+
+    expect(presentationService.reservationCalls[0]?.intent).toEqual({
+      label: "clip.mp4",
+    });
+    expect(presentationService.currentLabel).toBe("library motion B");
+    expect(presentationService.committedPayload).toBeNull();
+    expect(
+      presentationService.latestReservations[0]?.dispose,
+    ).toHaveBeenCalledOnce();
+    expect(harness.controller.state).toMatchObject({
+      operation: null,
+      stage: "idle",
+      error: null,
+      result: null,
+    });
+  });
+
+  it("publishes reservation failures without starting transport", async () => {
+    const harness = createHarness();
+    await prepareReadyController(harness);
+    const failure = new Error("presentation owner unavailable");
+    harness.presentationService.reserveHandler = async () => {
+      throw failure;
+    };
+
+    await expect(harness.controller.run()).rejects.toBe(failure);
+
+    expect(harness.requestService.uploadCalls).toHaveLength(0);
+    expect(harness.jobService.calls).toHaveLength(0);
+    expect(harness.controller.state).toMatchObject({
+      operation: "generate",
+      stage: "failed",
+      error: "presentation owner unavailable",
+      result: null,
+    });
   });
 
   it("does not upload after an observer disposes its owner", async () => {
@@ -587,6 +853,9 @@ describe("VideoToMotionController", () => {
 
     expect(harness.requestService.uploadCalls).toHaveLength(0);
     expect(harness.jobService.calls).toHaveLength(0);
+    expect(
+      harness.presentationService.reservations[0]?.dispose,
+    ).toHaveBeenCalledOnce();
   });
 
   it("does not start polling after an observer disposes the running view", async () => {
@@ -614,6 +883,9 @@ describe("VideoToMotionController", () => {
     harness.jobService.waitHandler = () => completed.promise;
 
     const run = harness.controller.run();
+    await vi.waitFor(() =>
+      expect(harness.requestService.uploadCalls).toHaveLength(1),
+    );
     const uploadCall = harness.requestService.uploadCalls[0]!;
     uploadCall.options?.onProgress?.({
       loaded: 0,
@@ -654,12 +926,13 @@ describe("VideoToMotionController", () => {
     });
 
     expect(stages).toEqual([
+      "reserving",
       "uploading",
       "running",
       "running",
       "completed",
     ]);
-    expect(harness.reportError).toHaveBeenCalledTimes(4);
+    expect(harness.reportError).toHaveBeenCalledTimes(5);
     expect(harness.reportError).toHaveBeenCalledWith(failure);
     expect(harness.controller.state.stage).toBe("completed");
     expect(harness.controller.canRun).toBe(true);
@@ -670,6 +943,12 @@ describe("VideoToMotionController", () => {
     await prepareReadyController(harness);
     const payload = motionResult("unpresentable motion");
     const failure = new Error("stage rejected motion");
+    const cleanupFailure = new Error("reservation cleanup failed");
+    const reservation = harness.presentationService.createReservation();
+    reservation.dispose.mockImplementationOnce(() => {
+      throw cleanupFailure;
+    });
+    harness.presentationService.reserveHandler = async () => reservation;
     harness.requestService.uploadHandler = async () => ({ job_id: "job-42" });
     harness.jobService.waitHandler = async () => payload;
     harness.presentationService.presentHandler = async () => {
@@ -683,6 +962,33 @@ describe("VideoToMotionController", () => {
       stage: "failed",
       error: "stage rejected motion",
       result: null,
+    });
+    expect(harness.controller.canRun).toBe(true);
+    expect(reservation.dispose).toHaveBeenCalledOnce();
+    expect(harness.reportError).toHaveBeenCalledWith(cleanupFailure);
+  });
+
+  it("publishes completion when reservation cleanup reports a failure", async () => {
+    const harness = createHarness();
+    await prepareReadyController(harness);
+    const payload = motionResult("cleanup-safe motion");
+    const cleanupFailure = new Error("reservation cleanup failed");
+    const reservation = harness.presentationService.createReservation();
+    reservation.dispose.mockImplementationOnce(() => {
+      throw cleanupFailure;
+    });
+    harness.presentationService.reserveHandler = async () => reservation;
+    harness.requestService.uploadHandler = async () => ({ job_id: "job-42" });
+    harness.jobService.waitHandler = async () => payload;
+
+    await expect(harness.controller.run()).resolves.toBe(payload);
+
+    expect(reservation.dispose).toHaveBeenCalledOnce();
+    expect(harness.reportError).toHaveBeenCalledWith(cleanupFailure);
+    expect(harness.controller.state).toMatchObject({
+      operation: "generate",
+      stage: "completed",
+      error: null,
     });
     expect(harness.controller.canRun).toBe(true);
   });
@@ -710,6 +1016,9 @@ describe("VideoToMotionController", () => {
     });
     expect(harness.controller.busy).toBe(false);
     expect(harness.controller.canRun).toBe(true);
+    expect(
+      harness.presentationService.reservations[0]?.dispose,
+    ).toHaveBeenCalledOnce();
   });
 
   it("does not publish completion after disposal during presentation", async () => {
@@ -724,11 +1033,42 @@ describe("VideoToMotionController", () => {
     await vi.waitFor(() =>
       expect(harness.presentationService.calls).toHaveLength(1),
     );
+    const reservation = harness.presentationService.reservations[0]!;
+    expect(reservation.dispose).not.toHaveBeenCalled();
     harness.controller.dispose();
+    expect(reservation.dispose).toHaveBeenCalledOnce();
     presented.resolve("presented");
 
     await expect(run).rejects.toMatchObject({ name: "AbortError" });
     expect(harness.controller.state.stage).toBe("running");
+  });
+
+  it("finishes owner teardown when reservation cleanup throws", async () => {
+    const harness = createHarness();
+    await prepareReadyController(harness);
+    const upload = deferred<{ job_id: string }>();
+    const cleanupFailure = new Error("reservation cleanup failed");
+    const reservation = harness.presentationService.createReservation();
+    reservation.dispose.mockImplementationOnce(() => {
+      throw cleanupFailure;
+    });
+    harness.presentationService.reserveHandler = async () => reservation;
+    harness.requestService.uploadHandler = () => upload.promise;
+
+    const run = harness.controller.run();
+    await vi.waitFor(() =>
+      expect(harness.requestService.uploadCalls).toHaveLength(1),
+    );
+
+    expect(() => harness.controller.dispose()).not.toThrow();
+    expect(reservation.dispose).toHaveBeenCalledOnce();
+    expect(harness.reportError).toHaveBeenCalledWith(cleanupFailure);
+    expect(harness.previewUrls.revokeObjectURL).toHaveBeenCalledWith(
+      "blob:test-1",
+    );
+    upload.resolve({ job_id: "ignored" });
+    await expect(run).rejects.toMatchObject({ name: "AbortError" });
+    expect(reservation.dispose).toHaveBeenCalledOnce();
   });
 
   it("rejects an invalid focal length before starting transport", async () => {
@@ -767,6 +1107,9 @@ describe("VideoToMotionController", () => {
     expect(harness.presentationService.calls).toHaveLength(0);
     expect(harness.controller.busy).toBe(false);
     expect(harness.controller.canRun).toBe(true);
+    expect(
+      harness.presentationService.reservations[0]?.dispose,
+    ).toHaveBeenCalledOnce();
   });
 
   it("blocks input changes while a request owns their immutable snapshot", async () => {
@@ -796,6 +1139,9 @@ describe("VideoToMotionController", () => {
     const snapshots: string[] = [];
     harness.controller.onDidChangeState((state) => snapshots.push(state.stage));
     const run = harness.controller.run();
+    await vi.waitFor(() =>
+      expect(harness.requestService.uploadCalls).toHaveLength(1),
+    );
     const uploadCall = harness.requestService.uploadCalls[0]!;
     const snapshotCount = snapshots.length;
 

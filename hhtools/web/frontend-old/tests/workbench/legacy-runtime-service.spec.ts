@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
 const runtimeMocks = vi.hoisted(() => ({
   presentHumanMotion: vi.fn(),
+  reserveHumanMotionPresentation: vi.fn(),
+  reservationDispose: vi.fn(),
   resetStageView: vi.fn(),
   subscribeH2rStageDisplayState: vi.fn(),
   toggleH2rStageLayer: vi.fn(),
@@ -9,6 +11,7 @@ const runtimeMocks = vi.hoisted(() => ({
 
 vi.mock("../../src/runtime/webui-runtime", () => ({
   presentHumanMotion: runtimeMocks.presentHumanMotion,
+  reserveHumanMotionPresentation: runtimeMocks.reserveHumanMotionPresentation,
   resetStageView: runtimeMocks.resetStageView,
   subscribeH2rStageDisplayState: runtimeMocks.subscribeH2rStageDisplayState,
   toggleH2rStageLayer: runtimeMocks.toggleH2rStageLayer,
@@ -34,6 +37,12 @@ const payload: MotionPayload = {
 beforeEach(() => {
   runtimeMocks.presentHumanMotion.mockReset();
   runtimeMocks.presentHumanMotion.mockResolvedValue("presented");
+  runtimeMocks.reserveHumanMotionPresentation.mockReset();
+  runtimeMocks.reservationDispose.mockReset();
+  runtimeMocks.reserveHumanMotionPresentation.mockImplementation(() => ({
+    commit: runtimeMocks.presentHumanMotion,
+    dispose: runtimeMocks.reservationDispose,
+  }));
   runtimeMocks.resetStageView.mockReset();
   runtimeMocks.subscribeH2rStageDisplayState.mockReset();
   runtimeMocks.subscribeH2rStageDisplayState.mockReturnValue(vi.fn());
@@ -69,6 +78,100 @@ describe("LegacyRuntimeService", () => {
 
     expect(runtimeMocks.presentHumanMotion).toHaveBeenCalledOnce();
     expect(runtimeMocks.presentHumanMotion).toHaveBeenCalledWith(payload);
+    expect(runtimeMocks.reserveHumanMotionPresentation).toHaveBeenCalledWith(
+      payload.name,
+    );
+    expect(runtimeMocks.reservationDispose).toHaveBeenCalledOnce();
+  });
+
+  it("forwards a named presentation reservation without committing it", async () => {
+    const service = new BrowserLegacyRuntimeService();
+    await service.start();
+
+    const reservation = await service.reserveHumanMotionPresentation({
+      label: "clip.mp4",
+    });
+
+    expect(runtimeMocks.reserveHumanMotionPresentation).toHaveBeenCalledWith(
+      "clip.mp4",
+    );
+    expect(runtimeMocks.presentHumanMotion).not.toHaveBeenCalled();
+    await expect(reservation.commit(payload)).resolves.toBe("presented");
+    expect(runtimeMocks.presentHumanMotion).toHaveBeenCalledWith(payload);
+    reservation.dispose();
+    expect(runtimeMocks.reservationDispose).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a pre-aborted reservation without starting the runtime", async () => {
+    const service = new BrowserLegacyRuntimeService();
+    const request = new AbortController();
+    request.abort();
+
+    await expect(
+      service.reserveHumanMotionPresentation(
+        { label: "cancelled.mp4" },
+        { signal: request.signal },
+      ),
+    ).rejects.toMatchObject({ name: "AbortError" });
+
+    expect(runtimeMocks.reserveHumanMotionPresentation).not.toHaveBeenCalled();
+  });
+
+  it("stops waiting for startup when reservation is aborted", async () => {
+    const service = new BrowserLegacyRuntimeService();
+    const request = new AbortController();
+
+    const reservation = service.reserveHumanMotionPresentation(
+      { label: "cancelled-during-start.mp4" },
+      { signal: request.signal },
+    );
+    request.abort();
+
+    await expect(reservation).rejects.toMatchObject({ name: "AbortError" });
+    expect(runtimeMocks.reserveHumanMotionPresentation).not.toHaveBeenCalled();
+  });
+
+  it("releases a hot-path reservation when abort wins its synchronous return", async () => {
+    const service = new BrowserLegacyRuntimeService();
+    await service.start();
+    const request = new AbortController();
+    runtimeMocks.reserveHumanMotionPresentation.mockImplementationOnce(() => {
+      request.abort();
+      return {
+        commit: runtimeMocks.presentHumanMotion,
+        dispose: runtimeMocks.reservationDispose,
+      };
+    });
+
+    await expect(
+      service.reserveHumanMotionPresentation(
+        { label: "cancelled-hot-path.mp4" },
+        { signal: request.signal },
+      ),
+    ).rejects.toMatchObject({ name: "AbortError" });
+
+    expect(runtimeMocks.reserveHumanMotionPresentation).toHaveBeenCalledWith(
+      "cancelled-hot-path.mp4",
+    );
+    expect(runtimeMocks.reservationDispose).toHaveBeenCalledOnce();
+  });
+
+  it("releases a hot-path reservation aborted before promise settlement", async () => {
+    const service = new BrowserLegacyRuntimeService();
+    await service.start();
+    const request = new AbortController();
+
+    const reservation = service.reserveHumanMotionPresentation(
+      { label: "cancelled-before-delivery.mp4" },
+      { signal: request.signal },
+    );
+    request.abort();
+
+    await expect(reservation).rejects.toMatchObject({ name: "AbortError" });
+    expect(runtimeMocks.reserveHumanMotionPresentation).toHaveBeenCalledWith(
+      "cancelled-before-delivery.mp4",
+    );
+    expect(runtimeMocks.reservationDispose).toHaveBeenCalledOnce();
   });
 
   it("forwards a superseded aggregate presentation without translating it", async () => {
@@ -80,6 +183,7 @@ describe("LegacyRuntimeService", () => {
     );
 
     expect(runtimeMocks.presentHumanMotion).toHaveBeenCalledWith(payload);
+    expect(runtimeMocks.reservationDispose).toHaveBeenCalledOnce();
   });
 
   it("propagates presentation failures without invalidating readiness", async () => {
@@ -92,6 +196,7 @@ describe("LegacyRuntimeService", () => {
     await expect(service.presentHumanMotion(payload)).rejects.toBe(failure);
 
     expect(service.start()).toBe(readiness);
+    expect(runtimeMocks.reservationDispose).toHaveBeenCalledOnce();
   });
 
   it("joins runtime readiness before forwarding Stage reset", async () => {

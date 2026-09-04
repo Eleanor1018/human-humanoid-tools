@@ -2,6 +2,7 @@ import { DisposableStore } from "@/base/common/disposable";
 import { CommandService } from "@/platform/commands/common/command-service";
 import { BrowserHostService } from "@/platform/host/browser/browser-host-service";
 import { BrowserRequestService } from "@/platform/request/browser/browser-request-service";
+import { BrowserHumanToRobotService } from "@/workbench/contrib/human-to-robot/browser/browser-human-to-robot-service";
 import type { IWorkbenchServices } from "@/workbench/services/common/workbench-services";
 import { BrowserGvhmrComponentService } from "@/workbench/services/gvhmr/browser/browser-gvhmr-component-service";
 import { BrowserJobService } from "@/workbench/services/jobs/browser/browser-job-service";
@@ -44,6 +45,13 @@ export function createBrowserWorkbenchServices(
   const legacyRuntimeService = ownedServices.add(
     new BrowserLegacyRuntimeService(),
   );
+  const humanToRobotService = ownedServices.add(
+    new BrowserHumanToRobotService(
+      requestService,
+      jobService,
+      legacyRuntimeService,
+    ),
+  );
   const stageViewService = ownedServices.add(
     new BrowserStageViewService(reportError),
   );
@@ -63,6 +71,7 @@ export function createBrowserWorkbenchServices(
     requestService,
     gvhmrComponentService: new BrowserGvhmrComponentService(),
     jobService,
+    humanToRobotService,
     // One concrete strangler serves lifecycle, presentation, and passive Stage
     // source roles while the service graph still owns it exactly once.
     motionResultPresentationService: legacyRuntimeService,

@@ -199,7 +199,11 @@ import type {
 import { ThreeResourceDisposer } from "@/platform/graphics/common/three-resource-disposer";
 import type { ThreeResourceExtras } from "@/platform/graphics/common/three-resource-disposer";
 import type { AsyncStageViewLoadResult } from "./stage/async-stage-view-load-result";
-import { BakedMeshView } from "./stage/baked-mesh-view";
+import {
+  BakedMeshView,
+  type BakedMeshRetirement,
+  type PreparedBakedMesh,
+} from "./stage/baked-mesh-view";
 import {
   calibrationMotionLoadDisposition,
   type CalibrationBootstrapResult,
@@ -209,6 +213,7 @@ import {
   LatestAsyncAttemptOwner,
   type LatestAsyncAttempt,
 } from "./stage/latest-async-attempt-owner";
+import { LatestAsyncCompletionLeaseOwner } from "./stage/latest-async-completion-lease-owner";
 import {
   LatestAsyncResultOwner,
   type CommittedAsyncResult,
@@ -831,6 +836,11 @@ interface LoadingOverlayPresentation {
 
 let loadingOverlayRevision = 0;
 
+/** Reserve overlay ownership without touching the host DOM. */
+function claimLoadingOverlayPresentation(): LoadingOverlayPresentation {
+  return Object.freeze({ revision: ++loadingOverlayRevision });
+}
+
 function loadingOverlayIsCurrent(
   presentation: LoadingOverlayPresentation,
 ): boolean {
@@ -840,7 +850,7 @@ function loadingOverlayIsCurrent(
 function showLoading(
   label?: string | (() => string),
 ): LoadingOverlayPresentation {
-  const presentation = Object.freeze({ revision: ++loadingOverlayRevision });
+  const presentation = claimLoadingOverlayPresentation();
   const isCurrent = (): boolean => loadingOverlayIsCurrent(presentation);
   let resolvedLabel: string | undefined;
   try {
@@ -1440,7 +1450,169 @@ resize();
 // NOTE: the render loop is started at the very bottom of this module, after
 // `player` is defined — calling animate() here would hit the const TDZ.
 
+type SourceViewStageDisposition = "staged" | "superseded";
+
+interface SourceViewGenerationRecord {
+  readonly root: THREE.Group;
+  readonly ownedChildren: Set<THREE.Object3D>;
+  readonly extras: ThreeResourceExtras;
+  retired: boolean;
+}
+
+interface PreparedSourceViewGeneration<RetiredGeneration> {
+  /** Attach one hidden candidate without changing the currently published View. */
+  stage(isCurrent?: () => boolean): SourceViewStageDisposition;
+  /** Callback-free local preflight for an aggregate multi-View publication. */
+  canPublish(): boolean;
+  /** Switch aliases without entering Three.js or another observable host API. */
+  publish(): RetiredGeneration | null;
+  /** Release only this candidate; repeated or post-publication calls are neutral. */
+  abandon(): void;
+  /** Exact installed identity used by the aggregate motion transaction. */
+  isPublishedCurrent(): boolean;
+}
+
+/**
+ * Two-phase child-root installation shared by the synchronous source Views.
+ *
+ * The old root stays attached while a hidden candidate crosses the observable
+ * `Object3D.add` boundary. Publication itself is callback-free, so an aggregate
+ * owner can switch several Views and its canonical model in one JS turn.
+ */
+class DetachedSourceViewPreparation<RetiredGeneration>
+implements PreparedSourceViewGeneration<RetiredGeneration> {
+  private state:
+    | "prepared"
+    | "staging"
+    | "staged"
+    | "published"
+    | "abandoned" = "prepared";
+
+  constructor(
+    private readonly stableOwner: THREE.Group,
+    private readonly candidateRoot: THREE.Group,
+    private readonly preparationIsCurrent: () => boolean,
+    private readonly publishGeneration: () => RetiredGeneration | null,
+    private readonly disposeCandidate: () => void,
+    private readonly publishedGenerationIsCurrent: () => boolean,
+    private readonly cleanupContext: string,
+  ) {}
+
+  stage(isCurrent: () => boolean = () => true): SourceViewStageDisposition {
+    if (this.state === "staged") return "staged";
+    if (this.state !== "prepared") return "superseded";
+    const mayStage = (): boolean => {
+      try {
+        // The caller authority may synchronously reserve a successor. Recheck
+        // the private View generation before crossing into Three.js.
+        return (
+          this.preparationIsCurrent()
+          && isCurrent()
+          && this.preparationIsCurrent()
+        );
+      } catch {
+        return false;
+      }
+    };
+    if (!mayStage()) {
+      try {
+        this.abandon();
+      } catch (error) {
+        console.warn(this.cleanupContext, errorMessage(error));
+      }
+      return "superseded";
+    }
+
+    // Mark first: an `added` listener may abandon, but cannot publish before
+    // attachment and the post-callback authority check both settle.
+    this.state = "staging";
+    try {
+      this.stableOwner.add(this.candidateRoot);
+    } catch (installError) {
+      let cleanupError: unknown = null;
+      try {
+        this.abandon();
+      } catch (error) {
+        cleanupError = error;
+      }
+      if (!mayStage()) {
+        if (cleanupError) console.warn(this.cleanupContext, errorMessage(cleanupError));
+        return "superseded";
+      }
+      if (cleanupError) {
+        throw new AggregateError(
+          [installError, cleanupError],
+          "Source View staging and cleanup failed",
+        );
+      }
+      throw installError;
+    }
+    if (
+      this.state !== "staging"
+      || this.candidateRoot.parent !== this.stableOwner
+      || !mayStage()
+    ) {
+      try {
+        this.abandon();
+      } catch (error) {
+        console.warn(this.cleanupContext, errorMessage(error));
+      }
+      return "superseded";
+    }
+    this.state = "staged";
+    return "staged";
+  }
+
+  publish(): RetiredGeneration | null {
+    // No foreign validator is called here. `preparationIsCurrent` is a private
+    // numeric generation check supplied by the owning View.
+    if (!this.canPublish()) {
+      throw new Error("Only the current staged source View generation can publish");
+    }
+    this.state = "published";
+    return this.publishGeneration();
+  }
+
+  canPublish(): boolean {
+    // `preparationIsCurrent` is a private numeric View-generation comparison,
+    // never aggregate authority or another observable host callback.
+    return (
+      this.state === "staged"
+      && this.candidateRoot.parent === this.stableOwner
+      && this.preparationIsCurrent()
+    );
+  }
+
+  abandon(): void {
+    if (this.state === "published" || this.state === "abandoned") return;
+    this.state = "abandoned";
+    this.disposeCandidate();
+  }
+
+  isPublishedCurrent(): boolean {
+    return this.state === "published" && this.publishedGenerationIsCurrent();
+  }
+}
+
 // =================================================================  SKELETON
+declare const skeletonViewRetirementBrand: unique symbol;
+interface SkeletonViewRetirement {
+  readonly [skeletonViewRetirementBrand]: true;
+}
+
+interface SkeletonViewGeneration extends SourceViewGenerationRecord {
+  readonly retirement: SkeletonViewRetirement;
+  readonly joints: Vec3[][];
+  readonly parents: number[];
+  readonly spheres: Array<THREE.Mesh<THREE.SphereGeometry, THREE.MeshStandardMaterial>>;
+  readonly lineGeom: THREE.BufferGeometry;
+  readonly lines: THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial>;
+  readonly frameIndices: number[] | null | undefined;
+  readonly color: number;
+  readonly exclude: Set<number>;
+  readonly clipDuration: number;
+}
+
 class SkeletonView implements PlaybackView {
   readonly group: THREE.Group;
   joints: Vec3[][] | null = null;
@@ -1452,71 +1624,152 @@ class SkeletonView implements PlaybackView {
   color = 0x0a84ff;
   exclude = new Set<number>();
   clipDuration = 1;
+  private preparationGeneration = 0;
+  private content: SkeletonViewGeneration | null = null;
+  private readonly generations = new WeakMap<
+    SkeletonViewRetirement,
+    SkeletonViewGeneration
+  >();
 
   constructor() {
     this.group = new THREE.Group();
     world.add(this.group);
   }
   clear(): void {
-    try {
-      threeResourceDisposer.disposeObject3DChildren(this.group, {
-        geometries: [
-          ...this.spheres.map((sphere) => sphere.geometry),
-          ...(this.lineGeom ? [this.lineGeom] : []),
-        ],
-        materials: [
-          ...this.spheres.map((sphere) => sphere.material),
-          ...(this.lines ? [this.lines.material] : []),
-        ],
-      });
-    } finally {
-      // Aliases must never retain disposed resources, even when one resource's
-      // dispose listener throws and the aggregate is rethrown to the caller.
-      try {
-        this.group.clear();
-      } finally {
-        this.spheres = [];
-        this.joints = null;
-        this.parents = [];
-        this.lineGeom = null;
-        this.lines = null;
-        this.frameIndices = null;
-        this.exclude = new Set();
-      }
-    }
+    this.preparationGeneration += 1;
+    const retired = this.content?.retirement ?? null;
+    if (this.content) this.content.root.visible = false;
+    this.content = null;
+    this.releaseAliases();
+    if (retired) this.retire(retired);
   }
-  load(motion: MotionPayload, color = 0x0a84ff): void {
-    this.clear();
-    this.color = color;
-    this.joints = motion.positions; // (F, J, 3)
-    this.parents = motion.parent_indices;
-    this.exclude = new Set(motion.exclude_joint_indices || []);
-    this.frameIndices = motion.frame_indices;
-    this.clipDuration = effectivePlaybackDuration(motion);
-    const J = this.parents.length;
-    const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.5, metalness: 0.1 });
-    const sphereGeo = new THREE.SphereGeometry(0.028, 12, 12);
-    for (let j = 0; j < J; j++) {
-      const s = new THREE.Mesh(sphereGeo, mat);
-      if (this.exclude.has(j)) s.visible = false;
-      this.group.add(s);
-      this.spheres.push(s);
+
+  prepare(
+    motion: MotionPayload,
+    color = 0x0a84ff,
+  ): PreparedSourceViewGeneration<SkeletonViewRetirement> {
+    const generation = ++this.preparationGeneration;
+    const root = new THREE.Group();
+    root.visible = false;
+    const spheres: Array<
+      THREE.Mesh<THREE.SphereGeometry, THREE.MeshStandardMaterial>
+    > = [];
+    const ownedChildren = new Set<THREE.Object3D>();
+    const geometries: THREE.BufferGeometry[] = [];
+    const materials: THREE.Material[] = [];
+    const retirement = Object.freeze({}) as SkeletonViewRetirement;
+    const joints = motion.positions;
+    const parents = motion.parent_indices;
+    const exclude = new Set(motion.exclude_joint_indices || []);
+    const frameIndices = motion.frame_indices;
+    const clipDuration = effectivePlaybackDuration(motion);
+    let lineGeom: THREE.BufferGeometry | null = null;
+    let lines: THREE.LineSegments<
+      THREE.BufferGeometry,
+      THREE.LineBasicMaterial
+    > | null = null;
+    let record: SkeletonViewGeneration | null = null;
+    try {
+      const material = new THREE.MeshStandardMaterial({
+        color,
+        roughness: 0.5,
+        metalness: 0.1,
+      });
+      materials.push(material);
+      const sphereGeometry = new THREE.SphereGeometry(0.028, 12, 12);
+      geometries.push(sphereGeometry);
+      for (let index = 0; index < parents.length; index++) {
+        const sphere = new THREE.Mesh(sphereGeometry, material);
+        if (exclude.has(index)) sphere.visible = false;
+        ownedChildren.add(sphere);
+        root.add(sphere);
+        spheres.push(sphere);
+      }
+      let segmentCount = 0;
+      for (let index = 0; index < parents.length; index++) {
+        const parent = parents[index];
+        if (parent < 0 || exclude.has(index) || exclude.has(parent)) continue;
+        segmentCount += 1;
+      }
+      lineGeom = new THREE.BufferGeometry();
+      geometries.push(lineGeom);
+      lineGeom.setAttribute(
+        "position",
+        new THREE.BufferAttribute(new Float32Array(segmentCount * 2 * 3), 3),
+      );
+      const lineMaterial = new THREE.LineBasicMaterial({
+        color,
+        transparent: true,
+        opacity: 0.7,
+      });
+      materials.push(lineMaterial);
+      lines = new THREE.LineSegments(lineGeom, lineMaterial);
+      ownedChildren.add(lines);
+      root.add(lines);
+      record = {
+        root,
+        ownedChildren,
+        extras: { geometries, materials },
+        retired: false,
+        retirement,
+        joints,
+        parents,
+        spheres,
+        lineGeom,
+        lines,
+        frameIndices,
+        color,
+        exclude,
+        clipDuration,
+      };
+      this.generations.set(retirement, record);
+      this.setGenerationFrame(record, 0);
+    } catch (error) {
+      if (record) this.disposeGeneration(record);
+      else retireThreeContentRoot(
+        this.group,
+        root,
+        "failed source-skeleton candidate cleanup failed",
+        undefined,
+        [...ownedChildren],
+        { geometries, materials },
+      );
+      throw error;
     }
-    let segCount = 0;
-    for (let j = 0; j < J; j++) {
-      const p = this.parents[j];
-      if (p < 0 || this.exclude.has(j) || this.exclude.has(p)) continue;
-      segCount++;
-    }
-    const positions = new Float32Array(segCount * 2 * 3);
-    this.lineGeom = new THREE.BufferGeometry();
-    this.lineGeom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-    this.lines = new THREE.LineSegments(
-      this.lineGeom,
-      new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.7 })
+
+    const candidate = record;
+    return new DetachedSourceViewPreparation(
+      this.group,
+      candidate.root,
+      () => generation === this.preparationGeneration,
+      () => this.publishGeneration(candidate),
+      () => this.disposeGeneration(candidate),
+      () => this.content === candidate,
+      "stale source-skeleton candidate cleanup failed",
     );
-    this.group.add(this.lines);
-    this.setFrame(0);
+  }
+
+  retire(retirement: SkeletonViewRetirement | null): void {
+    if (!retirement) return;
+    const generation = this.generations.get(retirement);
+    if (!generation) return;
+    if (this.content === generation) {
+      generation.root.visible = false;
+      this.content = null;
+      this.releaseAliases();
+    }
+    this.disposeGeneration(generation);
+  }
+
+  load(motion: MotionPayload, color = 0x0a84ff): void {
+    const prepared = this.prepare(motion, color);
+    try {
+      if (prepared.stage() !== "staged") return;
+      const retired = prepared.publish();
+      this.retire(retired);
+    } finally {
+      prepared.abandon();
+    }
   }
   get numFrames(): number {
     return this.joints ? this.joints.length : 0;
@@ -1525,30 +1778,78 @@ class SkeletonView implements PlaybackView {
     this.setFrameFrac(f);
   }
   setFrameFrac(fi: number): void {
-    if (!this.joints || !this.lineGeom) return;
-    const max = this.joints.length - 1;
-    const { ia, ib, t } = resolvePlaybackFrame(this.frameIndices, fi, max);
-    const fr = this.joints[ia];
+    if (!this.content) return;
+    this.setGenerationFrame(this.content, fi);
+  }
+
+  private publishGeneration(
+    generation: SkeletonViewGeneration,
+  ): SkeletonViewRetirement | null {
+    const retired = this.content?.retirement ?? null;
+    if (this.content) this.content.root.visible = false;
+    generation.root.visible = true;
+    this.content = generation;
+    this.color = generation.color;
+    this.joints = generation.joints;
+    this.parents = generation.parents;
+    this.spheres = generation.spheres;
+    this.lineGeom = generation.lineGeom;
+    this.lines = generation.lines;
+    this.frameIndices = generation.frameIndices;
+    this.exclude = generation.exclude;
+    this.clipDuration = generation.clipDuration;
+    return retired;
+  }
+
+  private disposeGeneration(generation: SkeletonViewGeneration): void {
+    if (generation.retired) return;
+    generation.retired = true;
+    this.generations.delete(generation.retirement);
+    retireThreeContentRoot(
+      this.group,
+      generation.root,
+      "source-skeleton generation cleanup failed",
+      undefined,
+      [...generation.ownedChildren],
+      generation.extras,
+    );
+  }
+
+  private releaseAliases(): void {
+    this.spheres = [];
+    this.joints = null;
+    this.parents = [];
+    this.lineGeom = null;
+    this.lines = null;
+    this.frameIndices = null;
+    this.exclude = new Set();
+    this.clipDuration = 1;
+  }
+
+  private setGenerationFrame(generation: SkeletonViewGeneration, fi: number): void {
+    const max = generation.joints.length - 1;
+    const { ia, ib, t } = resolvePlaybackFrame(generation.frameIndices, fi, max);
+    const fr = generation.joints[ia];
     if (!fr) return;
     const blend = t > 1e-5 && ia !== ib;
-    const nxt = blend ? this.joints[ib] : undefined;
-    for (let j = 0; j < this.spheres.length; j++) {
+    const nxt = blend ? generation.joints[ib] : undefined;
+    for (let j = 0; j < generation.spheres.length; j++) {
       if (nxt) {
-        this.spheres[j].position.set(
+        generation.spheres[j].position.set(
           fr[j][0] + (nxt[j][0] - fr[j][0]) * t,
           fr[j][1] + (nxt[j][1] - fr[j][1]) * t,
           fr[j][2] + (nxt[j][2] - fr[j][2]) * t,
         );
       } else {
-        this.spheres[j].position.set(fr[j][0], fr[j][1], fr[j][2]);
+        generation.spheres[j].position.set(fr[j][0], fr[j][1], fr[j][2]);
       }
     }
-    const position = this.lineGeom.getAttribute("position") as THREE.BufferAttribute;
+    const position = generation.lineGeom.getAttribute("position") as THREE.BufferAttribute;
     const arr = position.array;
     let k = 0;
-    for (let j = 0; j < this.parents.length; j++) {
-      const p = this.parents[j];
-      if (p < 0 || this.exclude.has(j) || this.exclude.has(p)) continue;
+    for (let j = 0; j < generation.parents.length; j++) {
+      const p = generation.parents[j];
+      if (p < 0 || generation.exclude.has(j) || generation.exclude.has(p)) continue;
       if (nxt) {
         arr[k++] = fr[j][0] + (nxt[j][0] - fr[j][0]) * t;
         arr[k++] = fr[j][1] + (nxt[j][1] - fr[j][1]) * t;
@@ -1570,102 +1871,445 @@ class SkeletonView implements PlaybackView {
 // is a *separate* view from the skeleton: in Viser the objects follow the clip
 // even when the stick figure is hidden, so object animation must NOT be tied to
 // SkeletonView visibility (the previous bug: hiding the skeleton froze props).
+declare const envViewRetirementBrand: unique symbol;
+interface EnvViewRetirement {
+  readonly [envViewRetirementBrand]: true;
+}
+
+interface EnvViewGeneration extends SourceViewGenerationRecord {
+  readonly retirement: EnvViewRetirement;
+  readonly objectMeshes: THREE.Object3D[];
+  readonly objectTraj: SceneObjectPayload[];
+  readonly motionToken: string;
+  readonly clipDuration: number;
+  activated: boolean;
+}
+
+interface PreparedEnvViewGeneration
+extends PreparedSourceViewGeneration<EnvViewRetirement> {
+  /** Start optional GLTF refinement only after the whole source bundle publishes. */
+  activate(): void;
+}
+
 class EnvView {
   readonly group: THREE.Group;
   objectMeshes: THREE.Object3D[] = [];
   objectTraj: SceneObjectPayload[] = [];
   joints: SceneObjectPayload[] | null = null;
   clipDuration = 1;
-  private _loadGeneration = 0;
+  private preparationGeneration = 0;
+  private content: EnvViewGeneration | null = null;
+  private readonly generations = new WeakMap<EnvViewRetirement, EnvViewGeneration>();
+  private readonly disposedWithGeneration = new WeakSet<THREE.Object3D>();
 
   constructor() {
     this.group = env; // reuse the existing env group (child of world)
   }
   clear(): void {
-    // GLTFLoader has no ownership-safe cancellation handle. Invalidating its
-    // generation makes every escaped completion terminally stale instead.
-    this._loadGeneration += 1;
+    this.preparationGeneration += 1;
+    const retired = this.content?.retirement ?? null;
+    if (this.content) this.content.root.visible = false;
+    this.content = null;
+    this.releaseAliases();
+    if (retired) this.retire(retired);
+  }
+
+  prepare(motion: MotionPayload): PreparedEnvViewGeneration {
+    const generation = ++this.preparationGeneration;
+    const root = new THREE.Group();
+    root.visible = false;
+    const ownedChildren = new Set<THREE.Object3D>();
+    const retirement = Object.freeze({}) as EnvViewRetirement;
+    const objectMeshes: THREE.Object3D[] = [];
+    const objectTraj: SceneObjectPayload[] = [];
+    let record: EnvViewGeneration | null = null;
+    const registerOwnedSubtree = (object: THREE.Object3D): void => {
+      object.traverse((node) => { ownedChildren.add(node); });
+    };
     try {
-      threeResourceDisposer.disposeObject3DChildren(this.group);
-    } finally {
-      try {
-        this.group.clear();
-      } finally {
-        this.objectMeshes = [];
-        this.objectTraj = [];
-        this.joints = null;
-        this.clipDuration = 1;
+      if (motion.terrain) {
+        const terrain = buildTerrainMesh(motion.terrain);
+        if (terrain) {
+          registerOwnedSubtree(terrain);
+          root.add(terrain);
+        }
       }
-    }
-  }
-  load(motion: MotionPayload): void {
-    this.clear();
-    const generation = this._loadGeneration;
-    this.clipDuration = effectivePlaybackDuration(motion);
-    if (motion.terrain) {
-      const m = buildTerrainMesh(motion.terrain);
-      if (m) this.group.add(m);
-    }
-    (motion.objects || []).forEach((o, i) => {
-      this._buildObject(o, i, motion.token, generation);
-    });
-    // Mark as animatable so the shared player drives setFrame each tick.
-    this.joints = this.objectTraj.length ? this.objectTraj : null;
-    this.setFrame(0);
-  }
-  private _buildObject(
-    o: SceneObjectPayload,
-    i: number,
-    token: string,
-    generation: number,
-  ): void {
-    const c = o.color ? (o.color[0] << 16) | (o.color[1] << 8) | o.color[2] : 0xff9f0a;
-    const box = new THREE.Mesh(
-      new THREE.BoxGeometry(o.extents[0], o.extents[1], o.extents[2]),
-      new THREE.MeshStandardMaterial({
-        color: c, transparent: true, opacity: o.opacity ?? 0.55, roughness: 0.6,
-      })
-    );
-    this.group.add(box);
-    this.objectMeshes.push(box);
-    this.objectTraj.push(o);
-    if (o.has_mesh && token) {
-      const loader = new GLTFLoader();
-      loader.load(
-        `/api/object_glb?token=${token}&index=${i}`,
-        (gltf) => {
-          const real = gltf.scene;
-          if (
-            this._loadGeneration !== generation ||
-            this.objectMeshes[i] !== box
-          ) {
-            disposeDetachedThreeObject(real, "stale environment GLTF cleanup failed");
-            return;
-          }
-          // GLB from /api/object_glb is already centred + scaled on the server.
-          real.position.copy(box.position);
-          real.quaternion.copy(box.quaternion);
-          this.group.add(real);
-          this.objectMeshes[i] = real;
-          this.group.remove(box);
-          disposeDetachedThreeObject(box, "environment placeholder cleanup failed");
-        },
-        undefined,
-        () => {} // keep box on failure
+      for (const object of motion.objects || []) {
+        const color = object.color
+          ? (object.color[0] << 16) | (object.color[1] << 8) | object.color[2]
+          : 0xff9f0a;
+        const placeholder = new THREE.Mesh(
+          new THREE.BoxGeometry(
+            object.extents[0],
+            object.extents[1],
+            object.extents[2],
+          ),
+          new THREE.MeshStandardMaterial({
+            color,
+            transparent: true,
+            opacity: object.opacity ?? 0.55,
+            roughness: 0.6,
+          }),
+        );
+        registerOwnedSubtree(placeholder);
+        root.add(placeholder);
+        objectMeshes.push(placeholder);
+        objectTraj.push(object);
+      }
+      record = {
+        root,
+        ownedChildren,
+        extras: {},
+        retired: false,
+        retirement,
+        objectMeshes,
+        objectTraj,
+        motionToken: motion.token,
+        clipDuration: effectivePlaybackDuration(motion),
+        activated: false,
+      };
+      this.generations.set(retirement, record);
+      this.setGenerationFrame(record, 0);
+    } catch (error) {
+      if (record) this.disposeGeneration(record);
+      else retireThreeContentRoot(
+        this.group,
+        root,
+        "failed source-environment candidate cleanup failed",
+        (child) => { this.disposedWithGeneration.add(child); },
+        [...ownedChildren],
       );
+      throw error;
+    }
+
+    const candidate = record;
+    const preparation = new DetachedSourceViewPreparation(
+      this.group,
+      candidate.root,
+      () => generation === this.preparationGeneration,
+      () => this.publishGeneration(candidate),
+      () => this.disposeGeneration(candidate),
+      () => this.content === candidate,
+      "stale source-environment candidate cleanup failed",
+    );
+    return {
+      stage: (isCurrent) => preparation.stage(isCurrent),
+      canPublish: () => preparation.canPublish(),
+      publish: () => preparation.publish(),
+      abandon: () => preparation.abandon(),
+      isPublishedCurrent: () => preparation.isPublishedCurrent(),
+      activate: () => this.activateGeneration(candidate),
+    };
+  }
+
+  retire(retirement: EnvViewRetirement | null): void {
+    if (!retirement) return;
+    const generation = this.generations.get(retirement);
+    if (!generation) return;
+    if (this.content === generation) {
+      generation.root.visible = false;
+      this.content = null;
+      this.releaseAliases();
+    }
+    this.disposeGeneration(generation);
+  }
+
+  load(motion: MotionPayload): void {
+    const prepared = this.prepare(motion);
+    try {
+      if (prepared.stage() !== "staged") return;
+      const retired = prepared.publish();
+      this.retire(retired);
+      prepared.activate();
+    } finally {
+      prepared.abandon();
     }
   }
+
   get numFrames(): number {
     return this.objectTraj.length && this.objectTraj[0].positions
       ? this.objectTraj[0].positions.length : 0;
   }
   setFrame(f: number): void {
-    for (let i = 0; i < this.objectMeshes.length; i++) {
-      const o = this.objectTraj[i];
-      if (!o || !o.positions[f]) continue;
-      const m = this.objectMeshes[i];
-      m.position.set(o.positions[f][0], o.positions[f][1], o.positions[f][2]);
-      const q = o.quaternions[f];
+    if (!this.content) return;
+    this.setGenerationFrame(this.content, f);
+  }
+
+  private publishGeneration(
+    generation: EnvViewGeneration,
+  ): EnvViewRetirement | null {
+    const retired = this.content?.retirement ?? null;
+    if (this.content) this.content.root.visible = false;
+    generation.root.visible = true;
+    this.content = generation;
+    this.objectMeshes = generation.objectMeshes;
+    this.objectTraj = generation.objectTraj;
+    this.joints = generation.objectTraj.length ? generation.objectTraj : null;
+    this.clipDuration = generation.clipDuration;
+    return retired;
+  }
+
+  private activateGeneration(generation: EnvViewGeneration): void {
+    if (generation.activated || generation.retired || this.content !== generation) return;
+    generation.activated = true;
+    generation.objectTraj.forEach((object, index) => {
+      const placeholder = generation.objectMeshes[index];
+      if (!object.has_mesh || !generation.motionToken || !placeholder) return;
+      const loader = new GLTFLoader();
+      loader.load(
+        `/api/object_glb?token=${generation.motionToken}&index=${index}`,
+        (gltf) => this.commitObjectMesh(
+          generation,
+          object,
+          index,
+          placeholder,
+          gltf.scene,
+        ),
+        undefined,
+        () => {}, // Keep the placeholder on a current load failure.
+      );
+    });
+  }
+
+  private commitObjectMesh(
+    generation: EnvViewGeneration,
+    object: SceneObjectPayload,
+    index: number,
+    placeholder: THREE.Object3D,
+    real: THREE.Object3D,
+  ): void {
+    const generationIsCurrent = (): boolean => (
+      !generation.retired
+      && this.content === generation
+      && generation.root.parent === this.group
+      && generation.objectTraj[index] === object
+      && generation.objectMeshes[index] === placeholder
+    );
+    const placeholderIsCurrent = (): boolean => (
+      generationIsCurrent() && placeholder.parent === generation.root
+    );
+    // Freeze both forests before an observable add/remove callback can split a
+    // descendant away from a later traversal.
+    const realOwnedSnapshot: THREE.Object3D[] = [];
+    real.traverse((node) => { realOwnedSnapshot.push(node); });
+    const placeholderOwnedSnapshot: THREE.Object3D[] = [];
+    placeholder.traverse((node) => { placeholderOwnedSnapshot.push(node); });
+    const retireBrokenCurrentGeneration = (context: string): void => {
+      if (
+        generation.retired
+        || this.content !== generation
+        || (
+          generation.root.parent === this.group
+          && generation.objectMeshes[index] === placeholder
+          && placeholder.parent === generation.root
+        )
+      ) return;
+      try {
+        this.retire(generation.retirement);
+      } catch (error) {
+        console.warn(context, errorMessage(error));
+      }
+    };
+
+    if (!placeholderIsCurrent()) {
+      this.releaseGenerationObject(
+        generation,
+        real,
+        realOwnedSnapshot,
+        "stale environment GLTF cleanup failed",
+      );
+      retireBrokenCurrentGeneration(
+        "stale environment placeholder retirement failed",
+      );
+      return;
+    }
+    // The server has already centred and scaled the GLB to the placeholder.
+    real.position.copy(placeholder.position);
+    real.quaternion.copy(placeholder.quaternion);
+    if (!placeholderIsCurrent()) {
+      this.releaseGenerationObject(
+        generation,
+        real,
+        realOwnedSnapshot,
+        "stale environment GLTF transform cleanup failed",
+      );
+      retireBrokenCurrentGeneration(
+        "environment transform placeholder retirement failed",
+      );
+      return;
+    }
+    for (const node of realOwnedSnapshot) generation.ownedChildren.add(node);
+    try {
+      generation.root.add(real);
+    } catch (error) {
+      const failedCurrentAttachment = placeholderIsCurrent();
+      this.releaseGenerationObject(
+        generation,
+        real,
+        realOwnedSnapshot,
+        "failed environment GLTF attachment cleanup failed",
+      );
+      retireBrokenCurrentGeneration(
+        "failed environment GLTF attachment retirement failed",
+      );
+      if (failedCurrentAttachment && placeholderIsCurrent()) throw error;
+      return;
+    }
+    if (!placeholderIsCurrent() || real.parent !== generation.root) {
+      this.releaseGenerationObject(
+        generation,
+        real,
+        realOwnedSnapshot,
+        "stale environment GLTF attachment cleanup failed",
+      );
+      retireBrokenCurrentGeneration(
+        "stale environment GLTF attachment retirement failed",
+      );
+      return;
+    }
+
+    // The placeholder remains authoritative while Object3D.remove observers run.
+    let removalError: unknown = null;
+    try {
+      generation.root.remove(placeholder);
+    } catch (error) {
+      removalError = error;
+    }
+    if (
+      !generationIsCurrent()
+      || real.parent !== generation.root
+      || placeholder.parent === generation.root
+      || generation.objectMeshes[index] !== placeholder
+    ) {
+      this.releaseGenerationObject(
+        generation,
+        real,
+        realOwnedSnapshot,
+        "environment GLTF rollback cleanup failed",
+      );
+      retireBrokenCurrentGeneration(
+        "environment GLTF rollback retirement failed",
+      );
+      if (removalError && placeholderIsCurrent()) throw removalError;
+      return;
+    }
+
+    // Callback-free publication: every exact graph/alias condition settled.
+    generation.objectMeshes[index] = real;
+    this.releaseGenerationObject(
+      generation,
+      placeholder,
+      placeholderOwnedSnapshot,
+      "environment placeholder cleanup failed",
+    );
+    if (
+      !generation.retired
+      && this.content === generation
+      && (
+        generation.root.parent !== this.group
+        || generation.objectMeshes[index] !== real
+        || real.parent !== generation.root
+      )
+    ) {
+      try {
+        this.retire(generation.retirement);
+      } catch (error) {
+        console.warn(
+          "environment committed GLTF ownership retirement failed",
+          errorMessage(error),
+        );
+      }
+      return;
+    }
+    if (removalError) {
+      console.warn(
+        "environment placeholder removal reported an error",
+        errorMessage(removalError),
+      );
+    }
+  }
+
+  /**
+   * Settle one captured child forest without ever broad-clearing a successor.
+   * A pre-claim foreign transfer is preserved; local or post-claim adoption is
+   * terminally detached. Cleanup errors are diagnostic so later obligations
+   * in the same GLTF callback still reach their terminal state.
+   */
+  private releaseGenerationObject(
+    generation: EnvViewGeneration,
+    root: THREE.Object3D,
+    knownSubtree: readonly THREE.Object3D[],
+    context: string,
+  ): void {
+    const unsettledKnownSubtree: THREE.Object3D[] = [];
+    for (const node of knownSubtree) {
+      generation.ownedChildren.delete(node);
+      if (this.disposedWithGeneration.has(node)) {
+        const lateParent = node.parent;
+        if (lateParent) forceDetachRetiredThreeObject(lateParent, node);
+      } else {
+        unsettledKnownSubtree.push(node);
+      }
+    }
+    if (this.disposedWithGeneration.has(root)) return;
+
+    const insideGeneration = isInThreeOwnerRealm(root, generation.root);
+    const generationWasTransferred = (
+      generation.root.parent !== null
+      && !isInThreeOwnerRealm(generation.root, this.group)
+    );
+    const objectWasTransferred = (
+      root.parent !== null
+      && (
+        (insideGeneration && generationWasTransferred)
+        || (!insideGeneration && !isInThreeOwnerRealm(root, this.group))
+      )
+    );
+    if (!objectWasTransferred) {
+      const parent = root.parent;
+      if (parent) forceDetachRetiredThreeObject(parent, root);
+    }
+    try {
+      retireThreeContentRoot(
+        this.group,
+        root,
+        context,
+        (node) => { this.disposedWithGeneration.add(node); },
+        unsettledKnownSubtree,
+      );
+    } catch (error) {
+      console.warn(context, errorMessage(error));
+    }
+  }
+
+  private disposeGeneration(generation: EnvViewGeneration): void {
+    if (generation.retired) return;
+    generation.retired = true;
+    this.generations.delete(generation.retirement);
+    retireThreeContentRoot(
+      this.group,
+      generation.root,
+      "source-environment generation cleanup failed",
+      (child) => { this.disposedWithGeneration.add(child); },
+      [...generation.ownedChildren],
+      generation.extras,
+    );
+  }
+
+  private releaseAliases(): void {
+    this.objectMeshes = [];
+    this.objectTraj = [];
+    this.joints = null;
+    this.clipDuration = 1;
+  }
+
+  private setGenerationFrame(generation: EnvViewGeneration, frame: number): void {
+    for (let i = 0; i < generation.objectMeshes.length; i++) {
+      const o = generation.objectTraj[i];
+      if (!o || !o.positions[frame]) continue;
+      const m = generation.objectMeshes[i];
+      m.position.set(o.positions[frame][0], o.positions[frame][1], o.positions[frame][2]);
+      const q = o.quaternions[frame];
       m.quaternion.set(q[0], q[1], q[2], q[3]); // backend sends xyzw
     }
   }
@@ -2368,6 +3012,23 @@ function _unitIcosphere(): PrimitiveGeometryData {
   ];
   return { verts, faces };
 }
+declare const capsuleMeshViewRetirementBrand: unique symbol;
+interface CapsuleMeshViewRetirement {
+  readonly [capsuleMeshViewRetirementBrand]: true;
+}
+
+interface CapsuleMeshViewGeneration extends SourceViewGenerationRecord {
+  readonly retirement: CapsuleMeshViewRetirement;
+  readonly joints: Vec3[][];
+  readonly frameIndices: number[] | null | undefined;
+  readonly mesh: THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial>;
+  readonly edges: Array<[number, number]>;
+  readonly visibleJoints: number[];
+  readonly numJoints: number;
+  readonly positions: Float32Array;
+  readonly clipDuration: number;
+}
+
 class CapsuleMeshView {
   readonly group: THREE.Group;
   readonly heavy = false;
@@ -2381,8 +3042,14 @@ class CapsuleMeshView {
   edges: Array<[number, number]> = [];
   visibleJoints: number[] = [];
   numJoints = 0;
-  positions = new Float32Array();
+  positions: Float32Array<ArrayBufferLike> = new Float32Array();
   clipDuration = 1;
+  private preparationGeneration = 0;
+  private content: CapsuleMeshViewGeneration | null = null;
+  private readonly generations = new WeakMap<
+    CapsuleMeshViewRetirement,
+    CapsuleMeshViewGeneration
+  >();
 
   constructor() {
     this.group = new THREE.Group();
@@ -2391,81 +3058,199 @@ class CapsuleMeshView {
   }
   get ready(): boolean { return this.mesh != null && this.joints != null; }
   clear(): void {
-    try {
-      threeResourceDisposer.disposeObject3DChildren(this.group, {
-        geometries: this.mesh ? [this.mesh.geometry] : [],
-        materials: this.mesh ? [this.mesh.material] : [],
-      });
-    } finally {
-      try {
-        this.group.clear();
-      } finally {
-        this.mesh = null;
-        this.joints = null;
-        this.frameIndices = null;
-        this.edges = [];
-        this.visibleJoints = [];
-        this.numJoints = 0;
-        this.positions = new Float32Array();
-      }
-    }
+    this.preparationGeneration += 1;
+    const retired = this.content?.retirement ?? null;
+    if (this.content) this.content.root.visible = false;
+    this.content = null;
+    this.releaseAliases();
+    if (retired) this.retire(retired);
   }
-  load(motion: MotionPayload): void {
-    this.clear();
-    this.joints = motion.positions;
-    this.frameIndices = motion.frame_indices;
-    this.clipDuration = effectivePlaybackDuration(motion);
+
+  prepare(
+    motion: MotionPayload,
+  ): PreparedSourceViewGeneration<CapsuleMeshViewRetirement> {
+    const generation = ++this.preparationGeneration;
+    const root = new THREE.Group();
+    root.visible = false;
+    const ownedChildren = new Set<THREE.Object3D>();
+    const geometries: THREE.BufferGeometry[] = [];
+    const materials: THREE.Material[] = [];
+    const retirement = Object.freeze({}) as CapsuleMeshViewRetirement;
+    const joints = motion.positions;
+    const frameIndices = motion.frame_indices;
+    const clipDuration = effectivePlaybackDuration(motion);
     const parents = motion.parent_indices;
     const exclude = new Set(motion.exclude_joint_indices || []);
-    this.edges = [];
+    const edges: Array<[number, number]> = [];
     for (let j = 0; j < parents.length; j++) {
       const p = parents[j];
       if (p < 0 || exclude.has(j) || exclude.has(p)) continue;
-      this.edges.push([p, j]);
+      edges.push([p, j]);
     }
-    this.visibleJoints = [];
+    const visibleJoints: number[] = [];
     for (let j = 0; j < parents.length; j++) {
-      if (!exclude.has(j)) this.visibleJoints.push(j);
+      if (!exclude.has(j)) visibleJoints.push(j);
     }
-    this.numJoints = this.visibleJoints.length;
+    const numJoints = visibleJoints.length;
     // build index buffer once
     const vpb = this.cyl.verts.length; // verts per bone
     const vpj = this.sph.verts.length; // verts per joint
-    const totalBoneV = this.edges.length * vpb;
+    const totalBoneV = edges.length * vpb;
     const idx: number[] = [];
-    this.edges.forEach((_, e) => this.cyl.faces.forEach((f) =>
+    edges.forEach((_, e) => this.cyl.faces.forEach((f) =>
       idx.push(f[0] + e * vpb, f[1] + e * vpb, f[2] + e * vpb)));
-    for (let j = 0; j < this.numJoints; j++)
+    for (let j = 0; j < numJoints; j++)
       this.sph.faces.forEach((f) => idx.push(
         f[0] + totalBoneV + j * vpj, f[1] + totalBoneV + j * vpj, f[2] + totalBoneV + j * vpj));
-    const nVerts = totalBoneV + this.numJoints * vpj;
-    this.positions = new Float32Array(nVerts * 3);
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute("position", new THREE.BufferAttribute(this.positions, 3));
-    geo.setIndex(idx);
-    this.mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({
-      color: 0xf7a470, roughness: 0.6, metalness: 0.05,
-      side: THREE.DoubleSide, flatShading: true,
-    }));
-    this.group.add(this.mesh);
-    this.setFrame(0);
+    const nVerts = totalBoneV + numJoints * vpj;
+    const positions = new Float32Array(nVerts * 3);
+    let record: CapsuleMeshViewGeneration | null = null;
+    try {
+      const geometry = new THREE.BufferGeometry();
+      geometries.push(geometry);
+      geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+      geometry.setIndex(idx);
+      const material = new THREE.MeshStandardMaterial({
+        color: 0xf7a470,
+        roughness: 0.6,
+        metalness: 0.05,
+        side: THREE.DoubleSide,
+        flatShading: true,
+      });
+      materials.push(material);
+      const mesh = new THREE.Mesh(geometry, material);
+      ownedChildren.add(mesh);
+      root.add(mesh);
+      record = {
+        root,
+        ownedChildren,
+        extras: { geometries, materials },
+        retired: false,
+        retirement,
+        joints,
+        frameIndices,
+        mesh,
+        edges,
+        visibleJoints,
+        numJoints,
+        positions,
+        clipDuration,
+      };
+      this.generations.set(retirement, record);
+      this.setGenerationFrame(record, 0);
+    } catch (error) {
+      if (record) this.disposeGeneration(record);
+      else retireThreeContentRoot(
+        this.group,
+        root,
+        "failed source-capsule candidate cleanup failed",
+        undefined,
+        [...ownedChildren],
+        { geometries, materials },
+      );
+      throw error;
+    }
+
+    const candidate = record;
+    return new DetachedSourceViewPreparation(
+      this.group,
+      candidate.root,
+      () => generation === this.preparationGeneration,
+      () => this.publishGeneration(candidate),
+      () => this.disposeGeneration(candidate),
+      () => this.content === candidate,
+      "stale source-capsule candidate cleanup failed",
+    );
+  }
+
+  retire(retirement: CapsuleMeshViewRetirement | null): void {
+    if (!retirement) return;
+    const generation = this.generations.get(retirement);
+    if (!generation) return;
+    if (this.content === generation) {
+      generation.root.visible = false;
+      this.content = null;
+      this.releaseAliases();
+    }
+    this.disposeGeneration(generation);
+  }
+
+  load(motion: MotionPayload): void {
+    const prepared = this.prepare(motion);
+    try {
+      if (prepared.stage() !== "staged") return;
+      const retired = prepared.publish();
+      this.retire(retired);
+    } finally {
+      prepared.abandon();
+    }
   }
   get numFrames(): number { return this.joints ? this.joints.length : 0; }
   setFrame(f: number): void {
     this.setFrameFrac(f);
   }
   setFrameFrac(fi: number): void {
-    if (!this.mesh || !this.joints) return;
-    const max = this.joints.length - 1;
-    const { ia, ib, t } = resolvePlaybackFrame(this.frameIndices, fi, max);
-    const fr = this.joints[ia];
+    if (!this.content) return;
+    this.setGenerationFrame(this.content, fi);
+  }
+
+  private publishGeneration(
+    generation: CapsuleMeshViewGeneration,
+  ): CapsuleMeshViewRetirement | null {
+    const retired = this.content?.retirement ?? null;
+    if (this.content) this.content.root.visible = false;
+    generation.root.visible = true;
+    this.content = generation;
+    this.joints = generation.joints;
+    this.frameIndices = generation.frameIndices;
+    this.mesh = generation.mesh;
+    this.edges = generation.edges;
+    this.visibleJoints = generation.visibleJoints;
+    this.numJoints = generation.numJoints;
+    this.positions = generation.positions;
+    this.clipDuration = generation.clipDuration;
+    return retired;
+  }
+
+  private disposeGeneration(generation: CapsuleMeshViewGeneration): void {
+    if (generation.retired) return;
+    generation.retired = true;
+    this.generations.delete(generation.retirement);
+    retireThreeContentRoot(
+      this.group,
+      generation.root,
+      "source-capsule generation cleanup failed",
+      undefined,
+      [...generation.ownedChildren],
+      generation.extras,
+    );
+  }
+
+  private releaseAliases(): void {
+    this.mesh = null;
+    this.joints = null;
+    this.frameIndices = null;
+    this.edges = [];
+    this.visibleJoints = [];
+    this.numJoints = 0;
+    this.positions = new Float32Array();
+    this.clipDuration = 1;
+  }
+
+  private setGenerationFrame(
+    generation: CapsuleMeshViewGeneration,
+    fi: number,
+  ): void {
+    const max = generation.joints.length - 1;
+    const { ia, ib, t } = resolvePlaybackFrame(generation.frameIndices, fi, max);
+    const fr = generation.joints[ia];
     if (!fr) return;
     const blend = t > 1e-5 && ia !== ib;
-    const nxt = blend ? this.joints[ib] : undefined;
-    const pos = this.positions;
+    const nxt = blend ? generation.joints[ib] : undefined;
+    const pos = generation.positions;
     let o = 0;
     const r = this.boneRadius;
-    for (const [pi, ci] of this.edges) {
+    for (const [pi, ci] of generation.edges) {
       let sx = fr[pi][0], sy = fr[pi][1], sz = fr[pi][2];
       let ex = fr[ci][0], ey = fr[ci][1], ez = fr[ci][2];
       if (nxt) {
@@ -2493,7 +3278,7 @@ class CapsuleMeshView {
       }
     }
     const jr = this.jointRadius;
-    for (const j of this.visibleJoints) {
+    for (const j of generation.visibleJoints) {
       let cx = fr[j][0], cy = fr[j][1], cz = fr[j][2];
       if (nxt) {
         cx += (nxt[j][0] - cx) * t;
@@ -2504,7 +3289,7 @@ class CapsuleMeshView {
         pos[o++] = cx + v[0] * jr; pos[o++] = cy + v[1] * jr; pos[o++] = cz + v[2] * jr;
       }
     }
-    this.mesh.geometry.attributes.position.needsUpdate = true;
+    generation.mesh.geometry.attributes.position.needsUpdate = true;
   }
 }
 
@@ -3687,6 +4472,14 @@ function workflowNode(
 }
 
 function h2rBlockedReason(): string | null {
+  if (h2rMotionSelectionIsPending()) return runtimeText(
+    "A source motion is loading. Wait for the current selection to finish.",
+    "源动作正在加载，请等待当前选择完成。",
+  );
+  if (h2rRobotExportPreviewIsPending()) return runtimeText(
+    "A robot trajectory preview is loading. Wait for it to finish.",
+    "机器人轨迹预览正在加载，请等待当前任务完成。",
+  );
   if (!state.motion) return runtimeText(
     "Source motion is missing. Load a clip from Motion first.",
     "缺少源 Motion：请先在“动作 Motion”中加载一个 clip。",
@@ -4199,6 +4992,17 @@ function markR2rPlaybackPresented(claim: R2rPlaybackClaim): boolean {
 
 let lastAppliedPanelPresentation: PanelPresentationOperation | null = null;
 let lastFollowedUpPanelPresentation: PanelPresentationOperation | null = null;
+let h2rPanelRefreshDeferred = false;
+
+/** The H2R inspector, not merely any H2R-owned panel, may run its orchestration. */
+function h2rInspectorPanelIsActive(): boolean {
+  const operation = panelPresentationCoordinator.current;
+  return Boolean(
+    operation
+    && operation === lastAppliedPanelPresentation
+    && operation.value.panelId === "h2r"
+  );
+}
 
 function captureSharedStagePlayer(): SharedStagePlayerSnapshot {
   return {
@@ -4286,6 +5090,11 @@ function runCurrentPanelFollowups(): void {
   // Mark before entering a DOM/request helper so synchronous reentry cannot
   // execute the same generation twice.
   lastFollowedUpPanelPresentation = operation;
+  if (operation.value.panelId !== "h2r") {
+    h2rPanelRefreshDeferred = true;
+  } else {
+    resumeDeferredH2rPanelRefresh();
+  }
   if (operation.value.panelId === "batch") {
     renderBasket({ refreshCompatibility: false });
     if (!panelPresentationCoordinator.isCurrent(operation)) return;
@@ -4293,6 +5102,31 @@ function runCurrentPanelFollowups(): void {
   } else if (operation.value.stageOwner === "r2r") {
     void r2rUpdateRetargetBtn();
   }
+}
+
+/** Hand deferred H2R orchestration back after its exact pair writer retires. */
+function resumeDeferredH2rPanelRefresh(): void {
+  const operation = panelPresentationCoordinator.current;
+  if (
+    !h2rPanelRefreshDeferred
+    || !operation
+    || operation !== lastAppliedPanelPresentation
+    || operation.value.panelId !== "h2r"
+    || h2rMotionSelectionIsPending()
+    || h2rRobotExportPreviewIsPending()
+    || h2rRunState === "running"
+    || state.robotPanelLocked
+  ) return;
+  const panelIsCurrent = (): boolean => (
+    panelPresentationCoordinator.isCurrent(operation)
+    && operation === lastAppliedPanelPresentation
+  );
+  void refreshRetargetPanel(panelIsCurrent).catch((error) => {
+    if (panelIsCurrent()) {
+      h2rPanelRefreshDeferred = true;
+      console.warn("H2R panel refresh failed", errorMessage(error));
+    }
+  });
 }
 
 /** Publish before the first host callback, then reconcile latest-only. */
@@ -4344,33 +5178,478 @@ async function routeAfterRobotLoad(): Promise<void> {
 }
 
 // =================================================================  MOTION
+type H2rMotionSelectionKind = "library" | "upload" | "presentation";
+
+/** Immutable user intent shared by every path that can replace H2R motion. */
+interface H2rMotionSelectionIdentity {
+  readonly kind: H2rMotionSelectionKind;
+  readonly label: string;
+  readonly motionInputRevision: number;
+  readonly scaledPairRevision: number;
+  /** Claim used by direct presentation to withdraw an older request overlay. */
+  readonly loadingOverlayClaim: LoadingOverlayPresentation;
+  /** A late load may change panels only if the user has not navigated since. */
+  readonly startingPanelOperation: PanelPresentationOperation | null;
+}
+
+let h2rMotionInputRevision = 0;
+
+const h2rMotionSelectionAttempts = new LatestAsyncCompletionLeaseOwner<
+  H2rMotionSelectionIdentity
+>((identity) => (
+  identity.motionInputRevision === h2rMotionInputRevision
+  && identity.scaledPairRevision === h2rScaledPairRevision
+));
+
+/** Reserve latest-only publication before a DOM callback, upload, or request. */
+function beginH2rMotionSelection(
+  kind: H2rMotionSelectionKind,
+  label: string,
+): LatestAsyncAttempt<H2rMotionSelectionIdentity> {
+  // These are callback-free intent claims. Reserve every shared capability
+  // before a DOM projection, transport call, or non-cancellable decoder.
+  const motionInputRevision = ++h2rMotionInputRevision;
+  const scaledPairRevision = ++h2rScaledPairRevision;
+  const loadingOverlayClaim = claimLoadingOverlayPresentation();
+  const attempt = h2rMotionSelectionAttempts.begin(Object.freeze({
+    kind,
+    label,
+    motionInputRevision,
+    scaledPairRevision,
+    loadingOverlayClaim,
+    startingPanelOperation: panelPresentationCoordinator.current,
+  }));
+  h2rRunState = "idle";
+  // A pending playback receipt belongs to the motion/result selected before
+  // this intent and must never be presented after the replacement wins.
+  pendingH2rPlayback = null;
+  return attempt;
+}
+
+function h2rMotionSelectionIsCurrent(
+  attempt: LatestAsyncAttempt<H2rMotionSelectionIdentity>,
+): boolean {
+  return h2rMotionSelectionAttempts.isCurrent(attempt);
+}
+
+/** Finish the new pair claim before this selection crosses its first host boundary. */
+function prepareH2rMotionSelection(
+  attempt: LatestAsyncAttempt<H2rMotionSelectionIdentity>,
+): boolean {
+  const ownsPairMutation = (): boolean => (
+    h2rMotionSelectionIsCurrent(attempt)
+    && attempt.identity.scaledPairRevision === h2rScaledPairRevision
+  );
+  return clearH2rScaledPreview(ownsPairMutation) && ownsPairMutation();
+}
+
+/** Retire one exact selection and retain a post-finish presentation lease. */
+function finishH2rMotionSelection(
+  attempt: LatestAsyncAttempt<H2rMotionSelectionIdentity>,
+): boolean {
+  return h2rMotionSelectionAttempts.finish(attempt);
+}
+
+function h2rMotionSelectionLeaseIsLatest(
+  attempt: LatestAsyncAttempt<H2rMotionSelectionIdentity>,
+): boolean {
+  return h2rMotionSelectionAttempts.leaseIsLatest(attempt);
+}
+
+function h2rMotionSelectionIsPending(): boolean {
+  return h2rMotionSelectionAttempts.isPending;
+}
+
+/** Revoke motion acquisition when a newer non-motion H2R selection wins. */
+function invalidateH2rMotionSelection(): LoadingOverlayPresentation {
+  const loadingOverlayClaim = claimLoadingOverlayPresentation();
+  h2rMotionSelectionAttempts.invalidate();
+  h2rMotionInputRevision += 1;
+  h2rScaledPairRevision += 1;
+  h2rRunState = "idle";
+  skin.claimLoadGeneration();
+  if (pendingH2rPlayback?.kind === "motion") pendingH2rPlayback = null;
+  return loadingOverlayClaim;
+}
+
+function h2rMotionSelectionPanelIsUnchanged(
+  attempt: LatestAsyncAttempt<H2rMotionSelectionIdentity>,
+): boolean {
+  return (
+    h2rMotionSelectionIsCurrent(attempt)
+    && panelPresentationCoordinator.current
+      === attempt.identity.startingPanelOperation
+  );
+}
+
+/** Publish terminal workflow state only while this completion is still latest. */
+function publishLatestH2rMotionSelectionCompletion(
+  attempt: LatestAsyncAttempt<H2rMotionSelectionIdentity>,
+): boolean {
+  return runCurrentBestEffort(
+    "H2R motion selection workflow publication failed",
+    () => h2rMotionSelectionLeaseIsLatest(attempt),
+    () => publishH2rWorkflowState(),
+  );
+}
+
+interface PreparedH2rSourceBundle {
+  readonly skeleton: PreparedSourceViewGeneration<SkeletonViewRetirement>;
+  readonly capsule: PreparedSourceViewGeneration<CapsuleMeshViewRetirement>;
+  readonly environment: PreparedEnvViewGeneration;
+  readonly skin: PreparedBakedMesh;
+}
+
+type PreparedH2rSourceBundleDraft = {
+  -readonly [Key in keyof PreparedH2rSourceBundle]?: PreparedH2rSourceBundle[Key];
+};
+
+interface RetiredH2rSourceBundle {
+  readonly skeleton: SkeletonViewRetirement | null;
+  readonly capsule: CapsuleMeshViewRetirement | null;
+  readonly environment: EnvViewRetirement | null;
+  readonly skin: BakedMeshRetirement | null;
+}
+
+interface ClaimedH2rCalibrationRetirement {
+  readonly session: CalibrationManipulatorSession;
+  readonly orbit: OrbitSettingsSnapshot | null;
+  /** Epoch installed by the callback-free claim below. */
+  readonly presentationEpoch: number;
+}
+
+/** Attach every candidate hidden; a failed stage leaves the stable bundle intact. */
+function stageH2rSourceBundle(
+  bundle: PreparedH2rSourceBundle,
+  isCurrent: () => boolean,
+): boolean {
+  return (
+    bundle.skeleton.stage(isCurrent) === "staged"
+    && bundle.capsule.stage(isCurrent) === "staged"
+    && bundle.environment.stage(isCurrent) === "staged"
+    && bundle.skin.stage(isCurrent) === "staged"
+    && isCurrent()
+  );
+}
+
+/** Final callback-free preflight immediately before aggregate publication. */
+function h2rSourceBundleCanPublish(bundle: PreparedH2rSourceBundle): boolean {
+  return (
+    bundle.skeleton.canPublish()
+    && bundle.capsule.canPublish()
+    && bundle.environment.canPublish()
+    && bundle.skin.canPublish()
+  );
+}
+
+/**
+ * Switch all four source View aliases without crossing a callback boundary.
+ * The caller publishes canonical state in the same JavaScript turn.
+ */
+function publishH2rSourceBundle(
+  bundle: PreparedH2rSourceBundle,
+): RetiredH2rSourceBundle {
+  return {
+    skeleton: bundle.skeleton.publish(),
+    capsule: bundle.capsule.publish(),
+    environment: bundle.environment.publish(),
+    skin: bundle.skin.publish(),
+  };
+}
+
+function h2rSourceBundleIsPublishedCurrent(
+  bundle: PreparedH2rSourceBundle,
+): boolean {
+  return (
+    bundle.skeleton.isPublishedCurrent()
+    && bundle.capsule.isPublishedCurrent()
+    && bundle.environment.isPublishedCurrent()
+    && bundle.skin.isPublishedCurrent()
+  );
+}
+
+/** Verify the old editor before entering the final callback-free commit. */
+function h2rCalibrationCanRetireForMotion(
+  session: CalibrationManipulatorSession | null,
+  presentationEpoch: number,
+): session is CalibrationManipulatorSession {
+  return Boolean(
+    session
+    && state.calibrationMode
+    && calibrationPresentationEpoch === presentationEpoch
+    && h2rCalibrationManipulatorSession === session
+    && calibrationSessionIsCurrent("h2r", session)
+  );
+}
+
+/**
+ * Withdraw the old editor's public authority without entering any host API.
+ * Exact resource cleanup happens only after the source bundle is committed.
+ */
+function claimH2rCalibrationRetirement(
+  session: CalibrationManipulatorSession,
+  presentationEpoch: number,
+): ClaimedH2rCalibrationRetirement {
+  const retirement = Object.freeze({
+    session,
+    orbit: state.calibOrbitSaved,
+    presentationEpoch: presentationEpoch + 1,
+  });
+  calibrationPresentationEpoch = retirement.presentationEpoch;
+  h2rCalibrationBootstrapAttempts.invalidate();
+  h2rCalibrationStatusAttempts.invalidate();
+  h2rCalibrationManipulatorSession = null;
+  state.calibrationMode = false;
+  state.calibNeedsCameraFocus = false;
+  state.calibOrbitSaved = null;
+  state.calibRestore = null;
+  state.calibLimits = null;
+  state.calibQ = {};
+  state.calibSliderRows = {};
+  state.calibBaselineQ = null;
+  state.calibDraftQ = null;
+  state.calibHasSaved = false;
+  calibrationEditorUi.h2r.comparison = "current";
+  return retirement;
+}
+
+/** Drain only the calibration generation claimed in the source commit. */
+function retireClaimedH2rCalibration(
+  retirement: ClaimedH2rCalibrationRetirement,
+  sourceIsCurrent: () => boolean,
+): void {
+  // FK stop publishes its terminal generation before scheduler cancellation;
+  // a reentrant successor therefore cannot be stopped by this old cleanup.
+  runBestEffortCleanup(
+    "replaced calibration FK cleanup failed",
+    () => h2rCalibrationFkPreview.stop(),
+  );
+  runBestEffortCleanup(
+    "replaced calibration manipulator cleanup failed",
+    () => calibManip.stop(retirement.session),
+  );
+  const sharedProjectionIsCurrent = (): boolean => (
+    sourceIsCurrent()
+    && calibrationPresentationEpoch === retirement.presentationEpoch
+    && h2rCalibrationManipulatorSession === null
+    && !state.calibrationMode
+  );
+  if (retirement.orbit) {
+    runCurrentBestEffort(
+      "replaced calibration orbit restore failed",
+      sharedProjectionIsCurrent,
+      () => {
+        orbit.minDistance = retirement.orbit!.minDistance;
+        orbit.maxDistance = retirement.orbit!.maxDistance;
+        orbit.zoomSpeed = retirement.orbit!.zoomSpeed;
+      },
+    );
+  }
+  runCurrentBestEffort(
+    "replaced calibration renderer cleanup failed",
+    sharedProjectionIsCurrent,
+    () => robot.setOpacity(1),
+  );
+  runCurrentBestEffort(
+    "replaced calibration editor cleanup failed",
+    sharedProjectionIsCurrent,
+    () => {
+      const card = document.getElementById("calib-card");
+      if (card) card.style.display = "none";
+      document.getElementById("calib-banner")?.classList.add("hidden");
+      emitCalibrationEditorState("h2r");
+    },
+  );
+}
+
+/** Exact retirement is cleanup: it must not turn a published bundle into failure. */
+function retireH2rSourceBundle(retired: RetiredH2rSourceBundle): void {
+  runBestEffortCleanup(
+    "source skeleton predecessor cleanup failed",
+    () => skel.retire(retired.skeleton),
+  );
+  runBestEffortCleanup(
+    "source capsule predecessor cleanup failed",
+    () => mesh.retire(retired.capsule),
+  );
+  runBestEffortCleanup(
+    "source environment predecessor cleanup failed",
+    () => envView.retire(retired.environment),
+  );
+  runBestEffortCleanup(
+    "source body predecessor cleanup failed",
+    () => skin.retire(retired.skin),
+  );
+}
+
+function abandonH2rSourceBundle(bundle: PreparedH2rSourceBundleDraft): void {
+  runBestEffortCleanup(
+    "unpublished source body cleanup failed",
+    () => bundle.skin?.abandon(),
+  );
+  runBestEffortCleanup(
+    "unpublished source environment cleanup failed",
+    () => bundle.environment?.abandon(),
+  );
+  runBestEffortCleanup(
+    "unpublished source capsule cleanup failed",
+    () => bundle.capsule?.abandon(),
+  );
+  runBestEffortCleanup(
+    "unpublished source skeleton cleanup failed",
+    () => bundle.skeleton?.abandon(),
+  );
+}
+
+/** Callback-free visibility projection used inside source-bundle publication. */
+function applyLoadedH2rMotionVisibility(payload: MotionPayload): void {
+  const isParcMs =
+    payload.meta?.dataset === "parc_ms"
+    || payload.meta?.source_format === "parc_ms_pkl";
+  const hasSkin = Boolean(payload.body_mesh?.available);
+  const showSkeleton = isParcMs || !hasSkin;
+  h2rRequestedVisibility.sourceSkeleton = showSkeleton;
+  h2rRequestedVisibility.sourceBody = !showSkeleton || hasSkin;
+  h2rRequestedVisibility.sourceEnvironment = motionHasEnvironment(payload);
+  h2rRequestedVisibility.scaledSkeleton = false;
+  h2rRequestedVisibility.scaledEnvironment = false;
+  h2rRequestedVisibility.targetRobot = false;
+  applyH2rPhysicalVisibility();
+}
+
 /**
  * Commit a newly loaded human motion, invalidate prior H2R results, and rebuild
  * every source-motion Three.js layer before publishing the new workflow state.
  */
 async function loadMotionPayload(
   payload: MotionPayload,
+  attempt: LatestAsyncAttempt<H2rMotionSelectionIdentity>,
 ): Promise<AsyncStageViewLoadResult> {
-  const wasCalibrating = state.calibrationMode;
-  const calibrationDraft = wasCalibrating ? { ...state.calibQ } : null;
+  const motionLoadIsCurrent = (): boolean => (
+    h2rMotionSelectionIsCurrent(attempt)
+  );
+  const prepared: PreparedH2rSourceBundleDraft = {};
+  try {
+    if (!motionLoadIsCurrent()) return "stale";
+    prepared.skeleton = skel.prepare(payload, 0x0a84ff);
+    if (!motionLoadIsCurrent()) return "stale";
+    prepared.capsule = mesh.prepare(payload);
+    if (!motionLoadIsCurrent()) return "stale";
+    prepared.environment = envView.prepare(payload);
+    if (!motionLoadIsCurrent()) return "stale";
+    const skinPreparation = await skin.prepareDetached(
+      payload.body_mesh,
+      motionLoadIsCurrent,
+    );
+    if (skinPreparation.status === "stale") return "stale";
+    prepared.skin = skinPreparation.preparation;
+    if (!motionLoadIsCurrent()) return "stale";
+    const wasCalibrating = state.calibrationMode;
+    const calibrationDraft = wasCalibrating ? { ...state.calibQ } : null;
+    const calibrationSession = wasCalibrating
+      ? h2rCalibrationManipulatorSession
+      : null;
+    const calibrationEpoch = calibrationPresentationEpoch;
+    return await commitMotionPayload(
+      payload,
+      attempt,
+      prepared as PreparedH2rSourceBundle,
+      wasCalibrating,
+      calibrationDraft,
+      calibrationSession,
+      calibrationEpoch,
+    );
+  } finally {
+    // Published handles are neutral to abandon; every earlier exit terminally
+    // releases only the candidates this aggregate preparation actually owns.
+    abandonH2rSourceBundle(prepared);
+  }
+}
+
+/** Enter publication only after every source candidate is ready and staged. */
+async function commitMotionPayload(
+  payload: MotionPayload,
+  attempt: LatestAsyncAttempt<H2rMotionSelectionIdentity>,
+  preparedSource: PreparedH2rSourceBundle,
+  wasCalibrating: boolean,
+  calibrationDraft: Record<string, number> | null,
+  previousCalibrationSession: CalibrationManipulatorSession | null,
+  previousCalibrationEpoch: number,
+): Promise<AsyncStageViewLoadResult> {
+  const motionLoadIsCurrent = (): boolean => (
+    h2rMotionSelectionIsCurrent(attempt)
+  );
+  if (!motionLoadIsCurrent()) return "stale";
+  const scaledPairRevision = attempt.identity.scaledPairRevision;
+  const motionOwnsScaledPair = (): boolean => (
+    motionLoadIsCurrent() && scaledPairRevision === h2rScaledPairRevision
+  );
+
+  if (!stageH2rSourceBundle(preparedSource, motionLoadIsCurrent)) return "stale";
+  if (wasCalibrating) {
+    // Retire the exact old editor while canonical motion still matches its
+    // lease. Any session started from a cleanup callback owns the shared Stage
+    // and prevents this motion candidate from publishing afterwards.
+    if (
+      !previousCalibrationSession
+      || calibrationPresentationEpoch !== previousCalibrationEpoch
+      || !calibrationSessionIsCurrent("h2r", previousCalibrationSession)
+    ) return "stale";
+    exitCalibrationMode(previousCalibrationSession);
+    if (
+      !motionLoadIsCurrent()
+      || calibrationPresentationEpoch !== previousCalibrationEpoch + 1
+      || state.calibrationMode
+      || h2rCalibrationManipulatorSession !== null
+    ) return "stale";
+  }
+  if (
+    !motionLoadIsCurrent()
+    || !h2rSourceBundleCanPublish(preparedSource)
+  ) return "stale";
+
+  // Every candidate is hidden and validated before this callback-free block.
+  // View aliases, canonical identity, derived-result withdrawal, and logical
+  // visibility therefore become observable as one complete source generation.
+  const retiredSource = publishH2rSourceBundle(preparedSource);
   state.motion = payload;
   state.libraryEntry = payload.library_entry || null;
   state.reference = payload.suggested_reference ?? null;
-  syncRefSelect();
+  state.robotTrajectory = null;
   state.exportToken = null;
-  clearResultDiagnostics("h2r");
+  state.exportSrcFps = null;
+  state.exportHasScene = false;
   state.calibration = false;
   h2rRunState = "idle";
+  robot.trajectory = null;
+  robot.frameIndices = null;
+  robot.clipDuration = 1;
+  applyLoadedH2rMotionVisibility(payload);
+  if (!h2rSourceBundleIsPublishedCurrent(preparedSource)) {
+    throw new Error("H2R source bundle publication lost its installed generation");
+  }
+
+  // Publication is already terminal. Observer or predecessor-cleanup failures
+  // are diagnostics and cannot turn the installed motion into a false failure.
+  runBestEffortCleanup(
+    "H2R source bundle display publication failed",
+    () => markH2rStageDisplayChanged(),
+  );
+  retireH2rSourceBundle(retiredSource);
+  runBestEffortCleanup(
+    "H2R source environment activation failed",
+    () => preparedSource.environment.activate(),
+  );
+  if (!motionLoadIsCurrent()) return "stale";
+  syncRefSelect();
+  if (!motionLoadIsCurrent()) return "stale";
+  clearResultDiagnostics("h2r");
+  if (!motionLoadIsCurrent()) return "stale";
   // In calibration mode only the robot + blue reference T-pose should be visible.
   if (wasCalibrating) {
     try {
-      // Calibration does not render the baked body, but it must still invalidate
-      // a decode escaped from the previously active motion.
-      skin.clear();
-      state.robotTrajectory = null;
-      robot.trajectory = null;
-      clearH2rScaledPreview();
       player.setPlaying(false);
+      if (!motionLoadIsCurrent()) return "stale";
 
       if (state.robot && state.reference) {
         const calibrationRobot = state.robot;
@@ -4378,9 +5657,13 @@ async function loadMotionPayload(
         const calibrationRobotGeneration = robot.loadGeneration;
         const calibrationReference = state.reference;
         const calibrationMotionToken = payload.token ?? null;
-        const entryResult = await enterCalibrationMode(calibrationDraft);
+        const entryResult = await enterCalibrationMode(
+          calibrationDraft,
+          motionOwnsScaledPair,
+        );
         const calibrationIdentityIsCurrent = (): boolean => (
-          state.motion === payload
+          motionLoadIsCurrent()
+          && state.motion === payload
           && (state.motion?.token ?? null) === calibrationMotionToken
           && state.robot === calibrationRobot
           && state.robot?.name === calibrationRobotName
@@ -4394,7 +5677,8 @@ async function loadMotionPayload(
         );
         if (disposition === "stale") return "stale";
         if (disposition === "calibration") {
-          _applyCalibSceneLayout();
+          if (!calibrationIdentityIsCurrent()) return "stale";
+          if (!_applyCalibSceneLayout(motionOwnsScaledPair)) return "stale";
           if (!calibrationIdentityIsCurrent()) return "stale";
           toast(runtimeText(
             `Loaded ${payload.name} (calibration mode)`,
@@ -4406,81 +5690,190 @@ async function loadMotionPayload(
         }
       } else {
         // A motion without a usable reference cannot retain an ownerless editor.
+        if (!motionLoadIsCurrent()) return "stale";
         exitCalibrationMode();
+        if (!motionLoadIsCurrent()) return "stale";
       }
     } catch (error) {
-      if (state.motion === payload) exitCalibrationMode();
+      if (motionLoadIsCurrent() && state.motion === payload) {
+        exitCalibrationMode();
+        if (motionLoadIsCurrent()) {
+          applyLoadedH2rMotionVisibility(payload);
+          markH2rStageDisplayChanged();
+        }
+      }
       throw error;
     }
   }
-  skel.load(payload, 0x0a84ff);
-  mesh.load(payload);
-  envView.load(payload);
-  const hasEnv = motionHasEnvironment(payload);
-  if (!hasEnv) {
-    envView.clear();
+  if (wasCalibrating) {
+    // A failed/cancelled re-entry may have restored the previous session's
+    // requested layers. Re-project the newly installed source generation.
+    applyLoadedH2rMotionVisibility(payload);
+    markH2rStageDisplayChanged();
+    if (!motionLoadIsCurrent()) return "stale";
   }
-  const skinLoadResult = await skin.load(payload.body_mesh);
-  if (skinLoadResult === "stale") return "stale";
   // Terrain/objects clips default to the interaction-mesh backend (matches Viser
   // "Auto"); pure skeletal clips stay on Newton IK.
   if (payload.suggested_backend) {
     const rb = document.getElementById("rt-backend");
+    if (!motionLoadIsCurrent()) return "stale";
     const bb = document.getElementById("batch-backend");
+    if (!motionLoadIsCurrent()) return "stale";
     if (rb) rb.value = payload.suggested_backend;
+    if (!motionLoadIsCurrent()) return "stale";
     if (bb) bb.value = payload.suggested_backend;
+    if (!motionLoadIsCurrent()) return "stale";
   }
-  withH2rStageDisplayBatch(() => {
-    if (hasEnv) {
-      setH2rLayerVisible("sourceEnvironment", true);
-    } else {
-      setH2rLayerVisible("sourceEnvironment", false);
-    }
-    // A fresh motion invalidates any previous retarget result.
-    state.robotTrajectory = null;
-    robot.trajectory = null;
-    clearH2rScaledPreview();
-    if (state.robot) robot.applyStatic();
-    // parc_ms / skeletal-only: default skeleton lines (capsules collapse when FK rest is wrong).
-    const isParcMs =
-      payload.meta?.dataset === "parc_ms" ||
-      payload.meta?.source_format === "parc_ms_pkl";
-    const hasSkin = Boolean(payload.body_mesh?.available);
-    const showSkeleton = isParcMs || !hasSkin;
-    setH2rLayerVisible("sourceSkeleton", showSkeleton);
-    setBodyVisible(!showSkeleton || hasSkin);
-    setH2rLayerVisible("targetRobot", false);
-    player.ready(effectivePlaybackDuration(payload));
+  if (state.robot) robot.applyStatic();
+  if (!motionLoadIsCurrent()) return "stale";
+  pendingH2rPlayback = Object.freeze({
+    kind: "motion",
+    selectionAttempt: attempt,
+    motion: payload,
+    duration: effectivePlaybackDuration(payload),
   });
-  player.setPlaying(true);
+  presentPendingH2rPlayback();
+  if (!motionLoadIsCurrent()) return "stale";
   renderMotionDetails(payload);
+  if (!motionLoadIsCurrent()) return "stale";
   updatePills();
+  if (!motionLoadIsCurrent()) return "stale";
   updateRetargetFpsPlaceholder();
-  if (state.robot) {
+  if (!motionLoadIsCurrent()) return "stale";
+  if (state.robot && h2rMotionSelectionPanelIsUnchanged(attempt)) {
     const panelSwitch = switchInspectorPanel("h2r");
     if (!panelSwitchSettledOnStageOwner(panelSwitch, "h2r")) return "stale";
   }
-  await refreshRetargetPanel();
-  if (state.motion !== payload || state.motion?.token !== payload.token) return "stale";
+  await refreshRetargetPanel(motionLoadIsCurrent, scaledPairRevision);
+  if (
+    !motionLoadIsCurrent()
+    || state.motion !== payload
+    || state.motion?.token !== payload.token
+  ) return "stale";
   toast(runtimeText(`Loaded ${payload.name}`, `已加载 ${payload.name}`));
-  return "committed";
+  return motionLoadIsCurrent() ? "committed" : "stale";
+}
+
+/** One-shot capability reserved when a generated-motion user intent begins. */
+export interface HumanMotionPresentationReservation {
+  commit(payload: MotionPayload): Promise<"presented" | "superseded">;
+  dispose(): void;
+}
+
+function h2rMotionSelectionIntentIsLatest(
+  attempt: LatestAsyncAttempt<H2rMotionSelectionIdentity>,
+): boolean {
+  return (
+    attempt.identity.motionInputRevision === h2rMotionInputRevision
+    && attempt.identity.scaledPairRevision === h2rScaledPairRevision
+  );
 }
 
 /**
- * Temporary aggregate presentation boundary used by migrated features.
- * Keep the ordering here so views never coordinate Stage, library, and basket
- * singleton state themselves; a future StageService can replace this adapter.
+ * Reserve latest-user-intent ownership before a migrated feature starts work.
+ * The returned lease never exposes runtime generations outside this module.
+ */
+export function reserveHumanMotionPresentation(
+  label = "generated motion",
+): HumanMotionPresentationReservation {
+  const attempt = beginH2rMotionSelection("presentation", label);
+  const attemptIsCurrent = (): boolean => (
+    h2rMotionSelectionIsCurrent(attempt)
+  );
+  try {
+    prepareH2rMotionSelection(attempt);
+  } catch (error) {
+    h2rMotionSelectionAttempts.abandon(attempt);
+    resumeDeferredH2rPanelRefresh();
+    throw error;
+  }
+  runCurrentBestEffort(
+    "H2R motion reservation overlay withdrawal failed",
+    attemptIsCurrent,
+    () => { hideLoading(attempt.identity.loadingOverlayClaim); },
+  );
+  runCurrentBestEffort(
+    "H2R motion reservation workflow publication failed",
+    attemptIsCurrent,
+    () => publishH2rWorkflowState(),
+  );
+
+  let disposed = false;
+  let commitPromise: Promise<"presented" | "superseded"> | null = null;
+  return Object.freeze({
+    commit: (
+      payload: MotionPayload,
+    ): Promise<"presented" | "superseded"> => {
+      if (commitPromise) return commitPromise;
+      if (disposed) return Promise.resolve("superseded" as const);
+      commitPromise = presentReservedHumanMotion(payload, attempt);
+      return commitPromise;
+    },
+    dispose: () => {
+      if (disposed) return;
+      disposed = true;
+      if (!h2rMotionSelectionAttempts.abandon(attempt)) return;
+      runCurrentBestEffort(
+        "H2R motion reservation cancellation publication failed",
+        () => h2rMotionSelectionIntentIsLatest(attempt)
+          && !h2rMotionSelectionIsPending(),
+        () => publishH2rWorkflowState(),
+      );
+      resumeDeferredH2rPanelRefresh();
+    },
+  });
+}
+
+/** Commit one generated motion through its already-reserved intent lease. */
+async function presentReservedHumanMotion(
+  payload: MotionPayload,
+  attempt: LatestAsyncAttempt<H2rMotionSelectionIdentity>,
+): Promise<"presented" | "superseded"> {
+  try {
+    if (!h2rMotionSelectionIsCurrent(attempt)) return "superseded";
+    const loadResult = await loadMotionPayload(payload, attempt);
+    if (loadResult === "stale" || !h2rMotionSelectionIsCurrent(attempt)) {
+      if (h2rMotionSelectionIsCurrent(attempt)) {
+        finishH2rMotionSelection(attempt);
+        publishLatestH2rMotionSelectionCompletion(attempt);
+      }
+      return "superseded";
+    }
+    await refreshLibrary();
+    if (!h2rMotionSelectionIsCurrent(attempt)) return "superseded";
+    if (!finishH2rMotionSelection(attempt)) return "superseded";
+    if (!publishLatestH2rMotionSelectionCompletion(attempt)) {
+      return "superseded";
+    }
+    if (!h2rMotionSelectionLeaseIsLatest(attempt)) return "superseded";
+    return "presented";
+  } catch (error) {
+    if (!h2rMotionSelectionIsCurrent(attempt)) return "superseded";
+    if (!finishH2rMotionSelection(attempt)) return "superseded";
+    if (!publishLatestH2rMotionSelectionCompletion(attempt)) {
+      return "superseded";
+    }
+    if (!h2rMotionSelectionLeaseIsLatest(attempt)) return "superseded";
+    throw error;
+  } finally {
+    resumeDeferredH2rPanelRefresh();
+  }
+}
+
+/**
+ * Compatibility one-shot facade. New use cases reserve before their first
+ * asynchronous operation so latest ownership follows user intent, not result
+ * arrival order.
  */
 export async function presentHumanMotion(
   payload: MotionPayload,
 ): Promise<"presented" | "superseded"> {
-  const loadResult = await loadMotionPayload(payload);
-  if (loadResult === "stale") return "superseded";
-  await refreshLibrary();
-  if (payload.library_entry) {
-    addToBasket([payload.library_entry], { silent: true });
+  const reservation = reserveHumanMotionPresentation("generated motion");
+  try {
+    return await reservation.commit(payload);
+  } finally {
+    reservation.dispose();
   }
-  return "presented";
 }
 
 function datasetSceneGlbUrl(token: string | null | undefined, o: SceneObjectPayload): string | null {
@@ -4490,11 +5883,15 @@ function datasetSceneGlbUrl(token: string | null | undefined, o: SceneObjectPayl
 }
 
 let h2rRobotExportPreviewRevision = 0;
+let h2rRobotExportPreviewPendingAttempt:
+  H2rRobotExportPreviewAttempt | null = null;
 
 /** Immutable click-time capability for one robot-trajectory preview request. */
 interface H2rRobotExportPreviewAttempt {
   readonly revision: number;
+  readonly motionInputRevision: number;
   readonly scaledPairRevision: number;
+  readonly loadingOverlayClaim: LoadingOverlayPresentation;
   readonly sourcePath: string;
   readonly label: string;
   readonly requestedRobotName: string | null;
@@ -4511,15 +5908,19 @@ function beginH2rRobotExportPreview(
   entry: LibraryEntry,
   robotName?: string,
 ): H2rRobotExportPreviewAttempt {
+  const loadingOverlayClaim = invalidateH2rMotionSelection();
   const revision = ++h2rRobotExportPreviewRevision;
-  const scaledPairRevision = ++h2rScaledPairRevision;
+  const motionInputRevision = h2rMotionInputRevision;
+  const scaledPairRevision = h2rScaledPairRevision;
   // Export preview also owns the shared RobotView intent. This callback-free
   // claim makes an older parser stale without discarding reusable live content.
   const inputRobotViewGeneration = robot.claimLoadGeneration();
   pendingH2rPlayback = null;
-  return Object.freeze({
+  const attempt = Object.freeze({
     revision,
+    motionInputRevision,
     scaledPairRevision,
+    loadingOverlayClaim,
     sourcePath: entry.source_path,
     label: entry.stem || entry.sequence_id || "",
     requestedRobotName: robotName || null,
@@ -4530,6 +5931,8 @@ function beginH2rRobotExportPreview(
     inputExportToken: state.exportToken,
     inputRobotViewGeneration,
   });
+  h2rRobotExportPreviewPendingAttempt = attempt;
+  return attempt;
 }
 
 function h2rRobotExportPreviewOwnsPair(
@@ -4537,8 +5940,23 @@ function h2rRobotExportPreviewOwnsPair(
 ): boolean {
   return (
     attempt.revision === h2rRobotExportPreviewRevision
+    && attempt.motionInputRevision === h2rMotionInputRevision
     && attempt.scaledPairRevision === h2rScaledPairRevision
   );
+}
+
+function h2rRobotExportPreviewIsPending(): boolean {
+  const attempt = h2rRobotExportPreviewPendingAttempt;
+  return attempt !== null && h2rRobotExportPreviewOwnsPair(attempt);
+}
+
+/** Clear only this exact pending alias; stale finalizers cannot retire B. */
+function finishH2rRobotExportPreview(
+  attempt: H2rRobotExportPreviewAttempt,
+): boolean {
+  if (h2rRobotExportPreviewPendingAttempt !== attempt) return false;
+  h2rRobotExportPreviewPendingAttempt = null;
+  return h2rRobotExportPreviewOwnsPair(attempt);
 }
 
 function h2rRobotExportPreviewInputsAreCurrent(
@@ -4966,10 +6384,13 @@ async function previewRobotClip(
   );
   let loadingPresentation: LoadingOverlayPresentation | null = null;
   try {
-    // The request owns both scaled Views before transport. A synchronously
-    // reentrant preview/retarget/refresh claims a newer pair and finishes the
-    // inherited cleanup before this stale request can cross its first await.
+    // The pair claim is already published. Complete inherited cleanup before
+    // the first loading-overlay or transport callback can start a successor.
     if (!clearH2rScaledPreview(ownsPairMutation)) return null;
+    if (!inputsAreCurrent()) return null;
+    hideLoading(attempt.loadingOverlayClaim);
+    if (!inputsAreCurrent()) return null;
+    publishH2rWorkflowState();
     if (!inputsAreCurrent()) return null;
     loadingPresentation = showLoading(() => runtimeText(
       `Loading robot trajectory ${attempt.label}`.trim(),
@@ -5006,6 +6427,15 @@ async function previewRobotClip(
     // Loading UI is owned by request intent, not by mutable domain identity.
     // An older request must never hide a successor's overlay.
     if (loadingPresentation) hideLoading(loadingPresentation);
+    if (finishH2rRobotExportPreview(attempt)) {
+      runCurrentBestEffort(
+        "H2R robot export preview terminal workflow publication failed",
+        () => h2rRobotExportPreviewOwnsPair(attempt)
+          && !h2rRobotExportPreviewIsPending(),
+        () => publishH2rWorkflowState(),
+      );
+      resumeDeferredH2rPanelRefresh();
+    }
   }
 }
 
@@ -5034,30 +6464,58 @@ async function loadLibraryEntryRequest(
   entry: LibraryEntry,
   options: { usage?: "human_to_robot"; rethrow?: boolean } = {},
 ): Promise<AsyncStageViewLoadResult> {
-  const label = entry.stem || entry.sequence_id || "";
-  const loadingPresentation = showLoading(
-    () => runtimeText(`Loading motion… ${label}`, `加载动作中… ${label}`).trim(),
-  );
+  const attempt = beginH2rMotionSelection("library", "library motion");
+  let loadingPresentation: LoadingOverlayPresentation | null = null;
   try {
+    if (!prepareH2rMotionSelection(attempt)) return "stale";
+    hideLoading(attempt.identity.loadingOverlayClaim);
+    if (!h2rMotionSelectionIsCurrent(attempt)) return "stale";
+    const label = entry.stem || entry.sequence_id || "";
+    loadingPresentation = showLoading(
+      () => runtimeText(`Loading motion… ${label}`, `加载动作中… ${label}`).trim(),
+    );
+    if (!h2rMotionSelectionIsCurrent(attempt)) return "stale";
+    publishH2rWorkflowState();
+    if (!h2rMotionSelectionIsCurrent(attempt)) return "stale";
     const body = options.usage ? { ...entry, usage: options.usage } : entry;
     const { job_id } = await API.post("/api/motion/load_library", body);
+    if (!h2rMotionSelectionIsCurrent(attempt)) return "stale";
     const payload = await waitMotionJob<MotionPayload>(job_id, (frac, sub) => {
-      setLoadingProgress(frac, sub, loadingPresentation);
+      if (h2rMotionSelectionIsCurrent(attempt) && loadingPresentation) {
+        setLoadingProgress(frac, sub, loadingPresentation);
+      }
     });
+    if (!h2rMotionSelectionIsCurrent(attempt)) return "stale";
     setLoadingProgress(
       1,
       runtimeText("Building scene…", "构建场景…"),
       loadingPresentation,
     );
-    const loadResult = await loadMotionPayload(payload);
-    if (loadResult === "stale") return "stale";
+    if (!h2rMotionSelectionIsCurrent(attempt)) return "stale";
+    const loadResult = await loadMotionPayload(payload, attempt);
+    if (loadResult === "stale" || !h2rMotionSelectionIsCurrent(attempt)) {
+      if (h2rMotionSelectionIsCurrent(attempt)) {
+        finishH2rMotionSelection(attempt);
+        publishLatestH2rMotionSelectionCompletion(attempt);
+      }
+      return "stale";
+    }
+    if (!finishH2rMotionSelection(attempt)) return "stale";
+    if (!publishLatestH2rMotionSelectionCompletion(attempt)) return "stale";
+    if (!h2rMotionSelectionLeaseIsLatest(attempt)) return "stale";
     return "committed";
   } catch (e) {
+    if (!h2rMotionSelectionIsCurrent(attempt)) return "stale";
+    if (!finishH2rMotionSelection(attempt)) return "stale";
+    publishLatestH2rMotionSelectionCompletion(attempt);
+    if (!h2rMotionSelectionLeaseIsLatest(attempt)) return "stale";
     toast(errorMessage(e), true);
+    if (!h2rMotionSelectionLeaseIsLatest(attempt)) return "stale";
     if (options.rethrow) throw e;
     return "committed";
   } finally {
-    hideLoading(loadingPresentation);
+    if (loadingPresentation) hideLoading(loadingPresentation);
+    resumeDeferredH2rPanelRefresh();
   }
 }
 
@@ -5495,33 +6953,57 @@ async function ingestMotionFiles(
   profile = "mimic",
 ): Promise<MotionPayload | null> {
   if (!files || !files.length) return null;
-  const libraryFolderLabel = inferLibraryFolderLabel(files);
-  const loadingPresentation = showLoading(() => runtimeText(
-    `Linking and parsing… (${files.length} files)`,
-    `链接并解析中…（${files.length} 个文件）`,
-  ));
+  const attempt = beginH2rMotionSelection(
+    "upload",
+    `${files.length} files`,
+  );
+  let loadingPresentation: LoadingOverlayPresentation | null = null;
   try {
+    if (!prepareH2rMotionSelection(attempt)) return null;
+    hideLoading(attempt.identity.loadingOverlayClaim);
+    if (!h2rMotionSelectionIsCurrent(attempt)) return null;
+    const libraryFolderLabel = inferLibraryFolderLabel(files);
+    loadingPresentation = showLoading(() => runtimeText(
+      `Linking and parsing… (${files.length} files)`,
+      `链接并解析中…（${files.length} 个文件）`,
+    ));
+    if (!h2rMotionSelectionIsCurrent(attempt)) return null;
+    publishH2rWorkflowState();
+    if (!h2rMotionSelectionIsCurrent(attempt)) return null;
     const uploadResp = await uploadFilesXHR(
       "/api/motion/upload",
       files,
       { profile, libraryFolderLabel },
       () => {},
     );
+    if (!h2rMotionSelectionIsCurrent(attempt)) return null;
     const { job_id, linked, folder_label, materialize_mode } = uploadResp;
     const payload = await waitMotionJob<MotionPayload>(job_id, (frac, sub) => {
-      setLoadingProgress(frac, sub, loadingPresentation);
+      if (h2rMotionSelectionIsCurrent(attempt) && loadingPresentation) {
+        setLoadingProgress(frac, sub, loadingPresentation);
+      }
     }, { uploadFrac: 0 });
+    if (!h2rMotionSelectionIsCurrent(attempt)) return null;
     setLoadingProgress(
       1,
       runtimeText("Building scene…", "构建场景…"),
       loadingPresentation,
     );
-    const loadResult = await loadMotionPayload(payload);
-    if (loadResult === "stale") return null;
+    if (!h2rMotionSelectionIsCurrent(attempt)) return null;
+    const loadResult = await loadMotionPayload(payload, attempt);
+    if (loadResult === "stale" || !h2rMotionSelectionIsCurrent(attempt)) {
+      if (h2rMotionSelectionIsCurrent(attempt)) {
+        finishH2rMotionSelection(attempt);
+        publishLatestH2rMotionSelectionCompletion(attempt);
+      }
+      return null;
+    }
     if (linked || folder_label || payload.linked_folder) {
       await refreshLibrary();
+      if (!h2rMotionSelectionIsCurrent(attempt)) return null;
       const label = folder_label || payload.linked_folder;
       if (label) setLibrarySearch(label);
+      if (!h2rMotionSelectionIsCurrent(attempt)) return null;
     }
     const resolvedMaterializeMode = materialize_mode === "pending"
       ? payload.materialize_mode
@@ -5537,18 +7019,27 @@ async function ingestMotionFiles(
         `${modeHint.en} and loaded: ${payload.name} (Library · ${folder_label || payload.linked_folder})`,
         `已${modeHint.zh}并加载：${payload.name}（资源库 · ${folder_label || payload.linked_folder}）`,
       ));
+      if (!h2rMotionSelectionIsCurrent(attempt)) return null;
     } else if (linked || payload.linked_folder) {
       toast(runtimeText(
         `${modeHint.en} to the Library: ${payload.linked_folder || folder_label}; loaded the first clip`,
         `已${modeHint.zh}到资源库：${payload.linked_folder || folder_label}，已加载首条 clip`,
       ));
+      if (!h2rMotionSelectionIsCurrent(attempt)) return null;
     }
+    if (!finishH2rMotionSelection(attempt)) return null;
+    if (!publishLatestH2rMotionSelectionCompletion(attempt)) return null;
+    if (!h2rMotionSelectionLeaseIsLatest(attempt)) return null;
     return payload;
   } catch (e) {
-    toast(errorMessage(e), true);
+    if (!h2rMotionSelectionIsCurrent(attempt)) return null;
+    if (!finishH2rMotionSelection(attempt)) return null;
+    publishLatestH2rMotionSelectionCompletion(attempt);
+    if (h2rMotionSelectionLeaseIsLatest(attempt)) toast(errorMessage(e), true);
     return null;
   } finally {
-    hideLoading(loadingPresentation);
+    if (loadingPresentation) hideLoading(loadingPresentation);
+    resumeDeferredH2rPanelRefresh();
   }
 }
 
@@ -8671,24 +10162,41 @@ function updateR2rCalibBanner(): void {
   el.replaceChildren(textElement("span", "dot", ""), message);
 }
 
-function _applyCalibSceneLayout(): void {
+function _applyCalibSceneLayout(
+  ownsPairMutation?: () => boolean,
+): boolean {
+  const sceneMutationIsCurrent = ownsPairMutation ?? (() => true);
+  let applied = false;
   // Calibration changes both resource availability and all layer toggles.
   // Commit that layout as one display state instead of six transient states.
   withH2rStageDisplayBatch(() => {
+    if (!sceneMutationIsCurrent()) return;
     state.robotTrajectory = null;
     robot.trajectory = null;
     clearResultDiagnostics("h2r");
-    clearH2rScaledPreview();
+    if (!sceneMutationIsCurrent()) return;
+    if (!clearH2rScaledPreview(ownsPairMutation)) return;
+    if (!sceneMutationIsCurrent()) return;
     setH2rLayerVisible("sourceSkeleton", false);
+    if (!sceneMutationIsCurrent()) return;
     setBodyVisible(false);
+    if (!sceneMutationIsCurrent()) return;
     setH2rLayerVisible("sourceEnvironment", false);
+    if (!sceneMutationIsCurrent()) return;
     setH2rLayerVisible("scaledSkeleton", false);
+    if (!sceneMutationIsCurrent()) return;
     setH2rLayerVisible("scaledEnvironment", false);
+    if (!sceneMutationIsCurrent()) return;
     setH2rLayerVisible("targetRobot", true);
+    if (!sceneMutationIsCurrent()) return;
     robot.applyStatic();
+    if (!sceneMutationIsCurrent()) return;
     player.setPlaying(false);
+    if (!sceneMutationIsCurrent()) return;
     _setPlaybarVisible(false);
+    applied = sceneMutationIsCurrent();
   });
+  return applied;
 }
 
 function _restoreVis(snap: ViewVisibilitySnapshot | null): void {
@@ -8712,7 +10220,7 @@ function _restoreVis(snap: ViewVisibilitySnapshot | null): void {
   });
 }
 
-interface H2rCalibrationPairIdentity {
+interface H2rCalibrationDomainIdentity {
   readonly robot: RobotPayload;
   readonly robotName: string;
   readonly robotViewGeneration: number;
@@ -8721,8 +10229,15 @@ interface H2rCalibrationPairIdentity {
   readonly reference: string;
 }
 
-interface H2rCalibrationBootstrapIdentity extends H2rCalibrationPairIdentity {
+interface H2rCalibrationBootstrapIdentity extends H2rCalibrationDomainIdentity {
   readonly robotGroundOffset: number;
+  /** Shared Stage/orbit epoch captured before this bootstrap installs state. */
+  readonly presentationEpoch: number;
+}
+
+interface H2rCalibrationStatusIdentity extends H2rCalibrationDomainIdentity {
+  /** Prevent an old status response from taking a newer pair writer's lease. */
+  readonly scaledPairRevision: number;
 }
 
 const h2rCalibrationBootstrapAttempts = new LatestAsyncAttemptOwner<
@@ -8734,10 +10249,11 @@ const h2rCalibrationBootstrapAttempts = new LatestAsyncAttemptOwner<
   && state.motion === identity.motion
   && (state.motion?.token ?? null) === identity.motionToken
   && state.reference === identity.reference
+  && calibrationPresentationEpoch === identity.presentationEpoch
 ));
 
 const h2rCalibrationStatusAttempts = new LatestAsyncAttemptOwner<
-  H2rCalibrationPairIdentity
+  H2rCalibrationStatusIdentity
 >((identity) => (
   state.robot === identity.robot
   && state.robot?.name === identity.robotName
@@ -8745,38 +10261,43 @@ const h2rCalibrationStatusAttempts = new LatestAsyncAttemptOwner<
   && state.motion === identity.motion
   && (state.motion?.token ?? null) === identity.motionToken
   && state.reference === identity.reference
+  && h2rScaledPairRevision === identity.scaledPairRevision
 ));
 
 function h2rCalibrationStatusUrl(
-  identity: H2rCalibrationPairIdentity,
+  identity: H2rCalibrationDomainIdentity,
 ): `/api/calibration/status${string}` {
   return `/api/calibration/status?robot=${encodeURIComponent(identity.robotName)}&reference=${encodeURIComponent(identity.reference)}`;
 }
 
 function rollbackH2rCalibrationBootstrap(
   attempt: LatestAsyncAttempt<H2rCalibrationBootstrapIdentity>,
-  error: unknown,
+  error: unknown | null,
   manipulatorSession: CalibrationManipulatorSession | null,
+  ownsInstalledState: () => boolean,
+  requestMayReport: () => boolean,
 ): boolean {
-  if (!h2rCalibrationBootstrapAttempts.isCurrent(attempt)) return false;
+  const abandonAttempt = (): false => {
+    h2rCalibrationBootstrapAttempts.abandon(attempt);
+    return false;
+  };
+  const visibilitySnapshot = ownsInstalledState() ? state.calibRestore : null;
+  const orbitSnapshot = ownsInstalledState() ? state.calibOrbitSaved : null;
   if (h2rCalibrationManipulatorSession === manipulatorSession) {
     h2rCalibrationManipulatorSession = null;
   }
-  const visibilitySnapshot = state.calibRestore;
-  const orbitSnapshot = state.calibOrbitSaved;
-
   runBestEffortCleanup(
     "calibration bootstrap: manipulator cleanup failed",
     () => {
       if (manipulatorSession) calibManip.stop(manipulatorSession);
     },
   );
-  if (!h2rCalibrationBootstrapAttempts.isCurrent(attempt)) return false;
+  if (!ownsInstalledState()) return abandonAttempt();
   runBestEffortCleanup(
     "calibration bootstrap: FK owner cleanup failed",
     () => h2rCalibrationFkPreview.stop(),
   );
-  if (!h2rCalibrationBootstrapAttempts.isCurrent(attempt)) return false;
+  if (!ownsInstalledState()) return abandonAttempt();
 
   // Canonical aliases become terminal before fallible renderer/DOM cleanup.
   state.calibrationMode = false;
@@ -8790,44 +10311,55 @@ function rollbackH2rCalibrationBootstrap(
   calibrationEditorUi.h2r.comparison = "current";
 
   const cleanup = (context: string, action: () => void): boolean => {
-    if (!h2rCalibrationBootstrapAttempts.isCurrent(attempt)) return false;
+    if (!ownsInstalledState()) return false;
     runBestEffortCleanup(context, action);
-    return h2rCalibrationBootstrapAttempts.isCurrent(attempt);
+    return ownsInstalledState();
   };
 
   if (orbitSnapshot && !cleanup("calibration bootstrap: orbit restore failed", () => {
     orbit.minDistance = orbitSnapshot.minDistance;
     orbit.maxDistance = orbitSnapshot.maxDistance;
     orbit.zoomSpeed = orbitSnapshot.zoomSpeed;
-  })) return false;
-  if (!cleanup("calibration bootstrap: robot opacity restore failed", () => robot.setOpacity(1))) return false;
+  })) return abandonAttempt();
+  if (!cleanup("calibration bootstrap: robot opacity restore failed", () => robot.setOpacity(1))) {
+    return abandonAttempt();
+  }
   if (!cleanup("calibration bootstrap: editor cleanup failed", () => {
     const card = document.getElementById("calib-card");
     if (card) card.style.display = "none";
     document.getElementById("calib-banner")?.classList.add("hidden");
-  })) return false;
+  })) return abandonAttempt();
   if (!cleanup("calibration bootstrap: visibility restore failed", () => {
     if (visibilitySnapshot) {
       _restoreVis(visibilitySnapshot);
     } else {
       markH2rStageDisplayChanged();
     }
-  })) return false;
+  })) return abandonAttempt();
   if (!cleanup("calibration bootstrap: robot ground offset restore failed", () => {
     robot.groundOffset = attempt.identity.robotGroundOffset;
-  })) return false;
+  })) return abandonAttempt();
   if (!cleanup("calibration bootstrap: robot pose restore failed", () => {
     if (robot.trajectory) robot.setFrame(0);
     else robot.applyStatic();
-  })) return false;
+  })) return abandonAttempt();
   if (!cleanup("calibration bootstrap: workflow publication failed", () => {
     publishH2rWorkflowState();
     emitCalibrationEditorState("h2r");
-  })) return false;
-  if (!cleanup("calibration bootstrap: error notification failed", () => {
-    toast(errorMessage(error), true);
-  })) return false;
-  if (!h2rCalibrationBootstrapAttempts.finish(attempt)) return false;
+  })) return abandonAttempt();
+  if (error !== null && requestMayReport()) {
+    runBestEffortCleanup(
+      "calibration bootstrap: error notification failed",
+      () => toast(errorMessage(error), true),
+    );
+    if (!ownsInstalledState()) return abandonAttempt();
+  }
+  if (
+    !ownsInstalledState()
+    || !h2rCalibrationBootstrapAttempts.finish(attempt)
+  ) {
+    return abandonAttempt();
+  }
   // The original snapshots belong to the whole calibration lifetime. Keep them
   // available until A is fully retired so a reentrant B inherits the real
   // pre-calibration baseline instead of a partially restored scene.
@@ -8838,12 +10370,14 @@ function rollbackH2rCalibrationBootstrap(
 
 async function enterCalibrationMode(
   initialQ: Record<string, number> | null = null,
+  ownsPairMutation?: () => boolean,
 ): Promise<CalibrationBootstrapResult> {
   const activeRobot = state.robot;
   const activeMotion = state.motion;
   const reference = state.reference;
   if (!activeRobot || !reference) return "failed";
-  calibrationPresentationEpoch += 1;
+  if (ownsPairMutation && !ownsPairMutation()) return "stale";
+  const presentationEpoch = ++calibrationPresentationEpoch;
 
   h2rCalibrationStatusAttempts.invalidate();
   const attempt = h2rCalibrationBootstrapAttempts.begin({
@@ -8854,19 +10388,30 @@ async function enterCalibrationMode(
     motionToken: activeMotion?.token ?? null,
     robotGroundOffset: robot.groundOffset,
     reference,
+    presentationEpoch,
   });
   const requestedInitialQ = initialQ && typeof initialQ === "object"
     ? { ...initialQ }
     : null;
-  const isCurrent = (): boolean =>
-    h2rCalibrationBootstrapAttempts.isCurrent(attempt);
+  // A newer motion reservation revokes forward publication immediately, but
+  // this exact bootstrap retains cleanup authority while its installed
+  // robot/motion/reference identity is still current.
+  const bootstrapOwnsInstalledState = (): boolean => (
+    h2rCalibrationBootstrapAttempts.isCurrent(attempt)
+  );
+  const requestMayPublish = (): boolean => (
+    bootstrapOwnsInstalledState()
+    && h2rInspectorPanelIsActive()
+    && (!ownsPairMutation || ownsPairMutation())
+  );
   // Only a lease acquired by this attempt belongs in its finally cleanup.
   // A stale attempt must never stop the pre-existing session used by a newer
   // attempt that has not reserved its replacement yet.
   let manipulatorSession: CalibrationManipulatorSession | null = null;
   let manipulatorCommitted = false;
+  let terminalCleanupAttempted = false;
   const manipulatorOwnsLease = (): boolean => Boolean(
-    isCurrent()
+    requestMayPublish()
     && manipulatorSession
     && manipulatorSession.value.owner === "h2r"
     && h2rCalibrationManipulatorSession === manipulatorSession
@@ -8879,7 +10424,7 @@ async function enterCalibrationMode(
       reference: attempt.identity.reference,
       motion_token: attempt.identity.motionToken,
     });
-    if (!isCurrent()) return "stale";
+    if (!requestMayPublish()) return "stale";
     if (!session.reference) throw new Error(runtimeText(
       "Calibration session did not include a reference pose",
       "标定会话未返回参考姿态",
@@ -8952,7 +10497,7 @@ async function enterCalibrationMode(
     if (!manipulatorOwnsLease()) return "stale";
     banner?.classList.remove("hidden");
     if (!manipulatorOwnsLease()) return "stale";
-    _applyCalibSceneLayout();
+    if (!_applyCalibSceneLayout(ownsPairMutation)) return "stale";
     if (!manipulatorOwnsLease()) return "stale";
     publishH2rWorkflowState();
     if (!manipulatorOwnsLease()) return "stale";
@@ -8966,7 +10511,7 @@ async function enterCalibrationMode(
       h2rCalibrationContext,
     )) return "stale";
     const manipulatorIsCurrent = (): boolean => Boolean(
-      isCurrent()
+      requestMayPublish()
       && manipulatorSession
       && calibrationSessionIsCurrent("h2r", manipulatorSession)
     );
@@ -8995,33 +10540,59 @@ async function enterCalibrationMode(
       "已进入标定模式：请对齐蓝色参考骨架",
     ));
     if (!manipulatorIsCurrent()) return "stale";
-    const entered = h2rCalibrationBootstrapAttempts.finish(attempt);
+    const entered = requestMayPublish()
+      && h2rCalibrationBootstrapAttempts.finish(attempt);
     if (entered) manipulatorCommitted = true;
     return entered ? "entered" : "stale";
   } catch (error) {
-    if (!isCurrent()) return "stale";
+    const failureWasCurrent = requestMayPublish();
     if (!manipulatorSession) {
       // Network, validation, prepare, and cross-workflow busy failures precede
       // ownership transfer, so there is no candidate state to roll back.
-      runBestEffortCleanup(
-        "calibration bootstrap: error notification failed",
-        () => toast(errorMessage(error), true),
-      );
-      return h2rCalibrationBootstrapAttempts.finish(attempt)
-        ? "failed"
-        : "stale";
+      let reportStayedCurrent = failureWasCurrent;
+      if (reportStayedCurrent) {
+        reportStayedCurrent = runCurrentBestEffort(
+          "calibration bootstrap: error notification failed",
+          requestMayPublish,
+          () => toast(errorMessage(error), true),
+        );
+      }
+      terminalCleanupAttempted = true;
+      const finished = bootstrapOwnsInstalledState()
+        && h2rCalibrationBootstrapAttempts.finish(attempt);
+      if (!finished) h2rCalibrationBootstrapAttempts.abandon(attempt);
+      return reportStayedCurrent && finished ? "failed" : "stale";
     }
     // Roll back only this attempt's exact reservation. A host callback may
     // already have installed successor C while B was unwinding.
-    return rollbackH2rCalibrationBootstrap(attempt, error, manipulatorSession)
-      ? "failed"
-      : "stale";
+    terminalCleanupAttempted = true;
+    const rolledBack = rollbackH2rCalibrationBootstrap(
+      attempt,
+      error,
+      manipulatorSession,
+      bootstrapOwnsInstalledState,
+      requestMayPublish,
+    );
+    return failureWasCurrent && rolledBack ? "failed" : "stale";
   } finally {
-    if (manipulatorSession && !manipulatorCommitted) {
-      runBestEffortCleanup(
-        "calibration bootstrap: uncommitted manipulator cleanup failed",
-        () => stopCalibrationManipulatorSession("h2r", manipulatorSession),
-      );
+    if (!manipulatorCommitted && !terminalCleanupAttempted) {
+      terminalCleanupAttempted = true;
+      if (manipulatorSession) {
+        // Normal stale exits still own any partial state they installed. Use
+        // the same exact rollback path as failures, without publishing an error.
+        rollbackH2rCalibrationBootstrap(
+          attempt,
+          null,
+          manipulatorSession,
+          bootstrapOwnsInstalledState,
+          requestMayPublish,
+        );
+      } else if (
+        !bootstrapOwnsInstalledState()
+        || !h2rCalibrationBootstrapAttempts.finish(attempt)
+      ) {
+        h2rCalibrationBootstrapAttempts.abandon(attempt);
+      }
     }
   }
 }
@@ -9389,7 +10960,51 @@ function previewCalibPose(
  * Reconcile the current H2R robot/reference pair with saved calibration. This
  * is orchestration, not a pure render: a missing calibration may open the editor.
  */
-async function refreshRetargetPanel(): Promise<void> {
+async function refreshRetargetPanel(
+  callerIsCurrent: () => boolean = () => true,
+  claimedScaledPairRevision?: number,
+): Promise<void> {
+  if (!callerIsCurrent()) return;
+  if (!h2rInspectorPanelIsActive()) {
+    h2rPanelRefreshDeferred = true;
+    return;
+  }
+  // A running retarget owns the motion/robot pair and the panel lock. Returning
+  // to H2R may project that state, but must not start a status/preview request
+  // that would advance the pair revision underneath the in-flight run.
+  const unclaimedPairWriterIsPending = (
+    claimedScaledPairRevision === undefined
+    && (
+      h2rMotionSelectionIsPending()
+      || h2rRobotExportPreviewIsPending()
+    )
+  );
+  if (
+    unclaimedPairWriterIsPending
+    || h2rRunState === "running"
+    || state.robotPanelLocked
+  ) {
+    h2rPanelRefreshDeferred = true;
+    publishH2rWorkflowState();
+    return;
+  }
+  h2rPanelRefreshDeferred = false;
+  const refreshIsCurrent = (): boolean => (
+    h2rInspectorPanelIsActive() && callerIsCurrent()
+  );
+  // Unclaimed panel refreshes reserve their own generation before the first
+  // DOM/request boundary, so two same-domain status requests cannot form ABA.
+  const refreshScaledPairRevision = claimedScaledPairRevision
+    ?? ++h2rScaledPairRevision;
+  const ownsRefreshScaledPair = (): boolean => (
+    refreshScaledPairRevision === h2rScaledPairRevision
+    && callerIsCurrent()
+  );
+  if (
+    claimedScaledPairRevision === undefined
+    && !clearH2rScaledPreview(ownsRefreshScaledPair)
+  ) return;
+  if (!refreshIsCurrent() || !ownsRefreshScaledPair()) return;
   h2rCalibrationStatusAttempts.invalidate();
   document.getElementById("rt-motion").textContent = state.motion
     ? state.motion.name
@@ -9421,9 +11036,11 @@ async function refreshRetargetPanel(): Promise<void> {
     motion: state.motion,
     motionToken: state.motion?.token ?? null,
     reference: state.reference,
+    scaledPairRevision: refreshScaledPairRevision,
   });
   const statusIsCurrent = (): boolean => (
-    !state.calibrationMode
+    refreshIsCurrent()
+    && !state.calibrationMode
     && h2rCalibrationStatusAttempts.isCurrent(statusAttempt)
   );
   let calibrationStatus: ApiGetResponse<`/api/calibration/status${string}`>;
@@ -9436,7 +11053,7 @@ async function refreshRetargetPanel(): Promise<void> {
     if (!statusIsCurrent()) return;
     btn.disabled = true;
     if (state.motion) {
-      await enterCalibrationMode(null);
+      await enterCalibrationMode(null, ownsRefreshScaledPair);
       return;
     }
     calCard.style.display = "none";
@@ -9458,7 +11075,7 @@ async function refreshRetargetPanel(): Promise<void> {
     calCard.style.display = "none";
     btn.disabled = !state.motion;
     if (state.motion) {
-      await refreshScaledPreview();
+      await refreshScaledPreview(statusAttempt.identity.scaledPairRevision);
       if (!statusIsCurrent()) return;
     }
   } else {
@@ -9469,7 +11086,10 @@ async function refreshRetargetPanel(): Promise<void> {
     if (!statusIsCurrent()) return;
     btn.disabled = true;
     if (state.motion) {
-      await enterCalibrationMode(calibrationStatus.joint_q || null);
+      await enterCalibrationMode(
+        calibrationStatus.joint_q || null,
+        ownsRefreshScaledPair,
+      );
       return;
     } else {
       calCard.style.display = "none";
@@ -9491,6 +11111,7 @@ document.getElementById("recalib-btn").onclick = async () => {
   const activeMotion = state.motion;
   const reference = state.reference;
   if (!activeRobot || !reference || state.calibrationMode) return;
+  const scaledPairRevision = h2rScaledPairRevision;
   const statusAttempt = h2rCalibrationStatusAttempts.begin({
     robot: activeRobot,
     robotName: activeRobot.name,
@@ -9498,6 +11119,7 @@ document.getElementById("recalib-btn").onclick = async () => {
     motion: activeMotion,
     motionToken: activeMotion?.token ?? null,
     reference,
+    scaledPairRevision,
   });
   let jq: Record<string, number> | null = null;
   try {
@@ -9512,7 +11134,10 @@ document.getElementById("recalib-btn").onclick = async () => {
     state.calibrationMode
     || !h2rCalibrationStatusAttempts.isCurrent(statusAttempt)
   ) return;
-  await enterCalibrationMode(jq);
+  await enterCalibrationMode(
+    jq,
+    () => scaledPairRevision === h2rScaledPairRevision,
+  );
 };
 
 document.getElementById("calib-zero").onclick = async () => {
@@ -9607,8 +11232,6 @@ document.getElementById("calib-save").onclick = async () => {
     if (!finalizationIsCurrent()) return;
     publishH2rWorkflowState();
     if (!finalizationIsCurrent()) return;
-    void syncBatchRefHint();
-    if (!finalizationIsCurrent()) return;
     const changed = Object.values(savedQ).filter((value) => Math.abs(value) > 1e-4).length;
     if (!finalizationIsCurrent()) return;
     toast(runtimeText(
@@ -9677,27 +11300,38 @@ function setRetargetProgress(
 let h2rRetargetRevision = 0;
 
 interface H2rPlaybackPresentationBase {
+  readonly kind: "motion" | "retarget" | "export-preview";
+  readonly duration: number;
+}
+
+interface H2rMotionPlaybackPresentation extends H2rPlaybackPresentationBase {
+  readonly kind: "motion";
+  readonly selectionAttempt: LatestAsyncAttempt<H2rMotionSelectionIdentity>;
+  readonly motion: MotionPayload;
+}
+
+interface H2rRobotPlaybackPresentation extends H2rPlaybackPresentationBase {
   readonly kind: "retarget" | "export-preview";
   readonly robot: RobotPayload;
   readonly robotViewGeneration: number;
   readonly trajectory: RobotTrajectoryPayload;
-  readonly duration: number;
 }
 
-interface H2rRetargetPlaybackPresentation extends H2rPlaybackPresentationBase {
+interface H2rRetargetPlaybackPresentation extends H2rRobotPlaybackPresentation {
   readonly kind: "retarget";
   readonly runRevision: number;
   readonly motionToken: string;
   readonly reference: string | null;
 }
 
-interface H2rExportPreviewPlaybackPresentation extends H2rPlaybackPresentationBase {
+interface H2rExportPreviewPlaybackPresentation extends H2rRobotPlaybackPresentation {
   readonly kind: "export-preview";
   readonly previewRevision: number;
   readonly scaledPairRevision: number;
 }
 
 type H2rPlaybackPresentation =
+  | H2rMotionPlaybackPresentation
   | H2rRetargetPlaybackPresentation
   | H2rExportPreviewPlaybackPresentation;
 
@@ -9707,6 +11341,14 @@ function h2rPlaybackIsCurrent(
   playback: H2rPlaybackPresentation,
 ): boolean {
   if (pendingH2rPlayback !== playback) return false;
+  if (playback.kind === "motion") {
+    return (
+      h2rMotionSelectionLeaseIsLatest(playback.selectionAttempt)
+      && state.motion === playback.motion
+      && state.motion?.token === playback.motion.token
+      && !state.calibrationMode
+    );
+  }
   const sharedIdentityIsCurrent = (
     state.robot === playback.robot
     && robot.isLoadGenerationCurrent(playback.robotViewGeneration)
@@ -9763,12 +11405,14 @@ function presentPendingH2rPlayback(
     if (!presentationIsCurrent()) return false;
     player.setPlaying(true);
     if (!presentationIsCurrent()) return false;
-    robot.group.getWorldPosition(_camFocus);
-    if (!presentationIsCurrent()) return false;
-    orbit.target.copy(_camFocus);
-    if (!presentationIsCurrent()) return false;
-    _orbitManualUntil = 0;
-    if (!presentationIsCurrent()) return false;
+    if (playback.kind !== "motion") {
+      robot.group.getWorldPosition(_camFocus);
+      if (!presentationIsCurrent()) return false;
+      orbit.target.copy(_camFocus);
+      if (!presentationIsCurrent()) return false;
+      _orbitManualUntil = 0;
+      if (!presentationIsCurrent()) return false;
+    }
     pendingH2rPlayback = null;
     return true;
   } catch (error) {
@@ -9782,11 +11426,27 @@ function presentPendingH2rPlayback(
 }
 
 document.getElementById("retarget-btn").onclick = async () => {
-  if (!state.motion || !state.robot) return;
+  if (
+    h2rMotionSelectionIsPending()
+    || h2rRobotExportPreviewIsPending()
+    || !state.motion
+    || !state.robot
+  ) return;
   const retargetRevision = ++h2rRetargetRevision;
+  const retargetMotionInputRevision = h2rMotionInputRevision;
+  const retargetScaledPairRevision = ++h2rScaledPairRevision;
   pendingH2rPlayback = null;
+  h2rRunState = "idle";
+  // The raw run token survives input loss solely to terminalize this run's
+  // canonical `running` state. All forward publication also requires the
+  // captured motion/pair revisions below.
   const retargetOwnsRun = (): boolean => (
     retargetRevision === h2rRetargetRevision
+  );
+  const retargetMayPublish = (): boolean => (
+    retargetOwnsRun()
+    && retargetMotionInputRevision === h2rMotionInputRevision
+    && retargetScaledPairRevision === h2rScaledPairRevision
   );
   const retargetRobot = state.robot;
   const retargetRobotName = retargetRobot.name;
@@ -9794,11 +11454,13 @@ document.getElementById("retarget-btn").onclick = async () => {
   const retargetMotionToken = state.motion.token;
   const retargetMotionFps = state.motion.framerate;
   const retargetReference = state.reference;
-  const retargetScaledPairRevision = ++h2rScaledPairRevision;
   let lockAcquired = false;
   let resultCommitted = false;
+  let resultPairInstalled = false;
+  let trajectoryMutationStarted = false;
+  let candidateTrajectory: RobotTrajectoryPayload | null = null;
   const retargetOwnsScaledPair = (): boolean => (
-    retargetOwnsRun()
+    retargetMayPublish()
     && retargetScaledPairRevision === h2rScaledPairRevision
   );
   const retargetInputsAreCurrent = (): boolean => (
@@ -9810,42 +11472,82 @@ document.getElementById("retarget-btn").onclick = async () => {
     && state.reference === retargetReference
     && !state.calibrationMode
   );
-  // Retarget owns an asynchronous pair writer. Empty both old Views before
-  // the first DOM/transport boundary so a reentrant successor can inherit and
-  // finish the cleanup rather than observing a half-retired pair.
-  if (!clearH2rScaledPreview(retargetOwnsScaledPair)) return;
-  if (!retargetInputsAreCurrent()) return;
-  const prog = document.getElementById("rt-progress");
-  const bar = prog.querySelector<HTMLElement>(".bar");
-  const status = document.getElementById("rt-status");
-  const retargetButton = document.getElementById("retarget-btn");
-  const discardStaleResult = (): boolean => {
-    if (retargetInputsAreCurrent()) return false;
-    // Input loss belongs to this run until a newer Retarget click takes the
-    // raw revision. Recheck that revision after every host mutation so A can
-    // never clear progress, state, or feedback already published by B.
-    if (!retargetOwnsRun()) return true;
-    prog.classList.remove("indet");
-    if (!retargetOwnsRun()) return true;
-    status.textContent = "";
-    if (!retargetOwnsRun()) return true;
-    h2rRunState = "idle";
-    if (!retargetOwnsRun()) return true;
-    toast(runtimeText(
-      "Retarget completed, but its motion, robot, or reference changed while it was running. The stale result was discarded; run Retarget again.",
-      "Retarget 已完成，但过程中动作、机器人或参考姿态发生了变化。旧结果已丢弃，请重新执行 Retarget。",
-    ), true);
-    return true;
+  let progressPresentation: {
+    readonly progress: HTMLElement;
+    readonly bar: HTMLElement;
+    readonly status: HTMLElement;
+  } | null = null;
+  let discardStaleResult = (): boolean => !retargetInputsAreCurrent();
+  const rollbackUncommittedRetarget = (context: string): void => {
+    if (
+      resultCommitted
+      || !retargetInputsAreCurrent()
+      || (!resultPairInstalled && !trajectoryMutationStarted)
+    ) return;
+    // Canonical aliases are withdrawn before fallible renderer cleanup. A
+    // successor pair revision makes this whole compensation stale-neutral.
+    state.robotTrajectory = null;
+    state.exportToken = null;
+    state.exportSrcFps = null;
+    state.exportHasScene = false;
+    if (
+      pendingH2rPlayback?.kind === "retarget"
+      && pendingH2rPlayback.runRevision === retargetRevision
+    ) pendingH2rPlayback = null;
+    if (trajectoryMutationStarted && robot.trajectory === candidateTrajectory) {
+      robot.trajectory = null;
+      robot.frameIndices = null;
+      robot.clipDuration = 1;
+    }
+    trajectoryMutationStarted = false;
+    if (!retargetOwnsScaledPair()) return;
+    runBestEffortCleanup(`${context}: scaled pair cleanup failed`, () => {
+      clearH2rScaledPreview(retargetOwnsScaledPair);
+    });
+    if (!retargetInputsAreCurrent()) return;
+    runBestEffortCleanup(`${context}: robot pose cleanup failed`, () => {
+      robot.applyStatic();
+    });
   };
   try {
-    if (!retargetOwnsRun()) return;
+    // The first fallible pair/DOM boundary is inside this lifecycle, so every
+    // claimed run reaches exact terminalization even when setup throws.
+    if (!clearH2rScaledPreview(retargetOwnsScaledPair)) return;
+    if (!retargetInputsAreCurrent()) return;
+    const prog = document.getElementById("rt-progress");
+    if (!prog) throw new Error("Retarget progress is unavailable");
+    const bar = prog.querySelector<HTMLElement>(".bar");
     if (!bar) throw new Error("Retarget progress bar is missing");
+    const status = document.getElementById("rt-status");
+    if (!status) throw new Error("Retarget status is unavailable");
+    const retargetButton = document.getElementById("retarget-btn");
+    if (!retargetButton) throw new Error("Retarget action is unavailable");
+    progressPresentation = { progress: prog, bar, status };
+    discardStaleResult = (): boolean => {
+      if (retargetInputsAreCurrent()) return false;
+      // Input loss belongs to this run until a newer Retarget click takes the
+      // raw revision. Recheck that revision after every host mutation so A can
+      // never clear progress, state, or feedback already published by B.
+      if (!retargetOwnsRun()) return true;
+      prog.classList.remove("indet");
+      if (!retargetOwnsRun()) return true;
+      status.textContent = "";
+      if (!retargetOwnsRun()) return true;
+      h2rRunState = "idle";
+      if (!retargetOwnsRun()) return true;
+      toast(runtimeText(
+        "Retarget completed, but its motion, robot, or reference changed while it was running. The stale result was discarded; run Retarget again.",
+        "Retarget 已完成，但过程中动作、机器人或参考姿态发生了变化。旧结果已丢弃，请重新执行 Retarget。",
+      ), true);
+      return true;
+    };
+    if (!retargetMayPublish()) return;
     prog.style.display = "block";
-    if (!retargetOwnsRun()) return;
+    if (!retargetMayPublish()) return;
     prog.classList.add("indet");
-    if (!retargetOwnsRun()) return;
+    if (!retargetMayPublish()) return;
     bar.style.width = "0%";
-    if (!retargetOwnsRun()) return;
+    if (!retargetMayPublish()) return;
     const firstHint = !retargetRobot.ik_prewarmed;
     if (!renderSpinnerStatus(
       status,
@@ -9855,22 +11557,22 @@ document.getElementById("retarget-btn").onclick = async () => {
           "正在 retarget…（新机器人首次较慢，进度条可能短暂不动）",
         )
         : runtimeText("Retargeting…", "正在 retarget…"),
-      retargetOwnsRun,
+      retargetMayPublish,
     )) return;
     retargetButton.disabled = true;
-    if (!retargetOwnsRun()) return;
+    if (!retargetMayPublish()) return;
     h2rRunState = "running";
     clearResultDiagnostics("h2r");
-    if (!retargetOwnsRun()) return;
+    if (!retargetMayPublish()) return;
     // Claim the reference-counted lock before entering the host callback. The
     // flag is set first because setRobotPanelLocked() increments before any of
     // its fallible DOM/projector work; finally must release this exact claim
     // even when a synchronous callback starts successor B.
     lockAcquired = true;
     setRobotPanelLocked(true);
-    if (!retargetOwnsRun()) return;
+    if (!retargetMayPublish()) return;
     publishH2rWorkflowState();
-    if (!retargetOwnsRun()) return;
+    if (!retargetMayPublish()) return;
     const retargetFpsInput = document.getElementById("rt-retarget-fps");
     if (!retargetInputsAreCurrent()) return;
     const retargetFps = parseOptionalFps(retargetFpsInput);
@@ -9948,6 +11650,7 @@ document.getElementById("retarget-btn").onclick = async () => {
       })
     ) return;
     if (discardStaleResult()) return;
+    resultPairInstalled = true;
     const hasScaledEnvironment = replaceScaledEnvironment
       ? Boolean(j.result.scaled_scene)
       : scaledEnv.group.children.length > 0;
@@ -9955,9 +11658,14 @@ document.getElementById("retarget-btn").onclick = async () => {
     // Once this block commits, later UI failures must not relabel the accepted
     // server result as a failed retarget or discard its export metadata.
     if (state.robot) state.robot.ik_prewarmed = true;
-    state.robotTrajectory = j.result.trajectory;
-    robot.setTrajectory(j.result.trajectory);
-    if (!retargetInputsAreCurrent()) return;
+    candidateTrajectory = j.result.trajectory;
+    trajectoryMutationStarted = true;
+    robot.setTrajectory(candidateTrajectory);
+    if (!retargetInputsAreCurrent()) {
+      rollbackUncommittedRetarget("H2R retarget trajectory loss");
+      return;
+    }
+    state.robotTrajectory = candidateTrajectory;
     state.exportToken = j.result.export_token;
     state.exportSrcFps = j.result.source_fps ?? null;
     state.exportHasScene = Boolean(j.result.has_scene);
@@ -10073,24 +11781,29 @@ document.getElementById("retarget-btn").onclick = async () => {
       console.warn("H2R retarget post-commit presentation failed", errorMessage(e));
       return;
     }
+    rollbackUncommittedRetarget("H2R retarget failure");
     if (!retargetOwnsRun()) return;
     if (!retargetInputsAreCurrent()) {
       discardStaleResult();
       return;
     }
-    status.textContent = "";
-    if (!retargetOwnsRun()) return;
-    prog.classList.remove("indet");
-    if (!retargetOwnsRun()) return;
+    if (progressPresentation) {
+      progressPresentation.status.textContent = "";
+      if (!retargetMayPublish()) return;
+      progressPresentation.progress.classList.remove("indet");
+      if (!retargetMayPublish()) return;
+    }
     h2rRunState = "failed";
-    if (!retargetOwnsRun()) return;
+    if (!retargetMayPublish()) return;
     toast(errorMessage(e), true);
   } finally {
     // Any identity-loss early return still terminates this run. Without this
     // compensation, a motion/robot change between two guarded host effects
     // could leave the canonical workflow permanently marked as running.
+    let runTerminalizedHere = false;
     if (retargetOwnsRun() && h2rRunState === "running") {
       h2rRunState = "idle";
+      runTerminalizedHere = true;
     }
     // The lock is reference-counted, so A always releases A's own claim. If B
     // replaced it synchronously, B's claim keeps the panel locked.
@@ -10100,12 +11813,17 @@ document.getElementById("retarget-btn").onclick = async () => {
         () => setRobotPanelLocked(false),
       );
     }
-    if (!retargetOwnsRun()) return;
+    const finalPublicationIsCurrent = (): boolean => (
+      retargetOwnsRun()
+      && (retargetMayPublish() || runTerminalizedHere)
+    );
+    if (!finalPublicationIsCurrent()) return;
     runCurrentBestEffort(
       "H2R retarget final workflow publication failed",
-      retargetOwnsRun,
+      finalPublicationIsCurrent,
       () => publishH2rWorkflowState(),
     );
+    resumeDeferredH2rPanelRefresh();
   }
 };
 function csvHeaderEnabled(elId: string): boolean {

@@ -33,7 +33,10 @@ export function VideoToMotionPipelineView({
   const text = useLocaleText(locale);
 
   const nodes = useMemo<PipelineNode[]>(() => {
-    const busy = state.stage === "uploading" || state.stage === "running";
+    const busy =
+      state.stage === "reserving"
+      || state.stage === "uploading"
+      || state.stage === "running";
     const generating = busy && state.operation === "generate";
     const importing = busy && state.operation === "import";
     const runtimeDetail = (() => {

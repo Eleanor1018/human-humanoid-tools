@@ -2,6 +2,7 @@ import type { IDisposable } from "@/base/common/disposable";
 import type { ICommandService } from "@/platform/commands/common/command-service";
 import type { IHostService } from "@/platform/host/common/host-service";
 import type { IRequestService } from "@/platform/request/common/request-service";
+import type { IHumanToRobotService } from "@/workbench/contrib/human-to-robot/common/human-to-robot-service";
 import type { IGvhmrComponentService } from "@/workbench/services/gvhmr/common/gvhmr-component-service";
 import type { IJobService } from "@/workbench/services/jobs/common/job-service";
 import type {
@@ -29,6 +30,7 @@ export interface IWorkbenchServices extends IDisposable {
   readonly requestService: IRequestService;
   readonly gvhmrComponentService: IGvhmrComponentService;
   readonly jobService: IJobService;
+  readonly humanToRobotService: IHumanToRobotService;
   readonly motionResultPresentationService: IMotionResultPresentationService;
   readonly settingsService: ISettingsService;
   readonly stageDisplayCommands: IStageDisplayCommands;

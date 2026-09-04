@@ -1,4 +1,4 @@
-import type { IDisposable } from "@/base/common/disposable";
+import { toDisposable, type IDisposable } from "@/base/common/disposable";
 import { Emitter, type Event } from "@/base/common/event";
 import type { MotionPayload } from "@/domain/motion/common/motion";
 import type {
@@ -12,6 +12,7 @@ import type {
 } from "@/workbench/contrib/video-to-motion/common/video-to-motion-state";
 import type { IJobService } from "@/workbench/services/jobs/common/job-service";
 import type {
+  IHumanMotionPresentationReservation,
   IMotionResultPresentationService,
 } from "@/workbench/services/motion/common/motion-result-presentation-service";
 
@@ -99,7 +100,7 @@ export type VideoToMotionRequestPort = Pick<
 export type VideoToMotionJobPort = Pick<IJobService, "waitForResult">;
 export type VideoToMotionPresentationPort = Pick<
   IMotionResultPresentationService,
-  "presentHumanMotion"
+  "reserveHumanMotionPresentation"
 >;
 
 export interface VideoPreviewUrlPort {
@@ -118,6 +119,7 @@ export interface VideoToMotionControllerDependencies {
 
 interface MotionUploadOperation {
   readonly kind: VideoToMotionOperation;
+  readonly presentationLabel: string;
   readonly uploadUrl: string;
   readonly parts: readonly UploadPart[];
   readonly expectedJobKind: string;
@@ -206,6 +208,7 @@ export class VideoToMotionController implements IDisposable {
   #checkpointFile: File | null = null;
   #runtimeRequest: AbortController | null = null;
   #operation: AbortController | null = null;
+  #presentationReservationLifetime: IDisposable | null = null;
   #disposed = false;
 
   readonly onDidChangeState: Event<VideoToMotionControllerState> =
@@ -224,7 +227,12 @@ export class VideoToMotionController implements IDisposable {
   }
 
   get busy(): boolean {
-    return this.#state.stage === "uploading" || this.#state.stage === "running";
+    // The operation token is reserved before presentation acquisition crosses
+    // its first host boundary, so inputs are immutable during that short gap too.
+    return this.#operation !== null
+      || this.#state.stage === "reserving"
+      || this.#state.stage === "uploading"
+      || this.#state.stage === "running";
   }
 
   get canConfirmEnvironment(): boolean {
@@ -420,6 +428,7 @@ export class VideoToMotionController implements IDisposable {
 
     return this.#executeMotionUpload({
       kind: "generate",
+      presentationLabel: video.name,
       uploadUrl: `/api/video-to-motion/upload?${query.toString()}`,
       parts,
       expectedJobKind: "video_to_motion",
@@ -444,6 +453,7 @@ export class VideoToMotionController implements IDisposable {
 
     return this.#executeMotionUpload({
       kind: "import",
+      presentationLabel: file.name,
       uploadUrl: "/api/motion/upload?profile=mimic",
       parts: [
         {
@@ -466,21 +476,48 @@ export class VideoToMotionController implements IDisposable {
   ): Promise<MotionPayload> {
     const request = new AbortController();
     this.#operation = request;
+    let reservationPromise: Promise<IHumanMotionPresentationReservation>;
+    try {
+      reservationPromise =
+        this.#presentationService.reserveHumanMotionPresentation(
+          { label: operation.presentationLabel },
+          { signal: request.signal },
+        );
+    } catch (error) {
+      // Ports are typed as async, but a faulty implementation can still throw
+      // before returning its promise. Normalize it into the owned failure path.
+      reservationPromise = Promise.reject(error);
+    }
+    // Reserve the shared motion intent before notifying observers. An observer
+    // may select a Library motion synchronously; publishing first ensures that
+    // later intent wins instead of this operation reclaiming it afterwards.
     this.#update({
       operation: operation.kind,
-      stage: "uploading",
+      stage: "reserving",
       progress: 0,
       progressDetail: null,
       error: null,
       result: null,
     });
-    // A synchronous observer may dispose its owning view during notification.
-    // Re-check ownership before starting a request with an aborted signal.
-    this.#assertCurrentOperation(request);
-
     let payload: MotionPayload;
     let summary: VideoToMotionResultSummary;
+    let reservation: IHumanMotionPresentationReservation | null = null;
+    let reservationLifetime: IDisposable | null = null;
     try {
+      // Always observe acquisition, even if reservation callbacks disposed the
+      // controller. A late capability is then wrapped and released exactly once.
+      reservation = await reservationPromise;
+      // Keep cleanup exact even when dispose() wins and the async method later
+      // reaches its finally block. A late reservation is still released once.
+      const ownedReservation = reservation;
+      reservationLifetime = toDisposable(() => ownedReservation.dispose());
+      this.#assertCurrentOperation(request);
+      this.#presentationReservationLifetime = reservationLifetime;
+      this.#assertCurrentOperation(request);
+      this.#update({
+        stage: "uploading",
+      });
+      this.#assertCurrentOperation(request);
       const started = await this.#requestService.upload<{ job_id: string }>(
         operation.uploadUrl,
         operation.parts,
@@ -543,8 +580,7 @@ export class VideoToMotionController implements IDisposable {
       summary = resultSummary(payload);
       // Presentation is part of the use case, not a responsibility left to the
       // React view. A Stage/library failure therefore remains retryable state.
-      const presentationResult =
-        await this.#presentationService.presentHumanMotion(payload);
+      const presentationResult = await reservation.commit(payload);
       this.#assertCurrentOperation(request);
       if (presentationResult === "superseded") {
         // A different motion won the shared Stage while its async View loaded.
@@ -562,12 +598,18 @@ export class VideoToMotionController implements IDisposable {
       }
       this.#operation = null;
       this.#update({
+        operation: operation.kind,
         stage: "failed",
         progressDetail: null,
         error: errorMessage(error),
         result: null,
       });
       throw error;
+    } finally {
+      if (this.#presentationReservationLifetime === reservationLifetime) {
+        this.#presentationReservationLifetime = null;
+      }
+      this.#runCleanupSafely(() => reservationLifetime?.dispose());
     }
 
     // Keep terminal event delivery outside the transport catch. A faulty view
@@ -588,15 +630,34 @@ export class VideoToMotionController implements IDisposable {
     this.#disposed = true;
     const runtimeRequest = this.#runtimeRequest;
     const operation = this.#operation;
+    const presentationReservationLifetime =
+      this.#presentationReservationLifetime;
     this.#runtimeRequest = null;
     this.#operation = null;
-    runtimeRequest?.abort(abortError());
-    operation?.abort(abortError());
+    this.#presentationReservationLifetime = null;
+    this.#runCleanupSafely(() => runtimeRequest?.abort(abortError()));
+    this.#runCleanupSafely(() => operation?.abort(abortError()));
+    this.#runCleanupSafely(() => presentationReservationLifetime?.dispose());
     const previewUrl = this.#state.video?.previewUrl;
     this.#videoFile = null;
     this.#checkpointFile = null;
-    if (previewUrl) this.#previewUrls.revokeObjectURL(previewUrl);
-    this.#stateEmitter.dispose();
+    if (previewUrl) {
+      this.#runCleanupSafely(() => this.#previewUrls.revokeObjectURL(previewUrl));
+    }
+    this.#runCleanupSafely(() => this.#stateEmitter.dispose());
+  }
+
+  /** Cleanup is observational and must not replace the workflow's terminal result. */
+  #runCleanupSafely(cleanup: () => void): void {
+    try {
+      cleanup();
+    } catch (error) {
+      try {
+        this.#reportError(error);
+      } catch {
+        // Error reporting is cleanup too; it cannot strand the primary owner.
+      }
+    }
   }
 
   #hasSelectedWeights(): boolean {

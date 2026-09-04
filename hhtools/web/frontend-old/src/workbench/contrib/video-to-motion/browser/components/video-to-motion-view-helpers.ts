@@ -129,6 +129,11 @@ export function operationMessage(
           "视频动作生成完成。",
         );
   }
+  if (state.stage === "reserving") {
+    return state.operation === "import"
+      ? text("Preparing result import…", "正在准备导入动作……")
+      : text("Preparing motion presentation…", "正在准备动作展示……");
+  }
   if (state.progressDetail?.kind === "job") {
     const message = state.progressDetail.message.trim();
     if (message) return message;

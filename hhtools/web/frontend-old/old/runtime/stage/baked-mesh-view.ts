@@ -9,6 +9,7 @@ export type BakedMeshWarningReporter = (
   message: string,
   ...details: readonly unknown[]
 ) => void;
+export type BakedMeshStageDisposition = "staged" | "superseded";
 
 export interface BakedMeshViewOptions {
   /** Injectable because browser decompression is asynchronous and non-cancellable. */
@@ -17,20 +18,38 @@ export interface BakedMeshViewOptions {
   readonly resourceDisposer?: ThreeResourceDisposer;
 }
 
+declare const bakedMeshRetirementBrand: unique symbol;
+
+/** Opaque exact handle for one previously published baked-body generation. */
+export interface BakedMeshRetirement {
+  readonly [bakedMeshRetirementBrand]: true;
+}
+
 /** Detached body candidate whose resources have exactly one terminal owner. */
 export interface PreparedBakedMesh {
-  /** Replace stable View content only while the caller still owns publication. */
+  /** Attach the hidden candidate while preserving currently published content. */
+  stage(isCurrent?: () => boolean): BakedMeshStageDisposition;
+  /** Callback-free local preflight for an aggregate multi-View publication. */
+  canPublish(): boolean;
+  /** Switch aliases/root visibility without invoking Three.js or caller code. */
+  publish(): BakedMeshRetirement | null;
+  /** Compatibility one-shot replacement built from stage/publish/retire. */
   commit(isCurrent?: () => boolean): AsyncStageViewLoadResult;
   /** Release an uncommitted candidate; repeated terminal calls are neutral. */
   abandon(): void;
+  /** Exact installed identity used by an aggregate source-motion transaction. */
+  isPublishedCurrent(): boolean;
 }
 
 export type BakedMeshPreparationResult =
   | { readonly status: "prepared"; readonly preparation: PreparedBakedMesh }
   | { readonly status: "stale" };
 
-interface BakedMeshCandidate {
-  readonly generation: number;
+interface BakedMeshGeneration {
+  readonly retirement: BakedMeshRetirement;
+  readonly root: THREE.Group;
+  /** Complete graph identity owned before any observable attachment callback. */
+  readonly ownedNodes: Set<THREE.Object3D>;
   readonly mesh:
     | THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial>
     | null;
@@ -38,6 +57,7 @@ interface BakedMeshCandidate {
   readonly numVerts: number;
   readonly geometry: THREE.BufferGeometry | null;
   readonly material: THREE.MeshStandardMaterial | null;
+  retired: boolean;
 }
 
 async function decodeGzipVertices(encodedVertices: string): Promise<Float32Array> {
@@ -62,11 +82,10 @@ const defaultWarningReporter: BakedMeshWarningReporter = (
 /**
  * Owns one optional SMPL-style baked body mesh and its decoded frame buffer.
  *
- * Construction is deliberately inert: composition decides which Scene/Group
- * owns `group`. Preparation builds detached resources while stable content
- * remains visible. The returned transaction commits once only while its
- * decoder generation and external publication owner are current, so a late
- * completion cannot replace resources owned by a newer motion.
+ * Construction is inert. A candidate is decoded and built under a detached
+ * child root, staged invisibly beside the stable generation, then published by
+ * plain alias/visibility writes. Exact retirement never clears the stable Group,
+ * so disposal re-entry cannot remove a successor installed under that Group.
  */
 export class BakedMeshView {
   readonly group = new THREE.Group();
@@ -80,8 +99,11 @@ export class BakedMeshView {
   readonly #decodeVertices: BakedMeshDecoder;
   readonly #reportWarning: BakedMeshWarningReporter;
   readonly #resourceDisposer: ThreeResourceDisposer;
-  #clearing = false;
+  readonly #generations = new WeakMap<BakedMeshRetirement, BakedMeshGeneration>();
+  readonly #terminalNodes = new WeakSet<THREE.Object3D>();
+  #content: BakedMeshGeneration | null = null;
   #loadGeneration = 0;
+  #stageGeneration = 0;
 
   constructor(options: BakedMeshViewOptions = {}) {
     this.group.visible = false;
@@ -91,12 +113,9 @@ export class BakedMeshView {
   }
 
   /**
-   * Revoke an escaped decoder without clearing the currently committed mesh.
-   *
-   * A higher-level motion-selection owner calls this as soon as newer user
-   * intent wins, which can happen before the replacement payload is available.
-   * The old async continuation becomes stale immediately while the stable View
-   * remains usable until that owner is ready to replace it.
+   * Revoke an escaped compatibility decoder without clearing stable content.
+   * Detached aggregate preparations deliberately use their external authority
+   * instead of this local latest-generation counter.
    */
   claimLoadGeneration(): number {
     this.#loadGeneration += 1;
@@ -104,152 +123,37 @@ export class BakedMeshView {
   }
 
   clear(): void {
-    // DecompressionStream exposes no cancellation handle. Invalidate first so
-    // even a completion racing resource disposal observes a terminal generation.
-    this.#loadGeneration += 1;
-    // A dispose listener may synchronously start a newer load. It still gets a
-    // fresh generation, while the outer clear remains the sole resource owner.
-    if (this.#clearing) return;
-    this.#clearing = true;
-    try {
-      this.#resourceDisposer.disposeObject3DChildren(this.group, {
-        geometries: this.mesh ? [this.mesh.geometry] : [],
-        materials: this.mesh ? [this.mesh.material] : [],
-      });
-    } finally {
-      try {
-        this.group.clear();
-      } finally {
-        // Aliases describe the same generation as the Group and must never
-        // retain disposed resources, even if a dispose listener throws.
-        this.mesh = null;
-        this.verts = null;
-        this.numVerts = 0;
-        this.ready = false;
-        this.clipDuration = null;
-        this.#clearing = false;
-      }
-    }
+    this.claimLoadGeneration();
+    this.#stageGeneration += 1;
+    const retired = this.#content?.retirement ?? null;
+    if (this.#content) this.#content.root.visible = false;
+    this.#content = null;
+    this.#releaseAliases();
+    this.retire(retired);
   }
 
-  /** Decode and build GPU resources without disturbing stable View content. */
+  /**
+   * Decode a candidate owned solely by the supplied aggregate authority.
+   *
+   * Unlike `prepare`, this does not claim or compare `#loadGeneration`, so a
+   * source-motion transaction can prepare all Views under one domain lease.
+   */
+  async prepareDetached(
+    bodyMesh: BodyMeshPayload | null | undefined,
+    isCurrent: () => boolean = () => true,
+  ): Promise<BakedMeshPreparationResult> {
+    return this.#prepareWithAuthority(bodyMesh, isCurrent);
+  }
+
+  /** Preserve the existing latest-wins compatibility preparation contract. */
   async prepare(
     bodyMesh: BodyMeshPayload | null | undefined,
   ): Promise<BakedMeshPreparationResult> {
     const generation = this.claimLoadGeneration();
-    if (!bodyMesh?.available) {
-      return {
-        status: "prepared",
-        preparation: this.#createPreparation({
-          generation,
-          mesh: null,
-          vertices: null,
-          numVerts: 0,
-          geometry: null,
-          material: null,
-        }),
-      };
-    }
-
-    let vertices: Float32Array;
-    try {
-      vertices = await this.#decodeVertices(bodyMesh.vertices_gz_b64);
-    } catch (error) {
-      if (!this.#isCurrent(generation)) return { status: "stale" };
-      // A current decode failure preserves the skeleton fallback by preparing
-      // an intentionally empty body generation.
-      this.#reportWarningSafely("baked mesh decode failed", error);
-      if (!this.#isCurrent(generation)) return { status: "stale" };
-      return {
-        status: "prepared",
-        preparation: this.#createPreparation({
-          generation,
-          mesh: null,
-          vertices: null,
-          numVerts: 0,
-          geometry: null,
-          material: null,
-        }),
-      };
-    }
-
-    if (!this.#isCurrent(generation)) return { status: "stale" };
-    const expectedLength = bodyMesh.num_frames * bodyMesh.num_verts * 3;
-    if (vertices.length !== expectedLength) {
-      this.#reportWarningSafely(
-        "baked mesh vertex buffer size mismatch",
-        vertices.length,
-        expectedLength,
-      );
-      if (!this.#isCurrent(generation)) return { status: "stale" };
-      return {
-        status: "prepared",
-        preparation: this.#createPreparation({
-          generation,
-          mesh: null,
-          vertices: null,
-          numVerts: 0,
-          geometry: null,
-          material: null,
-        }),
-      };
-    }
-
-    let geometry: THREE.BufferGeometry | null = null;
-    let material: THREE.MeshStandardMaterial | null = null;
-    let candidate: THREE.Mesh<
-      THREE.BufferGeometry,
-      THREE.MeshStandardMaterial
-    > | null = null;
-    try {
-      geometry = new THREE.BufferGeometry();
-      geometry.setAttribute(
-        "position",
-        new THREE.BufferAttribute(vertices.slice(0, bodyMesh.num_verts * 3), 3),
-      );
-      geometry.setIndex(bodyMesh.triangles.flat());
-      geometry.computeVertexNormals();
-      material = new THREE.MeshStandardMaterial({
-        color: 0xb4c8dc,
-        roughness: 0.55,
-        metalness: 0.05,
-        side: THREE.DoubleSide,
-        flatShading: true,
-      });
-      candidate = new THREE.Mesh(geometry, material);
-    } catch (error) {
-      this.#disposeDetached(candidate, geometry, material);
-      if (!this.#isCurrent(generation)) return { status: "stale" };
-      this.#reportWarningSafely("baked mesh decode failed", error);
-      if (!this.#isCurrent(generation)) return { status: "stale" };
-      return {
-        status: "prepared",
-        preparation: this.#createPreparation({
-          generation,
-          mesh: null,
-          vertices: null,
-          numVerts: 0,
-          geometry: null,
-          material: null,
-        }),
-      };
-    }
-
-    if (!this.#isCurrent(generation)) {
-      this.#disposeDetached(candidate, geometry, material);
-      return { status: "stale" };
-    }
-    return {
-      status: "prepared",
-      preparation: this.#createPreparation({
-        generation,
-        mesh: candidate,
-        vertices,
-        numVerts: bodyMesh.num_verts,
-        geometry,
-        material,
-      }),
-    };
+    return this.#prepareWithAuthority(
+      bodyMesh,
+      () => this.#loadGeneration === generation,
+    );
   }
 
   async load(
@@ -259,6 +163,19 @@ export class BakedMeshView {
     return result.status === "stale"
       ? "stale"
       : result.preparation.commit();
+  }
+
+  /** Retire only the generation named by this exact opaque handle. */
+  retire(retirement: BakedMeshRetirement | null): void {
+    if (!retirement) return;
+    const generation = this.#generations.get(retirement);
+    if (!generation) return;
+    if (this.#content === generation) {
+      generation.root.visible = false;
+      this.#content = null;
+      this.#releaseAliases();
+    }
+    this.#disposeGeneration(generation);
   }
 
   get numFrames(): number {
@@ -296,153 +213,411 @@ export class BakedMeshView {
     positions.needsUpdate = true;
   }
 
-  #createPreparation(candidate: BakedMeshCandidate): PreparedBakedMesh {
-    let settled = false;
-    return Object.freeze({
-      commit: (isCurrent: () => boolean = () => true) => {
-        if (settled) return "stale";
-        settled = true;
-        return this.#commitPrepared(candidate, isCurrent);
-      },
-      abandon: () => {
-        if (settled) return;
-        settled = true;
-        this.#disposeDetached(
-          candidate.mesh,
-          candidate.geometry,
-          candidate.material,
-        );
-      },
-    });
-  }
-
-  #commitPrepared(
-    candidate: BakedMeshCandidate,
-    isCurrent: () => boolean,
-  ): AsyncStageViewLoadResult {
-    const externalIsCurrent = (): boolean => {
+  async #prepareWithAuthority(
+    bodyMesh: BodyMeshPayload | null | undefined,
+    preparationIsCurrent: () => boolean,
+  ): Promise<BakedMeshPreparationResult> {
+    const authorityIsCurrent = (): boolean => {
       try {
-        return isCurrent();
+        return preparationIsCurrent();
       } catch {
         return false;
       }
     };
-    // The external validator is a foreign callback. Check the local generation
-    // both before and after it so synchronous re-entry fails closed.
-    const ownsGeneration = (generation: number): boolean => (
-      !this.#clearing
-      && this.#isCurrent(generation)
-      && externalIsCurrent()
-      && !this.#clearing
-      && this.#isCurrent(generation)
-    );
-    const disposeCandidate = (): void => {
-      this.#disposeDetached(
-        candidate.mesh,
-        candidate.geometry,
-        candidate.material,
-      );
-    };
-    const detachAndDisposeCandidate = (): unknown | null => {
-      let detachFailure: unknown | null = null;
+    if (!authorityIsCurrent()) return { status: "stale" };
+
+    let vertices: Float32Array | null = null;
+    let geometry: THREE.BufferGeometry | null = null;
+    let material: THREE.MeshStandardMaterial | null = null;
+    let mesh: THREE.Mesh<
+      THREE.BufferGeometry,
+      THREE.MeshStandardMaterial
+    > | null = null;
+    let root = new THREE.Group();
+    root.visible = false;
+
+    if (bodyMesh?.available) {
       try {
-        if (candidate.mesh?.parent === this.group) {
-          this.group.remove(candidate.mesh);
-        }
+        vertices = await this.#decodeVertices(bodyMesh.vertices_gz_b64);
       } catch (error) {
-        detachFailure = error;
-      } finally {
-        // Object3D.remove() dispatches synchronous events after detaching. A
-        // faulty observer must never skip this transaction's terminal release.
-        disposeCandidate();
+        if (!authorityIsCurrent()) return { status: "stale" };
+        // Current decode failure intentionally publishes an empty body so the
+        // skeleton fallback remains usable.
+        this.#reportWarningSafely("baked mesh decode failed", error);
+        if (!authorityIsCurrent()) return { status: "stale" };
+        vertices = null;
       }
-      return detachFailure;
+      if (!authorityIsCurrent()) return { status: "stale" };
+
+      if (vertices) {
+        const expectedLength = bodyMesh.num_frames * bodyMesh.num_verts * 3;
+        if (vertices.length !== expectedLength) {
+          this.#reportWarningSafely(
+            "baked mesh vertex buffer size mismatch",
+            vertices.length,
+            expectedLength,
+          );
+          if (!authorityIsCurrent()) return { status: "stale" };
+          vertices = null;
+        }
+      }
+
+      if (vertices) {
+        try {
+          geometry = new THREE.BufferGeometry();
+          geometry.setAttribute(
+            "position",
+            new THREE.BufferAttribute(vertices.slice(0, bodyMesh.num_verts * 3), 3),
+          );
+          geometry.setIndex(bodyMesh.triangles.flat());
+          geometry.computeVertexNormals();
+          material = new THREE.MeshStandardMaterial({
+            color: 0xb4c8dc,
+            roughness: 0.55,
+            metalness: 0.05,
+            side: THREE.DoubleSide,
+            flatShading: true,
+          });
+          mesh = new THREE.Mesh(geometry, material);
+          root.add(mesh);
+        } catch (error) {
+          this.#disposeDetachedRoot(root, geometry, material, mesh ? [mesh] : []);
+          if (!authorityIsCurrent()) return { status: "stale" };
+          this.#reportWarningSafely("baked mesh decode failed", error);
+          if (!authorityIsCurrent()) return { status: "stale" };
+          geometry = null;
+          material = null;
+          mesh = null;
+          vertices = null;
+          root = new THREE.Group();
+          root.visible = false;
+        }
+      }
+    }
+
+    if (!authorityIsCurrent()) {
+      this.#disposeDetachedRoot(root, geometry, material, mesh ? [mesh] : []);
+      return { status: "stale" };
+    }
+    const ownedNodes = new Set<THREE.Object3D>();
+    root.traverse((node) => { ownedNodes.add(node); });
+    if (mesh) ownedNodes.add(mesh);
+    const retirement = Object.freeze({}) as BakedMeshRetirement;
+    const candidate: BakedMeshGeneration = {
+      retirement,
+      root,
+      ownedNodes,
+      mesh,
+      vertices,
+      numVerts: mesh && vertices && bodyMesh ? bodyMesh.num_verts : 0,
+      geometry,
+      material,
+      retired: false,
     };
-    if (!ownsGeneration(candidate.generation)) {
-      disposeCandidate();
-      return "stale";
-    }
+    this.#generations.set(retirement, candidate);
+    return {
+      status: "prepared",
+      preparation: this.#createPreparation(candidate, authorityIsCurrent),
+    };
+  }
 
-    // clear() claims a distinct commit generation. A disposal callback may
-    // synchronously start a successor; the generation check below makes this
-    // transaction abandon only its own detached candidate in that case.
-    const commitGeneration = this.#loadGeneration + 1;
-    try {
-      this.clear();
-    } catch (error) {
-      disposeCandidate();
-      // Candidate disposal is itself an observable host boundary. Re-check
-      // after it so a successor started by a disposal listener owns the error.
-      if (!ownsGeneration(commitGeneration)) return "stale";
-      throw error;
-    }
-    if (!ownsGeneration(commitGeneration)) {
-      disposeCandidate();
-      return "stale";
-    }
-    if (!candidate.mesh || !candidate.vertices) {
-      return ownsGeneration(commitGeneration) ? "committed" : "stale";
-    }
-
-    try {
-      this.group.add(candidate.mesh);
-      if (!ownsGeneration(commitGeneration)) {
-        // A re-entrant clear may already have detached and disposed the mesh.
-        if (candidate.mesh.parent === this.group) {
-          const cleanupError = detachAndDisposeCandidate();
-          if (cleanupError) {
-            this.#reportWarningSafely("baked mesh cleanup failed", cleanupError);
-          }
-        }
-        return "stale";
+  #createPreparation(
+    candidate: BakedMeshGeneration,
+    preparationIsCurrent: () => boolean,
+  ): PreparedBakedMesh {
+    let state:
+      | "prepared"
+      | "staging"
+      | "staged"
+      | "published"
+      | "abandoned" = "prepared";
+    let stagedGeneration: number | null = null;
+    const externalAuthorityIsCurrent = (isCurrent: () => boolean): boolean => {
+      try {
+        // The foreign callback sits between two local/domain checks so re-entry
+        // from that callback always fails closed before entering Three.js.
+        return preparationIsCurrent() && isCurrent() && preparationIsCurrent();
+      } catch {
+        return false;
       }
-    } catch (error) {
-      if (candidate.mesh.parent === this.group) {
-        const cleanupError = detachAndDisposeCandidate();
+    };
+    const abandon = (): void => {
+      if (state === "published" || state === "abandoned") return;
+      state = "abandoned";
+      this.#disposeGeneration(candidate);
+    };
+    const stage = (
+      isCurrent: () => boolean = () => true,
+    ): BakedMeshStageDisposition => {
+      if (state === "staged") return "staged";
+      if (state !== "prepared") return "superseded";
+      if (!externalAuthorityIsCurrent(isCurrent)) {
+        this.#runStaleCleanup(abandon);
+        return "superseded";
+      }
+      stagedGeneration = ++this.#stageGeneration;
+      state = "staging";
+      try {
+        this.group.add(candidate.root);
+      } catch (installError) {
+        let cleanupError: unknown = null;
+        try {
+          abandon();
+        } catch (error) {
+          cleanupError = error;
+        }
+        if (
+          stagedGeneration !== this.#stageGeneration
+          || !externalAuthorityIsCurrent(isCurrent)
+        ) {
+          if (cleanupError) this.#reportWarningSafely("baked mesh cleanup failed", cleanupError);
+          return "superseded";
+        }
         if (cleanupError) {
-          this.#reportWarningSafely("baked mesh cleanup failed", cleanupError);
+          throw new AggregateError(
+            [installError, cleanupError],
+            "Baked mesh staging and cleanup failed",
+          );
         }
-      } else if (ownsGeneration(commitGeneration)) {
-        disposeCandidate();
+        throw installError;
       }
-      if (!ownsGeneration(commitGeneration)) return "stale";
-      this.#reportWarningSafely("baked mesh decode failed", error);
-      return ownsGeneration(commitGeneration) ? "committed" : "stale";
+      if (
+        state !== "staging"
+        || stagedGeneration !== this.#stageGeneration
+        || candidate.root.parent !== this.group
+        || !externalAuthorityIsCurrent(isCurrent)
+      ) {
+        this.#runStaleCleanup(abandon);
+        return "superseded";
+      }
+      state = "staged";
+      return "staged";
+    };
+    const canPublish = (): boolean => (
+      state === "staged"
+      && stagedGeneration === this.#stageGeneration
+      && candidate.root.parent === this.group
+    );
+    const publish = (): BakedMeshRetirement | null => {
+      // Deliberately no caller authority check: aggregate code performs its one
+      // final check before entering a callback-free multi-View publication.
+      if (!canPublish()) {
+        throw new Error("Only the current staged baked mesh can publish");
+      }
+      state = "published";
+      const retired = this.#content?.retirement ?? null;
+      if (this.#content) this.#content.root.visible = false;
+      candidate.root.visible = true;
+      this.#content = candidate;
+      this.mesh = candidate.mesh;
+      this.verts = candidate.vertices;
+      this.numVerts = candidate.numVerts;
+      this.clipDuration = null;
+      this.ready = Boolean(candidate.mesh && candidate.vertices);
+      return retired;
+    };
+    const isPublishedCurrent = (): boolean => (
+      state === "published" && this.#content === candidate
+    );
+    const commit = (
+      isCurrent: () => boolean = () => true,
+    ): AsyncStageViewLoadResult => {
+      if (stage(isCurrent) !== "staged") return "stale";
+      let retired: BakedMeshRetirement | null;
+      try {
+        retired = publish();
+      } catch (error) {
+        this.#runStaleCleanup(abandon);
+        throw error;
+      }
+      try {
+        this.retire(retired);
+      } catch (error) {
+        // Publication is already observable and cannot be rolled back. Cleanup
+        // failure is diagnostic; report it, then describe the actual final View.
+        this.#reportWarningSafely("baked mesh cleanup failed", error);
+      }
+      return (
+        isPublishedCurrent()
+        && externalAuthorityIsCurrent(isCurrent)
+      ) ? "committed" : "stale";
+    };
+    return Object.freeze({
+      stage,
+      canPublish,
+      publish,
+      commit,
+      abandon,
+      isPublishedCurrent,
+    });
+  }
+
+  #disposeGeneration(generation: BakedMeshGeneration): void {
+    if (generation.retired) return;
+    generation.retired = true;
+    this.#generations.delete(generation.retirement);
+    this.#disposeOwnedForest(
+      generation.root,
+      generation.ownedNodes,
+      {
+        geometries: generation.geometry ? [generation.geometry] : [],
+        materials: generation.material ? [generation.material] : [],
+      },
+      "Baked mesh generation cleanup failed",
+    );
+  }
+
+  /**
+   * Terminally detach and dispose only one captured generation forest.
+   *
+   * Transfers completed before the terminal claim are preserved. Re-entry that
+   * attaches a retired node beneath this View's successor is not a transfer and
+   * is force-detached. Once claimed, every node is tombstoned before disposal,
+   * and a dispose callback cannot resurrect it under either a local successor or
+   * a foreign owner.
+   */
+  #disposeOwnedForest(
+    retiredRoot: THREE.Object3D,
+    nodesKnownBeforeAdoption: ReadonlySet<THREE.Object3D>,
+    extras: {
+      readonly geometries?: readonly THREE.BufferGeometry[];
+      readonly materials?: readonly THREE.Material[];
+    },
+    context: string,
+  ): void {
+    const errors: unknown[] = [];
+    const originalNodes = [...nodesKnownBeforeAdoption];
+    const originalSet = new Set(originalNodes);
+    originalSet.add(retiredRoot);
+
+    const forceDetach = (node: THREE.Object3D): void => {
+      const parent = node.parent;
+      if (!parent) return;
+      const index = parent.children.indexOf(node);
+      if (index >= 0) parent.children.splice(index, 1);
+      node.parent = null;
+    };
+    const detachFromStableOwner = (node: THREE.Object3D): void => {
+      for (let attempt = 0; attempt < 2 && node.parent === this.group; attempt++) {
+        try {
+          this.group.remove(node);
+        } catch (error) {
+          errors.push(error);
+        }
+      }
+      if (node.parent === this.group) forceDetach(node);
+    };
+    const isInStableRealm = (node: THREE.Object3D): boolean => {
+      let current: THREE.Object3D | null = node;
+      const seen = new Set<THREE.Object3D>();
+      while (current && !seen.has(current)) {
+        if (current === this.group) return true;
+        seen.add(current);
+        current = current.parent;
+      }
+      return false;
+    };
+    const topAncestor = (node: THREE.Object3D): THREE.Object3D => {
+      let current = node;
+      const seen = new Set<THREE.Object3D>();
+      while (current.parent && !seen.has(current)) {
+        seen.add(current);
+        current = current.parent;
+      }
+      return current;
+    };
+
+    detachFromStableOwner(retiredRoot);
+    // Removal observers may move any captured descendant or re-add the root.
+    for (let pass = 0; pass < 3; pass++) {
+      detachFromStableOwner(retiredRoot);
+      for (const node of originalNodes) {
+        if (node.parent === this.group) detachFromStableOwner(node);
+      }
     }
 
-    // No fallible work remains after these aliases become observable.
-    this.mesh = candidate.mesh;
-    this.verts = candidate.vertices;
-    this.numVerts = candidate.numVerts;
-    this.clipDuration = null; // driven by the skeleton timeline
-    this.ready = true;
-    return "committed";
+    if (retiredRoot.parent && isInStableRealm(retiredRoot)) forceDetach(retiredRoot);
+    for (const node of originalNodes) {
+      if (node.parent && isInStableRealm(node)) forceDetach(node);
+    }
+
+    const terminalRootSet = new Set<THREE.Object3D>();
+    const preservedRootSet = new Set<THREE.Object3D>();
+    for (const node of [retiredRoot, ...originalNodes]) {
+      const top = topAncestor(node);
+      if (top.parent === null && originalSet.has(top)) terminalRootSet.add(top);
+      else preservedRootSet.add(node);
+    }
+    const terminalRoots = [...terminalRootSet].filter((root) => {
+      let parent = root.parent;
+      while (parent) {
+        if (terminalRootSet.has(parent)) return false;
+        parent = parent.parent;
+      }
+      return true;
+    });
+    const claimedNodes = new Set<THREE.Object3D>();
+    for (const root of terminalRoots) {
+      root.traverse((node) => { claimedNodes.add(node); });
+    }
+    for (const node of claimedNodes) this.#terminalNodes.add(node);
+
+    try {
+      this.#resourceDisposer.disposeObject3DForest(terminalRoots, {
+        ...extras,
+        preserveRoots: [this.group, ...preservedRootSet],
+      });
+    } catch (error) {
+      errors.push(error);
+    }
+
+    // Adoption after the tombstone cutoff can only expose disposed resources.
+    for (const node of claimedNodes) {
+      if (node.parent && !claimedNodes.has(node.parent)) forceDetach(node);
+    }
+    if (retiredRoot.parent === this.group) forceDetach(retiredRoot);
+    if (errors.length > 0) throw new AggregateError(errors, context);
   }
 
-  #isCurrent(generation: number): boolean {
-    return this.#loadGeneration === generation;
-  }
-
-  #disposeDetached(
-    candidate:
-      | THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial>
-      | null,
+  #disposeDetachedRoot(
+    root: THREE.Group,
     geometry: THREE.BufferGeometry | null,
     material: THREE.MeshStandardMaterial | null,
+    nodesKnownBeforeAdoption: readonly THREE.Object3D[] = [],
   ): void {
+    const ownedNodes = new Set<THREE.Object3D>(nodesKnownBeforeAdoption);
+    root.traverse((node) => { ownedNodes.add(node); });
     try {
-      this.#resourceDisposer.disposeObject3DForest(
-        candidate ? [candidate] : [],
+      this.#disposeOwnedForest(
+        root,
+        ownedNodes,
         {
           geometries: geometry ? [geometry] : [],
           materials: material ? [material] : [],
         },
+        "Detached baked mesh cleanup failed",
       );
     } catch (error) {
       // Detached async results have no synchronous owner that could recover a
-      // cleanup error. Report it, finish terminalization, and never resurrect it.
+      // cleanup error. Report it and never resurrect the candidate.
       this.#reportWarningSafely("baked mesh cleanup failed", error);
     }
+  }
+
+  #runStaleCleanup(cleanup: () => void): void {
+    try {
+      cleanup();
+    } catch (error) {
+      this.#reportWarningSafely("baked mesh cleanup failed", error);
+    }
+  }
+
+  #releaseAliases(): void {
+    this.mesh = null;
+    this.verts = null;
+    this.numVerts = 0;
+    this.ready = false;
+    this.clipDuration = null;
   }
 
   #reportWarningSafely(

@@ -1,4 +1,5 @@
 import type { MotionPayload } from "@/domain/motion/common/motion";
+import type { IDisposable } from "@/base/common/disposable";
 
 /**
  * Application-level presentation outcome. A superseded result is a normal
@@ -6,13 +7,31 @@ import type { MotionPayload } from "@/domain/motion/common/motion";
  */
 export type MotionPresentationResult = "presented" | "superseded";
 
+/** User intent captured before inference/import transport begins. */
+export interface HumanMotionPresentationIntent {
+  readonly label: string;
+}
+
+export interface MotionPresentationReservationOptions {
+  /** Cancels acquisition until the returned Promise settles. */
+  readonly signal?: AbortSignal;
+}
+
+/** One-shot latest-only right to commit a generated motion. */
+export interface IHumanMotionPresentationReservation extends IDisposable {
+  commit(payload: MotionPayload): Promise<MotionPresentationResult>;
+}
+
 /**
- * Commits a generated human motion to the shared application presentation.
+ * Reserves and commits generated motion to shared application presentation.
  *
- * Callers deliberately see one use-case operation rather than Stage, library,
- * or basket primitives. The temporary browser adapter may use the compatibility
- * runtime internally without leaking that dependency back into a feature.
+ * Reservation happens when user intent begins, before inference or import can
+ * yield. Callers see one use-case operation rather than Stage, library, or
+ * basket primitives; the browser adapter supplies the temporary runtime owner.
  */
 export interface IMotionResultPresentationService {
-  presentHumanMotion(payload: MotionPayload): Promise<MotionPresentationResult>;
+  reserveHumanMotionPresentation(
+    intent: HumanMotionPresentationIntent,
+    options?: MotionPresentationReservationOptions,
+  ): Promise<IHumanMotionPresentationReservation>;
 }

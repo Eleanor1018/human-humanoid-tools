@@ -182,7 +182,10 @@ export function useVideoToMotionController(
   return useMemo(
     () => ({
       state,
-      busy: state?.stage === "uploading" || state?.stage === "running",
+      busy:
+        state?.stage === "reserving"
+        || state?.stage === "uploading"
+        || state?.stage === "running",
       canRun: state !== null && requireController().canRun,
       canConfirmEnvironment:
         state !== null && requireController().canConfirmEnvironment,

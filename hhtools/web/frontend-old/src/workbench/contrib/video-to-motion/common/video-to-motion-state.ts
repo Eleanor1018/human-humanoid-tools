@@ -1,6 +1,7 @@
 /** Lifecycle phases for one video-to-motion request. */
 export type VideoToMotionStage =
   | "idle"
+  | "reserving"
   | "uploading"
   | "running"
   | "completed"
