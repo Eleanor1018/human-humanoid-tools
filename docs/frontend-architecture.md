@@ -16,7 +16,7 @@ src/
 ├── components/
 │   ├── Navbar.tsx           # Five-item application menu shell
 │   ├── Sidebar.tsx          # Fixed seven-item feature navigation
-│   └── ui/                  # shadcn primitives, added only when used
+│   └── ui/                  # Project-owned shadcn primitives
 ├── features/                # One folder per product feature
 │   ├── motion/
 │   ├── robot/
@@ -25,7 +25,7 @@ src/
 │   ├── batch/
 │   ├── video2motion/
 │   └── analysis/
-├── stage/                   # React/Three.js boundary
+├── stage/                   # Stage surface and floating view controls
 ├── api.ts                   # Shared HTTP primitives only
 ├── host.ts                  # Web/Electron boundary only
 └── styles.css
@@ -65,6 +65,7 @@ main -> App -> features -> api -> FastAPI
 - [x] Empty shared React renderer
 - [x] Five-item top menu and dropdown shells
 - [x] Fixed seven-item left navigation
+- [x] Minimal shadcn foundation and floating Stage view menu
 - [ ] Motion feature
 
 ## References
@@ -72,3 +73,5 @@ main -> App -> features -> api -> FastAPI
 - [VS Code source organization](https://github.com/microsoft/vscode/wiki/source-code-organization)
 - [Grafana navigation patterns](https://grafana.com/developers/saga/patterns/navigation/)
 - [React state structure](https://react.dev/learn/choosing-the-state-structure)
+- [shadcn Vite setup](https://ui.shadcn.com/docs/installation/vite)
+- [shadcn Toggle Group](https://ui.shadcn.com/docs/components/radix/toggle-group)

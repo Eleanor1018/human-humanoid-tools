@@ -96,8 +96,8 @@ hhtools-desktop
 
 WebUI 与 Electron GUI 共用 `hhtools/web/frontend` 中同一套 React + TypeScript renderer；
 Electron 通过本机 FastAPI sidecar 加载同一个页面，不维护第二套 GUI renderer。当前前端是
-带空功能页的最小导航骨架：Tailwind CSS 已接入构建，shadcn/ui 基础组件等第一个真实页面需要
-时再按需加入。
+带空功能页的最小导航骨架：Tailwind CSS 已接入构建；shadcn/ui 基础组件只在真实页面需要时
+逐个复制进项目。舞台视图菜单已经使用本地 ToggleGroup primitive。
 
 ```bash
 cd hhtools/web/frontend
