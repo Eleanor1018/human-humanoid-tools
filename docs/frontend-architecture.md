@@ -43,6 +43,8 @@ src/
 ├── stage/                   # R3F Stage surface and floating view controls
 │   ├── StageCanvas.tsx      # One Canvas, camera, controls, lights and grid
 │   ├── StageEmpty.tsx       # Legacy initial empty-state copy
+│   ├── SkeletonLayer.tsx    # Data-only source skeleton first-frame layer
+│   ├── types.ts             # Stage renderer data contracts
 │   └── StageViewMenu.tsx    # React visibility HUD
 └── styles.css
 ```
@@ -103,6 +105,7 @@ main -> App -> features -> components/ui
 - [x] Batch inspector visual shell
 - [x] Data Analysis inspector visual shell
 - [x] R3F Stage base scene (camera, controls, lights, axes, grid)
+- [x] R3F source skeleton first-frame layer and V2M result handoff
 - [ ] R3F motion/robot/environment payload layers
 - [ ] Motion backend integration
 

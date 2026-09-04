@@ -10,6 +10,7 @@ import {
   setupGvhmrInDesktop,
   startVideoToMotion,
   summarizeMotionResult,
+  toStageMotionPayload,
   waitForVideoToMotion,
 } from "../src/features/video-to-motion/api.ts";
 
@@ -112,4 +113,23 @@ test("summarizes total frames without retaining frame arrays", () => {
       linkedFolder: "gvhmr-turn",
     },
   );
+});
+
+test("projects a completed motion payload for the Stage", () => {
+  const payload = toStageMotionPayload({
+    positions: [[[0, 0, 0]]],
+    parent_indices: [-1],
+    token: "motion-token",
+  });
+  assert.deepEqual(payload, {
+    positions: [[[0, 0, 0]]],
+    parent_indices: [-1],
+    exclude_joint_indices: undefined,
+    frame_indices: undefined,
+    playback_duration: undefined,
+    duration: undefined,
+    framerate: undefined,
+    playback_frames: undefined,
+    num_frames_total: undefined,
+  });
 });

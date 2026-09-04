@@ -78,3 +78,4 @@
 - [x] 七个功能页面的视觉壳均遵循本规范
 - [x] 中间 Stage 迁移为单一 R3F Canvas，保留旧相机、灯光、网格和坐标轴
 - [x] R3F Canvas 使用旧版 `NoToneMapping` 色彩管线，避免材质颜色漂移
+- [x] 迁移旧版蓝色 source skeleton 的首帧视觉层

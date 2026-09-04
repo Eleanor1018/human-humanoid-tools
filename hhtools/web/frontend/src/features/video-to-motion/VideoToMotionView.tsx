@@ -5,6 +5,7 @@ import { ImportDropzone } from "@/components/ImportDropzone";
 import { InspectorPage } from "@/components/Inspector";
 import { Button } from "@/components/ui/button";
 import { WorkflowPipeline, WorkflowStep } from "@/components/WorkflowSteps";
+import type { StageMotionPayload } from "@/stage/types";
 
 import {
   canSetupGvhmrInDesktop,
@@ -15,6 +16,7 @@ import {
   setupGvhmrInDesktop,
   startVideoToMotion,
   summarizeMotionResult,
+  toStageMotionPayload,
   waitForVideoToMotion,
   type GvhmrRuntimeStatus,
   type MotionResultSummary,
@@ -36,7 +38,11 @@ function formatMetric(value: number | null, suffix = ""): string {
   return `${display}${suffix}`;
 }
 
-export function VideoToMotionView() {
+export function VideoToMotionView({
+  onMotionLoaded,
+}: {
+  onMotionLoaded?: (motion: StageMotionPayload | null) => void;
+}) {
   const [runtimePhase, setRuntimePhase] = useState<RuntimePhase>("checking");
   const [runtime, setRuntime] = useState<GvhmrRuntimeStatus | null>(null);
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
@@ -83,6 +89,7 @@ export function VideoToMotionView() {
   const selectVideo = (file: File | null) => {
     if (!file) return;
     if (!isSupportedVideoName(file.name)) {
+      onMotionLoaded?.(null);
       setVideo(null);
       setWorkflowPhase("error");
       setWorkflowError("Supported formats are MP4, MOV, MKV, AVI, WebM, and M4V.");
@@ -94,6 +101,7 @@ export function VideoToMotionView() {
     setWorkflowError(null);
     setJob(null);
     setResult(null);
+    onMotionLoaded?.(null);
   };
 
   const configureRuntime = async () => {
@@ -141,6 +149,7 @@ export function VideoToMotionView() {
       });
       if (request.signal.aborted) return;
       setResult(summarizeMotionResult(motion, video.name));
+      onMotionLoaded?.(toStageMotionPayload(motion));
       setWorkflowPhase("done");
     } catch (error) {
       if (request.signal.aborted) return;

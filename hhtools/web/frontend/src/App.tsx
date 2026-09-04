@@ -12,6 +12,7 @@ import { RobotToRobotView } from "./features/r2r/RobotToRobotView";
 import { VideoToMotionView } from "./features/video-to-motion/VideoToMotionView";
 import type { ViewId } from "./navigation";
 import { Stage } from "./stage/Stage";
+import type { StageMotionPayload } from "./stage/types";
 
 const inspectorViews: Record<ViewId, ComponentType> = {
   motion: MotionView,
@@ -25,6 +26,7 @@ const inspectorViews: Record<ViewId, ComponentType> = {
 
 export function App() {
   const [activeView, setActiveView] = useState<ViewId>("motion");
+  const [stageMotion, setStageMotion] = useState<StageMotionPayload | null>(null);
   const ActiveInspector = inspectorViews[activeView];
 
   return (
@@ -36,9 +38,13 @@ export function App() {
     >
       <Navbar />
       <Sidebar activeView={activeView} onSelect={setActiveView} />
-      <Stage />
+      <Stage motion={stageMotion} />
       <Inspector>
-        <ActiveInspector />
+        {activeView === "video-to-motion" ? (
+          <VideoToMotionView onMotionLoaded={setStageMotion} />
+        ) : (
+          <ActiveInspector />
+        )}
       </Inspector>
     </div>
   );

@@ -1,7 +1,11 @@
 /** Initial Stage copy from the legacy renderer, shown until a payload is loaded. */
-export function StageEmpty() {
+export function StageEmpty({ visible = true }: { visible?: boolean }) {
   return (
-    <div className="pointer-events-none absolute inset-0 z-10 grid place-items-center text-center">
+    <div
+      className="pointer-events-none absolute inset-0 z-10 grid place-items-center text-center"
+      hidden={!visible}
+      aria-hidden={!visible}
+    >
       <div>
         <span
           className="mx-auto mb-[18px] block size-[54px] bg-foreground opacity-[.18] [mask:url(/icons/motion/film.svg)_center/contain_no-repeat] [-webkit-mask:url(/icons/motion/film.svg)_center/contain_no-repeat]"

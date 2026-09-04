@@ -1,3 +1,5 @@
+import type { StageMotionPayload } from "@/stage/types";
+
 export const SUPPORTED_VIDEO_EXTENSIONS = [
   "mp4",
   "mov",
@@ -20,6 +22,9 @@ export interface MotionResult {
   readonly name?: string;
   readonly token?: string;
   readonly positions?: readonly unknown[];
+  readonly parent_indices?: readonly number[];
+  readonly exclude_joint_indices?: readonly number[];
+  readonly frame_indices?: readonly number[];
   readonly playback_frames?: number;
   readonly num_frames_total?: number;
   readonly playback_duration?: number;
@@ -27,6 +32,31 @@ export interface MotionResult {
   readonly framerate?: number;
   readonly sample_rate?: number;
   readonly linked_folder?: string;
+}
+
+/** Convert a completed motion result into the renderer's data-only contract. */
+export function toStageMotionPayload(
+  result: MotionResult,
+): StageMotionPayload | null {
+  if (
+    !Array.isArray(result.positions) ||
+    !Array.isArray(result.parent_indices) ||
+    result.positions.length === 0 ||
+    result.parent_indices.length === 0
+  ) {
+    return null;
+  }
+  return {
+    positions: result.positions as StageMotionPayload["positions"],
+    parent_indices: result.parent_indices,
+    exclude_joint_indices: result.exclude_joint_indices,
+    frame_indices: result.frame_indices,
+    playback_duration: result.playback_duration,
+    duration: result.duration,
+    framerate: result.framerate,
+    playback_frames: result.playback_frames,
+    num_frames_total: result.num_frames_total,
+  };
 }
 
 export interface MotionResultSummary {

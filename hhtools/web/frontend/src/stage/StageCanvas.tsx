@@ -3,6 +3,9 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
+import { SkeletonLayer } from "./SkeletonLayer";
+import type { StageLayerId } from "./StageViewMenu";
+import type { StageMotionPayload } from "./types";
 /**
  * Owns the orbit controller for the one R3F canvas. R3F owns rendering and
  * resize observation; this small adapter keeps the old interaction settings
@@ -83,7 +86,17 @@ function GroundGrid() {
 }
 
 /** Static scene content migrated from the legacy renderer bootstrap. */
-function StageScene() {
+function StageScene({
+  motion,
+  visibleLayers,
+}: {
+  motion: StageMotionPayload | null;
+  visibleLayers: readonly StageLayerId[];
+}) {
+  const skeletonVisible =
+    visibleLayers.includes("skeleton") ||
+    (motion !== null && visibleLayers.includes("body"));
+
   return (
     <>
       <OrbitController />
@@ -95,12 +108,19 @@ function StageScene() {
       <GroundGrid />
       <group name="hhtools-world" rotation={[-Math.PI / 2, 0, 0]}>
         <axesHelper args={[1.2]} />
+        <SkeletonLayer motion={motion} visible={skeletonVisible} />
       </group>
     </>
   );
 }
 
-export function StageCanvas() {
+export function StageCanvas({
+  motion,
+  visibleLayers,
+}: {
+  motion: StageMotionPayload | null;
+  visibleLayers: readonly StageLayerId[];
+}) {
   return (
     <Canvas
       data-stage-renderer="react-three-fiber"
@@ -119,7 +139,7 @@ export function StageCanvas() {
         gl.setClearColor(0x000000, 0);
       }}
     >
-      <StageScene />
+      <StageScene motion={motion} visibleLayers={visibleLayers} />
     </Canvas>
   );
 }
