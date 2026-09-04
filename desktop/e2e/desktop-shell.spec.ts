@@ -84,6 +84,34 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
     await expect(page.getByRole('menu', { name: 'Analysis' })).toBeVisible()
     await page.keyboard.press('Escape')
     await expect(page.getByRole('menu', { name: 'Analysis' })).toBeHidden()
+
+    const sidebar = page.getByRole('complementary', { name: 'Workspace navigation' })
+    await expect(sidebar.getByRole('button')).toHaveText([
+      'Motion',
+      'Robot',
+      'Video → Motion',
+      'Human → Robot',
+      'Robot → Robot',
+      'Batch',
+      'Data Analysis'
+    ])
+    await expect(sidebar.locator('.sidebar-icon')).toHaveCount(7)
+    expect(
+      await sidebar.locator('.sidebar-icon').evaluateAll((icons) =>
+        icons.every((icon) => getComputedStyle(icon).maskImage.includes('/icons/sidebar/'))
+      )
+    ).toBe(true)
+    await expect(sidebar.getByRole('button', { name: 'Motion', exact: true })).toHaveAttribute(
+      'aria-current',
+      'page'
+    )
+    await sidebar.getByRole('button', { name: 'Human → Robot' }).click()
+    await expect(page.locator('#app')).toHaveAttribute('data-active-view', 'h2r')
+    await expect(sidebar.getByRole('button', { name: 'Human → Robot' })).toHaveAttribute(
+      'aria-current',
+      'page'
+    )
+    await expect(page.locator('.workspace-drawer-handle, .col-resizer')).toHaveCount(0)
     await expect
       .poll(() =>
         page.evaluate(() =>
