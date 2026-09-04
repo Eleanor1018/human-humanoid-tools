@@ -112,6 +112,63 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
       'page'
     )
     await expect(page.locator('.workspace-drawer-handle, .col-resizer')).toHaveCount(0)
+
+    const stage = page.getByRole('main', { name: 'Workspace content' })
+    const stageMenu = stage.locator('[data-slot="toggle-group"][aria-label="Stage visibility"]')
+    const stageToggles = stageMenu.locator('[data-slot="toggle-group-item"]')
+    await expect(stageMenu).toBeVisible()
+    await expect(stageToggles).toHaveText([
+      'Skeleton',
+      'Body',
+      'Objects/Terrain',
+      'Scaled',
+      'Scaled',
+      'Robot'
+    ])
+    await expect(stageMenu.getByRole('button', { name: 'Body', exact: true })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
+    await expect(stageMenu.getByRole('button', { name: 'Robot', exact: true })).toBeDisabled()
+    await stageMenu.getByRole('button', { name: 'Skeleton', exact: true }).click()
+    await expect(stageMenu.getByRole('button', { name: 'Skeleton', exact: true })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
+    const [stageBounds, menuBounds, menuStyle, bodyStyle, eyeMask] = await Promise.all([
+      stage.boundingBox(),
+      stageMenu.boundingBox(),
+      stageMenu.evaluate((element) => {
+        const style = getComputedStyle(element)
+        return {
+          borderRadius: style.borderRadius,
+          gap: style.gap,
+          padding: style.padding
+        }
+      }),
+      stageMenu.getByRole('button', { name: 'Body', exact: true }).evaluate((element) => {
+        const style = getComputedStyle(element)
+        return {
+          backgroundColor: style.backgroundColor,
+          fontSize: style.fontSize,
+          padding: style.padding
+        }
+      }),
+      stageMenu.locator('.stage-layer-eye').first().evaluate(
+        (element) => getComputedStyle(element).maskImage
+      )
+    ])
+    expect(menuBounds?.x).toBeCloseTo((stageBounds?.x ?? 0) + 12, 0)
+    expect(menuBounds?.y).toBeCloseTo((stageBounds?.y ?? 0) + 12, 0)
+    expect(menuBounds?.width).toBeGreaterThan(300)
+    expect(menuBounds?.height).toBeGreaterThan(64)
+    expect(menuStyle).toEqual({ borderRadius: '8px', gap: '4px', padding: '6px 8px' })
+    expect(bodyStyle).toEqual({
+      backgroundColor: 'rgb(0, 113, 227)',
+      fontSize: '12px',
+      padding: '6px 12px'
+    })
+    expect(eyeMask).toContain('/icons/stage/eye.svg')
     await expect
       .poll(() =>
         page.evaluate(() =>
