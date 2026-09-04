@@ -97,9 +97,11 @@ function VideoBatch() {
       <InputSummary label="1. Videos" unit="videos" />
       <WorkflowStep title="2. Environment" defaultOpen>
         <div className="grid gap-2.5">
-          <select className={fieldClass} defaultValue="official" disabled>
-            <option value="official">GVHMR Official</option>
-          </select>
+          <Field label="Runtime">
+            <select className={fieldClass} defaultValue="official" disabled>
+              <option value="official">GVHMR Official</option>
+            </select>
+          </Field>
           <Button size="sm" disabled>
             Confirm environment
           </Button>
@@ -111,7 +113,9 @@ function VideoBatch() {
             Static camera
             <input type="checkbox" defaultChecked disabled className="size-4 accent-primary" />
           </label>
-          <input className={fieldClass} placeholder="Auto focal length" disabled />
+          <Field label="Focal length">
+            <input className={fieldClass} placeholder="Auto" disabled />
+          </Field>
           <Button variant="primary" size="sm" disabled>
             Start V2M batch
           </Button>

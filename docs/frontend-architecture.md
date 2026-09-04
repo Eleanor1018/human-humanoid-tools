@@ -41,8 +41,6 @@ src/
 │   └── analysis/
 │       └── AnalysisView.tsx # Dataset analysis shell
 ├── stage/                   # Stage surface and floating view controls
-├── api.ts                   # Shared HTTP primitives only
-├── host.ts                  # Web/Electron boundary only
 └── styles.css
 ```
 
@@ -51,23 +49,24 @@ Directories and files are created only when their first real user exists.
 ## Dependencies
 
 ```text
-main -> App -> features -> api -> FastAPI
+main -> App -> features -> components/ui
              |
-             +-> stage -> Three.js
-             +-> components/ui
+             +-> stage
 ```
 
 - `main.tsx` only mounts `App`.
 - `App.tsx` composes views; it does not implement workflows.
-- A feature owns its view, endpoint calls, and local state.
+- A feature owns its view and local state.
 - Features do not reach into another feature's internal files.
-- `api.ts`, `host.ts`, and `stage/` never import from features.
+- `stage/` and shared components never import from features.
 - Browser code never imports Python, Node, or Electron directly.
 
 ## Growth Rules
 
 - Start a feature with one view file. Split out `api.ts` or `model.ts` only when
   that responsibility becomes independently useful or testable.
+- Keep endpoint calls inside the owning feature; add a shared API primitive only
+  after a second real feature needs it.
 - Extract shared code after a second real caller appears.
 - Keep server state authoritative; use React state for presentation state.
 - Add shadcn components individually. Do not prebuild a component library.
