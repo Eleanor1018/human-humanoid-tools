@@ -108,7 +108,7 @@ class InternalImport:
         )
 
 
-# Current static debt: 57 forbidden import occurrences represented by 56 locations.
+# Current static debt: 52 forbidden import occurrences represented by 51 locations.
 # Reduce this table whenever an inversion is removed.  Never add an entry merely
 # to make a new failure green; fix the dependency direction instead.
 _LEGACY_LOCATION_BASELINE: dict[ImportIdentity, int] = {
@@ -164,32 +164,15 @@ _LEGACY_LOCATION_BASELINE: dict[ImportIdentity, int] = {
     ): 1,
     ImportIdentity("hhtools/mcp/runtime.py", "hhtools.web.server", "local_agent_runtime"): 1,
     ImportIdentity(
-        "hhtools/retarget/clip_ground_snap.py", "hhtools.web.serialize", "_root_transform"
-    ): 1,
-    ImportIdentity(
         "hhtools/retarget/newton_basic/pipeline.py",
         "hhtools.viewer.anatomy",
         "NewtonBasicPipeline._augment_canonical_targets",
     ): 1,
     ImportIdentity(
-        "hhtools/retarget/newton_basic/pipeline.py",
-        "hhtools.web.serialize",
-        "NewtonBasicPipeline._clamp_solved_foot_heights",
-    ): 1,
-    ImportIdentity(
         "hhtools/retarget/robot_to_robot.py",
         "hhtools.viewer.anatomy",
         "align_retargeted_ankles_to_scaled_source",
     ): 1,
-    ImportIdentity(
-        "hhtools/retarget/robot_to_robot.py",
-        "hhtools.web.serialize",
-        "align_retargeted_ankles_to_scaled_source",
-    ): 1,
-    ImportIdentity(
-        "hhtools/robot/foot_geometry.py", "hhtools.web.serialize", "_root_lateral_direction"
-    ): 1,
-    ImportIdentity("hhtools/robot/foot_geometry.py", "hhtools.web.serialize", "_root_transform"): 1,
     ImportIdentity(
         "hhtools/robot/ik_map_policy.py",
         "hhtools.retarget.newton_basic.human_aliases",
@@ -404,40 +387,15 @@ _LEGACY_IMPORT_FINGERPRINTS: dict[tuple[str, str, str], str] = {
         "local_agent_runtime",
     ): "from:create_app,effective_job_admission_settings",
     (
-        "hhtools/retarget/clip_ground_snap.py",
-        "hhtools.web.serialize",
-        "_root_transform",
-    ): "from:_quat_xyzw_to_rotmat",
-    (
         "hhtools/retarget/newton_basic/pipeline.py",
         "hhtools.viewer.anatomy",
         "NewtonBasicPipeline._augment_canonical_targets",
     ): "from:scaled_hand_tip_positions_world",
     (
-        "hhtools/retarget/newton_basic/pipeline.py",
-        "hhtools.web.serialize",
-        "NewtonBasicPipeline._clamp_solved_foot_heights",
-    ): "from:_ground_contact_zs,_lowest_ankle_z,_quat_xyzw_to_rotmat",
-    (
         "hhtools/retarget/robot_to_robot.py",
         "hhtools.viewer.anatomy",
         "align_retargeted_ankles_to_scaled_source",
     ): "from:motion_has_interaction_scene",
-    (
-        "hhtools/retarget/robot_to_robot.py",
-        "hhtools.web.serialize",
-        "align_retargeted_ankles_to_scaled_source",
-    ): "from:_apply_retarget_dof,_lowest_ankle_z,_quat_xyzw_to_rotmat",
-    (
-        "hhtools/robot/foot_geometry.py",
-        "hhtools.web.serialize",
-        "_root_lateral_direction",
-    ): "from:_quat_xyzw_to_rotmat",
-    (
-        "hhtools/robot/foot_geometry.py",
-        "hhtools.web.serialize",
-        "_root_transform",
-    ): "from:_quat_xyzw_to_rotmat",
     (
         "hhtools/robot/ik_map_policy.py",
         "hhtools.retarget.newton_basic.human_aliases",

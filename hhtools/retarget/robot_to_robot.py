@@ -1357,19 +1357,19 @@ def align_retargeted_ankles_to_scaled_source(
     if yellow_z is None:
         return retargeted
 
-    from hhtools.web.serialize import (
-        _apply_retarget_dof,
-        _lowest_ankle_z,
-        _quat_xyzw_to_rotmat,
+    from hhtools.robot.foot_geometry import (
+        apply_retarget_dof,
+        lowest_ankle_z,
+        quat_xyzw_to_rotmat,
     )
 
     f_ret = int(np.clip(f0, 0, q.shape[0] - 1))
     root = np.asarray(retargeted.root_trajectory[f_ret], dtype=np.float64)
     dof = np.asarray(retargeted.dof_trajectory[f_ret], dtype=np.float64)
-    _apply_retarget_dof(target_model, list(retargeted.dof_names), dof)
+    apply_retarget_dof(target_model, list(retargeted.dof_names), dof)
     ik_map = dict(target_model.preset.ik_map) if target_model.preset.ik_map else {}
-    ankle_local = _lowest_ankle_z(
-        target_model, ik_map, _quat_xyzw_to_rotmat(root[3:7]),
+    ankle_local = lowest_ankle_z(
+        target_model, ik_map, quat_xyzw_to_rotmat(root[3:7]),
     )
     if ankle_local is None:
         return retargeted

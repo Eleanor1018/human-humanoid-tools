@@ -11,11 +11,10 @@ from hhtools.core.grounding import SOURCE_FLOOR_META_KEY
 from hhtools.core.hierarchy import Hierarchy
 from hhtools.core.motion import Motion
 from hhtools.retarget.retarget_result import RetargetedMotion
+from hhtools.robot.foot_geometry import lowest_ankle_z, quat_xyzw_to_rotmat
 from hhtools.robot.loader import load_robot
 from hhtools.robot.registry import get, refresh
 from hhtools.web.serialize import (
-    _lowest_ankle_z,
-    _quat_xyzw_to_rotmat,
     _scaled_overlay_foot_z,
     serialize_robot_trajectory,
 )
@@ -88,7 +87,7 @@ def _playback_ankle_world_z(model, traj: dict) -> float:
     lift = float(frame.get("mesh_z_lift") or 0.0)
     ik_map = dict(model.preset.ik_map) if model.preset.ik_map else {}
     model.apply_configuration(model.zero_configuration())
-    ankle = _lowest_ankle_z(model, ik_map, _quat_xyzw_to_rotmat(root[3:7]))
+    ankle = lowest_ankle_z(model, ik_map, quat_xyzw_to_rotmat(root[3:7]))
     assert ankle is not None
     return float(root[2] + lift + ankle)
 

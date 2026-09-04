@@ -5181,11 +5181,11 @@ def _align_scaled_preview_to_robot_playback(
     """Shift yellow overlay Z to the grounded robot sole (browser playback frame)."""
     import numpy as np
 
-    from hhtools.web.serialize import (
-        _quat_xyzw_to_rotmat,
-        _scaled_overlay_foot_z,
-        _scene_min_mesh_z,
+    from hhtools.robot.foot_geometry import (
+        quat_xyzw_to_rotmat,
+        scene_min_mesh_z,
     )
+    from hhtools.web.serialize import _scaled_overlay_foot_z
 
     yellow_z = _scaled_overlay_foot_z(scaled_preview, 0)
     if yellow_z is None:
@@ -5203,11 +5203,11 @@ def _align_scaled_preview_to_robot_playback(
     dof0 = np.asarray(retargeted.dof_trajectory[f0], dtype=np.float64)
     cfg0 = {ret_dof_names[i]: float(dof0[i]) for i in range(len(ret_dof_names))}
     target_model.apply_configuration(cfg0)
-    root_rot = _quat_xyzw_to_rotmat(root[3:7])
+    root_rot = quat_xyzw_to_rotmat(root[3:7])
     # Browser playback: group.z = root.z + mesh_z_lift; sole is the mesh AABB
     # bottom (not the ankle link).  Aligning to ankle re-floats the yellow
     # skeleton by ~sole thickness and fights foot-floor snap.
-    min_mesh_z = _scene_min_mesh_z(target_model.trimesh_scene(), root_rot)
+    min_mesh_z = scene_min_mesh_z(target_model.trimesh_scene(), root_rot)
     robot_ref_z = (
         float(root[2] + mesh_lift + min_mesh_z) if min_mesh_z is not None else 0.0
     )

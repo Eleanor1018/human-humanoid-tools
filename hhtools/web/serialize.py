@@ -25,6 +25,12 @@ from typing import Any
 import numpy as np
 
 from hhtools.core.motion import Motion
+from hhtools.robot.foot_geometry import (
+    apply_retarget_dof,
+    lowest_ankle_z,
+    quat_xyzw_to_rotmat,
+    scene_min_mesh_z,
+)
 
 # Playback frame cap for browser payloads.  ``0`` = send every source frame
 # (no downsampling).  Set to e.g. 600 to bound JSON size on slow links.
@@ -567,161 +573,19 @@ def serialize_robot(model, *, name: str) -> dict[str, Any]:
 
 def _ground_offset_z(scene) -> float:
     """Lift (metres) so the scene's lowest vertex rests on the ground plane."""
-    min_z = _scene_min_mesh_z(scene)
+    min_z = scene_min_mesh_z(scene)
     return max(0.0, -min_z) if min_z is not None else 0.0
-
-
-def _quat_xyzw_to_rotmat(q: np.ndarray) -> np.ndarray:
-    x, y, z, w = (float(q[0]), float(q[1]), float(q[2]), float(q[3]))
-    return np.array(
-        [
-            [1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y - z * w), 2.0 * (x * z + y * w)],
-            [2.0 * (x * y + z * w), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z - x * w)],
-            [2.0 * (x * z - y * w), 2.0 * (y * z + x * w), 1.0 - 2.0 * (x * x + y * y)],
-        ],
-        dtype=np.float64,
-    )
-
-
-def _resolve_ik_link(ik_map: dict[str, Any], canonical: str) -> str | None:
-    spec = ik_map.get(canonical)
-    if spec is None:
-        return None
-    if isinstance(spec, str):
-        return spec
-    if isinstance(spec, dict):
-        link = spec.get("link") or spec.get("body")
-        return str(link) if link is not None else None
-    return str(spec)
-
-
-def _scene_min_mesh_z(scene, root_rot: np.ndarray | None = None) -> float | None:
-    """Lowest mesh vertex z with optional floating-base rotation (no translation)."""
-    try:
-        import trimesh
-    except Exception:
-        return None
-    R = np.eye(3, dtype=np.float64) if root_rot is None else np.asarray(root_rot, dtype=np.float64)
-    T_root = np.eye(4, dtype=np.float64)
-    T_root[:3, :3] = R
-    min_z: float | None = None
-    for node_name in scene.graph.nodes_geometry:
-        mat, geom_name = scene.graph[node_name]
-        if geom_name is None:
-            continue
-        geom = scene.geometry.get(geom_name)
-        if not isinstance(geom, trimesh.Trimesh) or geom.is_empty:
-            continue
-        mat_world = T_root @ np.asarray(mat, dtype=np.float64)
-        v = np.asarray(geom.vertices, dtype=np.float64)
-        z = (
-            mat_world[2, 0] * v[:, 0]
-            + mat_world[2, 1] * v[:, 1]
-            + mat_world[2, 2] * v[:, 2]
-            + mat_world[2, 3]
-        ).min()
-        if min_z is None or z < min_z:
-            min_z = float(z)
-    return min_z
-
-
-def _lowest_ankle_z(model, ik_map: dict[str, Any], root_rot: np.ndarray) -> float | None:
-    """Lowest ankle link origin z with floating-base rotation (no translation)."""
-    T_root = np.eye(4, dtype=np.float64)
-    T_root[:3, :3] = np.asarray(root_rot, dtype=np.float64)
-    ankle_zs: list[float] = []
-    for canonical in ("left_ankle", "right_ankle"):
-        link = _resolve_ik_link(ik_map, canonical)
-        if not link:
-            continue
-        try:
-            T_link = np.asarray(model.urdf.get_transform(link), dtype=np.float64)
-        except Exception:
-            continue
-        ankle_zs.append(float((T_root @ T_link)[2, 3]))
-    return min(ankle_zs) if ankle_zs else None
-
-
-def _lowest_ik_link_z(
-    model,
-    ik_map: dict[str, Any],
-    root_rot: np.ndarray,
-    slots: tuple[str, ...],
-) -> float | None:
-    """Lowest link-origin z among ``ik_map`` slots (root rotation only)."""
-    T_root = np.eye(4, dtype=np.float64)
-    T_root[:3, :3] = np.asarray(root_rot, dtype=np.float64)
-    zs: list[float] = []
-    for canonical in slots:
-        link = _resolve_ik_link(ik_map, canonical)
-        if not link:
-            continue
-        try:
-            T_link = np.asarray(model.urdf.get_transform(link), dtype=np.float64)
-        except Exception:
-            continue
-        zs.append(float((T_root @ T_link)[2, 3]))
-    return min(zs) if zs else None
-
-
-def _ground_contact_zs(
-    model,
-    ik_map: dict[str, Any],
-    root_rot: np.ndarray,
-    *,
-    include_mesh: bool = True,
-) -> tuple[float | None, float | None]:
-    """Lowest ``(limb_origin_z, mesh_z)`` in the root frame.
-
-    Both cover kneeling / prone contact where knees or shins touch the floor
-    while feet stay raised, but they are returned separately because they need
-    different ground thresholds: an ankle / knee **link origin** sits a foot
-    thickness above the floor when planted, whereas the mesh minimum *is* the
-    contact surface.
-    """
-    limb_z = _lowest_ik_link_z(
-        model,
-        ik_map,
-        root_rot,
-        ("left_ankle", "right_ankle", "left_knee", "right_knee"),
-    )
-    mesh_z: float | None = None
-    if include_mesh:
-        mesh_z = _scene_min_mesh_z(model.trimesh_scene(), root_rot)
-    return limb_z, mesh_z
 
 
 def _sole_depth_reference(model, ik_map: dict[str, Any]) -> float | None:
     """Ankle→sole distance at the zero pose (metres, positive when sole is below ankle)."""
     model.apply_configuration(model.zero_configuration())
     scene = model.trimesh_scene()
-    ankle_z = _lowest_ankle_z(model, ik_map, np.eye(3, dtype=np.float64))
-    min_mesh_z = _scene_min_mesh_z(scene)
+    ankle_z = lowest_ankle_z(model, ik_map, np.eye(3, dtype=np.float64))
+    min_mesh_z = scene_min_mesh_z(scene)
     if ankle_z is None or min_mesh_z is None:
         return None
     return float(ankle_z - min_mesh_z)
-
-
-def _apply_retarget_dof(
-    model,
-    dof_names: list[str] | tuple[str, ...],
-    dof_values: np.ndarray,
-) -> None:
-    """Apply one retarget DOF row, tolerating generic ``dof_N`` placeholders."""
-    names = list(dof_names)
-    values = np.asarray(dof_values, dtype=np.float64).reshape(-1)
-    if names and not any(str(n).startswith("dof_") for n in names):
-        cfg = {
-            str(names[i]): float(values[i])
-            for i in range(min(len(names), len(values)))
-        }
-        model.apply_configuration(cfg)
-        return
-    model_dof = model.dof_names()
-    arr = np.zeros(len(model_dof), dtype=np.float64)
-    n = min(len(values), len(arr))
-    arr[:n] = values[:n]
-    model.apply_configuration(arr)
 
 
 def _mesh_playback_z_lift(
@@ -752,15 +616,15 @@ def _mesh_playback_z_lift(
 
     Without overlay data, fall back to scheme A (ankle→sole at ``cfg`` only).
     """
-    _apply_retarget_dof(model, dof_names, dof_values)
-    root_rot = _quat_xyzw_to_rotmat(root_xyzw[3:7])
+    apply_retarget_dof(model, dof_names, dof_values)
+    root_rot = quat_xyzw_to_rotmat(root_xyzw[3:7])
     align = str(yellow_align or "sole").strip().lower()
     if yellow_foot_z is not None and align == "ankle":
-        ankle_z = _lowest_ankle_z(model, ik_map, root_rot)
+        ankle_z = lowest_ankle_z(model, ik_map, root_rot)
         if ankle_z is not None:
             return float(yellow_foot_z - float(root_xyzw[2]) - ankle_z)
     scene = model.trimesh_scene()
-    min_mesh_z = _scene_min_mesh_z(scene, root_rot)
+    min_mesh_z = scene_min_mesh_z(scene, root_rot)
     if min_mesh_z is None:
         return 0.0
     if yellow_foot_z is not None:
@@ -768,7 +632,7 @@ def _mesh_playback_z_lift(
     if sole_depth_ref is None:
         # Robots without ankle links in ik_map: rest the lowest mesh vertex on z=0.
         return float(-float(root_xyzw[2]) - min_mesh_z)
-    ankle_z = _lowest_ankle_z(model, ik_map, root_rot)
+    ankle_z = lowest_ankle_z(model, ik_map, root_rot)
     if ankle_z is None:
         return 0.0
     expected_min_mesh = float(ankle_z - sole_depth_ref)
@@ -846,9 +710,9 @@ def constant_playback_mesh_z_lift(
     if preserve_absolute_z:
         return float(lift0) if sole_depth_ref is not None else 0.0
 
-    _apply_retarget_dof(model, ret_dof_names, dof[f0])
-    root_rot0 = _quat_xyzw_to_rotmat(root0[3:7])
-    min_mesh_z0 = _scene_min_mesh_z(model.trimesh_scene(), root_rot0)
+    apply_retarget_dof(model, ret_dof_names, dof[f0])
+    root_rot0 = quat_xyzw_to_rotmat(root0[3:7])
+    min_mesh_z0 = scene_min_mesh_z(model.trimesh_scene(), root_rot0)
     if min_mesh_z0 is not None:
         world_min = float(root0[2]) + lift0 + min_mesh_z0
         return float(lift0 - world_min)
@@ -956,7 +820,7 @@ def serialize_robot_trajectory(
 
     frames: list[dict[str, Any]] = []
     for pi, f in enumerate(idx):
-        _apply_retarget_dof(model, ret_dof_names, dof[f])
+        apply_retarget_dof(model, ret_dof_names, dof[f])
         link_T: dict[str, list[float]] = {}
         for link in links:
             try:
