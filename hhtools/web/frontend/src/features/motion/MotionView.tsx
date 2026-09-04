@@ -1,7 +1,8 @@
-import { useState, type CSSProperties } from "react";
+import { useState } from "react";
 
 import { ImportDropzone } from "@/components/ImportDropzone";
 import { InspectorPage } from "@/components/Inspector";
+import { SearchField } from "@/components/SearchField";
 import { Button } from "@/components/ui/button";
 import {
   ToggleGroup,
@@ -40,8 +41,6 @@ const profiles: readonly MotionProfileOption[] = [
 
 const fieldClass =
   "min-h-[30px] min-w-0 truncate rounded-md border border-border bg-surface px-3 py-1.5 text-xs font-medium text-foreground disabled:cursor-not-allowed disabled:text-muted-foreground";
-
-type IconStyle = CSSProperties & { "--search-icon": string };
 
 function isMotionProfile(value: string): value is MotionProfile {
   return profiles.some((profile) => profile.id === value);
@@ -118,24 +117,11 @@ export function MotionView() {
           </select>
         </div>
         <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-1.5">
-          <label className="relative block min-w-0">
-            <span className="sr-only">Search the Motion Library</span>
-            <span
-              className="pointer-events-none absolute top-1/2 left-2.5 z-[1] size-3.5 -translate-y-1/2 bg-muted-foreground [mask:var(--search-icon)_center/contain_no-repeat] [-webkit-mask:var(--search-icon)_center/contain_no-repeat]"
-              style={
-                {
-                  "--search-icon": "url(/icons/motion/search.svg)",
-                } as IconStyle
-              }
-              aria-hidden="true"
-            />
-            <input
-              className="min-h-8 w-full rounded-md border border-border bg-surface py-1.5 pr-2.5 pl-8 text-xs text-foreground placeholder:text-muted-foreground disabled:cursor-not-allowed"
-              type="search"
-              placeholder="Search motions..."
-              disabled
-            />
-          </label>
+          <SearchField
+            label="Search the Motion Library"
+            placeholder="Search motions..."
+            disabled
+          />
           <Button size="sm" disabled>
             Link directory
           </Button>

@@ -18,11 +18,13 @@ src/
 │   ├── Sidebar.tsx          # Fixed seven-item feature navigation
 │   ├── Inspector.tsx        # Shared fixed right-side page frame
 │   ├── ImportDropzone.tsx   # Shared visual import surface
+│   ├── SearchField.tsx      # Shared compact search control
 │   └── ui/                  # Project-owned shadcn primitives
 ├── features/                # One folder per product feature
 │   ├── motion/
 │   │   └── MotionView.tsx   # Motion inspector and local import mode state
 │   ├── robot/
+│   │   └── RobotView.tsx    # Robot import and library shell
 │   ├── h2r/
 │   ├── r2r/
 │   ├── batch/
@@ -72,6 +74,7 @@ main -> App -> features -> api -> FastAPI
 - [x] Fixed seven-item left navigation
 - [x] Minimal shadcn foundation and floating Stage view menu
 - [x] Motion inspector visual shell
+- [x] Robot inspector visual shell
 - [ ] Motion backend integration
 
 ## References

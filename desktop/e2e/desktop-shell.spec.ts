@@ -126,6 +126,13 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
     ).toBeVisible()
     await expect(inspector.getByRole('button', { name: 'Choose file' })).toHaveCount(0)
 
+    await sidebar.getByRole('button', { name: 'Robot', exact: true }).click()
+    await expect(inspector.getByRole('heading', { name: 'Robot', exact: true })).toBeVisible()
+    await expect(inspector.getByRole('group', { name: 'URDF import area' })).toBeVisible()
+    await expect(inspector.getByRole('group', { name: 'Robot mesh import area' })).toBeVisible()
+    await expect(inspector.getByText('No URDF selected.')).toBeVisible()
+    await expect(inspector.getByRole('heading', { name: 'Robot Library' })).toBeVisible()
+
     await sidebar.getByRole('button', { name: 'Human → Robot' }).click()
     await expect(page.locator('#app')).toHaveAttribute('data-active-view', 'h2r')
     await expect(sidebar.getByRole('button', { name: 'Human → Robot' })).toHaveAttribute(
