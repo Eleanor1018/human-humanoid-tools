@@ -19,6 +19,7 @@ src/
 │   ├── Inspector.tsx        # Shared fixed right-side page frame
 │   ├── ImportDropzone.tsx   # Shared visual import surface
 │   ├── SearchField.tsx      # Shared compact search control
+│   ├── WorkflowSteps.tsx    # Shared pipeline and disclosure structure
 │   └── ui/                  # Project-owned shadcn primitives
 ├── features/                # One folder per product feature
 │   ├── motion/
@@ -29,6 +30,7 @@ src/
 │   ├── r2r/
 │   ├── batch/
 │   ├── video2motion/
+│   │   └── VideoToMotionView.tsx
 │   └── analysis/
 ├── stage/                   # Stage surface and floating view controls
 ├── api.ts                   # Shared HTTP primitives only
@@ -75,6 +77,7 @@ main -> App -> features -> api -> FastAPI
 - [x] Minimal shadcn foundation and floating Stage view menu
 - [x] Motion inspector visual shell
 - [x] Robot inspector visual shell
+- [x] Video-to-Motion inspector visual shell
 - [ ] Motion backend integration
 
 ## References

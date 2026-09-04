@@ -68,4 +68,5 @@
 - [x] 将组件私有样式迁入组件内 Tailwind class
 - [x] 按旧版信息层级建立 Motion 右侧面板样式壳
 - [x] 按相同视觉规则建立 Robot 右侧面板样式壳
+- [x] 建立 Video → Motion pipeline 与步骤样式壳
 - [ ] 后续功能页面遵循本规范

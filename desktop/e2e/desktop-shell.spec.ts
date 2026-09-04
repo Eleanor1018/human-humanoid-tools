@@ -133,6 +133,12 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
     await expect(inspector.getByText('No URDF selected.')).toBeVisible()
     await expect(inspector.getByRole('heading', { name: 'Robot Library' })).toBeVisible()
 
+    await sidebar.getByRole('button', { name: 'Video → Motion' }).click()
+    await expect(inspector.getByRole('heading', { name: 'Video → Motion' })).toBeVisible()
+    await expect(page.getByRole('list', { name: 'Video to Motion pipeline' })).toBeVisible()
+    await expect(inspector.locator('details')).toHaveCount(4)
+    await expect(inspector.getByRole('group', { name: 'Video import area' })).toBeVisible()
+
     await sidebar.getByRole('button', { name: 'Human → Robot' }).click()
     await expect(page.locator('#app')).toHaveAttribute('data-active-view', 'h2r')
     await expect(sidebar.getByRole('button', { name: 'Human → Robot' })).toHaveAttribute(
