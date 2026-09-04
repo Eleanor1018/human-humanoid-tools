@@ -60,7 +60,7 @@ main -> App -> features -> api -> FastAPI
 ## Current Progress
 
 - [x] Empty shared React renderer
-- [x] Five-item top menu shell
+- [x] Five-item top menu and dropdown shells
 - [ ] Motion feature
 
 ## References
