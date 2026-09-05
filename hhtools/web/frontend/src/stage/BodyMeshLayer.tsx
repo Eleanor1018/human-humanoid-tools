@@ -8,7 +8,7 @@ import {
   setBodyMeshFrame,
   type BodyMeshResource,
 } from "./bodyMesh";
-import type { StagePlaybackRef } from "./playback";
+import { timelineFrameAtTime, type StagePlaybackRef } from "./playback";
 import type { StageMotionPayload } from "./types";
 
 interface BodyMeshLayerProps {
@@ -22,11 +22,13 @@ interface BodyMeshLayerProps {
 function AnimatedBody({
   resource,
   playback,
+  motion,
   sourceFrameCount,
   visible,
 }: {
   resource: BodyMeshResource;
   playback?: StagePlaybackRef;
+  motion: StageMotionPayload;
   sourceFrameCount: number;
   visible: boolean;
 }) {
@@ -35,8 +37,12 @@ function AnimatedBody({
   useFrame(() => {
     if (!visible) return;
     const sourceLast = Math.max(0, sourceFrameCount - 1);
+    const sourceFrame = timelineFrameAtTime(
+      motion,
+      playback?.current.elapsed ?? 0,
+    );
     const fraction = sourceLast > 0
-      ? Math.min(1, Math.max(0, (playback?.current.frame ?? 0) / sourceLast))
+      ? Math.min(1, Math.max(0, sourceFrame / sourceLast))
       : 0;
     const frame = fraction * Math.max(0, resource.numFrames - 1);
     if (lastFrame.current === frame) return;
@@ -91,13 +97,14 @@ export function BodyMeshLayer({
     };
   }, [bodyMesh, onReadyChange]);
 
-  if (!resource) return null;
+  if (!resource || !motion) return null;
   return (
     <group name="source-body" visible={visible}>
       <AnimatedBody
         resource={resource}
         playback={playback}
-        sourceFrameCount={motion?.positions.length ?? resource.numFrames}
+        motion={motion}
+        sourceFrameCount={motion.positions.length || resource.numFrames}
         visible={visible}
       />
     </group>

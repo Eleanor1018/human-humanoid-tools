@@ -58,6 +58,7 @@ export interface StageMotionPayload {
   readonly playback_duration?: number;
   readonly duration?: number;
   readonly framerate?: number;
+  readonly sample_rate?: number;
   readonly playback_frames?: number;
   readonly num_frames_total?: number;
   readonly source_format?: string;
@@ -71,6 +72,10 @@ export interface StageMotionPayload {
   readonly suggested_reference?: string;
   readonly suggested_backend?: string;
   readonly meta?: Readonly<Record<string, unknown>>;
+  readonly object_mesh_source?: {
+    readonly kind: "motion" | "r2r";
+    readonly token: string;
+  };
 }
 
 /** Zero-pose robot data returned by `/api/robot/select`. */
@@ -88,3 +93,33 @@ export interface StageRobotPayload {
   readonly glb_base64?: string | null;
   readonly ground_offset_z?: number;
 }
+
+export interface StageRobotFrame {
+  readonly root?: readonly [
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+  ];
+  readonly mesh_z_lift?: number;
+  readonly links: Readonly<Record<string, StageMatrix4>>;
+}
+
+/** Per-frame FK payload returned by H2R and R2R jobs. */
+export interface StageRobotTrajectoryPayload {
+  readonly frames: readonly StageRobotFrame[];
+  readonly frame_indices?: readonly number[];
+  readonly duration?: number;
+  readonly playback_duration?: number;
+  readonly playback_frames?: number;
+  readonly num_frames_total?: number;
+  readonly framerate?: number;
+  readonly sample_rate?: number;
+}
+
+export type StageTimelinePayload =
+  | StageMotionPayload
+  | StageRobotTrajectoryPayload;

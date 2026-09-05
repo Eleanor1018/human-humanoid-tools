@@ -1,10 +1,14 @@
 import type { ChangeEvent, CSSProperties } from "react";
 
-import type { StageMotionPayload } from "./types";
-import type { StagePlaybackRef, StagePlaybackState } from "./playback";
+import {
+  timelineFrameCount,
+  type StagePlaybackRef,
+  type StagePlaybackState,
+} from "./playback";
+import type { StageTimelinePayload } from "./types";
 
 interface StagePlaybackBarProps {
-  motion: StageMotionPayload | null;
+  timeline: StageTimelinePayload | null;
   playback: StagePlaybackRef;
   snapshot: StagePlaybackState;
   onChange(): void;
@@ -50,13 +54,13 @@ function PlaybackButton({
 
 /** Compact controls for the renderer-owned shared motion cursor. */
 export function StagePlaybackBar({
-  motion,
+  timeline,
   playback,
   snapshot,
   onChange,
 }: StagePlaybackBarProps) {
-  const frameCount = motion?.positions.length ?? 0;
-  if (!motion || frameCount < 2) return null;
+  const frameCount = timelineFrameCount(timeline);
+  if (!timeline || frameCount < 2) return null;
   const maximumFrame = Math.max(0, frameCount - 1);
 
   const seek = (frame: number, pause = false): void => {

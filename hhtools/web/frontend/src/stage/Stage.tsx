@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
-  motionDuration,
+  timelineDuration,
   type StagePlaybackRef,
   type StagePlaybackState,
 } from "./playback";
@@ -9,28 +9,41 @@ import { StageViewMenu, type StageLayerId } from "./StageViewMenu";
 import { StageCanvas } from "./StageCanvas";
 import { StageEmpty } from "./StageEmpty";
 import { StagePlaybackBar } from "./StagePlaybackBar";
-import type { StageMotionPayload, StageRobotPayload } from "./types";
+import type {
+  StageMotionPayload,
+  StageRobotPayload,
+  StageRobotTrajectoryPayload,
+  StageTimelinePayload,
+} from "./types";
 
 export function Stage({
   motion = null,
+  scaledMotion = null,
   robot = null,
+  robotTrajectory = null,
 }: {
   motion?: StageMotionPayload | null;
+  scaledMotion?: StageMotionPayload | null;
   robot?: StageRobotPayload | null;
+  robotTrajectory?: StageRobotTrajectoryPayload | null;
 }) {
   // Match the original idle HUD until renderer-owned visibility state is wired in.
   const [visibleLayers, setVisibleLayers] = useState<StageLayerId[]>(["body"]);
+  const timeline: StageTimelinePayload | null =
+    robotTrajectory && robotTrajectory.frames.length > 0
+      ? robotTrajectory
+      : motion;
   const playback = useMemo<StagePlaybackRef>(() => {
-    const duration = motionDuration(motion);
+    const duration = timelineDuration(timeline);
     return {
       current: {
         elapsed: 0,
         frame: 0,
         duration,
-        playing: Boolean(motion && motion.positions.length > 1 && duration > 0),
+        playing: Boolean(timeline && duration > 0),
       },
     };
-  }, [motion]);
+  }, [timeline]);
   const [playbackView, setPlaybackView] = useState<{
     owner: StagePlaybackRef;
     value: StagePlaybackState;
@@ -47,6 +60,10 @@ export function Stage({
   );
   const hasEnvironment = Boolean(
     motion?.terrain || (motion?.objects && motion.objects.length > 0),
+  );
+  const hasScaledEnvironment = Boolean(
+    scaledMotion?.terrain ||
+      (scaledMotion?.objects && scaledMotion.objects.length > 0),
   );
   const publishPlayback = useCallback(() => {
     setPlaybackView({ owner: playback, value: { ...playback.current } });
@@ -81,6 +98,28 @@ export function Stage({
     });
   }, [hasEnvironment]);
 
+  useEffect(() => {
+    setVisibleLayers((current) => {
+      if (scaledMotion?.positions.length) {
+        return current.includes("scaled-skeleton")
+          ? current
+          : [...current, "scaled-skeleton"];
+      }
+      return current.filter((layer) => layer !== "scaled-skeleton");
+    });
+  }, [scaledMotion]);
+
+  useEffect(() => {
+    setVisibleLayers((current) => {
+      if (hasScaledEnvironment) {
+        return current.includes("scaled-scene")
+          ? current
+          : [...current, "scaled-scene"];
+      }
+      return current.filter((layer) => layer !== "scaled-scene");
+    });
+  }, [hasScaledEnvironment]);
+
   return (
     <main
       className="app-content @container relative col-start-2 row-start-2 min-h-0 min-w-0 overflow-hidden bg-stage-canvas max-[780px]:hidden"
@@ -89,21 +128,27 @@ export function Stage({
       {canvasVisible && (
         <StageCanvas
           motion={motion}
+          scaledMotion={scaledMotion}
           robot={robot}
+          robotTrajectory={robotTrajectory}
           playback={playback}
           onPlaybackChange={publishPlayback}
           visibleLayers={visibleLayers}
         />
       )}
-      <StageEmpty visible={motion === null && robot === null} />
+      <StageEmpty
+        visible={motion === null && scaledMotion === null && robot === null}
+      />
       <StageViewMenu
         value={visibleLayers}
         onValueChange={setVisibleLayers}
         robotAvailable={robot !== null}
         environmentAvailable={hasEnvironment}
+        scaledMotionAvailable={Boolean(scaledMotion?.positions.length)}
+        scaledEnvironmentAvailable={hasScaledEnvironment}
       />
       <StagePlaybackBar
-        motion={motion}
+        timeline={timeline}
         playback={playback}
         snapshot={playbackSnapshot}
         onChange={publishPlayback}

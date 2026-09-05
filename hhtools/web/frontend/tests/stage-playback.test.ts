@@ -8,8 +8,16 @@ import {
   setBodyMeshFrame,
   type CompleteBodyMeshPayload,
 } from "../src/stage/bodyMesh.ts";
-import { frameAtTime, motionDuration } from "../src/stage/playback.ts";
-import type { StageMotionPayload } from "../src/stage/types.ts";
+import {
+  frameAtTime,
+  motionDuration,
+  timelineDuration,
+  timelineFrameAtTime,
+} from "../src/stage/playback.ts";
+import type {
+  StageMotionPayload,
+  StageRobotTrajectoryPayload,
+} from "../src/stage/types.ts";
 
 function motion(overrides: Partial<StageMotionPayload> = {}): StageMotionPayload {
   return {
@@ -31,7 +39,7 @@ test("maps elapsed time onto the full serialized motion timeline", () => {
   assert.equal(motionDuration(payload), 2);
   assert.equal(frameAtTime(payload, 0), 0);
   assert.equal(frameAtTime(payload, 1), 2);
-  assert.equal(frameAtTime(payload, 2.5), 1);
+  assert.equal(frameAtTime(payload, 2.5), 4);
   assert.equal(
     motionDuration(motion({ playback_duration: Number.NaN, duration: 3 })),
     3,
@@ -43,6 +51,16 @@ test("maps elapsed time onto the full serialized motion timeline", () => {
     ),
     2,
   );
+});
+
+test("maps elapsed time onto serialized robot trajectory frames", () => {
+  const trajectory: StageRobotTrajectoryPayload = {
+    frames: [{ links: {} }, { links: {} }, { links: {} }],
+    sample_rate: 2,
+  };
+  assert.equal(timelineDuration(trajectory), 1);
+  assert.equal(timelineFrameAtTime(trajectory, 0.5), 1);
+  assert.equal(timelineFrameAtTime(trajectory, 2), 2);
 });
 
 test("decodes and interpolates the backend baked-body layout", async () => {

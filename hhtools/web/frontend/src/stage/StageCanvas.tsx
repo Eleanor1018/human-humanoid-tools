@@ -7,9 +7,14 @@ import { BodyMeshLayer } from "./BodyMeshLayer";
 import { EnvironmentLayer } from "./EnvironmentLayer";
 import { RobotLayer } from "./RobotLayer";
 import { SkeletonLayer } from "./SkeletonLayer";
-import { frameAtTime, type StagePlaybackRef } from "./playback";
+import { timelineFrameAtTime, type StagePlaybackRef } from "./playback";
 import type { StageLayerId } from "./StageViewMenu";
-import type { StageMotionPayload, StageRobotPayload } from "./types";
+import type {
+  StageMotionPayload,
+  StageRobotPayload,
+  StageRobotTrajectoryPayload,
+  StageTimelinePayload,
+} from "./types";
 
 /**
  * Owns the orbit controller for the one R3F canvas. R3F owns rendering and
@@ -92,31 +97,26 @@ function GroundGrid() {
 
 /** Advances the cursor owned by Stage inside the one R3F render loop. */
 function PlaybackClock({
-  motion,
+  timeline,
   playback,
   onPlaybackChange,
 }: {
-  motion: StageMotionPayload | null;
+  timeline: StageTimelinePayload | null;
   playback: StagePlaybackRef;
   onPlaybackChange?: () => void;
 }) {
   const reportElapsed = useRef(0);
   useFrame((_state, delta) => {
     const cursor = playback.current;
-    if (!motion || !cursor.playing || cursor.duration <= 0) {
+    if (!timeline || !cursor.playing || cursor.duration <= 0) {
       return;
     }
-    const step = Math.min(Math.max(delta, 0), 0.1);
-    cursor.elapsed += step;
-    if (cursor.elapsed >= cursor.duration) {
-      // Restart exactly at frame zero; carrying background-tab overshoot into
-      // a locomotion clip makes the loop boundary look like a random jump.
-      cursor.elapsed = 0;
-    }
-    cursor.frame = frameAtTime(motion, cursor.elapsed);
+    const step = Math.max(delta, 0);
+    cursor.elapsed = (cursor.elapsed + step) % cursor.duration;
+    cursor.frame = timelineFrameAtTime(timeline, cursor.elapsed);
     reportElapsed.current += step;
     if (reportElapsed.current >= 0.1) {
-      reportElapsed.current = 0;
+      reportElapsed.current %= 0.1;
       onPlaybackChange?.();
     }
   });
@@ -126,17 +126,25 @@ function PlaybackClock({
 /** Static scene content migrated from the legacy renderer bootstrap. */
 function StageScene({
   motion,
+  scaledMotion,
   robot,
+  robotTrajectory,
   playback,
   onPlaybackChange,
   visibleLayers,
 }: {
   motion: StageMotionPayload | null;
+  scaledMotion: StageMotionPayload | null;
   robot: StageRobotPayload | null;
+  robotTrajectory: StageRobotTrajectoryPayload | null;
   playback: StagePlaybackRef;
   onPlaybackChange?: () => void;
   visibleLayers: readonly StageLayerId[];
 }) {
+  const timeline: StageTimelinePayload | null =
+    robotTrajectory && robotTrajectory.frames.length > 0
+      ? robotTrajectory
+      : motion;
   const bodyMesh = motion?.body_mesh;
   const [bodyStatus, setBodyStatus] = useState<{
     owner: typeof bodyMesh;
@@ -151,17 +159,25 @@ function StageScene({
   const hasEnvironment = Boolean(
     motion?.terrain || (motion?.objects && motion.objects.length > 0),
   );
+  const hasScaledEnvironment = Boolean(
+    scaledMotion?.terrain ||
+      (scaledMotion?.objects && scaledMotion.objects.length > 0),
+  );
   const skeletonVisible =
     visibleLayers.includes("skeleton") ||
     (motion !== null && visibleLayers.includes("body") && !bodyReady);
   const bodyVisible = hasBodyMesh && bodyReady && visibleLayers.includes("body");
   const robotVisible = robot !== null && visibleLayers.includes("robot");
   const environmentVisible = hasEnvironment && visibleLayers.includes("objects");
+  const scaledSkeletonVisible =
+    scaledMotion !== null && visibleLayers.includes("scaled-skeleton");
+  const scaledEnvironmentVisible =
+    hasScaledEnvironment && visibleLayers.includes("scaled-scene");
 
   return (
     <>
       <PlaybackClock
-        motion={motion}
+        timeline={timeline}
         playback={playback}
         onPlaybackChange={onPlaybackChange}
       />
@@ -190,7 +206,26 @@ function StageScene({
           visible={environmentVisible}
           playback={playback}
         />
-        <RobotLayer robot={robot} visible={robotVisible} />
+        <SkeletonLayer
+          motion={scaledMotion}
+          visible={scaledSkeletonVisible}
+          playback={playback}
+          color={0xf5b82e}
+          name="scaled-skeleton"
+        />
+        <EnvironmentLayer
+          motion={scaledMotion}
+          visible={scaledEnvironmentVisible}
+          playback={playback}
+          timeline={robotTrajectory ?? scaledMotion}
+          name="scaled-environment"
+        />
+        <RobotLayer
+          robot={robot}
+          trajectory={robotTrajectory}
+          playback={playback}
+          visible={robotVisible}
+        />
       </group>
     </>
   );
@@ -198,13 +233,17 @@ function StageScene({
 
 export function StageCanvas({
   motion,
+  scaledMotion = null,
   robot = null,
+  robotTrajectory = null,
   playback,
   onPlaybackChange,
   visibleLayers,
 }: {
   motion: StageMotionPayload | null;
+  scaledMotion?: StageMotionPayload | null;
   robot?: StageRobotPayload | null;
+  robotTrajectory?: StageRobotTrajectoryPayload | null;
   playback: StagePlaybackRef;
   onPlaybackChange?: () => void;
   visibleLayers: readonly StageLayerId[];
@@ -230,7 +269,9 @@ export function StageCanvas({
     >
       <StageScene
         motion={motion}
+        scaledMotion={scaledMotion}
         robot={robot}
+        robotTrajectory={robotTrajectory}
         playback={playback}
         onPlaybackChange={onPlaybackChange}
         visibleLayers={visibleLayers}

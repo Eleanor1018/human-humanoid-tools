@@ -49,7 +49,6 @@ const layerRows: readonly (readonly StageLayer[])[] = [
       accessibleLabel: "Scaled Skeleton",
       title: "Effector skeleton after robot scaling and before IK",
       family: "scaled",
-      disabled: true,
     },
     {
       id: "scaled-scene",
@@ -57,7 +56,6 @@ const layerRows: readonly (readonly StageLayer[])[] = [
       accessibleLabel: "Scaled Scene",
       title: "Scaled terrain and interaction objects in robot coordinates",
       family: "scaled",
-      disabled: true,
     },
     {
       id: "robot",
@@ -79,6 +77,8 @@ interface StageViewMenuProps {
   onValueChange(value: StageLayerId[]): void;
   robotAvailable?: boolean;
   environmentAvailable?: boolean;
+  scaledMotionAvailable?: boolean;
+  scaledEnvironmentAvailable?: boolean;
 }
 
 export function StageViewMenu({
@@ -86,6 +86,8 @@ export function StageViewMenu({
   onValueChange,
   robotAvailable = false,
   environmentAvailable = false,
+  scaledMotionAvailable = false,
+  scaledEnvironmentAvailable = false,
 }: StageViewMenuProps) {
   return (
     <ToggleGroup
@@ -108,7 +110,9 @@ export function StageViewMenu({
               disabled={
                 layer.disabled ||
                 (layer.id === "robot" && !robotAvailable) ||
-                (layer.id === "objects" && !environmentAvailable)
+                (layer.id === "objects" && !environmentAvailable) ||
+                (layer.id === "scaled-skeleton" && !scaledMotionAvailable) ||
+                (layer.id === "scaled-scene" && !scaledEnvironmentAvailable)
               }
               title={layer.title}
               aria-label={layer.accessibleLabel ?? layer.label}

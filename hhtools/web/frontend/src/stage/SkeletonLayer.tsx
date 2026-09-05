@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 
-import type { StagePlaybackRef } from "./playback";
+import { timelineFrameAtTime, type StagePlaybackRef } from "./playback";
 import type { StageMotionPayload } from "./types";
 
 interface SkeletonLayerProps {
@@ -10,6 +10,8 @@ interface SkeletonLayerProps {
   visible: boolean;
   /** Shared StageScene cursor; all animated layers read the same frame. */
   playback?: StagePlaybackRef;
+  color?: number;
+  name?: string;
 }
 
 interface SkeletonEdge {
@@ -97,7 +99,13 @@ function writeFrame(
 }
 
 /** Renders the source motion at the shared StageScene playback cursor. */
-export function SkeletonLayer({ motion, visible, playback }: SkeletonLayerProps) {
+export function SkeletonLayer({
+  motion,
+  visible,
+  playback,
+  color = SOURCE_COLOR,
+  name = "source-skeleton",
+}: SkeletonLayerProps) {
   const firstFrame = motion?.positions[0] ?? [];
   const spheresRef = useRef<Array<THREE.Mesh | undefined>>([]);
   const lineGeometryRef = useRef<THREE.BufferGeometry | null>(null);
@@ -138,7 +146,7 @@ export function SkeletonLayer({ motion, visible, playback }: SkeletonLayerProps)
     spheresRef.current.length = firstFrame.length;
     lastFrameRef.current = null;
     if (motion) {
-      const frame = playback?.current.frame ?? 0;
+      const frame = timelineFrameAtTime(motion, playback?.current.elapsed ?? 0);
       writeFrame(
         motion,
         edges,
@@ -153,7 +161,7 @@ export function SkeletonLayer({ motion, visible, playback }: SkeletonLayerProps)
   useFrame(() => {
     // StageScene advances one shared cursor; this layer only applies it.
     if (!visible || !motion || motion.positions.length === 0) return;
-    const frame = playback?.current.frame ?? 0;
+    const frame = timelineFrameAtTime(motion, playback?.current.elapsed ?? 0);
     if (lastFrameRef.current === frame) return;
     writeFrame(
       motion,
@@ -166,7 +174,7 @@ export function SkeletonLayer({ motion, visible, playback }: SkeletonLayerProps)
   });
 
   return (
-    <group visible={visible && motion !== null} name="source-skeleton">
+    <group visible={visible && motion !== null} name={name}>
       {firstFrame.map((_, index) => (
         <mesh
           key={index}
@@ -179,7 +187,7 @@ export function SkeletonLayer({ motion, visible, playback }: SkeletonLayerProps)
         >
           <sphereGeometry args={[0.028, 12, 12]} />
           <meshStandardMaterial
-            color={SOURCE_COLOR}
+            color={color}
             roughness={0.5}
             metalness={0.1}
           />
@@ -194,7 +202,7 @@ export function SkeletonLayer({ motion, visible, playback }: SkeletonLayerProps)
           />
         </bufferGeometry>
         <lineBasicMaterial
-          color={SOURCE_COLOR}
+          color={color}
           transparent
           opacity={0.7}
         />

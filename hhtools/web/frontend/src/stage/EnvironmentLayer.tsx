@@ -7,14 +7,21 @@ import type {
   StageMotionPayload,
   StageObjectPayload,
   StageTerrainPayload,
+  StageTimelinePayload,
 } from "./types";
-import type { StagePlaybackRef } from "./playback";
+import {
+  timelineFrameAtTime,
+  timelineFrameCount,
+  type StagePlaybackRef,
+} from "./playback";
 
 interface EnvironmentLayerProps {
   motion: StageMotionPayload | null;
   visible: boolean;
   /** Shared cursor keeps props synchronized with skeleton and body playback. */
   playback?: StagePlaybackRef;
+  timeline?: StageTimelinePayload | null;
+  name?: string;
 }
 
 interface FramePair {
@@ -194,27 +201,50 @@ function styleObject(root: THREE.Object3D, color: number, opacity: number): void
   });
 }
 
+function objectMeshUrl(
+  motion: StageMotionPayload,
+  object: StageObjectPayload,
+  index: number,
+): string | null {
+  if (!object.has_mesh) return null;
+  const source = motion.object_mesh_source ?? (
+    motion.token ? { kind: "motion" as const, token: motion.token } : null
+  );
+  if (!source) return null;
+  const query = new URLSearchParams({ token: source.token });
+  if (typeof object.scale === "number" && object.scale > 0) {
+    query.set("scale", String(object.scale));
+  }
+  if (source.kind === "r2r") {
+    if (!object.mesh_file) return null;
+    query.set("mesh", object.mesh_file);
+    return `/api/r2r/scene_glb?${query.toString()}`;
+  }
+  query.set("index", String(object.source_index ?? index));
+  return `/api/object_glb?${query.toString()}`;
+}
+
 /** Use the real prop mesh when available, retaining the box while it loads. */
 function InteractionObject({
   object,
   index,
-  motionToken,
+  meshUrl,
   objectRefs,
 }: {
   object: StageObjectPayload;
   index: number;
-  motionToken?: string;
+  meshUrl: string | null;
   objectRefs: MutableRefObject<Array<THREE.Object3D | undefined>>;
 }) {
   const [loaded, setLoaded] = useState<{
     object: StageObjectPayload;
-    motionToken: string;
+    meshUrl: string;
     index: number;
     scene: THREE.Group;
   } | null>(null);
   const scene =
     loaded?.object === object &&
-    loaded.motionToken === motionToken &&
+    loaded.meshUrl === meshUrl &&
     loaded.index === index
       ? loaded.scene
       : null;
@@ -226,11 +256,9 @@ function InteractionObject({
     let active = true;
     let ownedScene: THREE.Group | null = null;
     setLoaded(null);
-    if (!object.has_mesh || !motionToken) return undefined;
-
-    const query = new URLSearchParams({ token: motionToken, index: String(index) });
+    if (!object.has_mesh || !meshUrl) return undefined;
     new GLTFLoader().load(
-      `/api/object_glb?${query.toString()}`,
+      meshUrl,
       (gltf) => {
         styleObject(gltf.scene, rgbToHex(object.color), opacity);
         ownedScene = gltf.scene;
@@ -238,7 +266,7 @@ function InteractionObject({
           disposeObject(gltf.scene);
           return;
         }
-        setLoaded({ object, motionToken, index, scene: gltf.scene });
+        setLoaded({ object, meshUrl, index, scene: gltf.scene });
       },
       undefined,
       () => {
@@ -250,7 +278,7 @@ function InteractionObject({
       active = false;
       if (ownedScene) disposeObject(ownedScene);
     };
-  }, [index, motionToken, object]);
+  }, [index, meshUrl, object]);
 
   return (
     <group
@@ -287,6 +315,8 @@ export function EnvironmentLayer({
   motion,
   visible,
   playback,
+  timeline,
+  name = "source-environment",
 }: EnvironmentLayerProps) {
   const objectRefs = useRef<Array<THREE.Object3D | undefined>>([]);
   const lastFrameRef = useRef<number | null>(null);
@@ -299,21 +329,25 @@ export function EnvironmentLayer({
 
   useFrame(() => {
     if (!visible || !motion || objects.length === 0) return;
-    const currentFrame = playback?.current.frame ?? 0;
+    const activeTimeline = timeline ?? motion;
+    const currentFrame = timelineFrameAtTime(
+      activeTimeline,
+      playback?.current.elapsed ?? 0,
+    );
     if (lastFrameRef.current === currentFrame) return;
 
     const timelineLength = Math.max(
-      motion.positions.length,
+      timelineFrameCount(activeTimeline),
       ...objects.map((object) => object.positions.length),
       0,
     );
 
     const sourceMaximum = Math.max(
       0,
-      (motion.positions.length || timelineLength) - 1,
+      (timelineFrameCount(activeTimeline) || timelineLength) - 1,
     );
     const sourceFrame = resolveFrame(
-      motion.frame_indices,
+      activeTimeline.frame_indices,
       currentFrame,
       sourceMaximum,
     );
@@ -339,14 +373,14 @@ export function EnvironmentLayer({
 
   if (!motion) return null;
   return (
-    <group name="source-environment" visible={visible}>
+    <group name={name} visible={visible}>
       {validTerrain(motion.terrain) && <TerrainMesh terrain={motion.terrain} />}
       {objects.map((object, index) => (
         <InteractionObject
           key={`${object.name ?? "object"}-${index}`}
           object={object}
           index={index}
-          motionToken={motion.token}
+          meshUrl={objectMeshUrl(motion, object, index)}
           objectRefs={objectRefs}
         />
       ))}
