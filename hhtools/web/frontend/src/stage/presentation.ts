@@ -44,7 +44,8 @@ export function r2rLayerAvailability(
     "r2r-source-robot": presentation.source.robot !== null,
     "r2r-source-skeleton": Boolean(presentation.source.skeleton?.positions.length),
     "r2r-source-scene": hasEnvironment(presentation.source.environment),
-    "r2r-target-robot": presentation.target.robot !== null,
+    "r2r-target-robot":
+      presentation.target.robot !== null && presentation.phase !== "source",
     "r2r-target-skeleton": Boolean(presentation.target.skeleton?.positions.length),
     "r2r-target-scene": hasEnvironment(presentation.target.environment),
   };

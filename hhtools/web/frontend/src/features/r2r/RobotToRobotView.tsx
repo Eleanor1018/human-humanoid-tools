@@ -319,6 +319,8 @@ export function RobotToRobotView({
       ? "Load a source trajectory first."
       : !targetRobot
         ? "Load the target robot first."
+        : calibration
+          ? "Save the open calibration before retargeting."
         : !calibrated
           ? "Save calibration for this robot pair first."
           : null;
@@ -500,7 +502,7 @@ export function RobotToRobotView({
   }
 
   async function retarget(): Promise<void> {
-    if (!sourceRobot || !targetRobot || !sourceResult || !calibrated) return;
+    if (!sourceRobot || !targetRobot || !sourceResult || !calibrated || calibration) return;
     const request = beginAction("retarget");
     clearRetargetResult();
     setStatus("Retargeting… The first run for a robot can take longer.");

@@ -183,8 +183,8 @@ package and are shared downward by Web and Viser rather than between hosts.
 
 The remaining legacy capabilities are Stage/workflow additions rather than
 asset-loading blockers: playback speed and loop controls, camera reset/follow,
-detailed validation cards, Batch basket actions, and the R2R dual-robot
-comparison view. They should be restored as separate, bounded changes.
+detailed validation cards, and Batch basket actions. They should be restored as
+separate, bounded changes.
 
 ## References
 

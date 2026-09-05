@@ -293,6 +293,23 @@ test("projects R2R layer availability independently for both actors", () => {
       "r2r-target-scene": false,
     },
   );
+
+  const withTargetRobot = r2rPresentation({
+    target: r2rActor({ robot: robot("target") }),
+  });
+  assert.equal(r2rLayerAvailability(withTargetRobot)["r2r-target-robot"], false);
+  assert.equal(
+    r2rLayerAvailability({ ...withTargetRobot, phase: "calibration" })[
+      "r2r-target-robot"
+    ],
+    true,
+  );
+  assert.equal(
+    r2rLayerAvailability({ ...withTargetRobot, phase: "result" })[
+      "r2r-target-robot"
+    ],
+    true,
+  );
 });
 
 test("reproduces legacy R2R source and overlay defaults", () => {
