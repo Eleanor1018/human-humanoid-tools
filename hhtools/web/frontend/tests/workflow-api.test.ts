@@ -19,6 +19,7 @@ const {
   analyzeDataset,
   computeDatasetSubset,
   previewDatasetRobot,
+  removeDatasetUploadFolder,
   uploadDataset,
 } = await import("../src/features/analysis/api.ts");
 const {
@@ -369,6 +370,35 @@ test("analysis upload preserves append query and folder-relative filenames", asy
   assert.match(requestUrl, /user_source_root=%2Fhome%2Fnora%2Fdata/);
   assert.equal(form?.get("files") instanceof File, true);
   assert.equal((form?.get("files") as File).name, "LAFAN/walk.bvh");
+});
+
+test("analysis upload basket removes one folder through the typed route", async () => {
+  let request: { url: string; init?: RequestInit } | undefined;
+  const result = await removeDatasetUploadFolder(
+    "/tmp/hhtools/dataset/abc",
+    "LAFAN/walks",
+    {
+      fetcher: async (input, init) => {
+        request = { url: String(input), init };
+        return Response.json({
+          source: "/tmp/hhtools/dataset/abc",
+          clip_count: 2,
+          human_count: 2,
+          robot_count: 0,
+          folders: { CMU: 2 },
+          clips: [],
+        });
+      },
+    },
+  );
+
+  assert.equal(request?.url, "/api/dataset/upload/remove");
+  assert.equal(request?.init?.method, "POST");
+  assert.deepEqual(JSON.parse(String(request?.init?.body)), {
+    source: "/tmp/hhtools/dataset/abc",
+    folder_label: "LAFAN/walks",
+  });
+  assert.deepEqual(result.folders, { CMU: 2 });
 });
 
 test("analysis subset sends the analyzed clips and selection parameters", async () => {
