@@ -21,6 +21,7 @@ may improve spacing, rounded corners, accessibility, and narrow-screen layout.
 - [ ] Match the Stage visibility HUD state and asset-family colors.
 - [ ] Share one complete React calibration editor between H2R and R2R.
 - [ ] Implement the three Batch pipelines against the existing FastAPI routes.
+  - [x] Add the shared typed import, scan, job, progress, and download boundary.
 - [ ] Restore H2R scaled preview and omitted result/export controls.
 - [ ] Restore remaining Motion, Robot, V2M, Analysis, and application-menu actions.
 - [ ] Run route-contract tests and desktop/narrow-screen browser smoke for every pipeline.
