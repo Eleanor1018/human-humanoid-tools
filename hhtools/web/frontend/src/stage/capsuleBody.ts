@@ -1,6 +1,7 @@
 import * as THREE from "three";
 
 import type { StageMotionPayload, StageVec3 } from "./types";
+import { CAPSULE_BODY_VISUAL } from "./visualStyle.ts";
 
 interface PrimitiveGeometry {
   readonly vertices: readonly StageVec3[];
@@ -15,9 +16,6 @@ export interface CapsuleBodyResource {
 }
 
 const SEGMENTS = 6;
-const BONE_RADIUS = 0.035;
-const JOINT_RADIUS = 0.05;
-
 function unitCylinder(segments: number): PrimitiveGeometry {
   const vertices: StageVec3[] = [];
   for (let ring = 0; ring < 2; ring += 1) {
@@ -129,9 +127,9 @@ export function createCapsuleBodyResource(
   geometry.setAttribute("position", attribute);
   geometry.setIndex(indices);
   const material = new THREE.MeshStandardMaterial({
-    color: 0xf7a470,
-    roughness: 0.6,
-    metalness: 0.05,
+    color: CAPSULE_BODY_VISUAL.color,
+    roughness: CAPSULE_BODY_VISUAL.roughness,
+    metalness: CAPSULE_BODY_VISUAL.metalness,
     side: THREE.DoubleSide,
     flatShading: true,
   });
@@ -185,12 +183,18 @@ export function setCapsuleBodyFrame(
     const uy = dz * ax - dx * az;
     const uz = dx * ay - dy * ax;
     for (const vertex of CYLINDER.vertices) {
-      resource.positions[offset++] = start[0] + ax * vertex[0] * BONE_RADIUS
-        + ux * vertex[1] * BONE_RADIUS + dx * vertex[2] * length;
-      resource.positions[offset++] = start[1] + ay * vertex[0] * BONE_RADIUS
-        + uy * vertex[1] * BONE_RADIUS + dy * vertex[2] * length;
-      resource.positions[offset++] = start[2] + az * vertex[0] * BONE_RADIUS
-        + uz * vertex[1] * BONE_RADIUS + dz * vertex[2] * length;
+      resource.positions[offset++] = start[0]
+        + ax * vertex[0] * CAPSULE_BODY_VISUAL.boneRadius
+        + ux * vertex[1] * CAPSULE_BODY_VISUAL.boneRadius
+        + dx * vertex[2] * length;
+      resource.positions[offset++] = start[1]
+        + ay * vertex[0] * CAPSULE_BODY_VISUAL.boneRadius
+        + uy * vertex[1] * CAPSULE_BODY_VISUAL.boneRadius
+        + dy * vertex[2] * length;
+      resource.positions[offset++] = start[2]
+        + az * vertex[0] * CAPSULE_BODY_VISUAL.boneRadius
+        + uz * vertex[1] * CAPSULE_BODY_VISUAL.boneRadius
+        + dz * vertex[2] * length;
     }
   }
 
@@ -199,9 +203,12 @@ export function setCapsuleBodyFrame(
       coordinate(current, next, joint, axis as 0 | 1 | 2, pair.blend),
     );
     for (const vertex of ICOSPHERE.vertices) {
-      resource.positions[offset++] = center[0] + vertex[0] * JOINT_RADIUS;
-      resource.positions[offset++] = center[1] + vertex[1] * JOINT_RADIUS;
-      resource.positions[offset++] = center[2] + vertex[2] * JOINT_RADIUS;
+      resource.positions[offset++] = center[0]
+        + vertex[0] * CAPSULE_BODY_VISUAL.jointRadius;
+      resource.positions[offset++] = center[1]
+        + vertex[1] * CAPSULE_BODY_VISUAL.jointRadius;
+      resource.positions[offset++] = center[2]
+        + vertex[2] * CAPSULE_BODY_VISUAL.jointRadius;
     }
   }
   resource.mesh.geometry.getAttribute("position").needsUpdate = true;

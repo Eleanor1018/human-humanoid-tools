@@ -1,6 +1,7 @@
 import * as THREE from "three";
 
 import type { StageBodyMeshPayload } from "./types";
+import { BAKED_BODY_VISUAL } from "./visualStyle.ts";
 
 export interface BodyMeshResource {
   readonly mesh: THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial>;
@@ -92,9 +93,9 @@ export async function createBodyMeshResource(
     geometry.setIndex(triangleIndices(payload.triangles, payload.num_verts));
     geometry.computeVertexNormals();
     material = new THREE.MeshStandardMaterial({
-      color: 0xb4c8dc,
-      roughness: 0.55,
-      metalness: 0.05,
+      color: BAKED_BODY_VISUAL.color,
+      roughness: BAKED_BODY_VISUAL.roughness,
+      metalness: BAKED_BODY_VISUAL.metalness,
       side: THREE.DoubleSide,
       flatShading: true,
     });

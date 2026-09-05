@@ -79,6 +79,7 @@ interface StageViewMenuProps {
   environmentAvailable?: boolean;
   scaledMotionAvailable?: boolean;
   scaledEnvironmentAvailable?: boolean;
+  calibration?: boolean;
 }
 
 export function StageViewMenu({
@@ -88,7 +89,11 @@ export function StageViewMenu({
   environmentAvailable = false,
   scaledMotionAvailable = false,
   scaledEnvironmentAvailable = false,
+  calibration = false,
 }: StageViewMenuProps) {
+  const rows = calibration
+    ? [[layerRows[1][2]]]
+    : layerRows;
   return (
     <ToggleGroup
       type="multiple"
@@ -98,7 +103,7 @@ export function StageViewMenu({
       aria-label="Stage visibility"
       className="stage-view-menu absolute top-3 left-3 z-[25] flex w-fit max-w-[calc(100%_-_24px)] flex-col items-stretch gap-1 rounded-lg border border-black/10 bg-white/[.85] px-2 py-1.5 shadow-[0_1px_3px_rgba(0,0,0,0.08)] backdrop-blur-[20px] @max-[440px]:top-2 @max-[440px]:left-2 @max-[440px]:max-w-[calc(100%_-_16px)]"
     >
-      {layerRows.map((row, index) => (
+      {rows.map((row, index) => (
         <div
           key={index}
           className="flex flex-nowrap items-center gap-[3px]"

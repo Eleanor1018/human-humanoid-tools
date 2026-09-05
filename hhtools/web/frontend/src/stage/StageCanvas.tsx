@@ -16,6 +16,7 @@ import type {
   StageRobotTrajectoryPayload,
   StageTimelinePayload,
 } from "./types";
+import type { SkeletonVisualVariant } from "./visualStyle";
 
 /**
  * Owns the orbit controller for the one R3F canvas. R3F owns rendering and
@@ -133,6 +134,8 @@ function StageScene({
   playback,
   onPlaybackChange,
   visibleLayers,
+  sourceSkeletonVariant,
+  robotOpacity,
 }: {
   motion: StageMotionPayload | null;
   scaledMotion: StageMotionPayload | null;
@@ -141,6 +144,8 @@ function StageScene({
   playback: StagePlaybackRef;
   onPlaybackChange?: () => void;
   visibleLayers: readonly StageLayerId[];
+  sourceSkeletonVariant: SkeletonVisualVariant;
+  robotOpacity: number;
 }) {
   const timeline: StageTimelinePayload | null =
     robotTrajectory && robotTrajectory.frames.length > 0
@@ -194,6 +199,7 @@ function StageScene({
           motion={motion}
           visible={skeletonVisible}
           playback={playback}
+          variant={sourceSkeletonVariant}
         />
         <CapsuleBodyLayer
           motion={motion}
@@ -215,7 +221,7 @@ function StageScene({
           motion={scaledMotion}
           visible={scaledSkeletonVisible}
           playback={playback}
-          color={0xf5b82e}
+          variant="scaled"
           name="scaled-skeleton"
         />
         <EnvironmentLayer
@@ -223,6 +229,7 @@ function StageScene({
           visible={scaledEnvironmentVisible}
           playback={playback}
           timeline={robotTrajectory ?? scaledMotion}
+          variant="scaled"
           name="scaled-environment"
         />
         <RobotLayer
@@ -230,6 +237,7 @@ function StageScene({
           trajectory={robotTrajectory}
           playback={playback}
           visible={robotVisible}
+          opacity={robotOpacity}
         />
       </group>
     </>
@@ -244,6 +252,8 @@ export function StageCanvas({
   playback,
   onPlaybackChange,
   visibleLayers,
+  sourceSkeletonVariant = "source",
+  robotOpacity = 1,
 }: {
   motion: StageMotionPayload | null;
   scaledMotion?: StageMotionPayload | null;
@@ -252,6 +262,8 @@ export function StageCanvas({
   playback: StagePlaybackRef;
   onPlaybackChange?: () => void;
   visibleLayers: readonly StageLayerId[];
+  sourceSkeletonVariant?: SkeletonVisualVariant;
+  robotOpacity?: number;
 }) {
   return (
     <Canvas
@@ -280,6 +292,8 @@ export function StageCanvas({
         playback={playback}
         onPlaybackChange={onPlaybackChange}
         visibleLayers={visibleLayers}
+        sourceSkeletonVariant={sourceSkeletonVariant}
+        robotOpacity={robotOpacity}
       />
     </Canvas>
   );

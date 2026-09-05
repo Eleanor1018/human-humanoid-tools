@@ -9,12 +9,14 @@ import type {
   StageRobotPayload,
   StageRobotTrajectoryPayload,
 } from "./types";
+import { ROBOT_VISUAL } from "./visualStyle";
 
 interface RobotLayerProps {
   robot: StageRobotPayload | null;
   trajectory?: StageRobotTrajectoryPayload | null;
   playback?: StagePlaybackRef;
   visible: boolean;
+  opacity?: number;
 }
 
 interface LinkMesh {
@@ -127,8 +129,14 @@ function linkForNode(node: THREE.Object3D, robot: StageRobotPayload): string | n
 
 function fallbackResource(robot: StageRobotPayload): RobotResource {
   const root = new THREE.Group();
-  const geometry = new THREE.SphereGeometry(0.02, 8, 8);
-  const material = new THREE.MeshStandardMaterial({ color: 0xb8bdc6 });
+  const geometry = new THREE.SphereGeometry(
+    ROBOT_VISUAL.fallbackRadius,
+    ROBOT_VISUAL.fallbackSegments,
+    ROBOT_VISUAL.fallbackSegments,
+  );
+  const material = new THREE.MeshStandardMaterial({
+    color: ROBOT_VISUAL.fallbackColor,
+  });
   const linkMeshes: Record<string, LinkMesh[]> = {};
   const zeroInverse: Record<string, THREE.Matrix4> = {};
   for (const link of robot.links) {
@@ -145,11 +153,11 @@ function fallbackResource(robot: StageRobotPayload): RobotResource {
 
 function createRobotMaterial(): THREE.MeshStandardMaterial {
   return new THREE.MeshStandardMaterial({
-    color: 0xc8ccd4,
-    emissive: 0x6b7280,
-    emissiveIntensity: 0.55,
-    roughness: 0.6,
-    metalness: 0.15,
+    color: ROBOT_VISUAL.color,
+    emissive: ROBOT_VISUAL.emissive,
+    emissiveIntensity: ROBOT_VISUAL.emissiveIntensity,
+    roughness: ROBOT_VISUAL.roughness,
+    metalness: ROBOT_VISUAL.metalness,
     side: THREE.DoubleSide,
     vertexColors: false,
   });
@@ -330,12 +338,14 @@ function RobotObject({
   trajectory,
   playback,
   visible,
+  opacity,
 }: {
   resource: RobotResource;
   robot: StageRobotPayload;
   trajectory?: StageRobotTrajectoryPayload | null;
   playback?: StagePlaybackRef;
   visible: boolean;
+  opacity: number;
 }) {
   const group = useRef<THREE.Group | null>(null);
   const lastFrame = useRef<number | null>(null);
@@ -354,6 +364,21 @@ function RobotObject({
       applyStatic(group.current, resource, robot);
     }
   }, [playback, resource, robot, trajectory]);
+
+  useEffect(() => {
+    const value = THREE.MathUtils.clamp(opacity, 0.1, 1);
+    resource.root.traverse((node) => {
+      const mesh = node as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      for (const material of materials) {
+        material.opacity = value;
+        material.transparent = value < 0.999;
+        material.depthWrite = value >= 0.55;
+        material.needsUpdate = true;
+      }
+    });
+  }, [opacity, resource]);
 
   useFrame(() => {
     if (!visible || !group.current || !trajectory?.frames.length) return;
@@ -379,6 +404,7 @@ export function RobotLayer({
   trajectory = null,
   playback,
   visible,
+  opacity = 1,
 }: RobotLayerProps) {
   const [loaded, setLoaded] = useState<{
     owner: StageRobotPayload;
@@ -426,6 +452,7 @@ export function RobotLayer({
       trajectory={trajectory}
       playback={playback}
       visible={visible}
+      opacity={opacity}
     />
   );
 }

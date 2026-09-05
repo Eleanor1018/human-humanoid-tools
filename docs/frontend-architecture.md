@@ -50,6 +50,7 @@ src/
 │   ├── StageEmpty.tsx       # Legacy initial empty-state copy
 │   ├── StagePlaybackBar.tsx # Play, pause, seek and single-frame controls
 │   ├── playback.ts          # Shared renderer playback cursor and timing
+│   ├── presentation.ts      # Pure workflow-to-layer default projection
 │   ├── SkeletonLayer.tsx    # Animated source skeleton layer
 │   ├── CapsuleBodyLayer.tsx # Universal tube-and-joint body fallback
 │   ├── capsuleBody.ts       # Capsule geometry and frame updates
@@ -58,6 +59,7 @@ src/
 │   ├── EnvironmentLayer.tsx # Terrain and animated interaction objects
 │   ├── RobotLayer.tsx       # GLB/fallback robot and trajectory playback
 │   ├── types.ts             # Stage renderer data contracts
+│   ├── visualStyle.ts       # Original Stage palette and material parameters
 │   └── StageViewMenu.tsx    # React visibility HUD
 └── styles.css
 ```
@@ -131,6 +133,7 @@ main -> App -> features -> components/ui
 - [x] Shared R3F timeline with play/pause, seek, and frame stepping
 - [x] Animated skeleton, baked body, terrain, and interaction-object layers
 - [x] Legacy-compatible capsule body when a baked skin is unavailable
+- [x] Original source/scaled terrain, object, skeleton, body, and robot materials
 - [x] Motion Library list, upload, job polling, and Stage handoff
 - [x] Motion Library root selection, external directory links, and recursive drops
 - [x] Robot catalog, zero-pose selection, GLB parsing, and Stage handoff

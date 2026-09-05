@@ -58,6 +58,12 @@ const categories: readonly { value: "all" | MotionCategory; label: string }[] = 
   { value: "terrain", label: "Terrain scene" },
 ];
 
+const categoryBadgeClass: Readonly<Record<MotionCategory, string>> = {
+  motion: "bg-[#0071e3]/[0.12] text-[#0071e3]",
+  object: "bg-[#8e44ad]/[0.14] text-[#8e44ad]",
+  terrain: "bg-[#34c759]/[0.14] text-[#34c759]",
+};
+
 const fieldClass =
   "min-h-[30px] min-w-0 truncate rounded-md border border-border bg-surface px-3 py-1.5 text-xs font-medium text-foreground disabled:cursor-not-allowed disabled:text-muted-foreground";
 
@@ -468,7 +474,9 @@ export function MotionView({
                       disabled={Boolean(loadingKey) && !busy}
                       onClick={() => loadEntry(entry)}
                     >
-                      <span className="rounded-sm bg-primary/10 px-1.5 py-1 text-[10px] font-semibold uppercase text-primary">
+                      <span
+                        className={`rounded-sm px-1.5 py-1 text-[10px] font-semibold uppercase ${categoryBadgeClass[motionCategory]}`}
+                      >
                         {motionCategory}
                       </span>
                       <span className="grid min-w-0 gap-0.5">

@@ -14,6 +14,10 @@ import {
   timelineFrameCount,
   type StagePlaybackRef,
 } from "./playback";
+import {
+  ENVIRONMENT_VISUALS,
+  type EnvironmentVisualVariant,
+} from "./visualStyle";
 
 interface EnvironmentLayerProps {
   motion: StageMotionPayload | null;
@@ -21,6 +25,7 @@ interface EnvironmentLayerProps {
   /** Shared cursor keeps props synchronized with skeleton and body playback. */
   playback?: StagePlaybackRef;
   timeline?: StageTimelinePayload | null;
+  variant?: EnvironmentVisualVariant;
   name?: string;
 }
 
@@ -29,9 +34,6 @@ interface FramePair {
   second: number;
   blend: number;
 }
-
-const DEFAULT_OBJECT_COLOR = 0xff9f0a;
-const DEFAULT_OBJECT_OPACITY = 0.55;
 
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.min(maximum, Math.max(minimum, value));
@@ -92,9 +94,9 @@ function writeObjectTransform(
   target.slerp(quaternionScratch, pair.blend);
 }
 
-function rgbToHex(color: StageObjectPayload["color"]): number {
+function rgbToHex(color: StageObjectPayload["color"], fallback: number): number {
   if (!color || color.length < 3 || color.some((value) => !Number.isFinite(value))) {
-    return DEFAULT_OBJECT_COLOR;
+    return fallback;
   }
   // SceneObject's transport contract uses integer RGB channels in 0..255.
   const channels = color.map((value) => clamp(value, 0, 255));
@@ -112,7 +114,14 @@ function validTerrain(terrain: StageTerrainPayload | null | undefined): terrain 
 }
 
 /** Declarative triangulated terrain. Coordinates remain in hhtools Z-up space. */
-function TerrainMesh({ terrain }: { terrain: StageTerrainPayload }) {
+function TerrainMesh({
+  terrain,
+  variant,
+}: {
+  terrain: StageTerrainPayload;
+  variant: EnvironmentVisualVariant;
+}) {
+  const visual = ENVIRONMENT_VISUALS[variant];
   const geometryRef = useRef<THREE.BufferGeometry | null>(null);
   const positions = useMemo(() => {
     const values = new Float32Array(terrain.vertices.length * 3);
@@ -158,10 +167,12 @@ function TerrainMesh({ terrain }: { terrain: StageTerrainPayload }) {
         />
       </bufferGeometry>
       <meshStandardMaterial
-        color={0x9a9aa0}
-        roughness={0.95}
+        color={visual.terrainColor}
+        roughness={visual.terrainRoughness}
         side={THREE.DoubleSide}
         flatShading
+        transparent={visual.terrainOpacity < 1}
+        opacity={visual.terrainOpacity}
       />
     </mesh>
   );
@@ -181,22 +192,6 @@ function disposeObject(root: THREE.Object3D): void {
         if (value instanceof THREE.Texture) value.dispose();
       }
       material.dispose();
-    }
-  });
-}
-
-function styleObject(root: THREE.Object3D, color: number, opacity: number): void {
-  root.traverse((node) => {
-    const mesh = node as THREE.Mesh;
-    if (!mesh.isMesh) return;
-    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-    for (const material of materials) {
-      const colored = material as THREE.Material & { color?: THREE.Color };
-      colored.color?.setHex(color);
-      material.opacity = opacity;
-      material.transparent = opacity < 1;
-      material.depthWrite = opacity >= 1;
-      material.needsUpdate = true;
     }
   });
 }
@@ -230,12 +225,15 @@ function InteractionObject({
   index,
   meshUrl,
   objectRefs,
+  variant,
 }: {
   object: StageObjectPayload;
   index: number;
   meshUrl: string | null;
   objectRefs: MutableRefObject<Array<THREE.Object3D | undefined>>;
+  variant: EnvironmentVisualVariant;
 }) {
+  const visual = ENVIRONMENT_VISUALS[variant];
   const [loaded, setLoaded] = useState<{
     object: StageObjectPayload;
     meshUrl: string;
@@ -250,7 +248,7 @@ function InteractionObject({
       : null;
   const initialPosition = object.positions[0] ?? [0, 0, 0];
   const initialQuaternion = object.quaternions[0] ?? [0, 0, 0, 1];
-  const opacity = clamp(object.opacity ?? DEFAULT_OBJECT_OPACITY, 0, 1);
+  const opacity = clamp(object.opacity ?? visual.objectOpacity, 0, 1);
 
   useEffect(() => {
     let active = true;
@@ -260,7 +258,6 @@ function InteractionObject({
     new GLTFLoader().load(
       meshUrl,
       (gltf) => {
-        styleObject(gltf.scene, rgbToHex(object.color), opacity);
         ownedScene = gltf.scene;
         if (!active) {
           disposeObject(gltf.scene);
@@ -296,10 +293,10 @@ function InteractionObject({
         <mesh>
           <boxGeometry args={[...object.extents]} />
           <meshStandardMaterial
-            color={rgbToHex(object.color)}
+            color={rgbToHex(object.color, visual.objectColor)}
             transparent={opacity < 1}
             opacity={opacity}
-            roughness={0.6}
+            roughness={visual.objectRoughness}
           />
         </mesh>
       )}
@@ -316,6 +313,7 @@ export function EnvironmentLayer({
   visible,
   playback,
   timeline,
+  variant = "source",
   name = "source-environment",
 }: EnvironmentLayerProps) {
   const objectRefs = useRef<Array<THREE.Object3D | undefined>>([]);
@@ -374,7 +372,9 @@ export function EnvironmentLayer({
   if (!motion) return null;
   return (
     <group name={name} visible={visible}>
-      {validTerrain(motion.terrain) && <TerrainMesh terrain={motion.terrain} />}
+      {validTerrain(motion.terrain) && (
+        <TerrainMesh terrain={motion.terrain} variant={variant} />
+      )}
       {objects.map((object, index) => (
         <InteractionObject
           key={`${object.name ?? "object"}-${index}`}
@@ -382,6 +382,7 @@ export function EnvironmentLayer({
           index={index}
           meshUrl={objectMeshUrl(motion, object, index)}
           objectRefs={objectRefs}
+          variant={variant}
         />
       ))}
     </group>

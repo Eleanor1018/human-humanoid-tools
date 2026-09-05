@@ -19,10 +19,18 @@ import {
   timelineDuration,
   timelineFrameAtTime,
 } from "../src/stage/playback.ts";
+import { defaultStageLayers } from "../src/stage/presentation.ts";
 import type {
   StageMotionPayload,
   StageRobotTrajectoryPayload,
 } from "../src/stage/types.ts";
+import {
+  BAKED_BODY_VISUAL,
+  CAPSULE_BODY_VISUAL,
+  ENVIRONMENT_VISUALS,
+  ROBOT_VISUAL,
+  SKELETON_VISUALS,
+} from "../src/stage/visualStyle.ts";
 
 function motion(overrides: Partial<StageMotionPayload> = {}): StageMotionPayload {
   return {
@@ -142,4 +150,80 @@ test("capsule body does not interpolate across sparse source frames", () => {
   } finally {
     disposeCapsuleBody(resource);
   }
+});
+
+test("keeps the original source and scaled Stage palette distinct", () => {
+  assert.equal(SKELETON_VISUALS.source.color, 0x0a84ff);
+  assert.equal(SKELETON_VISUALS.scaled.color, 0xffb020);
+  assert.equal(SKELETON_VISUALS.reference.color, 0x5eb3ff);
+  assert.equal(CAPSULE_BODY_VISUAL.color, 0xf7a470);
+  assert.equal(BAKED_BODY_VISUAL.color, 0xb4c8dc);
+  assert.equal(ENVIRONMENT_VISUALS.source.terrainColor, 0x9a9aa0);
+  assert.equal(ENVIRONMENT_VISUALS.scaled.terrainColor, 0x5c7a9e);
+  assert.equal(ENVIRONMENT_VISUALS.source.objectColor, 0xff9f0a);
+  assert.equal(ENVIRONMENT_VISUALS.scaled.objectColor, 0x6a9fd4);
+  assert.equal(ROBOT_VISUAL.color, 0xc8ccd4);
+});
+
+test("projects the original Motion and workflow layer defaults", () => {
+  const skeletonOnly = motion({ body_mesh: { available: false } });
+  assert.deepEqual(
+    defaultStageLayers({
+      mode: "motion",
+      motion: skeletonOnly,
+      scaledMotion: null,
+      robot: null,
+      robotTrajectory: null,
+    }),
+    ["skeleton"],
+  );
+
+  const skinned = motion({ body_mesh: { available: true } });
+  assert.deepEqual(
+    defaultStageLayers({
+      mode: "motion",
+      motion: skinned,
+      scaledMotion: null,
+      robot: null,
+      robotTrajectory: null,
+    }),
+    ["body"],
+  );
+
+  assert.deepEqual(
+    defaultStageLayers({
+      mode: "h2r",
+      motion: skeletonOnly,
+      scaledMotion: motion(),
+      robot: {
+        name: "robot",
+        display_name: "Robot",
+        links: [],
+        link_transforms_zero: {},
+      },
+      robotTrajectory: { frames: [{ links: {} }] },
+    }),
+    ["skeleton", "scaled-skeleton", "robot"],
+  );
+
+  assert.deepEqual(
+    defaultStageLayers({
+      mode: "h2r-result",
+      motion: motion({
+        body_mesh: { available: true },
+        objects: [{ extents: [1, 1, 1], positions: [], quaternions: [] }],
+      }),
+      scaledMotion: motion({
+        terrain: { vertices: [[0, 0, 0]], faces: [[0, 0, 0]] },
+      }),
+      robot: {
+        name: "robot",
+        display_name: "Robot",
+        links: [],
+        link_transforms_zero: {},
+      },
+      robotTrajectory: { frames: [{ links: {} }] },
+    }),
+    ["skeleton", "scaled-skeleton", "scaled-scene", "robot"],
+  );
 });

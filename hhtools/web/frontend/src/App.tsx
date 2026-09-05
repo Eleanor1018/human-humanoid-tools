@@ -21,6 +21,7 @@ import type {
 import { VideoToMotionView } from "./features/video-to-motion/VideoToMotionView";
 import type { ViewId } from "./navigation";
 import { Stage } from "./stage/Stage";
+import type { StagePresentation } from "./stage/presentation";
 import type {
   StageMotionPayload,
   StageRobotPayload,
@@ -97,6 +98,26 @@ export function App() {
   const [r2rCalibrationReference, setR2rCalibrationReference] =
     useState<StageMotionPayload | null>(null);
   const ActiveInspector = inspectorViews[activeView];
+  const stagePresentation: StagePresentation =
+    activeView === "robot-assets"
+      ? "robot"
+      : activeView === "dataset-viz"
+        ? "analysis"
+        : activeView === "batch"
+          ? "empty"
+          : activeView === "h2r"
+            ? h2rCalibrationReference
+              ? "h2r-calibration"
+              : h2rResult
+                ? "h2r-result"
+                : "h2r"
+            : activeView === "r2r"
+              ? r2rCalibrationReference
+                ? "r2r-calibration"
+                : r2rResult
+                  ? "r2r-result"
+                  : "r2r"
+              : activeView;
 
   const publishMotion = useCallback((motion: StageMotionPayload | null) => {
     setWorkspaceMotion(motion);
@@ -249,6 +270,7 @@ export function App() {
         scaledMotion={stageScaledMotion}
         robot={stageRobot}
         robotTrajectory={stageRobotTrajectory}
+        presentation={stagePresentation}
       />
       <Inspector>
         <div className={activeView === "motion" ? "h-full" : "hidden"}>

@@ -4,13 +4,17 @@ import * as THREE from "three";
 
 import { timelineFrameAtTime, type StagePlaybackRef } from "./playback";
 import type { StageMotionPayload } from "./types";
+import {
+  SKELETON_VISUALS,
+  type SkeletonVisualVariant,
+} from "./visualStyle";
 
 interface SkeletonLayerProps {
   motion: StageMotionPayload | null;
   visible: boolean;
   /** Shared StageScene cursor; all animated layers read the same frame. */
   playback?: StagePlaybackRef;
-  color?: number;
+  variant?: SkeletonVisualVariant;
   name?: string;
 }
 
@@ -18,8 +22,6 @@ interface SkeletonEdge {
   child: number;
   parent: number;
 }
-
-const SOURCE_COLOR = 0x0a84ff;
 
 /**
  * Resolve a fractional preview frame.  Interpolation is only allowed when
@@ -103,9 +105,10 @@ export function SkeletonLayer({
   motion,
   visible,
   playback,
-  color = SOURCE_COLOR,
+  variant = "source",
   name = "source-skeleton",
 }: SkeletonLayerProps) {
+  const visual = SKELETON_VISUALS[variant];
   const firstFrame = motion?.positions[0] ?? [];
   const spheresRef = useRef<Array<THREE.Mesh | undefined>>([]);
   const lineGeometryRef = useRef<THREE.BufferGeometry | null>(null);
@@ -185,11 +188,16 @@ export function SkeletonLayer({
           position={firstFrame[index]}
           visible={!excluded.has(index)}
         >
-          <sphereGeometry args={[0.028, 12, 12]} />
+          <sphereGeometry
+            args={[visual.jointRadius, visual.jointSegments, visual.jointSegments]}
+          />
           <meshStandardMaterial
-            color={color}
-            roughness={0.5}
-            metalness={0.1}
+            color={visual.color}
+            roughness={visual.roughness}
+            metalness={visual.metalness}
+            emissive={visual.emissive}
+            transparent={visual.opacity < 1}
+            opacity={visual.opacity}
           />
         </mesh>
       ))}
@@ -202,9 +210,9 @@ export function SkeletonLayer({
           />
         </bufferGeometry>
         <lineBasicMaterial
-          color={color}
+          color={visual.color}
           transparent
-          opacity={0.7}
+          opacity={visual.lineOpacity}
         />
       </lineSegments>
     </group>

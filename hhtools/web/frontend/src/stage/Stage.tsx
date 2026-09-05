@@ -9,6 +9,10 @@ import { StageViewMenu, type StageLayerId } from "./StageViewMenu";
 import { StageCanvas } from "./StageCanvas";
 import { StageEmpty } from "./StageEmpty";
 import { StagePlaybackBar } from "./StagePlaybackBar";
+import {
+  defaultStageLayers,
+  type StagePresentation,
+} from "./presentation";
 import type {
   StageMotionPayload,
   StageRobotPayload,
@@ -21,14 +25,15 @@ export function Stage({
   scaledMotion = null,
   robot = null,
   robotTrajectory = null,
+  presentation = "empty",
 }: {
   motion?: StageMotionPayload | null;
   scaledMotion?: StageMotionPayload | null;
   robot?: StageRobotPayload | null;
   robotTrajectory?: StageRobotTrajectoryPayload | null;
+  presentation?: StagePresentation;
 }) {
-  // Match the original idle HUD until renderer-owned visibility state is wired in.
-  const [visibleLayers, setVisibleLayers] = useState<StageLayerId[]>(["body"]);
+  const [visibleLayers, setVisibleLayers] = useState<StageLayerId[]>([]);
   const timeline: StageTimelinePayload | null =
     robotTrajectory && robotTrajectory.frames.length > 0
       ? robotTrajectory
@@ -65,6 +70,7 @@ export function Stage({
     scaledMotion?.terrain ||
       (scaledMotion?.objects && scaledMotion.objects.length > 0),
   );
+  const calibrating = presentation.endsWith("-calibration");
   const publishPlayback = useCallback(() => {
     setPlaybackView({ owner: playback, value: { ...playback.current } });
   }, [playback]);
@@ -77,48 +83,17 @@ export function Stage({
     return () => query.removeEventListener("change", update);
   }, []);
 
-  // A newly selected robot is immediately useful in the shared stage. Once the
-  // user toggles it off, ordinary React state keeps that choice until another
-  // payload is selected or the robot is cleared.
+  // New inputs and view transitions receive deterministic legacy defaults.
+  // Manual toggles remain local until one of those presentation facts changes.
   useEffect(() => {
-    setVisibleLayers((current) => {
-      if (robot !== null) {
-        return current.includes("robot") ? current : [...current, "robot"];
-      }
-      return current.filter((layer) => layer !== "robot");
-    });
-  }, [robot]);
-
-  useEffect(() => {
-    setVisibleLayers((current) => {
-      if (hasEnvironment) {
-        return current.includes("objects") ? current : [...current, "objects"];
-      }
-      return current.filter((layer) => layer !== "objects");
-    });
-  }, [hasEnvironment]);
-
-  useEffect(() => {
-    setVisibleLayers((current) => {
-      if (scaledMotion?.positions.length) {
-        return current.includes("scaled-skeleton")
-          ? current
-          : [...current, "scaled-skeleton"];
-      }
-      return current.filter((layer) => layer !== "scaled-skeleton");
-    });
-  }, [scaledMotion]);
-
-  useEffect(() => {
-    setVisibleLayers((current) => {
-      if (hasScaledEnvironment) {
-        return current.includes("scaled-scene")
-          ? current
-          : [...current, "scaled-scene"];
-      }
-      return current.filter((layer) => layer !== "scaled-scene");
-    });
-  }, [hasScaledEnvironment]);
+    setVisibleLayers(defaultStageLayers({
+      mode: presentation,
+      motion,
+      scaledMotion,
+      robot,
+      robotTrajectory,
+    }));
+  }, [motion, presentation, robot, robotTrajectory, scaledMotion]);
 
   return (
     <main
@@ -134,6 +109,8 @@ export function Stage({
           playback={playback}
           onPlaybackChange={publishPlayback}
           visibleLayers={visibleLayers}
+          sourceSkeletonVariant={calibrating ? "reference" : "source"}
+          robotOpacity={calibrating ? 0.72 : 1}
         />
       )}
       <StageEmpty
@@ -146,13 +123,16 @@ export function Stage({
         environmentAvailable={hasEnvironment}
         scaledMotionAvailable={Boolean(scaledMotion?.positions.length)}
         scaledEnvironmentAvailable={hasScaledEnvironment}
+        calibration={calibrating}
       />
-      <StagePlaybackBar
-        timeline={timeline}
-        playback={playback}
-        snapshot={playbackSnapshot}
-        onChange={publishPlayback}
-      />
+      {!calibrating && (
+        <StagePlaybackBar
+          timeline={timeline}
+          playback={playback}
+          snapshot={playbackSnapshot}
+          onChange={publishPlayback}
+        />
+      )}
     </main>
   );
 }
