@@ -201,7 +201,7 @@ export function MotionView({
   );
 
   const importFiles = useCallback(
-    (fileList: FileList | null) => {
+    (fileList: Iterable<File> | null) => {
       const files = fileList ? Array.from(fileList) : [];
       if (!files.length || loadingKey) return;
       motionRequest.current?.abort();
@@ -255,6 +255,8 @@ export function MotionView({
           label={`${profile} import area`}
           icon={selected.icon}
           title={selected.prompt}
+          disabled={Boolean(loadingKey)}
+          onFiles={importFiles}
         >
           {selected.acceptsFile && (
             <Button

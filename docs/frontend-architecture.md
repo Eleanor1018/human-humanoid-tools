@@ -62,6 +62,9 @@ src/
 └── styles.css
 ```
 
+`lib/dropFiles.ts` is the single browser boundary for recursive folder drops;
+feature views receive ordinary files with their relative paths preserved.
+
 Directories and files are created only when their first real user exists.
 
 ## Dependencies
