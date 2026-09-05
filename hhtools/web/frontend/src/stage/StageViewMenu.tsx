@@ -3,21 +3,18 @@ import {
   ToggleGroupItem,
 } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
-
-export type StageLayerId =
-  | "skeleton"
-  | "body"
-  | "objects"
-  | "scaled-skeleton"
-  | "scaled-scene"
-  | "robot";
+import type {
+  R2rLayerAvailability,
+  R2rStageLayerId,
+  StageLayerId,
+} from "./types";
 
 interface StageLayer {
   id: StageLayerId;
   label: string;
   accessibleLabel?: string;
   title: string;
-  family: "source" | "scaled" | "robot";
+  family: "source" | "scaled" | "robot" | "target";
   disabled?: boolean;
 }
 
@@ -66,10 +63,60 @@ const layerRows: readonly (readonly StageLayer[])[] = [
   ],
 ];
 
+const r2rLayerRows: readonly (readonly StageLayer[])[] = [
+  [
+    {
+      id: "r2r-source-robot",
+      label: "Robot",
+      accessibleLabel: "Source Robot",
+      title: "Show or hide the source robot",
+      family: "source",
+    },
+    {
+      id: "r2r-source-skeleton",
+      label: "Skeleton",
+      accessibleLabel: "Source Skeleton",
+      title: "Show or hide the source robot skeleton",
+      family: "source",
+    },
+    {
+      id: "r2r-source-scene",
+      label: "Scene",
+      accessibleLabel: "Source Scene",
+      title: "Show or hide source terrain and interaction objects",
+      family: "source",
+    },
+  ],
+  [
+    {
+      id: "r2r-target-robot",
+      label: "Robot",
+      accessibleLabel: "Target Robot",
+      title: "Show or hide the target robot",
+      family: "target",
+    },
+    {
+      id: "r2r-target-skeleton",
+      label: "Skeleton",
+      accessibleLabel: "Target Skeleton",
+      title: "Show or hide the scaled target skeleton",
+      family: "target",
+    },
+    {
+      id: "r2r-target-scene",
+      label: "Scene",
+      accessibleLabel: "Target Scene",
+      title: "Show or hide scaled target terrain and interaction objects",
+      family: "target",
+    },
+  ],
+];
+
 const activeFamilyClass: Record<StageLayer["family"], string> = {
   source: "data-[state=on]:bg-[#0071e3] data-[state=on]:hover:bg-[#0071e3]",
   scaled: "data-[state=on]:bg-[#007c83] data-[state=on]:hover:bg-[#007c83]",
   robot: "data-[state=on]:bg-[#8e44ad] data-[state=on]:hover:bg-[#8e44ad]",
+  target: "data-[state=on]:bg-[#8e44ad] data-[state=on]:hover:bg-[#8e44ad]",
 };
 
 interface StageViewMenuProps {
@@ -80,6 +127,7 @@ interface StageViewMenuProps {
   scaledMotionAvailable?: boolean;
   scaledEnvironmentAvailable?: boolean;
   calibration?: boolean;
+  r2rAvailability?: R2rLayerAvailability;
 }
 
 export function StageViewMenu({
@@ -90,10 +138,16 @@ export function StageViewMenu({
   scaledMotionAvailable = false,
   scaledEnvironmentAvailable = false,
   calibration = false,
+  r2rAvailability,
 }: StageViewMenuProps) {
-  const rows = calibration
-    ? [[layerRows[1][2]]]
-    : layerRows;
+  const rows = r2rAvailability
+    ? calibration
+      ? [[r2rLayerRows[1][0]]]
+      : r2rLayerRows
+    : calibration
+      ? [[layerRows[1][2]]]
+      : layerRows;
+  const r2rRowLabels = calibration ? ["Target"] : ["Source", "Target"];
   return (
     <ToggleGroup
       type="multiple"
@@ -108,16 +162,24 @@ export function StageViewMenu({
           key={index}
           className="flex flex-nowrap items-center gap-[3px]"
         >
+          {r2rAvailability && (
+            <span className="w-10 shrink-0 text-[10px] font-semibold uppercase text-muted-foreground">
+              {r2rRowLabels[index]}
+            </span>
+          )}
           {row.map((layer) => (
             <ToggleGroupItem
               key={layer.id}
               value={layer.id}
               disabled={
                 layer.disabled ||
+                (calibration && Boolean(r2rAvailability)) ||
                 (layer.id === "robot" && !robotAvailable) ||
                 (layer.id === "objects" && !environmentAvailable) ||
                 (layer.id === "scaled-skeleton" && !scaledMotionAvailable) ||
-                (layer.id === "scaled-scene" && !scaledEnvironmentAvailable)
+                (layer.id === "scaled-scene" && !scaledEnvironmentAvailable) ||
+                (layer.id.startsWith("r2r-") &&
+                  !r2rAvailability?.[layer.id as R2rStageLayerId])
               }
               title={layer.title}
               aria-label={layer.accessibleLabel ?? layer.label}

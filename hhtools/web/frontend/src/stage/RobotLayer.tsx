@@ -17,6 +17,7 @@ interface RobotLayerProps {
   playback?: StagePlaybackRef;
   visible: boolean;
   opacity?: number;
+  name?: string;
 }
 
 interface LinkMesh {
@@ -339,6 +340,7 @@ function RobotObject({
   playback,
   visible,
   opacity,
+  name,
 }: {
   resource: RobotResource;
   robot: StageRobotPayload;
@@ -346,6 +348,7 @@ function RobotObject({
   playback?: StagePlaybackRef;
   visible: boolean;
   opacity: number;
+  name: string;
 }) {
   const group = useRef<THREE.Group | null>(null);
   const lastFrame = useRef<number | null>(null);
@@ -392,7 +395,7 @@ function RobotObject({
   });
 
   return (
-    <group ref={group} name="robot-model" visible={visible}>
+    <group ref={group} name={name} visible={visible}>
       <primitive object={resource.root} dispose={null} />
     </group>
   );
@@ -405,6 +408,7 @@ export function RobotLayer({
   playback,
   visible,
   opacity = 1,
+  name = "robot-model",
 }: RobotLayerProps) {
   const [loaded, setLoaded] = useState<{
     owner: StageRobotPayload;
@@ -453,6 +457,7 @@ export function RobotLayer({
       playback={playback}
       visible={visible}
       opacity={opacity}
+      name={name}
     />
   );
 }

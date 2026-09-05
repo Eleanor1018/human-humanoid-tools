@@ -9,9 +9,11 @@ import { EnvironmentLayer } from "./EnvironmentLayer";
 import { RobotLayer } from "./RobotLayer";
 import { SkeletonLayer } from "./SkeletonLayer";
 import { timelineFrameAtTime, type StagePlaybackRef } from "./playback";
-import type { StageLayerId } from "./StageViewMenu";
+import { projectR2rStageVisibility } from "./presentation";
 import type {
+  StageLayerId,
   StageMotionPayload,
+  StageR2rPresentationPayload,
   StageRobotPayload,
   StageRobotTrajectoryPayload,
   StageTimelinePayload,
@@ -125,12 +127,96 @@ function PlaybackClock({
   return null;
 }
 
+function R2rLayers({
+  presentation,
+  playback,
+  visibleLayers,
+}: {
+  presentation: StageR2rPresentationPayload;
+  playback: StagePlaybackRef;
+  visibleLayers: readonly StageLayerId[];
+}) {
+  const visibility = projectR2rStageVisibility(presentation, visibleLayers);
+  if (presentation.phase === "calibration") {
+    return (
+      <>
+        <SkeletonLayer
+          motion={presentation.calibrationReference}
+          visible={visibility.calibrationReference}
+          playback={playback}
+          variant="reference"
+          name="r2r-calibration-reference"
+        />
+        <RobotLayer
+          robot={presentation.target.robot}
+          trajectory={presentation.target.trajectory}
+          playback={playback}
+          visible={visibility.targetRobot}
+          opacity={0.72}
+          name="r2r-target-robot"
+        />
+      </>
+    );
+  }
+
+  return (
+    <>
+      <RobotLayer
+        robot={presentation.source.robot}
+        trajectory={presentation.source.trajectory}
+        playback={playback}
+        visible={visibility.sourceRobot}
+        name="r2r-source-robot"
+      />
+      <SkeletonLayer
+        motion={presentation.source.skeleton}
+        visible={visibility.sourceSkeleton}
+        playback={playback}
+        variant="r2r-source"
+        name="r2r-source-skeleton"
+      />
+      <EnvironmentLayer
+        motion={presentation.source.environment}
+        visible={visibility.sourceScene}
+        playback={playback}
+        timeline={presentation.source.trajectory ?? presentation.source.skeleton}
+        variant="scaled"
+        name="r2r-source-environment"
+      />
+      <RobotLayer
+        robot={presentation.target.robot}
+        trajectory={presentation.target.trajectory}
+        playback={playback}
+        visible={visibility.targetRobot}
+        name="r2r-target-robot"
+      />
+      <SkeletonLayer
+        motion={presentation.target.skeleton}
+        visible={visibility.targetSkeleton}
+        playback={playback}
+        variant="scaled"
+        name="r2r-target-skeleton"
+      />
+      <EnvironmentLayer
+        motion={presentation.target.environment}
+        visible={visibility.targetScene}
+        playback={playback}
+        timeline={presentation.target.trajectory ?? presentation.target.skeleton}
+        variant="scaled"
+        name="r2r-target-environment"
+      />
+    </>
+  );
+}
+
 /** Static scene content migrated from the legacy renderer bootstrap. */
 function StageScene({
   motion,
   scaledMotion,
   robot,
   robotTrajectory,
+  r2r,
+  timeline,
   playback,
   onPlaybackChange,
   visibleLayers,
@@ -141,16 +227,14 @@ function StageScene({
   scaledMotion: StageMotionPayload | null;
   robot: StageRobotPayload | null;
   robotTrajectory: StageRobotTrajectoryPayload | null;
+  r2r: StageR2rPresentationPayload | null;
+  timeline: StageTimelinePayload | null;
   playback: StagePlaybackRef;
   onPlaybackChange?: () => void;
   visibleLayers: readonly StageLayerId[];
   sourceSkeletonVariant: SkeletonVisualVariant;
   robotOpacity: number;
 }) {
-  const timeline: StageTimelinePayload | null =
-    robotTrajectory && robotTrajectory.frames.length > 0
-      ? robotTrajectory
-      : motion;
   const bodyMesh = motion?.body_mesh;
   const [bodyStatus, setBodyStatus] = useState<{
     owner: typeof bodyMesh;
@@ -195,50 +279,60 @@ function StageScene({
       <GroundGrid />
       <group name="hhtools-world" rotation={[-Math.PI / 2, 0, 0]}>
         <axesHelper args={[1.2]} />
-        <SkeletonLayer
-          motion={motion}
-          visible={skeletonVisible}
-          playback={playback}
-          variant={sourceSkeletonVariant}
-        />
-        <CapsuleBodyLayer
-          motion={motion}
-          visible={capsuleVisible}
-          playback={playback}
-        />
-        <BodyMeshLayer
-          motion={motion}
-          visible={bodyVisible}
-          playback={playback}
-          onReadyChange={publishBodyReady}
-        />
-        <EnvironmentLayer
-          motion={motion}
-          visible={environmentVisible}
-          playback={playback}
-        />
-        <SkeletonLayer
-          motion={scaledMotion}
-          visible={scaledSkeletonVisible}
-          playback={playback}
-          variant="scaled"
-          name="scaled-skeleton"
-        />
-        <EnvironmentLayer
-          motion={scaledMotion}
-          visible={scaledEnvironmentVisible}
-          playback={playback}
-          timeline={robotTrajectory ?? scaledMotion}
-          variant="scaled"
-          name="scaled-environment"
-        />
-        <RobotLayer
-          robot={robot}
-          trajectory={robotTrajectory}
-          playback={playback}
-          visible={robotVisible}
-          opacity={robotOpacity}
-        />
+        {r2r ? (
+          <R2rLayers
+            presentation={r2r}
+            playback={playback}
+            visibleLayers={visibleLayers}
+          />
+        ) : (
+          <>
+            <SkeletonLayer
+              motion={motion}
+              visible={skeletonVisible}
+              playback={playback}
+              variant={sourceSkeletonVariant}
+            />
+            <CapsuleBodyLayer
+              motion={motion}
+              visible={capsuleVisible}
+              playback={playback}
+            />
+            <BodyMeshLayer
+              motion={motion}
+              visible={bodyVisible}
+              playback={playback}
+              onReadyChange={publishBodyReady}
+            />
+            <EnvironmentLayer
+              motion={motion}
+              visible={environmentVisible}
+              playback={playback}
+            />
+            <SkeletonLayer
+              motion={scaledMotion}
+              visible={scaledSkeletonVisible}
+              playback={playback}
+              variant="scaled"
+              name="scaled-skeleton"
+            />
+            <EnvironmentLayer
+              motion={scaledMotion}
+              visible={scaledEnvironmentVisible}
+              playback={playback}
+              timeline={robotTrajectory ?? scaledMotion}
+              variant="scaled"
+              name="scaled-environment"
+            />
+            <RobotLayer
+              robot={robot}
+              trajectory={robotTrajectory}
+              playback={playback}
+              visible={robotVisible}
+              opacity={robotOpacity}
+            />
+          </>
+        )}
       </group>
     </>
   );
@@ -249,6 +343,8 @@ export function StageCanvas({
   scaledMotion = null,
   robot = null,
   robotTrajectory = null,
+  r2r = null,
+  timeline,
   playback,
   onPlaybackChange,
   visibleLayers,
@@ -259,6 +355,8 @@ export function StageCanvas({
   scaledMotion?: StageMotionPayload | null;
   robot?: StageRobotPayload | null;
   robotTrajectory?: StageRobotTrajectoryPayload | null;
+  r2r?: StageR2rPresentationPayload | null;
+  timeline: StageTimelinePayload | null;
   playback: StagePlaybackRef;
   onPlaybackChange?: () => void;
   visibleLayers: readonly StageLayerId[];
@@ -289,6 +387,8 @@ export function StageCanvas({
         scaledMotion={scaledMotion}
         robot={robot}
         robotTrajectory={robotTrajectory}
+        r2r={r2r}
+        timeline={timeline}
         playback={playback}
         onPlaybackChange={onPlaybackChange}
         visibleLayers={visibleLayers}

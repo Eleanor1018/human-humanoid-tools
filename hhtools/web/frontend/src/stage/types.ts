@@ -19,6 +19,25 @@ export type StageMatrix4 = readonly [
   number,
 ];
 
+export type R2rStageLayerId =
+  | "r2r-source-robot"
+  | "r2r-source-skeleton"
+  | "r2r-source-scene"
+  | "r2r-target-robot"
+  | "r2r-target-skeleton"
+  | "r2r-target-scene";
+
+export type StageLayerId =
+  | "skeleton"
+  | "body"
+  | "objects"
+  | "scaled-skeleton"
+  | "scaled-scene"
+  | "robot"
+  | R2rStageLayerId;
+
+export type R2rLayerAvailability = Readonly<Record<R2rStageLayerId, boolean>>;
+
 export interface StageTerrainPayload {
   readonly vertices: readonly StageVec3[];
   readonly faces: readonly (readonly [number, number, number])[];
@@ -126,3 +145,23 @@ export interface StageRobotTrajectoryPayload {
 export type StageTimelinePayload =
   | StageMotionPayload
   | StageRobotTrajectoryPayload;
+
+/** One side of the R2R comparison surface. */
+export interface StageR2rActorPayload {
+  readonly robot: StageRobotPayload | null;
+  readonly trajectory: StageRobotTrajectoryPayload | null;
+  readonly skeleton: StageMotionPayload | null;
+  /** Scene-only motion payload carrying terrain, objects, and their mesh token. */
+  readonly environment: StageMotionPayload | null;
+}
+
+/** Complete data-only description of the two-sided R2R Stage. */
+export interface StageR2rPresentationPayload {
+  readonly phase: "source" | "calibration" | "result";
+  readonly source: StageR2rActorPayload;
+  readonly target: StageR2rActorPayload;
+  readonly calibrationReference: StageMotionPayload | null;
+  /** Stable identities let Stage reset defaults only for genuinely new results. */
+  readonly sourceToken: string | null;
+  readonly resultToken: string | null;
+}

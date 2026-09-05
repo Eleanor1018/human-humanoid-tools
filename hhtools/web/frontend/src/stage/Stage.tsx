@@ -1,20 +1,26 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   timelineDuration,
   type StagePlaybackRef,
   type StagePlaybackState,
 } from "./playback";
-import { StageViewMenu, type StageLayerId } from "./StageViewMenu";
+import { StageViewMenu } from "./StageViewMenu";
 import { StageCanvas } from "./StageCanvas";
 import { StageEmpty } from "./StageEmpty";
 import { StagePlaybackBar } from "./StagePlaybackBar";
 import {
+  defaultR2rStageLayers,
   defaultStageLayers,
+  r2rLayerAvailability,
+  r2rPlaybackTimeline,
+  r2rVisibilityIdentity,
   type StagePresentation,
 } from "./presentation";
 import type {
   StageMotionPayload,
+  StageLayerId,
+  StageR2rPresentationPayload,
   StageRobotPayload,
   StageRobotTrajectoryPayload,
   StageTimelinePayload,
@@ -26,16 +32,21 @@ export function Stage({
   robot = null,
   robotTrajectory = null,
   presentation = "empty",
+  r2r = null,
 }: {
   motion?: StageMotionPayload | null;
   scaledMotion?: StageMotionPayload | null;
   robot?: StageRobotPayload | null;
   robotTrajectory?: StageRobotTrajectoryPayload | null;
   presentation?: StagePresentation;
+  r2r?: StageR2rPresentationPayload | null;
 }) {
   const [visibleLayers, setVisibleLayers] = useState<StageLayerId[]>([]);
-  const timeline: StageTimelinePayload | null =
-    robotTrajectory && robotTrajectory.frames.length > 0
+  const [r2rVisibleLayers, setR2rVisibleLayers] = useState<StageLayerId[]>([]);
+  const r2rVisibilityKey = useRef<string | null>(null);
+  const timeline: StageTimelinePayload | null = r2r
+    ? r2rPlaybackTimeline(r2r)
+    : robotTrajectory && robotTrajectory.frames.length > 0
       ? robotTrajectory
       : motion;
   const playback = useMemo<StagePlaybackRef>(() => {
@@ -70,7 +81,22 @@ export function Stage({
     scaledMotion?.terrain ||
       (scaledMotion?.objects && scaledMotion.objects.length > 0),
   );
-  const calibrating = presentation.endsWith("-calibration");
+  const calibrating = r2r
+    ? r2r.phase === "calibration"
+    : presentation.endsWith("-calibration");
+  const r2rAvailability = r2r ? r2rLayerAvailability(r2r) : undefined;
+  const activeLayers = r2r ? r2rVisibleLayers : visibleLayers;
+  const setActiveLayers = r2r ? setR2rVisibleLayers : setVisibleLayers;
+  const r2rHasContent = Boolean(
+    r2r &&
+      (r2r.calibrationReference ||
+        r2r.source.robot ||
+        r2r.source.skeleton ||
+        r2r.source.environment ||
+        r2r.target.robot ||
+        r2r.target.skeleton ||
+        r2r.target.environment),
+  );
   const publishPlayback = useCallback(() => {
     setPlaybackView({ owner: playback, value: { ...playback.current } });
   }, [playback]);
@@ -86,6 +112,7 @@ export function Stage({
   // New inputs and view transitions receive deterministic legacy defaults.
   // Manual toggles remain local until one of those presentation facts changes.
   useEffect(() => {
+    if (r2r) return;
     setVisibleLayers(defaultStageLayers({
       mode: presentation,
       motion,
@@ -93,7 +120,15 @@ export function Stage({
       robot,
       robotTrajectory,
     }));
-  }, [motion, presentation, robot, robotTrajectory, scaledMotion]);
+  }, [motion, presentation, r2r, robot, robotTrajectory, scaledMotion]);
+
+  useEffect(() => {
+    if (!r2r) return;
+    const identity = r2rVisibilityIdentity(r2r);
+    if (r2rVisibilityKey.current === identity) return;
+    r2rVisibilityKey.current = identity;
+    setR2rVisibleLayers(defaultR2rStageLayers(r2r));
+  }, [r2r]);
 
   return (
     <main
@@ -106,24 +141,31 @@ export function Stage({
           scaledMotion={scaledMotion}
           robot={robot}
           robotTrajectory={robotTrajectory}
+          r2r={r2r}
+          timeline={timeline}
           playback={playback}
           onPlaybackChange={publishPlayback}
-          visibleLayers={visibleLayers}
+          visibleLayers={activeLayers}
           sourceSkeletonVariant={calibrating ? "reference" : "source"}
           robotOpacity={calibrating ? 0.72 : 1}
         />
       )}
       <StageEmpty
-        visible={motion === null && scaledMotion === null && robot === null}
+        visible={
+          r2r
+            ? !r2rHasContent
+            : motion === null && scaledMotion === null && robot === null
+        }
       />
       <StageViewMenu
-        value={visibleLayers}
-        onValueChange={setVisibleLayers}
+        value={activeLayers}
+        onValueChange={setActiveLayers}
         robotAvailable={robot !== null}
         environmentAvailable={hasEnvironment}
         scaledMotionAvailable={Boolean(scaledMotion?.positions.length)}
         scaledEnvironmentAvailable={hasScaledEnvironment}
         calibration={calibrating}
+        r2rAvailability={r2rAvailability}
       />
       {!calibrating && (
         <StagePlaybackBar

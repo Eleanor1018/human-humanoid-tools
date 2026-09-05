@@ -92,6 +92,9 @@ main -> App -> features -> components/ui
 ### Stage renderer
 
 - `StageCanvas.tsx` owns the single R3F `<Canvas>` and its local orbit control.
+- R2R supplies two explicit actor payloads. Source and target robot, skeleton,
+  and environment layers share that Canvas and one playback clock, while keeping
+  six independent visibility controls.
 - The scene keeps the legacy camera, transparent renderer, lights, grid, axes,
   and Z-up world transform; overlays stay ordinary React siblings.
 - `@react-three/drei` is intentionally not installed. Direct Three addon imports
@@ -142,6 +145,7 @@ main -> App -> features -> components/ui
 - [x] Human-to-Robot calibration, retarget job, playback, and export
 - [x] Robot-to-Robot upload/library source, calibration, retarget, and export
 - [x] Animated H2R/R2R robot trajectories and scaled scene layers
+- [x] R2R source/target six-layer overlay with legacy visibility defaults
 - [x] Dataset scan, folder upload, cached analysis, and progress polling
 - [x] Analysis metrics, tags, embedding scatter, histograms, and filters
 - [x] Analysis subset recommendation, manifest/robot export, and human preview

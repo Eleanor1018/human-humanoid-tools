@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ComponentType } from "react";
+import { useCallback, useEffect, useMemo, useState, type ComponentType } from "react";
 
 import { Inspector } from "./components/Inspector";
 import { Navbar } from "./components/Navbar";
@@ -24,6 +24,7 @@ import { Stage } from "./stage/Stage";
 import type { StagePresentation } from "./stage/presentation";
 import type {
   StageMotionPayload,
+  StageR2rPresentationPayload,
   StageRobotPayload,
   StageRobotTrajectoryPayload,
 } from "./stage/types";
@@ -118,6 +119,52 @@ export function App() {
                   ? "r2r-result"
                   : "r2r"
               : activeView;
+  const r2rStage = useMemo<StageR2rPresentationPayload | null>(() => {
+    if (activeView !== "r2r") return null;
+    const meshSource = r2rSourceResult
+      ? { kind: "r2r" as const, token: r2rSourceResult.token }
+      : undefined;
+    return {
+      phase: r2rCalibrationReference
+        ? "calibration"
+        : r2rResult
+          ? "result"
+          : "source",
+      source: {
+        robot: r2rSourceRobot,
+        trajectory: r2rSourceResult?.trajectory ?? null,
+        skeleton: r2rSourceResult?.skeleton_preview ?? null,
+        environment: motionWithScene(
+          null,
+          r2rSourceResult?.scaled_scene,
+          meshSource,
+        ),
+      },
+      target: {
+        robot: r2rTargetRobot,
+        trajectory: r2rCalibrationPose
+          ? calibrationTrajectory(r2rCalibrationPose, r2rTargetRobot)
+          : r2rResult?.trajectory ?? null,
+        skeleton: r2rResult?.scaled_preview ?? null,
+        environment: motionWithScene(
+          null,
+          r2rResult?.scaled_scene,
+          meshSource,
+        ),
+      },
+      calibrationReference: r2rCalibrationReference,
+      sourceToken: r2rSourceResult?.token ?? null,
+      resultToken: r2rResult?.export_token ?? null,
+    };
+  }, [
+    activeView,
+    r2rCalibrationPose,
+    r2rCalibrationReference,
+    r2rResult,
+    r2rSourceResult,
+    r2rSourceRobot,
+    r2rTargetRobot,
+  ]);
 
   const publishMotion = useCallback((motion: StageMotionPayload | null) => {
     setWorkspaceMotion(motion);
@@ -203,35 +250,12 @@ export function App() {
       return;
     }
 
-    setStageMotion(
-      r2rCalibrationReference ??
-        motionWithScene(
-          r2rSourceResult?.skeleton_preview,
-          r2rSourceResult?.scaled_scene,
-          r2rSourceResult
-            ? { kind: "r2r", token: r2rSourceResult.token }
-            : undefined,
-        ),
-    );
-    const presentedRobot = r2rTargetRobot ?? r2rSourceRobot;
-    setStageRobot(presentedRobot);
-    setStageRobotTrajectory(
-      r2rCalibrationPose
-        ? calibrationTrajectory(r2rCalibrationPose, r2rTargetRobot)
-        : r2rResult?.trajectory ??
-            (r2rTargetRobot ? null : r2rSourceResult?.trajectory ?? null),
-    );
-    setStageScaledMotion(
-      r2rCalibrationReference
-        ? null
-        : motionWithScene(
-            r2rResult?.scaled_preview,
-            r2rResult?.scaled_scene,
-            r2rSourceResult
-              ? { kind: "r2r", token: r2rSourceResult.token }
-              : undefined,
-          ),
-    );
+    // R2R is a symmetric two-actor presentation rendered through its own Stage
+    // contract. Clear the single-actor slots so they cannot leak into it.
+    setStageMotion(null);
+    setStageRobot(null);
+    setStageRobotTrajectory(null);
+    setStageScaledMotion(null);
   }, [
     activeView,
     h2rCalibrationPose,
@@ -271,6 +295,7 @@ export function App() {
         robot={stageRobot}
         robotTrajectory={stageRobotTrajectory}
         presentation={stagePresentation}
+        r2r={r2rStage}
       />
       <Inspector>
         <div className={activeView === "motion" ? "h-full" : "hidden"}>

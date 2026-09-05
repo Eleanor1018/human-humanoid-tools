@@ -19,9 +19,19 @@ import {
   timelineDuration,
   timelineFrameAtTime,
 } from "../src/stage/playback.ts";
-import { defaultStageLayers } from "../src/stage/presentation.ts";
+import {
+  defaultR2rStageLayers,
+  defaultStageLayers,
+  projectR2rStageVisibility,
+  r2rLayerAvailability,
+  r2rPlaybackTimeline,
+  r2rVisibilityIdentity,
+} from "../src/stage/presentation.ts";
 import type {
   StageMotionPayload,
+  StageR2rActorPayload,
+  StageR2rPresentationPayload,
+  StageRobotPayload,
   StageRobotTrajectoryPayload,
 } from "../src/stage/types.ts";
 import {
@@ -43,6 +53,41 @@ function motion(overrides: Partial<StageMotionPayload> = {}): StageMotionPayload
     ],
     parent_indices: [-1],
     playback_duration: 2,
+    ...overrides,
+  };
+}
+
+function robot(name: string): StageRobotPayload {
+  return {
+    name,
+    display_name: name,
+    links: [],
+    link_transforms_zero: {},
+  };
+}
+
+function r2rActor(
+  overrides: Partial<StageR2rActorPayload> = {},
+): StageR2rActorPayload {
+  return {
+    robot: null,
+    trajectory: null,
+    skeleton: null,
+    environment: null,
+    ...overrides,
+  };
+}
+
+function r2rPresentation(
+  overrides: Partial<StageR2rPresentationPayload> = {},
+): StageR2rPresentationPayload {
+  return {
+    phase: "source",
+    source: r2rActor(),
+    target: r2rActor(),
+    calibrationReference: null,
+    sourceToken: null,
+    resultToken: null,
     ...overrides,
   };
 }
@@ -154,6 +199,7 @@ test("capsule body does not interpolate across sparse source frames", () => {
 
 test("keeps the original source and scaled Stage palette distinct", () => {
   assert.equal(SKELETON_VISUALS.source.color, 0x0a84ff);
+  assert.equal(SKELETON_VISUALS["r2r-source"].color, 0x60a5fa);
   assert.equal(SKELETON_VISUALS.scaled.color, 0xffb020);
   assert.equal(SKELETON_VISUALS.reference.color, 0x5eb3ff);
   assert.equal(CAPSULE_BODY_VISUAL.color, 0xf7a470);
@@ -225,5 +271,139 @@ test("projects the original Motion and workflow layer defaults", () => {
       robotTrajectory: { frames: [{ links: {} }] },
     }),
     ["skeleton", "scaled-skeleton", "scaled-scene", "robot"],
+  );
+});
+
+test("projects R2R layer availability independently for both actors", () => {
+  const scene = motion({
+    positions: [],
+    objects: [{ extents: [1, 1, 1], positions: [], quaternions: [] }],
+  });
+  assert.deepEqual(
+    r2rLayerAvailability(r2rPresentation({
+      source: r2rActor({ robot: robot("source"), environment: scene }),
+      target: r2rActor({ skeleton: motion() }),
+    })),
+    {
+      "r2r-source-robot": true,
+      "r2r-source-skeleton": false,
+      "r2r-source-scene": true,
+      "r2r-target-robot": false,
+      "r2r-target-skeleton": true,
+      "r2r-target-scene": false,
+    },
+  );
+});
+
+test("reproduces legacy R2R source and overlay defaults", () => {
+  const scene = motion({
+    positions: [],
+    terrain: { vertices: [[0, 0, 0]], faces: [[0, 0, 0]] },
+  });
+  const complete = r2rPresentation({
+    source: r2rActor({
+      robot: robot("source"),
+      skeleton: motion(),
+      environment: scene,
+    }),
+    target: r2rActor({
+      robot: robot("target"),
+      skeleton: motion(),
+      environment: scene,
+    }),
+  });
+  assert.deepEqual(defaultR2rStageLayers(complete), [
+    "r2r-source-robot",
+    "r2r-source-scene",
+  ]);
+  assert.deepEqual(
+    defaultR2rStageLayers({ ...complete, phase: "result", resultToken: "result" }),
+    [
+      "r2r-source-robot",
+      "r2r-target-robot",
+      "r2r-target-skeleton",
+      "r2r-target-scene",
+    ],
+  );
+  assert.deepEqual(
+    defaultR2rStageLayers({ ...complete, phase: "calibration" }),
+    ["r2r-target-robot"],
+  );
+});
+
+test("calibration physically isolates the target robot and reference", () => {
+  const calibration = r2rPresentation({
+    phase: "calibration",
+    source: r2rActor({ robot: robot("source"), skeleton: motion() }),
+    target: r2rActor({ robot: robot("target"), skeleton: motion() }),
+    calibrationReference: motion(),
+  });
+  assert.deepEqual(
+    projectR2rStageVisibility(calibration, [
+      "r2r-source-robot",
+      "r2r-source-skeleton",
+      "r2r-source-scene",
+      "r2r-target-robot",
+      "r2r-target-skeleton",
+      "r2r-target-scene",
+    ]),
+    {
+      sourceRobot: false,
+      sourceSkeleton: false,
+      sourceScene: false,
+      targetRobot: true,
+      targetSkeleton: false,
+      targetScene: false,
+      calibrationReference: true,
+    },
+  );
+  assert.equal(r2rPlaybackTimeline(calibration), null);
+});
+
+test("uses the longest source or target actor timeline for R2R playback", () => {
+  const shortTrajectory: StageRobotTrajectoryPayload = {
+    frames: [{ links: {} }, { links: {} }],
+    playback_duration: 1,
+  };
+  const longTrajectory: StageRobotTrajectoryPayload = {
+    frames: [{ links: {} }, { links: {} }],
+    playback_duration: 9,
+  };
+  const longSkeleton = motion({ playback_duration: 8 });
+  const cases: readonly StageR2rPresentationPayload[] = [
+    r2rPresentation({
+      source: r2rActor({ trajectory: longTrajectory }),
+      target: r2rActor({ trajectory: shortTrajectory }),
+    }),
+    r2rPresentation({
+      source: r2rActor({ trajectory: shortTrajectory }),
+      target: r2rActor({ trajectory: longTrajectory }),
+    }),
+    r2rPresentation({
+      source: r2rActor({ skeleton: longSkeleton }),
+      target: r2rActor({ trajectory: shortTrajectory }),
+    }),
+    r2rPresentation({
+      source: r2rActor({ trajectory: shortTrajectory }),
+      target: r2rActor({ skeleton: longSkeleton }),
+    }),
+  ];
+  assert.equal(r2rPlaybackTimeline(cases[0]), longTrajectory);
+  assert.equal(r2rPlaybackTimeline(cases[1]), longTrajectory);
+  assert.equal(r2rPlaybackTimeline(cases[2]), longSkeleton);
+  assert.equal(r2rPlaybackTimeline(cases[3]), longSkeleton);
+  assert.equal(r2rPlaybackTimeline(r2rPresentation()), null);
+});
+
+test("keeps R2R visibility identity stable across presentation clones", () => {
+  const value = r2rPresentation({
+    source: r2rActor({ robot: robot("source") }),
+    target: r2rActor({ robot: robot("target") }),
+    sourceToken: "source-token",
+  });
+  assert.equal(r2rVisibilityIdentity(value), r2rVisibilityIdentity({ ...value }));
+  assert.notEqual(
+    r2rVisibilityIdentity(value),
+    r2rVisibilityIdentity({ ...value, resultToken: "result-token" }),
   );
 });

@@ -21,6 +21,16 @@ export const SKELETON_VISUALS = {
     opacity: 1,
     lineOpacity: 0.85,
   },
+  "r2r-source": {
+    color: 0x60a5fa,
+    jointRadius: 0.026,
+    jointSegments: 10,
+    roughness: 0.45,
+    metalness: 0.15,
+    emissive: 0x442200,
+    opacity: 1,
+    lineOpacity: 0.85,
+  },
   reference: {
     color: 0x5eb3ff,
     jointRadius: 0.022,
