@@ -25,6 +25,7 @@ may improve spacing, rounded corners, accessibility, and narrow-screen layout.
 - [ ] Restore H2R scaled preview and omitted result/export controls.
 - [ ] Restore remaining Motion, Robot, V2M, Analysis, and application-menu actions.
   - [x] Preserve the complete registered V2M Motion payload for Stage and H2R.
+  - [x] Preserve the last successful Motion while a replacement video is pending or invalid.
 - [ ] Run route-contract tests and desktop/narrow-screen browser smoke for every pipeline.
 
 ## Rules

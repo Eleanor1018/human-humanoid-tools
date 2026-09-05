@@ -89,7 +89,6 @@ export function VideoToMotionView({
   const selectVideo = (file: File | null) => {
     if (!file) return;
     if (!isSupportedVideoName(file.name)) {
-      onMotionLoaded?.(null);
       setVideo(null);
       setWorkflowPhase("error");
       setWorkflowError("Supported formats are MP4, MOV, MKV, AVI, WebM, and M4V.");
@@ -101,7 +100,6 @@ export function VideoToMotionView({
     setWorkflowError(null);
     setJob(null);
     setResult(null);
-    onMotionLoaded?.(null);
   };
 
   const configureRuntime = async () => {
