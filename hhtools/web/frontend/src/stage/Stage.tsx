@@ -5,6 +5,11 @@ import {
   type StagePlaybackRef,
   type StagePlaybackState,
 } from "./playback";
+import {
+  CalibrationMappingOverlay,
+  type CalibrationMappingOverlayHandle,
+} from "./CalibrationMappingOverlay";
+import { prepareReferenceSkeleton } from "./referenceSkeleton";
 import { StageViewMenu } from "./StageViewMenu";
 import { StageCanvas } from "./StageCanvas";
 import { StageEmpty } from "./StageEmpty";
@@ -45,6 +50,7 @@ export function Stage({
   const [r2rVisibleLayers, setR2rVisibleLayers] = useState<StageLayerId[]>([]);
   const [cameraRevision, setCameraRevision] = useState(0);
   const r2rVisibilityKey = useRef<string | null>(null);
+  const mappingOverlay = useRef<CalibrationMappingOverlayHandle | null>(null);
   const timeline: StageTimelinePayload | null = r2r
     ? r2rPlaybackTimeline(r2r)
     : robotTrajectory && robotTrajectory.frames.length > 0
@@ -85,6 +91,15 @@ export function Stage({
   const calibrating = r2r
     ? r2r.phase === "calibration"
     : presentation.endsWith("-calibration");
+  const calibrationReference = r2r ? r2r.calibrationReference : motion;
+  const calibrationRobot = r2r ? r2r.target.robot : robot;
+  const calibrationMappings = useMemo(
+    () =>
+      calibrating && calibrationReference
+        ? prepareReferenceSkeleton(calibrationReference, calibrationRobot).mappings
+        : [],
+    [calibrating, calibrationReference, calibrationRobot],
+  );
   const r2rAvailability = r2r ? r2rLayerAvailability(r2r) : undefined;
   const r2rCameraIdentity = r2r ? r2rVisibilityIdentity(r2r) : "";
   const activeLayers = r2r ? r2rVisibleLayers : visibleLayers;
@@ -161,8 +176,14 @@ export function Stage({
             presentation === "h2r-result" && activeLayers.includes("robot")
           }
           calibration={calibrating}
+          mappingOverlay={mappingOverlay}
         />
       )}
+      <CalibrationMappingOverlay
+        ref={mappingOverlay}
+        mappings={calibrationMappings}
+        visible={canvasVisible && calibrating}
+      />
       <StageEmpty
         visible={
           r2r

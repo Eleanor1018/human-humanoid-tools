@@ -47,11 +47,15 @@ src/
 │       └── api.ts           # Dataset scan, analysis jobs, subset and exports
 ├── stage/                   # R3F Stage surface and floating view controls
 │   ├── StageCanvas.tsx      # One Canvas, camera, controls, lights and grid
+│   ├── StageCameraController.tsx # Reset, orbit and H2R follow behavior
+│   ├── camera.ts            # Visible bounds and framing math
 │   ├── StageEmpty.tsx       # Legacy initial empty-state copy
 │   ├── StagePlaybackBar.tsx # Playback, speed, loop, seek and frame controls
 │   ├── playback.ts          # Shared renderer playback cursor and timing
 │   ├── presentation.ts      # Pure workflow-to-layer default projection
 │   ├── SkeletonLayer.tsx    # Animated source skeleton layer
+│   ├── ReferenceSkeletonLayer.tsx # IK-mapped calibration landmarks
+│   ├── CalibrationMappingOverlay.tsx # React-owned labels and link lines
 │   ├── CapsuleBodyLayer.tsx # Universal tube-and-joint body fallback
 │   ├── capsuleBody.ts       # Capsule geometry and frame updates
 │   ├── BodyMeshLayer.tsx    # Animated baked-body lifecycle
@@ -148,7 +152,7 @@ main -> App -> features -> components/ui
 - [x] Animated H2R/R2R robot trajectories and scaled scene layers
 - [x] R2R source/target six-layer overlay with legacy visibility defaults
 - [x] Visible-layer camera reset and H2R target-follow behavior
-- [x] IK-mapped calibration reference skeleton with original materials
+- [x] IK-mapped calibration reference with original materials, labels, and link lines
 - [x] Dataset scan, folder upload, cached analysis, and progress polling
 - [x] Analysis metrics, tags, embedding scatter, histograms, and filters
 - [x] Analysis subset recommendation, manifest/robot export, and human preview

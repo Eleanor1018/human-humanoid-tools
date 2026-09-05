@@ -1,5 +1,5 @@
 import { useFrame } from "@react-three/fiber";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import * as THREE from "three";
 
@@ -9,6 +9,7 @@ import type {
   StageRobotPayload,
   StageRobotTrajectoryPayload,
 } from "./types";
+import type { RobotLinkPoseReader } from "./robotPoseReader";
 import { ROBOT_VISUAL } from "./visualStyle";
 
 interface RobotLayerProps {
@@ -19,6 +20,7 @@ interface RobotLayerProps {
   opacity?: number;
   name?: string;
   onObjectChange?: (object: THREE.Group | null) => void;
+  onPoseReaderChange?: (reader: RobotLinkPoseReader | null) => void;
 }
 
 interface LinkMesh {
@@ -268,13 +270,47 @@ function applyStatic(
   group: THREE.Group,
   resource: RobotResource,
   robot: StageRobotPayload,
+  currentLinkMatrices: Record<string, THREE.Matrix4>,
 ): void {
   group.position.set(0, 0, robot.ground_offset_z ?? 0);
   group.quaternion.identity();
+  for (const link of Object.keys(currentLinkMatrices)) {
+    if (!Object.hasOwn(robot.link_transforms_zero, link)) delete currentLinkMatrices[link];
+  }
+  for (const [link, transform] of Object.entries(robot.link_transforms_zero)) {
+    const current = currentLinkMatrices[link] ?? new THREE.Matrix4();
+    currentLinkMatrices[link] = matrix4Into(transform, current);
+  }
   for (const entries of Object.values(resource.linkMeshes)) {
     for (const { mesh, baked } of entries) mesh.matrix.copy(baked);
   }
   group.updateMatrixWorld(true);
+}
+
+function storeInterpolatedLinkMatrices(
+  current: StageRobotTrajectoryPayload["frames"][number],
+  next: StageRobotTrajectoryPayload["frames"][number] | undefined,
+  blend: number,
+  output: Record<string, THREE.Matrix4>,
+): void {
+  for (const link of Object.keys(output)) {
+    if (!Object.hasOwn(current.links, link)) delete output[link];
+  }
+  for (const [link, transform] of Object.entries(current.links)) {
+    matrix4Into(transform, linkMatrix);
+    const nextTransform = next?.links[link];
+    if (nextTransform) {
+      matrix4Into(nextTransform, nextLinkMatrix);
+      linkMatrix.decompose(positionA, quaternionA, scaleA);
+      nextLinkMatrix.decompose(positionB, quaternionB, scaleB);
+      positionA.lerp(positionB, blend);
+      quaternionA.slerp(quaternionB, blend);
+      scaleA.lerp(scaleB, blend);
+      linkMatrix.compose(positionA, quaternionA, scaleA);
+    }
+    const currentMatrix = output[link] ?? new THREE.Matrix4();
+    output[link] = currentMatrix.copy(linkMatrix);
+  }
 }
 
 function applyTrajectoryFrame(
@@ -283,11 +319,13 @@ function applyTrajectoryFrame(
   robot: StageRobotPayload,
   trajectory: StageRobotTrajectoryPayload,
   frame: number,
+  currentLinkMatrices: Record<string, THREE.Matrix4>,
 ): void {
   const pair = resolveFrame(trajectory, frame);
   const current = trajectory.frames[pair.first];
   const next = pair.blend > 1e-5 ? trajectory.frames[pair.second] : undefined;
   if (!current) return;
+  storeInterpolatedLinkMatrices(current, next, pair.blend, currentLinkMatrices);
 
   const liftA = current.mesh_z_lift ?? 0;
   const liftB = next?.mesh_z_lift ?? liftA;
@@ -311,19 +349,9 @@ function applyTrajectoryFrame(
   }
 
   for (const [link, entries] of Object.entries(resource.linkMeshes)) {
-    const currentTransform = current.links[link];
-    if (!currentTransform) continue;
-    matrix4Into(currentTransform, linkMatrix);
-    const nextTransform = next?.links[link];
-    if (nextTransform) {
-      matrix4Into(nextTransform, nextLinkMatrix);
-      linkMatrix.decompose(positionA, quaternionA, scaleA);
-      nextLinkMatrix.decompose(positionB, quaternionB, scaleB);
-      positionA.lerp(positionB, pair.blend);
-      quaternionA.slerp(quaternionB, pair.blend);
-      scaleA.lerp(scaleB, pair.blend);
-      linkMatrix.compose(positionA, quaternionA, scaleA);
-    }
+    const currentMatrix = currentLinkMatrices[link];
+    if (!currentMatrix) continue;
+    linkMatrix.copy(currentMatrix);
     linkDelta.copy(linkMatrix).multiply(resource.zeroInverse[link]);
     for (const { mesh, baked } of entries) {
       meshMatrix.copy(linkDelta).multiply(baked);
@@ -343,6 +371,7 @@ function RobotObject({
   opacity,
   name,
   onObjectChange,
+  onPoseReaderChange,
 }: {
   resource: RobotResource;
   robot: StageRobotPayload;
@@ -352,9 +381,51 @@ function RobotObject({
   opacity: number;
   name: string;
   onObjectChange?: (object: THREE.Group | null) => void;
+  onPoseReaderChange?: (reader: RobotLinkPoseReader | null) => void;
 }) {
   const group = useRef<THREE.Group | null>(null);
   const lastFrame = useRef<number | null>(null);
+  const currentLinkMatrices = useRef<Record<string, THREE.Matrix4>>({});
+  const poseReader = useMemo<RobotLinkPoseReader>(() => {
+    const localMatrix = new THREE.Matrix4();
+    const worldMatrix = new THREE.Matrix4();
+    const unusedPosition = new THREE.Vector3();
+    const unusedScale = new THREE.Vector3();
+
+    const linkWorldMatrix = (link: string): THREE.Matrix4 | null => {
+      const object = group.current;
+      if (!object) return null;
+      const current = currentLinkMatrices.current[link];
+      if (current) localMatrix.copy(current);
+      else {
+        const zero = robot.link_transforms_zero[link];
+        if (!zero) return null;
+        matrix4Into(zero, localMatrix);
+      }
+      object.updateWorldMatrix(true, false);
+      return worldMatrix.copy(object.matrixWorld).multiply(localMatrix);
+    };
+
+    return {
+      getLinkWorldPosition(link, output) {
+        const matrix = linkWorldMatrix(link);
+        if (!matrix) return false;
+        output.setFromMatrixPosition(matrix);
+        return true;
+      },
+      getLinkWorldQuaternion(link, output) {
+        const matrix = linkWorldMatrix(link);
+        if (!matrix) return false;
+        matrix.decompose(unusedPosition, output, unusedScale);
+        return true;
+      },
+    };
+  }, [robot]);
+
+  useEffect(() => {
+    onPoseReaderChange?.(poseReader);
+    return () => onPoseReaderChange?.(null);
+  }, [onPoseReaderChange, poseReader]);
 
   useEffect(() => {
     if (!group.current) return;
@@ -364,10 +435,17 @@ function RobotObject({
         trajectory,
         playback?.current.elapsed ?? 0,
       );
-      applyTrajectoryFrame(group.current, resource, robot, trajectory, frame);
+      applyTrajectoryFrame(
+        group.current,
+        resource,
+        robot,
+        trajectory,
+        frame,
+        currentLinkMatrices.current,
+      );
       lastFrame.current = frame;
     } else {
-      applyStatic(group.current, resource, robot);
+      applyStatic(group.current, resource, robot, currentLinkMatrices.current);
     }
   }, [playback, resource, robot, trajectory]);
 
@@ -393,7 +471,14 @@ function RobotObject({
       playback?.current.elapsed ?? 0,
     );
     if (lastFrame.current === frame) return;
-    applyTrajectoryFrame(group.current, resource, robot, trajectory, frame);
+    applyTrajectoryFrame(
+      group.current,
+      resource,
+      robot,
+      trajectory,
+      frame,
+      currentLinkMatrices.current,
+    );
     lastFrame.current = frame;
   });
 
@@ -420,6 +505,7 @@ export function RobotLayer({
   opacity = 1,
   name = "robot-model",
   onObjectChange,
+  onPoseReaderChange,
 }: RobotLayerProps) {
   const [loaded, setLoaded] = useState<{
     owner: StageRobotPayload;
@@ -470,6 +556,7 @@ export function RobotLayer({
       opacity={opacity}
       name={name}
       onObjectChange={onObjectChange}
+      onPoseReaderChange={onPoseReaderChange}
     />
   );
 }

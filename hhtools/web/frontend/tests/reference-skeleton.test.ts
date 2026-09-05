@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import * as THREE from "three";
 
+import {
+  calibrationMappingKey,
+  calibrationMappingLabel,
+  projectCalibrationEndpoints,
+} from "../src/stage/calibrationOverlay.ts";
 import {
   normalizeReferenceSemantic,
   prepareReferenceSkeleton,
@@ -104,4 +110,45 @@ test("keeps the original mapped and context reference appearance", () => {
       opacityFactor: 0.32,
     },
   });
+});
+
+test("formats the original semantic label and a stable mapping identity", () => {
+  const mapping = prepareReferenceSkeleton(reference, robot).mappings[1];
+  assert.equal(calibrationMappingLabel(mapping), "Left wrist · wrist_link");
+  assert.equal(
+    calibrationMappingKey(mapping),
+    "1\u0000left_wrist\u0000wrist_link",
+  );
+});
+
+test("projects reference-to-robot endpoints and hides points outside depth", () => {
+  const camera = new THREE.PerspectiveCamera(50, 2, 0.1, 100);
+  camera.position.set(0, 0, 5);
+  camera.lookAt(0, 0, 0);
+  camera.updateProjectionMatrix();
+  camera.updateMatrixWorld(true);
+
+  const projected = projectCalibrationEndpoints(
+    new THREE.Vector3(0, 0, 0),
+    new THREE.Vector3(1, 0, 0),
+    camera,
+    200,
+    100,
+  );
+  assert.ok(projected);
+  assert.equal(projected.referenceX, 100);
+  assert.equal(projected.referenceY, 50);
+  assert.ok(projected.targetX > projected.referenceX);
+  assert.equal(projected.targetY, 50);
+
+  assert.equal(
+    projectCalibrationEndpoints(
+      new THREE.Vector3(0, 0, 10),
+      new THREE.Vector3(1, 0, 0),
+      camera,
+      200,
+      100,
+    ),
+    null,
+  );
 });

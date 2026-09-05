@@ -1,7 +1,15 @@
-import { useMemo } from "react";
+import { useFrame } from "@react-three/fiber";
+import { useEffect, useMemo, useRef, type RefObject } from "react";
 import * as THREE from "three";
 
+import {
+  calibrationMappingKey,
+  projectCalibrationEndpoints,
+  type CalibrationMappingProjection,
+} from "./calibrationOverlay";
+import type { CalibrationMappingOverlayHandle } from "./CalibrationMappingOverlay";
 import { prepareReferenceSkeleton } from "./referenceSkeleton";
+import type { RobotLinkPoseReader } from "./robotPoseReader";
 import type { StageMotionPayload, StageRobotPayload } from "./types";
 import { REFERENCE_SKELETON_VISUAL } from "./visualStyle";
 
@@ -12,6 +20,8 @@ interface ReferenceSkeletonLayerProps {
   mappedOnly?: boolean;
   sourceOpacity?: number;
   name?: string;
+  poseReader?: RefObject<RobotLinkPoseReader | null>;
+  mappingOverlay?: RefObject<CalibrationMappingOverlayHandle | null>;
 }
 
 function referenceLinePositions(
@@ -37,6 +47,8 @@ export function ReferenceSkeletonLayer({
   mappedOnly = true,
   sourceOpacity = REFERENCE_SKELETON_VISUAL.sourceOpacity,
   name = "reference-skeleton",
+  poseReader,
+  mappingOverlay,
 }: ReferenceSkeletonLayerProps) {
   const prepared = useMemo(
     () => (reference ? prepareReferenceSkeleton(reference, robot) : null),
@@ -47,6 +59,43 @@ export function ReferenceSkeletonLayer({
     () => (prepared ? referenceLinePositions(prepared) : new Float32Array()),
     [prepared],
   );
+  const jointMeshes = useRef<Array<THREE.Mesh | null>>([]);
+  const referenceWorld = useMemo(() => new THREE.Vector3(), []);
+  const targetWorld = useMemo(() => new THREE.Vector3(), []);
+
+  useEffect(() => {
+    mappingOverlay?.current?.clear();
+    return () => mappingOverlay?.current?.clear();
+  }, [mappingOverlay, prepared]);
+
+  useFrame(({ camera, size }) => {
+    const overlay = mappingOverlay?.current;
+    const reader = poseReader?.current;
+    if (!overlay || !reader || !visible || !prepared) {
+      overlay?.clear();
+      return;
+    }
+    const projections: CalibrationMappingProjection[] = [];
+    for (const mapping of prepared.mappings) {
+      const joint = jointMeshes.current[mapping.index];
+      if (!joint) continue;
+      joint.getWorldPosition(referenceWorld);
+      if (!reader.getLinkWorldPosition(mapping.targetLink, targetWorld)) continue;
+      const endpoints = projectCalibrationEndpoints(
+        referenceWorld,
+        targetWorld,
+        camera,
+        size.width,
+        size.height,
+      );
+      if (!endpoints) continue;
+      projections.push({
+        key: calibrationMappingKey(mapping),
+        ...endpoints,
+      });
+    }
+    overlay.present(projections);
+  });
 
   if (!prepared || prepared.frame.length === 0) return null;
   return (
@@ -58,6 +107,9 @@ export function ReferenceSkeletonLayer({
         return (
           <mesh
             key={index}
+            ref={(object) => {
+              jointMeshes.current[index] = object;
+            }}
             name={`reference-joint-${index}`}
             position={position}
             scale={

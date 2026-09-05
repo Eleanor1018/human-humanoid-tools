@@ -1,8 +1,15 @@
 import { Canvas, useFrame } from "@react-three/fiber";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
 import * as THREE from "three";
 
 import { BodyMeshLayer } from "./BodyMeshLayer";
+import type { CalibrationMappingOverlayHandle } from "./CalibrationMappingOverlay";
 import { CapsuleBodyLayer } from "./CapsuleBodyLayer";
 import { EnvironmentLayer } from "./EnvironmentLayer";
 import { ReferenceSkeletonLayer } from "./ReferenceSkeletonLayer";
@@ -11,6 +18,7 @@ import { SkeletonLayer } from "./SkeletonLayer";
 import { StageCameraController } from "./StageCameraController";
 import { advancePlayback, type StagePlaybackRef } from "./playback";
 import { projectR2rStageVisibility } from "./presentation";
+import type { RobotLinkPoseReader } from "./robotPoseReader";
 import type {
   StageLayerId,
   StageMotionPayload,
@@ -74,12 +82,18 @@ function R2rLayers({
   visibleLayers,
   onSourceRobotChange,
   onTargetRobotChange,
+  targetPoseReader,
+  mappingOverlay,
+  onTargetPoseReaderChange,
 }: {
   presentation: StageR2rPresentationPayload;
   playback: StagePlaybackRef;
   visibleLayers: readonly StageLayerId[];
   onSourceRobotChange: (object: THREE.Group | null) => void;
   onTargetRobotChange: (object: THREE.Group | null) => void;
+  targetPoseReader: RefObject<RobotLinkPoseReader | null>;
+  mappingOverlay?: RefObject<CalibrationMappingOverlayHandle | null>;
+  onTargetPoseReaderChange: (reader: RobotLinkPoseReader | null) => void;
 }) {
   const visibility = projectR2rStageVisibility(presentation, visibleLayers);
   if (presentation.phase === "calibration") {
@@ -90,6 +104,8 @@ function R2rLayers({
           robot={presentation.target.robot}
           visible={visibility.calibrationReference}
           name="r2r-calibration-reference"
+          poseReader={targetPoseReader}
+          mappingOverlay={mappingOverlay}
         />
         <RobotLayer
           robot={presentation.target.robot}
@@ -99,6 +115,7 @@ function R2rLayers({
           opacity={0.72}
           name="r2r-target-robot"
           onObjectChange={onTargetRobotChange}
+          onPoseReaderChange={onTargetPoseReaderChange}
         />
       </>
     );
@@ -171,6 +188,7 @@ function StageScene({
   cameraRevision,
   followRobot,
   calibration,
+  mappingOverlay,
 }: {
   motion: StageMotionPayload | null;
   scaledMotion: StageMotionPayload | null;
@@ -185,11 +203,13 @@ function StageScene({
   cameraRevision: number;
   followRobot: boolean;
   calibration: boolean;
+  mappingOverlay?: RefObject<CalibrationMappingOverlayHandle | null>;
 }) {
   const content = useRef<THREE.Group | null>(null);
   const followedRobot = useRef<THREE.Group | null>(null);
   const sourceRobot = useRef<THREE.Group | null>(null);
   const targetRobot = useRef<THREE.Group | null>(null);
+  const targetPoseReader = useRef<RobotLinkPoseReader | null>(null);
   const publishFollowedRobot = useCallback((object: THREE.Group | null) => {
     followedRobot.current = object;
   }, []);
@@ -199,6 +219,12 @@ function StageScene({
   const publishTargetRobot = useCallback((object: THREE.Group | null) => {
     targetRobot.current = object;
   }, []);
+  const publishTargetPoseReader = useCallback(
+    (reader: RobotLinkPoseReader | null) => {
+      targetPoseReader.current = reader;
+    },
+    [],
+  );
   const bodyMesh = motion?.body_mesh;
   const [bodyStatus, setBodyStatus] = useState<{
     owner: typeof bodyMesh;
@@ -258,6 +284,9 @@ function StageScene({
               visibleLayers={visibleLayers}
               onSourceRobotChange={publishSourceRobot}
               onTargetRobotChange={publishTargetRobot}
+              targetPoseReader={targetPoseReader}
+              mappingOverlay={mappingOverlay}
+              onTargetPoseReaderChange={publishTargetPoseReader}
             />
           ) : (
             <>
@@ -266,6 +295,8 @@ function StageScene({
                   reference={motion}
                   robot={robot}
                   visible={skeletonVisible}
+                  poseReader={targetPoseReader}
+                  mappingOverlay={mappingOverlay}
                 />
               ) : (
                 <SkeletonLayer
@@ -313,6 +344,7 @@ function StageScene({
                 visible={robotVisible}
                 opacity={robotOpacity}
                 onObjectChange={publishFollowedRobot}
+                onPoseReaderChange={publishTargetPoseReader}
               />
             </>
           )}
@@ -336,6 +368,7 @@ export function StageCanvas({
   cameraRevision = 0,
   followRobot = false,
   calibration = false,
+  mappingOverlay,
 }: {
   motion: StageMotionPayload | null;
   scaledMotion?: StageMotionPayload | null;
@@ -350,6 +383,7 @@ export function StageCanvas({
   cameraRevision?: number;
   followRobot?: boolean;
   calibration?: boolean;
+  mappingOverlay?: RefObject<CalibrationMappingOverlayHandle | null>;
 }) {
   return (
     <Canvas
@@ -384,6 +418,7 @@ export function StageCanvas({
         cameraRevision={cameraRevision}
         followRobot={followRobot}
         calibration={calibration}
+        mappingOverlay={mappingOverlay}
       />
     </Canvas>
   );
