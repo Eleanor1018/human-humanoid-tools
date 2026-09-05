@@ -40,6 +40,12 @@ import {
   type R2rScenePayload,
   type R2rSourceResult,
 } from "./features/r2r/api";
+import {
+  comparisonLayers,
+  storedComparisonPreset,
+  storeComparisonPreset,
+  type ComparisonPreset,
+} from "./features/result/comparison";
 import { VideoToMotionView } from "./features/video-to-motion/VideoToMotionView";
 import type { ViewId } from "./navigation";
 import { Stage } from "./stage/Stage";
@@ -132,6 +138,10 @@ export function App() {
   );
   const [h2rCalibrationInteraction, setH2rCalibrationInteraction] =
     useState<CalibrationInteractionModel | null>(null);
+  const [h2rComparisonPreset, setH2rComparisonPreset] =
+    useState<ComparisonPreset>(() =>
+      storedComparisonPreset(window.localStorage, "h2r"),
+    );
   const [r2rSourceRobot, setR2rSourceRobot] =
     useState<StageRobotPayload | null>(null);
   const [r2rTargetRobot, setR2rTargetRobot] =
@@ -149,6 +159,10 @@ export function App() {
   );
   const [r2rCalibrationInteraction, setR2rCalibrationInteraction] =
     useState<CalibrationInteractionModel | null>(null);
+  const [r2rComparisonPreset, setR2rComparisonPreset] =
+    useState<ComparisonPreset>(() =>
+      storedComparisonPreset(window.localStorage, "r2r"),
+    );
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -186,6 +200,15 @@ export function App() {
     }
     window.open(PROJECT_README_URL, "_blank", "noopener,noreferrer");
   }, []);
+
+  const changeComparisonPreset = useCallback(
+    (workflow: "h2r" | "r2r", preset: ComparisonPreset) => {
+      if (workflow === "h2r") setH2rComparisonPreset(preset);
+      else setR2rComparisonPreset(preset);
+      storeComparisonPreset(window.localStorage, workflow, preset);
+    },
+    [],
+  );
 
   const stagePresentation: StagePresentation =
     activeView === "robot-assets"
@@ -446,6 +469,13 @@ export function App() {
               ? r2rCalibrationInteraction
               : null
         }
+        layerPreset={
+          activeView === "h2r" && h2rResult
+            ? comparisonLayers("h2r", h2rComparisonPreset)
+            : activeView === "r2r" && r2rResult
+              ? comparisonLayers("r2r", r2rComparisonPreset)
+              : null
+        }
       />
       <Inspector>
         <div className={activeView === "motion" ? "h-full" : "hidden"}>
@@ -485,6 +515,10 @@ export function App() {
             calibrationDisplay={h2rCalibrationDisplay}
             onCalibrationDisplayChange={setH2rCalibrationDisplay}
             onCalibrationInteraction={setH2rCalibrationInteraction}
+            comparisonPreset={h2rComparisonPreset}
+            onComparisonPresetChange={(preset) =>
+              changeComparisonPreset("h2r", preset)
+            }
           />
         </div>
         <div className={activeView === "r2r" ? "h-full" : "hidden"}>
@@ -503,6 +537,10 @@ export function App() {
             calibrationDisplay={r2rCalibrationDisplay}
             onCalibrationDisplayChange={setR2rCalibrationDisplay}
             onCalibrationInteraction={setR2rCalibrationInteraction}
+            comparisonPreset={r2rComparisonPreset}
+            onComparisonPresetChange={(preset) =>
+              changeComparisonPreset("r2r", preset)
+            }
           />
         </div>
         <div className={activeView === "batch" ? "h-full" : "hidden"}>

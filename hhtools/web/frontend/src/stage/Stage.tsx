@@ -27,9 +27,11 @@ import {
   r2rPlaybackTimeline,
   r2rVisibilityIdentity,
   standardStageLayerAvailability,
+  type StandardStageLayerId,
   type StagePresentation,
 } from "./presentation";
 import type {
+  R2rStageLayerId,
   StageMotionPayload,
   StageLayerId,
   StageR2rPresentationPayload,
@@ -47,6 +49,7 @@ export function Stage({
   r2r = null,
   calibrationDisplay = DEFAULT_CALIBRATION_DISPLAY,
   calibrationInteraction = null,
+  layerPreset = null,
 }: {
   motion?: StageMotionPayload | null;
   scaledMotion?: StageMotionPayload | null;
@@ -56,6 +59,7 @@ export function Stage({
   r2r?: StageR2rPresentationPayload | null;
   calibrationDisplay?: CalibrationDisplayOptions;
   calibrationInteraction?: CalibrationInteractionModel | null;
+  layerPreset?: readonly StageLayerId[] | null;
 }) {
   const [visibleLayers, setVisibleLayers] = useState<StageLayerId[]>([]);
   const [r2rVisibleLayers, setR2rVisibleLayers] = useState<StageLayerId[]>([]);
@@ -88,11 +92,10 @@ export function Stage({
   const playbackSnapshot = playbackView.owner === playback
     ? playbackView.value
     : playback.current;
-  const availability = standardStageLayerAvailability({
-    motion,
-    scaledMotion,
-    robot,
-  });
+  const availability = useMemo(
+    () => standardStageLayerAvailability({ motion, scaledMotion, robot }),
+    [motion, robot, scaledMotion],
+  );
   const calibrating = r2r
     ? r2r.phase === "calibration"
     : presentation.endsWith("-calibration");
@@ -108,7 +111,19 @@ export function Stage({
         : [],
     [calibrating, calibrationReference, calibrationRobot],
   );
-  const r2rAvailability = r2r ? r2rLayerAvailability(r2r) : undefined;
+  const r2rAvailability = useMemo(
+    () => (r2r ? r2rLayerAvailability(r2r) : undefined),
+    [r2r],
+  );
+  const availablePresetLayers = useMemo(
+    () =>
+      layerPreset?.filter((layer) =>
+        layer.startsWith("r2r-")
+          ? Boolean(r2rAvailability?.[layer as R2rStageLayerId])
+          : availability[layer as StandardStageLayerId],
+      ) ?? null,
+    [availability, layerPreset, r2rAvailability],
+  );
   const r2rCameraIdentity = r2r ? r2rVisibilityIdentity(r2r) : "";
   const activeLayers = r2r ? r2rVisibleLayers : visibleLayers;
   const setActiveLayers = r2r ? setR2rVisibleLayers : setVisibleLayers;
@@ -149,6 +164,12 @@ export function Stage({
     r2rVisibilityKey.current = identity;
     setR2rVisibleLayers(defaultR2rStageLayers(r2r));
   }, [r2r]);
+
+  useEffect(() => {
+    if (!availablePresetLayers) return;
+    if (r2r) setR2rVisibleLayers(availablePresetLayers);
+    else setVisibleLayers(availablePresetLayers);
+  }, [availablePresetLayers, r2r]);
 
   useEffect(() => {
     if (hasContent) setCameraRevision((revision) => revision + 1);

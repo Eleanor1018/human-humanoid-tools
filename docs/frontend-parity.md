@@ -10,8 +10,8 @@ may improve spacing, rounded corners, accessibility, and narrow-screen layout.
 | Motion | Functional | Restore the compact validation summary |
 | Robot | Functional | Restore import/load validation summary |
 | Video to Motion | Functional when GVHMR is ready | Add a real server-side running-job cancellation protocol |
-| Human to Robot | Functional | Restore comparison presets and richer input validation |
-| Robot to Robot | Functional | Restore comparison presets and richer input validation |
+| Human to Robot | Functional | Restore richer input validation |
+| Robot to Robot | Functional | Restore richer input validation |
 | Batch | Functional | Run full solver smoke when the licensed/runtime dependencies are available |
 | Analysis | Complete | Scatter preview, stable filtering, histogram brushing, and removable upload basket are connected |
 | Application menu | Complete | Typed navigation, imports, current export, settings, help, theme, and desktop exit are connected |
@@ -27,6 +27,7 @@ may improve spacing, rounded corners, accessibility, and narrow-screen layout.
 - [ ] Restore H2R scaled preview and omitted result/export controls.
   - [x] Load the calibrated scaled skeleton/scene before Retarget without forcing it visible.
   - [x] Show shared diagnostics and complete FPS/time/header export controls for H2R/R2R.
+  - [x] Restore persisted Source, Target, Result, and Overlay Stage presets.
 - [ ] Restore remaining Motion, Robot, V2M, Analysis, and application-menu actions.
   - [x] Share one persistent H2R Batch draft with Motion and remove managed folders safely.
   - [x] Preserve the complete registered V2M Motion payload for Stage and H2R.

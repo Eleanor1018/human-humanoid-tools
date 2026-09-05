@@ -24,6 +24,7 @@ import {
 } from "@/features/robot/api";
 import { ResultDiagnostics } from "@/features/result/ResultDiagnostics";
 import { ResultExportControls } from "@/features/result/ResultExportControls";
+import type { ComparisonPreset } from "@/features/result/comparison";
 import type { StageMotionPayload } from "@/stage/types";
 import {
   DEFAULT_CALIBRATION_DISPLAY,
@@ -66,6 +67,8 @@ export interface HumanToRobotViewProps {
   readonly onCalibrationInteraction?: (
     interaction: CalibrationInteractionModel | null,
   ) => void;
+  readonly comparisonPreset?: ComparisonPreset;
+  readonly onComparisonPresetChange?: (preset: ComparisonPreset) => void;
 }
 
 function errorMessage(error: unknown): string {
@@ -137,6 +140,8 @@ export function HumanToRobotView({
   calibrationDisplay: controlledCalibrationDisplay,
   onCalibrationDisplayChange,
   onCalibrationInteraction,
+  comparisonPreset,
+  onComparisonPresetChange,
 }: HumanToRobotViewProps) {
   const [motionEntries, setMotionEntries] = useState<
     readonly MotionLibraryEntry[]
@@ -761,7 +766,11 @@ export function HumanToRobotView({
             )}
             {result && (
               <>
-                <ResultDiagnostics diagnostics={result.diagnostics} />
+                <ResultDiagnostics
+                  diagnostics={result.diagnostics}
+                  preset={comparisonPreset}
+                  onPresetChange={onComparisonPresetChange}
+                />
                 <ResultExportControls
                   key={result.export_token}
                   token={result.export_token}

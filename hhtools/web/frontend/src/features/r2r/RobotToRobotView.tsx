@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { WorkflowPipeline, WorkflowStep } from "@/components/WorkflowSteps";
 import { ResultDiagnostics } from "@/features/result/ResultDiagnostics";
 import { ResultExportControls } from "@/features/result/ResultExportControls";
+import type { ComparisonPreset } from "@/features/result/comparison";
 import {
   DEFAULT_CALIBRATION_DISPLAY,
   type CalibrationDisplayOptions,
@@ -74,6 +75,8 @@ export interface RobotToRobotViewProps {
   onCalibrationInteraction?: (
     interaction: CalibrationInteractionModel | null,
   ) => void;
+  comparisonPreset?: ComparisonPreset;
+  onComparisonPresetChange?: (preset: ComparisonPreset) => void;
 }
 
 function errorMessage(error: unknown): string {
@@ -159,6 +162,8 @@ export function RobotToRobotView({
   calibrationDisplay: controlledCalibrationDisplay,
   onCalibrationDisplayChange,
   onCalibrationInteraction,
+  comparisonPreset,
+  onComparisonPresetChange,
 }: RobotToRobotViewProps) {
   const [robots, setRobots] = useState<readonly RobotSummary[]>([]);
   const [entries, setEntries] = useState<readonly MotionLibraryEntry[]>([]);
@@ -859,7 +864,11 @@ export function RobotToRobotView({
             )}
             {retargetResult && (
               <>
-                <ResultDiagnostics diagnostics={retargetResult.diagnostics} />
+                <ResultDiagnostics
+                  diagnostics={retargetResult.diagnostics}
+                  preset={comparisonPreset}
+                  onPresetChange={onComparisonPresetChange}
+                />
                 <ResultExportControls
                   key={retargetResult.export_token}
                   token={retargetResult.export_token}

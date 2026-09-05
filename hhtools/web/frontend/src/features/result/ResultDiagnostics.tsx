@@ -1,8 +1,25 @@
 import {
+  ToggleGroup,
+  ToggleGroupItem,
+} from "@/components/ui/toggle-group";
+
+import {
   buildTrackingChart,
   topEffectors,
   type ResultDiagnosticsPayload,
 } from "./model";
+import {
+  COMPARISON_PRESETS,
+  isComparisonPreset,
+  type ComparisonPreset,
+} from "./comparison";
+
+const PRESET_LABELS: Readonly<Record<ComparisonPreset, string>> = {
+  source: "Source",
+  target: "Target",
+  result: "Result",
+  overlay: "Overlay",
+};
 
 function formatCm(value: number | null | undefined): string {
   return value == null || !Number.isFinite(value)
@@ -19,8 +36,12 @@ function formatPercent(value: number | null | undefined): string {
 /** Shared H2R/R2R diagnostics rendered directly from the backend result DTO. */
 export function ResultDiagnostics({
   diagnostics,
+  preset,
+  onPresetChange,
 }: {
   readonly diagnostics?: ResultDiagnosticsPayload | null;
+  readonly preset?: ComparisonPreset;
+  readonly onPresetChange?: (preset: ComparisonPreset) => void;
 }) {
   const resolved = diagnostics ?? {
     schema_version: 1,
@@ -61,6 +82,29 @@ export function ResultDiagnostics({
           {quality.label}
         </span>
       </header>
+
+      {preset && (
+        <ToggleGroup
+          type="single"
+          value={preset}
+          disabled={!onPresetChange}
+          onValueChange={(value) => {
+            if (isComparisonPreset(value)) onPresetChange?.(value);
+          }}
+          aria-label="Stage comparison"
+          className="grid w-full grid-cols-4 overflow-hidden rounded-md border border-border-subtle bg-surface p-0.5"
+        >
+          {COMPARISON_PRESETS.map((option) => (
+            <ToggleGroupItem
+              key={option}
+              value={option}
+              className="min-h-7 min-w-0 rounded-sm px-1.5 text-[10px] font-medium text-muted-foreground hover:bg-accent hover:text-accent-foreground data-[state=on]:bg-primary data-[state=on]:font-semibold data-[state=on]:text-primary-foreground"
+            >
+              {PRESET_LABELS[option]}
+            </ToggleGroupItem>
+          ))}
+        </ToggleGroup>
+      )}
 
       {!resolved.available || !tracking ? (
         <p className="text-xs leading-[1.45] text-muted-foreground" role="status">
