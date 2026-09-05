@@ -229,11 +229,7 @@ export function App() {
   // Feature panels own transport. App keeps only the inputs and results needed
   // to project the active workflow onto the shared R3F Stage.
   const inspector =
-    activeView === "motion" ? (
-      <MotionView onMotionLoaded={publishMotion} />
-    ) : activeView === "robot-assets" ? (
-      <RobotView onRobotLoaded={publishRobot} />
-    ) : activeView === "video-to-motion" ? (
+    activeView === "video-to-motion" ? (
       <VideoToMotionView onMotionLoaded={publishMotion} />
     ) : (
       <ActiveInspector />
@@ -255,6 +251,18 @@ export function App() {
         robotTrajectory={stageRobotTrajectory}
       />
       <Inspector>
+        <div className={activeView === "motion" ? "h-full" : "hidden"}>
+          <MotionView
+            currentMotion={workspaceMotion}
+            onMotionLoaded={publishMotion}
+          />
+        </div>
+        <div className={activeView === "robot-assets" ? "h-full" : "hidden"}>
+          <RobotView
+            currentRobot={workspaceRobot}
+            onRobotLoaded={publishRobot}
+          />
+        </div>
         <div className={activeView === "h2r" ? "h-full" : "hidden"}>
           <HumanToRobotView
             currentMotion={workspaceMotion}
@@ -284,7 +292,11 @@ export function App() {
         <div className={activeView === "dataset-viz" ? "h-full" : "hidden"}>
           <AnalysisView onMotionLoaded={publishMotion} />
         </div>
-        {activeView !== "h2r" && activeView !== "r2r" && activeView !== "dataset-viz"
+        {activeView !== "motion" &&
+        activeView !== "robot-assets" &&
+        activeView !== "h2r" &&
+        activeView !== "r2r" &&
+        activeView !== "dataset-viz"
           ? inspector
           : null}
       </Inspector>

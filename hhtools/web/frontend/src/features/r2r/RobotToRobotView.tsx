@@ -348,16 +348,14 @@ export function RobotToRobotView({
     if (!sourceChoice) return;
     const request = beginAction("source-robot");
     setStatus(`Loading source robot ${sourceChoice}…`);
-    setSourceRobot(null);
-    setSourceResult(null);
-    onSourceRobotLoaded?.(null);
-    onSourceLoaded?.(null);
-    clearRetargetResult();
     try {
       const payload = await loadRobot(sourceChoice, { signal: request.signal });
       if (request.signal.aborted) return;
       setSourceRobot(payload);
+      setSourceResult(null);
       onSourceRobotLoaded?.(payload);
+      onSourceLoaded?.(null);
+      clearRetargetResult();
       setStatus(`Source robot loaded: ${payload.display_name}`);
     } catch (reason) {
       if (!request.signal.aborted) setError(errorMessage(reason));
@@ -370,14 +368,12 @@ export function RobotToRobotView({
     if (!targetChoice) return;
     const request = beginAction("target-robot");
     setStatus(`Loading target robot ${targetChoice}…`);
-    setTargetRobot(null);
-    onTargetRobotLoaded?.(null);
-    clearRetargetResult();
     try {
       const payload = await loadRobot(targetChoice, { signal: request.signal });
       if (request.signal.aborted) return;
       setTargetRobot(payload);
       onTargetRobotLoaded?.(payload);
+      clearRetargetResult();
       setStatus(`Target robot loaded: ${payload.display_name}`);
     } catch (reason) {
       if (!request.signal.aborted) setError(errorMessage(reason));
@@ -392,12 +388,10 @@ export function RobotToRobotView({
     if (!sourceRobot) return;
     const request = beginAction("source-trajectory");
     setStatus("Loading source trajectory…");
-    setSourceResult(null);
-    onSourceLoaded?.(null);
-    clearRetargetResult();
     try {
       const result = await load(request);
       if (request.signal.aborted) return;
+      clearRetargetResult();
       setSourceResult(result);
       onSourceLoaded?.(result);
       if (result.suggested_backend === "interaction_mesh") {

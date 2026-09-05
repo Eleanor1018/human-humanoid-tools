@@ -102,8 +102,8 @@ main -> App -> features -> components/ui
   after a second real feature needs it.
 - Extract shared code after a second real caller appears.
 - Keep server state authoritative; use React state for presentation state.
-- Keep H2R and R2R mounted while hidden so an in-flight server job and its
-  local form state survive navigation; only the active workflow owns Stage.
+- Keep stateful asset and workflow panels mounted while hidden so in-flight
+  requests and local form state survive navigation; only the active view owns Stage.
 - Add shadcn components individually. Do not prebuild a component library.
 - Keep only tokens and document-wide defaults in `styles.css`; colocate feature
   and component styling with their JSX using Tailwind utilities.

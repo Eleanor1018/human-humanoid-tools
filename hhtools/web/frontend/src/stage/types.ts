@@ -72,6 +72,9 @@ export interface StageMotionPayload {
   readonly suggested_reference?: string;
   readonly suggested_backend?: string;
   readonly meta?: Readonly<Record<string, unknown>>;
+  readonly library_entry?: {
+    readonly source_path: string;
+  };
   readonly object_mesh_source?: {
     readonly kind: "motion" | "r2r";
     readonly token: string;

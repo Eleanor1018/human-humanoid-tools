@@ -71,14 +71,16 @@ function errorMessage(error: unknown): string {
 }
 
 export function RobotView({
+  currentRobot,
   onRobotLoaded,
 }: {
+  /** App-owned stable input; failed replacements leave it untouched. */
+  currentRobot?: RobotPayload | null;
   /** App uses this to publish the server payload to the shared Stage. */
   onRobotLoaded?: (payload: RobotPayload | null) => void;
 }) {
   const [robots, setRobots] = useState<RobotSummary[]>([]);
   const [search, setSearch] = useState("");
-  const [loadedName, setLoadedName] = useState<string | null>(null);
   const [loadingName, setLoadingName] = useState<string | null>(null);
   const [loadingLibrary, setLoadingLibrary] = useState(true);
   const [libraryDir, setLibraryDir] = useState<string | null>(null);
@@ -100,7 +102,6 @@ export function RobotView({
       })
       .catch((reason: unknown) => {
         if (request.signal.aborted) return;
-        setRobots([]);
         setError(errorMessage(reason));
       })
       .finally(() => {
@@ -134,6 +135,7 @@ export function RobotView({
       });
   }, [robots, search]);
 
+  const loadedName = currentRobot?.name ?? null;
   const loadedRobot = loadedName
     ? robots.find((robot) => robot.name === loadedName)
     : undefined;
@@ -149,13 +151,11 @@ export function RobotView({
       void loadRobot(robot.name, { signal: request.signal })
         .then((payload) => {
           if (request.signal.aborted) return;
-          setLoadedName(payload.name || robot.name);
           onRobotLoaded?.(payload);
         })
         .catch((reason: unknown) => {
           if (request.signal.aborted) return;
           setError(errorMessage(reason));
-          onRobotLoaded?.(null);
         })
         .finally(() => {
           if (!request.signal.aborted) setLoadingName(null);

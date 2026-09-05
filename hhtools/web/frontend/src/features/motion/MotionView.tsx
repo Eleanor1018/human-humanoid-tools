@@ -88,8 +88,11 @@ function uploadFolderLabel(files: readonly File[]): string | undefined {
 }
 
 export function MotionView({
+  currentMotion,
   onMotionLoaded,
 }: {
+  /** App-owned stable input; failed replacements leave it untouched. */
+  currentMotion?: StageMotionPayload | null;
   /** App publishes this payload to the shared R3F Stage. */
   onMotionLoaded?: (motion: StageMotionPayload | null) => void;
 }) {
@@ -99,7 +102,6 @@ export function MotionView({
   const [category, setCategory] = useState<"all" | MotionCategory>("all");
   const [loadingLibrary, setLoadingLibrary] = useState(true);
   const [loadingKey, setLoadingKey] = useState<string | null>(null);
-  const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const libraryRequest = useRef<AbortController | null>(null);
@@ -107,6 +109,7 @@ export function MotionView({
   const fileInput = useRef<HTMLInputElement | null>(null);
   const folderInput = useRef<HTMLInputElement | null>(null);
   const selected = profiles.find((item) => item.id === profile) ?? profiles[0];
+  const selectedKey = currentMotion?.library_entry?.source_path ?? null;
 
   const refreshLibrary = useCallback(() => {
     libraryRequest.current?.abort();
@@ -121,7 +124,6 @@ export function MotionView({
       })
       .catch((reason: unknown) => {
         if (request.signal.aborted) return;
-        setEntries([]);
         setError(errorMessage(reason));
       })
       .finally(() => {
@@ -168,7 +170,6 @@ export function MotionView({
       motionRequest.current = request;
       const key = entryKey(entry);
       setLoadingKey(key);
-      setSelectedKey(null);
       setError(null);
       setStatus(`Loading ${entryLabel(entry)}…`);
       void loadMotionLibraryEntry(entry, {
@@ -184,7 +185,6 @@ export function MotionView({
           if (request.signal.aborted) return;
           const stagePayload = toStageMotionPayload(payload);
           if (!stagePayload) throw new Error("The motion result has no preview data.");
-          setSelectedKey(key);
           setStatus(`Loaded ${entryLabel(entry)}`);
           onMotionLoaded?.(stagePayload);
         })
@@ -192,7 +192,6 @@ export function MotionView({
           if (request.signal.aborted) return;
           setError(errorMessage(reason));
           setStatus(null);
-          onMotionLoaded?.(null);
         })
         .finally(() => {
           if (!request.signal.aborted) setLoadingKey(null);
@@ -209,7 +208,6 @@ export function MotionView({
       const request = new AbortController();
       motionRequest.current = request;
       setLoadingKey(`upload:${files[0].name}`);
-      setSelectedKey(null);
       setError(null);
       setStatus(`Uploading ${files.length} file${files.length === 1 ? "" : "s"}…`);
       void uploadMotion(files, {
@@ -235,7 +233,6 @@ export function MotionView({
           if (request.signal.aborted) return;
           setError(errorMessage(reason));
           setStatus(null);
-          onMotionLoaded?.(null);
         })
         .finally(() => {
           if (!request.signal.aborted) setLoadingKey(null);
