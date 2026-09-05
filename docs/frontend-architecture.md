@@ -161,6 +161,20 @@ large model files and their upstream licenses are not copied into Git.
 Their GLB meshes receive the same neutral silver material as the original
 workbench so models with missing or inconsistent source materials look uniform.
 
+## Motion And Robot Parity
+
+The core asset workflows now match the original frontend: library discovery,
+search and filtering, file/folder upload, recursive drop, managed Motion Library
+selection and links, six built-in robot models, custom robot import/removal, and
+transactional replacement of the current Stage asset. Motion Body uses a baked
+skin when present and the original orange capsule body otherwise; robot meshes
+use the original neutral material.
+
+The remaining legacy capabilities are Stage/workflow additions rather than
+asset-loading blockers: playback speed and loop controls, camera reset/follow,
+detailed validation cards, Batch basket actions, and the R2R dual-robot
+comparison view. They should be restored as separate, bounded changes.
+
 ## References
 
 - [VS Code source organization](https://github.com/microsoft/vscode/wiki/source-code-organization)
