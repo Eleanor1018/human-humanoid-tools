@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from hhtools.bodymodels.fallback import forward_without_weights
+from hhtools.bodymodels.fallback import forward_without_weights, motion_from_fallback
 from hhtools.bodymodels.layout import (
     SMPL_LAYOUT,
     SMPLH_LAYOUT,
@@ -11,6 +11,7 @@ from hhtools.bodymodels.layout import (
 )
 from hhtools.bodymodels.params import SmplMotionParams
 from hhtools.io.datasets import _engine_cache
+from hhtools.web.output.serialize import skeleton_exclude_joint_indices
 
 
 def _params(family: str, *, up_axis: str = "Z") -> SmplMotionParams:
@@ -58,6 +59,31 @@ def test_weight_free_forward_keeps_y_up_coordinates_for_later_grounding() -> Non
     # The proxy's feet are below the pelvis on the source Y axis. The web
     # grounding step then performs the existing Y -> Z conversion.
     assert result.joints[0, 7, 1] < result.joints[0, 0, 1]
+    # SMPL's native model frame uses +X for the subject's left side.
+    assert result.joints[0, 1, 0] > result.joints[0, 0, 0]
+    assert result.joints[0, 2, 0] < result.joints[0, 0, 0]
+
+
+def test_weight_free_forward_applies_world_up_only_through_root_orientation() -> None:
+    params = _params("smplx", up_axis="Z")
+    params.root_orient[:] = [np.pi / 2.0, 0.0, 0.0]
+
+    result = forward_without_weights(params)
+
+    pelvis = result.joints[0, 0]
+    assert result.joints[0, 15, 2] > pelvis[2]
+    assert result.joints[0, 7, 2] < pelvis[2]
+    assert abs(float(result.joints[0, 15, 1] - pelvis[1])) < 1e-5
+
+
+def test_web_visualization_omits_dense_smplx_hand_and_face_joints() -> None:
+    motion = motion_from_fallback(_params("smplx"), name="preview")
+
+    excluded = set(skeleton_exclude_joint_indices(motion))
+
+    assert set(range(22, 55)) <= excluded
+    assert 20 not in excluded
+    assert 21 not in excluded
 
 
 def test_dataset_engine_boundary_uses_proxy_when_weights_are_missing(monkeypatch) -> None:

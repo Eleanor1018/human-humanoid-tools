@@ -53,6 +53,7 @@ ALLOWED_DEPENDENCIES: dict[str, frozenset[str]] = {
             "agent",
             "contracts",
             "core",
+            "human",
             "integrations",
             "io",
             "retarget",
@@ -61,7 +62,7 @@ ALLOWED_DEPENDENCIES: dict[str, frozenset[str]] = {
             "utils",
         }
     ),
-    "viewer": frozenset({"_version", "core", "io", "retarget", "robot"}),
+    "viewer": frozenset({"_version", "core", "human", "io", "retarget", "robot"}),
     "mcp": frozenset({"_version", "contracts", "retarget", "services"}),
     "cli": frozenset({"_version", "bodymodels", "contracts", "core", "io", "retarget", "robot"}),
 }
@@ -292,11 +293,6 @@ _LEGACY_LOCATION_BASELINE: dict[ImportIdentity, int] = {
     ImportIdentity("hhtools/web/analysis/scaled_preview.py", "hhtools.viewer.anatomy", _MODULE_SCOPE): 1,
     ImportIdentity(
         "hhtools/web/output/serialize.py", "hhtools.viewer.anatomy", "_prune_canonical_names"
-    ): 1,
-    ImportIdentity(
-        "hhtools/web/output/serialize.py",
-        "hhtools.viewer.anatomy",
-        "skeleton_exclude_joint_indices",
     ): 1,
     ImportIdentity(
         "hhtools/web/server/motion_runtime.py",
@@ -547,11 +543,6 @@ _LEGACY_IMPORT_FINGERPRINTS: dict[tuple[str, str, str], str] = {
         "hhtools.viewer.anatomy",
         "_prune_canonical_names",
     ): "from:deepest_mapped_canonicals",
-    (
-        "hhtools/web/output/serialize.py",
-        "hhtools.viewer.anatomy",
-        "skeleton_exclude_joint_indices",
-    ): "from:degenerate_auxiliary_bone_indices,detect_virtual_root",
     (
         "hhtools/web/server/motion_runtime.py",
         "hhtools.viewer.anatomy",

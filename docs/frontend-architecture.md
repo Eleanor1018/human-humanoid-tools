@@ -169,6 +169,10 @@ selection and links, six built-in robot models, custom robot import/removal, and
 transactional replacement of the current Stage asset. Motion Body uses a baked
 skin when present and the original orange capsule body otherwise; robot meshes
 use the original neutral material.
+SMPL-family fallback FK starts from the model's native Y-up rest pose, and the
+Web payload omits dense face, finger, and toe joints from compact body views.
+Those compact-topology rules live in the renderer-neutral `hhtools.human`
+package and are shared downward by Web and Viser rather than between hosts.
 
 The remaining legacy capabilities are Stage/workflow additions rather than
 asset-loading blockers: playback speed and loop controls, camera reset/follow,

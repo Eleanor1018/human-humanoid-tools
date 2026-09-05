@@ -43,12 +43,14 @@ _MAX_MESH_GZIP_BYTES = 0
 
 def skeleton_exclude_joint_indices(motion: Motion) -> list[int]:
     """Bone indices to skip in stick/capsule viz (matches Viser defaults)."""
-    from hhtools.viewer.anatomy import (
+    from hhtools.human.anatomy import (
         degenerate_auxiliary_bone_indices,
+        dense_rig_viz_exclude_indices,
         detect_virtual_root,
     )
 
     ex: set[int] = set(degenerate_auxiliary_bone_indices(motion))
+    ex |= dense_rig_viz_exclude_indices(motion)
     if detect_virtual_root(list(motion.hierarchy.bone_names)):
         ex.add(0)
     return sorted(ex)

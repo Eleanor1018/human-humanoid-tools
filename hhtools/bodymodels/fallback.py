@@ -42,48 +42,48 @@ class FallbackForwardResult:
         return None
 
 
-# Neutral SMPL proxy in Z-up coordinates.  It intentionally mirrors the
-# compact reference pose used for calibration; omitted hand/face joints are
-# attached to their parent below.  The proxy is only a kinematic scaffold,
-# never a replacement for the licensed body-model surface.
-_SMPL_PROXY_POSITIONS_Z = np.asarray(
+# Neutral proxy in SMPL's native Y-up model coordinates. ``root_orient`` maps
+# this model frame into each dataset's world frame; pre-rotating the rest pose
+# to ``params.up_axis`` would apply that conversion twice. Omitted hand/face
+# joints are attached to their parent below.
+_SMPL_PROXY_POSITIONS_Y = np.asarray(
     [
         [0.0, 0.0, 0.00],
-        [-0.095, 0.0, -0.02],
-        [0.095, 0.0, -0.02],
-        [0.0, 0.0, 0.11],
-        [-0.095, 0.0, -0.46],
-        [0.095, 0.0, -0.46],
-        [0.0, 0.0, 0.165],
-        [-0.095, 0.0, -0.86],
-        [0.095, 0.0, -0.86],
-        [0.0, 0.0, 0.22],
-        [-0.095, 0.0, -0.86],
-        [0.095, 0.0, -0.86],
-        [0.0, 0.0, 0.38],
-        [0.0, 0.0, 0.38],
-        [0.0, 0.0, 0.38],
-        [0.0, 0.0, 0.62],
-        [-0.17, 0.0, 0.38],
-        [0.17, 0.0, 0.38],
-        [-0.38, 0.0, 0.38],
-        [0.38, 0.0, 0.38],
-        [-0.58, 0.0, 0.38],
-        [0.58, 0.0, 0.38],
-        [-0.58, 0.0, 0.38],
-        [0.58, 0.0, 0.38],
+        [0.095, -0.02, 0.0],
+        [-0.095, -0.02, 0.0],
+        [0.0, 0.11, 0.0],
+        [0.095, -0.46, 0.0],
+        [-0.095, -0.46, 0.0],
+        [0.0, 0.165, 0.0],
+        [0.095, -0.86, 0.0],
+        [-0.095, -0.86, 0.0],
+        [0.0, 0.22, 0.0],
+        [0.095, -0.86, 0.0],
+        [-0.095, -0.86, 0.0],
+        [0.0, 0.38, 0.0],
+        [0.0, 0.38, 0.0],
+        [0.0, 0.38, 0.0],
+        [0.0, 0.62, 0.0],
+        [0.17, 0.38, 0.0],
+        [-0.17, 0.38, 0.0],
+        [0.38, 0.38, 0.0],
+        [-0.38, 0.38, 0.0],
+        [0.58, 0.38, 0.0],
+        [-0.58, 0.38, 0.0],
+        [0.58, 0.38, 0.0],
+        [-0.58, 0.38, 0.0],
     ],
     dtype=np.float32,
 )
 
 
-def _proxy_positions(layout: BodyModelLayout, up_axis: str) -> NDArray[np.float32]:
-    """Return a proxy rest pose in the parameter stream's coordinate frame."""
+def _proxy_positions(layout: BodyModelLayout) -> NDArray[np.float32]:
+    """Return a proxy rest pose in SMPL's native model coordinate frame."""
     positions = np.zeros((layout.num_joints, 3), dtype=np.float32)
     if layout.family == "smpl":
-        positions[:] = _SMPL_PROXY_POSITIONS_Z
+        positions[:] = _SMPL_PROXY_POSITIONS_Y
     else:
-        positions[:22] = _SMPL_PROXY_POSITIONS_Z[:22]
+        positions[:22] = _SMPL_PROXY_POSITIONS_Y[:22]
         for index, name in enumerate(layout.joint_names[22:], start=22):
             if layout.family == "smplx" and name in {
                 "jaw",
@@ -91,19 +91,13 @@ def _proxy_positions(layout: BodyModelLayout, up_axis: str) -> NDArray[np.float3
                 "right_eye_smplhf",
             }:
                 positions[index] = positions[15] + np.array(
-                    [0.0, 0.0, 0.03], dtype=np.float32
+                    [0.0, 0.03, 0.0], dtype=np.float32
                 )
             elif name.startswith("left_"):
                 positions[index] = positions[20]
             elif name.startswith("right_"):
                 positions[index] = positions[21]
 
-    # SMPL's native frame is Y-up.  Most hhtools parameter adapters already
-    # expose Z-up, while PHUMA/HMR4D retain Y-up until web grounding.
-    if up_axis.upper() == "Y":
-        positions = np.stack(
-            [positions[:, 0], positions[:, 2], -positions[:, 1]], axis=-1
-        ).astype(np.float32)
     return positions
 
 
@@ -155,7 +149,7 @@ def forward_without_weights(
     layout = layout_for(params.surface_model)
     frames = params.num_frames
     joints = layout.num_joints
-    rest = _proxy_positions(layout, params.up_axis)
+    rest = _proxy_positions(layout)
     offsets = np.zeros_like(rest)
     parents = np.asarray(layout.parents, dtype=np.int64)
     for index, parent in enumerate(parents):
