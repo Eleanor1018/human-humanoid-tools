@@ -13,6 +13,8 @@ import {
   DEFAULT_CALIBRATION_DISPLAY,
   type CalibrationDisplayOptions,
 } from "./calibrationDisplay";
+import { CalibrationJointHud } from "./CalibrationJointHud";
+import type { CalibrationInteractionModel } from "./calibrationInteraction";
 import { prepareReferenceSkeleton } from "./referenceSkeleton";
 import { StageViewMenu } from "./StageViewMenu";
 import { StageCanvas } from "./StageCanvas";
@@ -44,6 +46,7 @@ export function Stage({
   presentation = "empty",
   r2r = null,
   calibrationDisplay = DEFAULT_CALIBRATION_DISPLAY,
+  calibrationInteraction = null,
 }: {
   motion?: StageMotionPayload | null;
   scaledMotion?: StageMotionPayload | null;
@@ -52,10 +55,12 @@ export function Stage({
   presentation?: StagePresentation;
   r2r?: StageR2rPresentationPayload | null;
   calibrationDisplay?: CalibrationDisplayOptions;
+  calibrationInteraction?: CalibrationInteractionModel | null;
 }) {
   const [visibleLayers, setVisibleLayers] = useState<StageLayerId[]>([]);
   const [r2rVisibleLayers, setR2rVisibleLayers] = useState<StageLayerId[]>([]);
   const [cameraRevision, setCameraRevision] = useState(0);
+  const [selectedJoint, setSelectedJoint] = useState<string | null>(null);
   const r2rVisibilityKey = useRef<string | null>(null);
   const mappingOverlay = useRef<CalibrationMappingOverlayHandle | null>(null);
   const timeline: StageTimelinePayload | null = r2r
@@ -91,6 +96,9 @@ export function Stage({
   const calibrating = r2r
     ? r2r.phase === "calibration"
     : presentation.endsWith("-calibration");
+  const activeCalibrationInteraction = calibrating
+    ? calibrationInteraction
+    : null;
   const calibrationReference = r2r ? r2r.calibrationReference : motion;
   const calibrationRobot = r2r ? r2r.target.robot : robot;
   const calibrationMappings = useMemo(
@@ -146,6 +154,18 @@ export function Stage({
     if (hasContent) setCameraRevision((revision) => revision + 1);
   }, [hasContent, motion, presentation, r2rCameraIdentity, robot, scaledMotion]);
 
+  useEffect(() => {
+    if (
+      !activeCalibrationInteraction ||
+      (selectedJoint &&
+        !activeCalibrationInteraction.jointLimits.some(
+          (joint) => joint.name === selectedJoint,
+        ))
+    ) {
+      setSelectedJoint(null);
+    }
+  }, [activeCalibrationInteraction, selectedJoint]);
+
   return (
     <main
       className="app-content @container relative col-start-2 row-start-2 min-h-0 min-w-0 overflow-hidden bg-stage-canvas"
@@ -168,6 +188,9 @@ export function Stage({
         }
         calibration={calibrating}
         calibrationDisplay={calibrationDisplay}
+        calibrationInteraction={activeCalibrationInteraction}
+        selectedJoint={selectedJoint}
+        onSelectedJointChange={setSelectedJoint}
         mappingOverlay={mappingOverlay}
       />
       <CalibrationMappingOverlay
@@ -177,6 +200,13 @@ export function Stage({
         labels={calibrationDisplay.labels}
         mappingLines={calibrationDisplay.mappingLines}
       />
+      {activeCalibrationInteraction && selectedJoint && (
+        <CalibrationJointHud
+          interaction={activeCalibrationInteraction}
+          jointName={selectedJoint}
+          onClose={() => setSelectedJoint(null)}
+        />
+      )}
       <StageEmpty
         visible={
           r2r

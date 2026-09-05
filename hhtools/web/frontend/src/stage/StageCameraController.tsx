@@ -16,6 +16,7 @@ interface StageCameraControllerProps {
   frameRevision: number;
   follow: boolean;
   calibration: boolean;
+  interactionLocked?: boolean;
 }
 
 /** Owns orbit interaction, content framing, and H2R robot following. */
@@ -26,6 +27,7 @@ export function StageCameraController({
   frameRevision,
   follow,
   calibration,
+  interactionLocked = false,
 }: StageCameraControllerProps) {
   const { camera, gl } = useThree();
   const controlsRef = useRef<OrbitControls | null>(null);
@@ -40,6 +42,7 @@ export function StageCameraController({
     controls.dampingFactor = 0.08;
     controls.screenSpacePanning = true;
     controls.enableZoom = false;
+    controls.enabled = !interactionLocked;
     controls.update();
     controlsRef.current = controls;
 
@@ -80,6 +83,10 @@ export function StageCameraController({
       controlsRef.current = null;
     };
   }, [camera, gl]);
+
+  useEffect(() => {
+    if (controlsRef.current) controlsRef.current.enabled = !interactionLocked;
+  }, [interactionLocked]);
 
   useFrame((_state, delta) => {
     const controls = controlsRef.current;

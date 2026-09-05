@@ -13,6 +13,7 @@ import type {
   StageMotionPayload,
   StageRobotTrajectoryPayload,
 } from "@/stage/types";
+import type { CalibrationJointWorld } from "@/stage/calibrationInteraction";
 
 export interface CalibrationStatus {
   readonly calibrated: boolean;
@@ -32,6 +33,7 @@ export interface CalibrationJointLimit {
 export interface CalibrationSession {
   readonly joint_q: Readonly<Record<string, number>>;
   readonly joint_limits: readonly CalibrationJointLimit[];
+  readonly joint_world: Readonly<Record<string, CalibrationJointWorld>>;
   readonly reference: StageMotionPayload;
   readonly reference_name: string;
   readonly ground_offset_z: number;
@@ -41,6 +43,7 @@ export interface CalibrationSession {
 export interface CalibrationPose {
   readonly links: readonly string[];
   readonly link_transforms: Readonly<Record<string, StageMatrix4>>;
+  readonly joint_world: Readonly<Record<string, CalibrationJointWorld>>;
   readonly ground_offset_z: number;
 }
 

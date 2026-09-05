@@ -11,8 +11,10 @@ import * as THREE from "three";
 import { BodyMeshLayer } from "./BodyMeshLayer";
 import type { CalibrationMappingOverlayHandle } from "./CalibrationMappingOverlay";
 import type { CalibrationDisplayOptions } from "./calibrationDisplay";
+import type { CalibrationInteractionModel } from "./calibrationInteraction";
 import { CapsuleBodyLayer } from "./CapsuleBodyLayer";
 import { EnvironmentLayer } from "./EnvironmentLayer";
+import { ManipulatorLayer } from "./ManipulatorLayer";
 import { ReferenceSkeletonLayer } from "./ReferenceSkeletonLayer";
 import { RobotLayer } from "./RobotLayer";
 import { SkeletonLayer } from "./SkeletonLayer";
@@ -194,6 +196,9 @@ function StageScene({
   followRobot,
   calibration,
   calibrationDisplay,
+  calibrationInteraction,
+  selectedJoint,
+  onSelectedJointChange,
   mappingOverlay,
 }: {
   motion: StageMotionPayload | null;
@@ -210,6 +215,9 @@ function StageScene({
   followRobot: boolean;
   calibration: boolean;
   calibrationDisplay: CalibrationDisplayOptions;
+  calibrationInteraction: CalibrationInteractionModel | null;
+  selectedJoint: string | null;
+  onSelectedJointChange: (name: string | null) => void;
   mappingOverlay?: RefObject<CalibrationMappingOverlayHandle | null>;
 }) {
   const content = useRef<THREE.Group | null>(null);
@@ -237,6 +245,7 @@ function StageScene({
     owner: typeof bodyMesh;
     ready: boolean;
   }>({ owner: undefined, ready: false });
+  const [manipulating, setManipulating] = useState(false);
   const bodyReady = bodyStatus.owner === bodyMesh && bodyStatus.ready;
   const publishBodyReady = useCallback(
     (ready: boolean) => setBodyStatus({ owner: bodyMesh, ready }),
@@ -281,6 +290,7 @@ function StageScene({
         frameRevision={cameraRevision}
         follow={followRobot}
         calibration={calibration}
+        interactionLocked={manipulating}
       />
       <ambientLight intensity={0.55} />
       <hemisphereLight args={[0xffffff, 0x8899aa, 1.35]} />
@@ -365,6 +375,14 @@ function StageScene({
               />
             </>
           )}
+          {calibrationInteraction && (
+            <ManipulatorLayer
+              interaction={calibrationInteraction}
+              selectedJoint={selectedJoint}
+              onSelectedJointChange={onSelectedJointChange}
+              onDraggingChange={setManipulating}
+            />
+          )}
         </group>
       </group>
     </>
@@ -386,6 +404,9 @@ export function StageCanvas({
   followRobot = false,
   calibration = false,
   calibrationDisplay,
+  calibrationInteraction = null,
+  selectedJoint = null,
+  onSelectedJointChange,
   mappingOverlay,
 }: {
   motion: StageMotionPayload | null;
@@ -402,6 +423,9 @@ export function StageCanvas({
   followRobot?: boolean;
   calibration?: boolean;
   calibrationDisplay: CalibrationDisplayOptions;
+  calibrationInteraction?: CalibrationInteractionModel | null;
+  selectedJoint?: string | null;
+  onSelectedJointChange?: (name: string | null) => void;
   mappingOverlay?: RefObject<CalibrationMappingOverlayHandle | null>;
 }) {
   return (
@@ -438,6 +462,9 @@ export function StageCanvas({
         followRobot={followRobot}
         calibration={calibration}
         calibrationDisplay={calibrationDisplay}
+        calibrationInteraction={calibrationInteraction}
+        selectedJoint={selectedJoint}
+        onSelectedJointChange={onSelectedJointChange ?? (() => {})}
         mappingOverlay={mappingOverlay}
       />
     </Canvas>

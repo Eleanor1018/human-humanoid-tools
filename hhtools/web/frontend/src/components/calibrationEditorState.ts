@@ -10,7 +10,6 @@ export interface ResolvedCalibrationJointLimit {
   readonly upper: number;
 }
 
-export type CalibrationAngleUnit = "rad" | "deg";
 export type CalibrationJointRegion =
   | "torso"
   | "left-arm"
@@ -167,3 +166,6 @@ export function isNearCalibrationLimit(
     (value - limit.lower < span * 0.03 || limit.upper - value < span * 0.03)
   );
 }
+import type { CalibrationAngleUnit } from "@/stage/calibrationInteraction";
+
+export type { CalibrationAngleUnit } from "@/stage/calibrationInteraction";

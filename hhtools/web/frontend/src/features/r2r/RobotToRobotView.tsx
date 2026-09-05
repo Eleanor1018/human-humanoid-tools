@@ -2,7 +2,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Field, fieldClass } from "@/components/Field";
 import { CalibrationEditor } from "@/components/CalibrationEditor";
-import { normalizeCalibrationValues } from "@/components/calibrationEditorState";
+import {
+  normalizeCalibrationValues,
+  setCalibrationJointValue,
+  type CalibrationAngleUnit,
+} from "@/components/calibrationEditorState";
 import { InspectorPage } from "@/components/Inspector";
 import { Button } from "@/components/ui/button";
 import { WorkflowPipeline, WorkflowStep } from "@/components/WorkflowSteps";
@@ -12,6 +16,7 @@ import {
   DEFAULT_CALIBRATION_DISPLAY,
   type CalibrationDisplayOptions,
 } from "@/stage/calibrationDisplay";
+import type { CalibrationInteractionModel } from "@/stage/calibrationInteraction";
 
 import {
   getR2rCalibrationSession,
@@ -65,6 +70,9 @@ export interface RobotToRobotViewProps {
   onTargetPose?: (pose: R2rCalibrationPose | null) => void;
   calibrationDisplay?: CalibrationDisplayOptions;
   onCalibrationDisplayChange?: (value: CalibrationDisplayOptions) => void;
+  onCalibrationInteraction?: (
+    interaction: CalibrationInteractionModel | null,
+  ) => void;
 }
 
 function errorMessage(error: unknown): string {
@@ -148,6 +156,7 @@ export function RobotToRobotView({
   onTargetPose,
   calibrationDisplay: controlledCalibrationDisplay,
   onCalibrationDisplayChange,
+  onCalibrationInteraction,
 }: RobotToRobotViewProps) {
   const [robots, setRobots] = useState<readonly RobotSummary[]>([]);
   const [entries, setEntries] = useState<readonly MotionLibraryEntry[]>([]);
@@ -174,6 +183,11 @@ export function RobotToRobotView({
   const [checkingCalibration, setCheckingCalibration] = useState(false);
   const [calibration, setCalibration] = useState<R2rCalibrationSession | null>(null);
   const [jointQ, setJointQ] = useState<Record<string, number>>({});
+  const [jointGeometry, setJointGeometry] = useState<{
+    readonly jointWorld: R2rCalibrationSession["joint_world"];
+    readonly groundOffsetZ: number;
+  } | null>(null);
+  const [angleUnit, setAngleUnit] = useState<CalibrationAngleUnit>("rad");
   const [calibrationBaseline, setCalibrationBaseline] = useState<
     Record<string, number>
   >({});
@@ -195,9 +209,11 @@ export function RobotToRobotView({
   const calibrationStatusRequest = useRef<AbortController | null>(null);
   const poseCallback = useRef(onTargetPose);
   const referenceCallback = useRef(onCalibrationReference);
+  const interactionCallback = useRef(onCalibrationInteraction);
   const poseWasActive = useRef(false);
   poseCallback.current = onTargetPose;
   referenceCallback.current = onCalibrationReference;
+  interactionCallback.current = onCalibrationInteraction;
 
   useEffect(() => {
     const request = new AbortController();
@@ -262,6 +278,7 @@ export function RobotToRobotView({
     setCalibration(null);
     referenceCallback.current?.(null);
     setJointQ({});
+    setJointGeometry(null);
     setCalibrationBaseline({});
     setCalibrationPath(null);
     setCalibrated(false);
@@ -300,7 +317,13 @@ export function RobotToRobotView({
         signal: request.signal,
       })
         .then((pose) => {
-          if (!request.signal.aborted) poseCallback.current?.(pose);
+          if (!request.signal.aborted) {
+            setJointGeometry({
+              jointWorld: pose.joint_world,
+              groundOffsetZ: pose.ground_offset_z,
+            });
+            poseCallback.current?.(pose);
+          }
         })
         .catch((reason: unknown) => {
           if (!request.signal.aborted) setError(errorMessage(reason));
@@ -316,9 +339,36 @@ export function RobotToRobotView({
     () => () => {
       if (poseWasActive.current) poseCallback.current?.(null);
       referenceCallback.current?.(null);
+      interactionCallback.current?.(null);
     },
     [],
   );
+
+  useEffect(() => {
+    if (!calibration || !jointGeometry) {
+      interactionCallback.current?.(null);
+      return;
+    }
+    interactionCallback.current?.({
+      jointQ,
+      jointLimits: calibration.joint_limits,
+      jointWorld: jointGeometry.jointWorld,
+      groundOffsetZ: jointGeometry.groundOffsetZ,
+      angleUnit,
+      disabled: busy !== null,
+      onJointChange: (name, value) => {
+        setJointQ((current) =>
+          setCalibrationJointValue(
+            calibration.joint_limits,
+            current,
+            name,
+            value,
+          ),
+        );
+      },
+      onAngleUnitChange: setAngleUnit,
+    });
+  }, [angleUnit, busy, calibration, jointGeometry, jointQ]);
 
   const selectedEntry = useMemo(
     () => entries.find((entry) => entry.source_path === trajectoryChoice) ?? null,
@@ -488,6 +538,10 @@ export function RobotToRobotView({
       );
       setCalibration(session);
       setJointQ(initial);
+      setJointGeometry({
+        jointWorld: session.joint_world,
+        groundOffsetZ: session.ground_offset_z,
+      });
       setCalibrationBaseline(initial);
       clearRetargetResult();
       referenceCallback.current?.(session.reference);
@@ -532,6 +586,7 @@ export function RobotToRobotView({
   function closeCalibration(cancelled = false): void {
     setCalibration(null);
     setJointQ({});
+    setJointGeometry(null);
     setCalibrationBaseline({});
     referenceCallback.current?.(null);
     poseCallback.current?.(null);
@@ -717,10 +772,12 @@ export function RobotToRobotView({
                 reference={calibration.reference}
                 robot={targetRobot!}
                 display={calibrationDisplay}
+                angleUnit={angleUnit}
                 disabled={busy !== null}
                 saving={busy === "calibration-save"}
                 onChange={setJointQ}
                 onDisplayChange={publishCalibrationDisplay}
+                onAngleUnitChange={setAngleUnit}
                 onCancel={() => closeCalibration(true)}
                 onSave={() => void saveCalibration()}
               />

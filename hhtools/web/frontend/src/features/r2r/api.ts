@@ -28,6 +28,7 @@ import type {
   StageTerrainPayload,
   StageVec3,
 } from "@/stage/types";
+import type { CalibrationJointWorld } from "@/stage/calibrationInteraction";
 
 export { getRobotLibrary, loadRobot };
 export type { MotionLibraryEntry, RobotPayload, RobotSummary };
@@ -92,15 +93,17 @@ export interface R2rCalibrationReference {
 export interface R2rCalibrationSession {
   readonly joint_q: Readonly<Record<string, number>>;
   readonly joint_limits: readonly R2rJointLimit[];
+  readonly joint_world: Readonly<Record<string, CalibrationJointWorld>>;
   readonly reference: R2rCalibrationReference;
   readonly reference_name: string;
-  readonly ground_offset_z?: number;
+  readonly ground_offset_z: number;
   readonly has_saved_calibration?: boolean;
 }
 
 export interface R2rCalibrationPose {
   readonly links: readonly string[];
   readonly link_transforms: Readonly<Record<string, StageMatrix4>>;
+  readonly joint_world: Readonly<Record<string, CalibrationJointWorld>>;
   readonly ground_offset_z: number;
 }
 

@@ -44,6 +44,7 @@ import { VideoToMotionView } from "./features/video-to-motion/VideoToMotionView"
 import type { ViewId } from "./navigation";
 import { Stage } from "./stage/Stage";
 import { DEFAULT_CALIBRATION_DISPLAY } from "./stage/calibrationDisplay";
+import type { CalibrationInteractionModel } from "./stage/calibrationInteraction";
 import type { StagePresentation } from "./stage/presentation";
 import type {
   StageMotionPayload,
@@ -129,6 +130,8 @@ export function App() {
   const [h2rCalibrationDisplay, setH2rCalibrationDisplay] = useState(
     DEFAULT_CALIBRATION_DISPLAY,
   );
+  const [h2rCalibrationInteraction, setH2rCalibrationInteraction] =
+    useState<CalibrationInteractionModel | null>(null);
   const [r2rSourceRobot, setR2rSourceRobot] =
     useState<StageRobotPayload | null>(null);
   const [r2rTargetRobot, setR2rTargetRobot] =
@@ -144,6 +147,9 @@ export function App() {
   const [r2rCalibrationDisplay, setR2rCalibrationDisplay] = useState(
     DEFAULT_CALIBRATION_DISPLAY,
   );
+  const [r2rCalibrationInteraction, setR2rCalibrationInteraction] =
+    useState<CalibrationInteractionModel | null>(null);
+
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     try {
@@ -180,6 +186,7 @@ export function App() {
     }
     window.open(PROJECT_README_URL, "_blank", "noopener,noreferrer");
   }, []);
+
   const stagePresentation: StagePresentation =
     activeView === "robot-assets"
       ? "robot"
@@ -432,6 +439,13 @@ export function App() {
         calibrationDisplay={
           activeView === "r2r" ? r2rCalibrationDisplay : h2rCalibrationDisplay
         }
+        calibrationInteraction={
+          activeView === "h2r"
+            ? h2rCalibrationInteraction
+            : activeView === "r2r"
+              ? r2rCalibrationInteraction
+              : null
+        }
       />
       <Inspector>
         <div className={activeView === "motion" ? "h-full" : "hidden"}>
@@ -470,6 +484,7 @@ export function App() {
             onScaledPreview={setH2rPreview}
             calibrationDisplay={h2rCalibrationDisplay}
             onCalibrationDisplayChange={setH2rCalibrationDisplay}
+            onCalibrationInteraction={setH2rCalibrationInteraction}
           />
         </div>
         <div className={activeView === "r2r" ? "h-full" : "hidden"}>
@@ -486,6 +501,7 @@ export function App() {
             onTargetPose={setR2rCalibrationPose}
             calibrationDisplay={r2rCalibrationDisplay}
             onCalibrationDisplayChange={setR2rCalibrationDisplay}
+            onCalibrationInteraction={setR2rCalibrationInteraction}
           />
         </div>
         <div className={activeView === "batch" ? "h-full" : "hidden"}>

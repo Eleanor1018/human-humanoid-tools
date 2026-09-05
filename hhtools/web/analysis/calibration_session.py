@@ -262,6 +262,7 @@ def build_calibration_session(
     return {
         "joint_q": joint_q,
         "joint_limits": _joint_limits_payload(model),
+        "joint_world": joint_world_payload(model),
         "reference": ref_payload,
         "reference_name": reference,
         "ground_offset_z": ground_z,

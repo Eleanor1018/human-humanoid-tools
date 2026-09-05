@@ -32,10 +32,12 @@ interface CalibrationEditorProps {
   readonly reference: StageMotionPayload;
   readonly robot: StageRobotPayload;
   readonly display: CalibrationDisplayOptions;
+  readonly angleUnit?: CalibrationAngleUnit;
   readonly disabled?: boolean;
   readonly saving?: boolean;
   readonly onChange: (value: Record<string, number>) => void;
   readonly onDisplayChange: (value: CalibrationDisplayOptions) => void;
+  readonly onAngleUnitChange?: (unit: CalibrationAngleUnit) => void;
   readonly onCancel: () => void;
   readonly onSave: () => void;
 }
@@ -150,16 +152,20 @@ export function CalibrationEditor({
   reference,
   robot,
   display,
+  angleUnit: controlledAngleUnit,
   disabled = false,
   saving = false,
   onChange,
   onDisplayChange,
+  onAngleUnitChange,
   onCancel,
   onSave,
 }: CalibrationEditorProps) {
   const [query, setQuery] = useState("");
   const [region, setRegion] = useState<RegionFilter>("all");
-  const [unit, setUnit] = useState<CalibrationAngleUnit>("rad");
+  const [localAngleUnit, setLocalAngleUnit] = useState<CalibrationAngleUnit>("rad");
+  const unit = controlledAngleUnit ?? localAngleUnit;
+  const publishAngleUnit = onAngleUnitChange ?? setLocalAngleUnit;
   const [comparison, setComparison] = useState<ComparisonMode>("current");
   const currentDraft = useRef(normalizeCalibrationValues(limits, value));
   const resolved = useMemo(
@@ -221,7 +227,7 @@ export function CalibrationEditor({
                 type="button"
                 disabled={disabled}
                 aria-pressed={unit === option}
-                onClick={() => setUnit(option)}
+                onClick={() => publishAngleUnit(option)}
                 className={`min-h-7 px-2 text-[10px] font-semibold ${
                   unit === option
                     ? "bg-accent text-accent-foreground"
