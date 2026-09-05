@@ -4,10 +4,13 @@ import { ImportDropzone } from "@/components/ImportDropzone";
 import { InspectorPage } from "@/components/Inspector";
 import { SearchField } from "@/components/SearchField";
 import { Button } from "@/components/ui/button";
+import type { UploadFile } from "@/lib/api";
 
 import {
+  deleteRobot,
   getRobotLibrary,
   loadRobot,
+  uploadRobot,
   type RobotPayload,
   type RobotSummary,
 } from "./api";
@@ -70,6 +73,13 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function uploadName(file: File): string {
+  return file.name
+    .replace(/\.urdf$/i, "")
+    .replace(/[^a-z0-9_]/gi, "_")
+    .toLowerCase() || "uploaded_robot";
+}
+
 export function RobotView({
   currentRobot,
   onRobotLoaded,
@@ -83,10 +93,15 @@ export function RobotView({
   const [search, setSearch] = useState("");
   const [loadingName, setLoadingName] = useState<string | null>(null);
   const [loadingLibrary, setLoadingLibrary] = useState(true);
+  const [importing, setImporting] = useState(false);
+  const [urdf, setUrdf] = useState<UploadFile | null>(null);
+  const [meshes, setMeshes] = useState<readonly UploadFile[]>([]);
   const [libraryDir, setLibraryDir] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const libraryRequest = useRef<AbortController | null>(null);
   const robotRequest = useRef<AbortController | null>(null);
+  const urdfInput = useRef<HTMLInputElement | null>(null);
+  const meshInput = useRef<HTMLInputElement | null>(null);
 
   const refresh = useCallback(() => {
     libraryRequest.current?.abort();
@@ -117,6 +132,10 @@ export function RobotView({
     };
   }, [refresh]);
 
+  useEffect(() => {
+    meshInput.current?.setAttribute("webkitdirectory", "");
+  }, []);
+
   const filteredRobots = useMemo(() => {
     const tokens = search.trim().toLowerCase().split(/\s+/).filter(Boolean);
     return [...robots]
@@ -139,6 +158,104 @@ export function RobotView({
   const loadedRobot = loadedName
     ? robots.find((robot) => robot.name === loadedName)
     : undefined;
+  const busy = importing || Boolean(loadingName);
+
+  const finishImport = useCallback(
+    async (selectedUrdf: UploadFile, selectedMeshes: readonly UploadFile[]) => {
+      robotRequest.current?.abort();
+      const request = new AbortController();
+      robotRequest.current = request;
+      setImporting(true);
+      setError(null);
+      try {
+        const payload = await uploadRobot(
+          [selectedUrdf, ...selectedMeshes],
+          uploadName(selectedUrdf),
+          { signal: request.signal },
+        );
+        if (request.signal.aborted) return;
+        setUrdf(null);
+        setMeshes([]);
+        onRobotLoaded?.(payload);
+        refresh();
+      } catch (reason) {
+        if (!request.signal.aborted) setError(errorMessage(reason));
+      } finally {
+        if (!request.signal.aborted) setImporting(false);
+      }
+    },
+    [onRobotLoaded, refresh],
+  );
+
+  const receiveUrdf = useCallback(
+    (files: readonly UploadFile[]) => {
+      if (busy) return;
+      const selectedUrdf = files.find((file) =>
+        file.name.toLowerCase().endsWith(".urdf"),
+      );
+      if (!selectedUrdf) {
+        setError("No .urdf file was found.");
+        return;
+      }
+      const sidecars = files.filter(
+        (file) =>
+          file !== selectedUrdf && !file.name.toLowerCase().endsWith(".urdf"),
+      );
+      setUrdf(selectedUrdf);
+      setMeshes(sidecars);
+      setError(null);
+      if (sidecars.length) void finishImport(selectedUrdf, sidecars);
+    },
+    [busy, finishImport],
+  );
+
+  const receiveMeshes = useCallback(
+    (files: readonly UploadFile[]) => {
+      if (busy) return;
+      if (!urdf) {
+        setError("Choose the robot URDF before selecting its mesh folder.");
+        return;
+      }
+      const sidecars = files.filter(
+        (file) => !file.name.toLowerCase().endsWith(".urdf"),
+      );
+      if (!sidecars.length) {
+        setError("No mesh assets were found.");
+        return;
+      }
+      setMeshes(sidecars);
+      setError(null);
+      void finishImport(urdf, sidecars);
+    },
+    [busy, finishImport, urdf],
+  );
+
+  const remove = useCallback(
+    (robot: RobotSummary) => {
+      if (!robot.deletable || busy) return;
+      if (!window.confirm(
+        `Remove “${robotLabel(robot)}” from the Robot Library?\nThis permanently deletes its local folder.`,
+      )) return;
+      robotRequest.current?.abort();
+      const request = new AbortController();
+      robotRequest.current = request;
+      setLoadingName(robot.name);
+      setError(null);
+      void deleteRobot(robot.name, { signal: request.signal })
+        .then(() => {
+          if (request.signal.aborted) return;
+          if (currentRobot?.name === robot.name) onRobotLoaded?.(null);
+          refresh();
+        })
+        .catch((reason: unknown) => {
+          if (!request.signal.aborted) setError(errorMessage(reason));
+        })
+        .finally(() => {
+          if (!request.signal.aborted) setLoadingName(null);
+        });
+    },
+    [busy, currentRobot?.name, onRobotLoaded, refresh],
+  );
 
   const load = useCallback(
     (robot: RobotSummary) => {
@@ -172,23 +289,59 @@ export function RobotView({
           icon="/icons/robot/file.svg"
           title="1 · URDF file"
           className="min-h-[120px] px-9 py-3.5"
+          disabled={busy}
+          onFiles={receiveUrdf}
         >
-          <Button size="sm" disabled>
+          <Button size="sm" disabled={busy} onClick={() => urdfInput.current?.click()}>
             Choose .urdf
           </Button>
+          <input
+            ref={urdfInput}
+            className="hidden"
+            type="file"
+            accept=".urdf"
+            onChange={(event) => {
+              receiveUrdf(Array.from(event.currentTarget.files ?? []) as UploadFile[]);
+              event.currentTarget.value = "";
+            }}
+          />
         </ImportDropzone>
         <ImportDropzone
           label="Robot mesh import area"
           icon="/icons/robot/folder.svg"
           title="2 · Mesh folder"
           className="min-h-[120px] px-9 py-3.5"
+          disabled={busy}
+          onFiles={receiveMeshes}
         >
-          <Button size="sm" disabled>
+          <Button
+            size="sm"
+            disabled={busy || !urdf}
+            onClick={() => meshInput.current?.click()}
+          >
             Choose mesh folder
           </Button>
+          <input
+            ref={meshInput}
+            className="hidden"
+            type="file"
+            multiple
+            onChange={(event) => {
+              receiveMeshes(Array.from(event.currentTarget.files ?? []) as UploadFile[]);
+              event.currentTarget.value = "";
+            }}
+          />
         </ImportDropzone>
         <p className="text-xs text-muted-foreground" aria-live="polite">
-          {loadedRobot ? `Loaded: ${robotLabel(loadedRobot)}` : "No URDF selected."}
+          {importing
+            ? `Importing ${urdf?.name || "robot"}...`
+            : urdf
+              ? `URDF: ${urdf.name} · ${meshes.length ? `${meshes.length} assets` : "choose the mesh folder"}`
+              : loadedRobot
+                ? `Loaded: ${robotLabel(loadedRobot)}`
+                : currentRobot
+                  ? `Loaded: ${currentRobot.display_name}`
+                  : "No URDF selected."}
         </p>
       </div>
 
@@ -247,14 +400,17 @@ export function RobotView({
                 const busy = loadingName === robot.name;
                 const unavailable = !robot.has_urdf;
                 return (
-                  <li key={robot.name} className="min-w-0 list-none">
+                  <li
+                    key={robot.name}
+                    className="grid min-w-0 list-none grid-cols-[minmax(0,1fr)_auto] items-center"
+                  >
                     <button
                       type="button"
                       className="grid min-h-12 w-full grid-cols-[32px_minmax(0,1fr)_auto] items-center gap-2 rounded-md border border-transparent bg-transparent px-2 py-1.5 text-left text-foreground transition-colors hover:border-border-subtle hover:bg-background focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring data-[active=true]:border-primary data-[active=true]:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
                       data-active={active}
                       aria-current={active ? "true" : undefined}
                       aria-label={`Load robot ${robotLabel(robot)}`}
-                      disabled={unavailable || Boolean(loadingName)}
+                      disabled={unavailable || busy}
                       onClick={() => load(robot)}
                     >
                       <img
@@ -287,6 +443,18 @@ export function RobotView({
                               : "Load"}
                       </span>
                     </button>
+                    {robot.deletable && !robot.builtin && (
+                      <button
+                        type="button"
+                        className="size-8 rounded-md text-lg leading-none text-muted-foreground hover:bg-[#fff1f0] hover:text-[#a62c2c] focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-50"
+                        title="Remove from Robot Library"
+                        aria-label={`Delete robot ${robotLabel(robot)}`}
+                        disabled={busy}
+                        onClick={() => remove(robot)}
+                      >
+                        ×
+                      </button>
+                    )}
                   </li>
                 );
               })}

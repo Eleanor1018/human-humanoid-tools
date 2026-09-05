@@ -133,6 +133,7 @@ main -> App -> features -> components/ui
 - [x] Legacy-compatible capsule body when a baked skin is unavailable
 - [x] Motion Library list, upload, job polling, and Stage handoff
 - [x] Robot catalog, zero-pose selection, GLB parsing, and Stage handoff
+- [x] Persistent URDF/mesh-folder robot import and user-robot removal
 - [x] Six curated robot presets installed from pinned upstream sources
 - [x] Human-to-Robot calibration, retarget job, playback, and export
 - [x] Robot-to-Robot upload/library source, calibration, retarget, and export

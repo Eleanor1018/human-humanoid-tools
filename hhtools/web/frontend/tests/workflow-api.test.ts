@@ -14,6 +14,7 @@ const { retarget: runH2rRetarget, retargetExportUrl } =
   await import("../src/features/h2r/api.ts");
 const { getR2rLibrary, r2rExportUrl, runR2rRetarget } =
   await import("../src/features/r2r/api.ts");
+const { deleteRobot, uploadRobot } = await import("../src/features/robot/api.ts");
 const {
   analyzeDataset,
   computeDatasetSubset,
@@ -269,4 +270,21 @@ test("analysis subset sends the analyzed clips and selection parameters", async 
   });
   assert.deepEqual(body, { clips: [clip], k: 1, alpha: 0.75 });
   assert.deepEqual(value, { selected: ["walk"], count: 1 });
+});
+
+test("robot import preserves bundle paths and deletion encodes its name", async () => {
+  const file = new File(["solid robot"], "arm.stl") as File & { _relpath?: string };
+  file._relpath = "meshes/arm.stl";
+  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
+    calls.push({ url: String(input), init });
+    if (init?.method === "DELETE") return Response.json({ ok: true, deleted: "my robot" });
+    return Response.json({ name: "my_robot", display_name: "My Robot", links: [], link_transforms_zero: {} });
+  };
+  await uploadRobot([file], "my_robot", { fetcher });
+  await deleteRobot("my robot", { fetcher });
+  assert.equal(calls[0].url, "/api/robot/upload?name=my_robot");
+  assert.equal(((calls[0].init?.body as FormData).get("files") as File).name, "meshes/arm.stl");
+  assert.equal(calls[1].url, "/api/robot/my%20robot");
+  assert.equal(calls[1].init?.method, "DELETE");
 });

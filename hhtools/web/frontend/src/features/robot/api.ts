@@ -1,6 +1,11 @@
 /** Robot-specific types and request functions for the inspector. */
 
-import { requestJson, type Fetcher } from "@/lib/api";
+import {
+  requestJson,
+  uploadFiles,
+  type Fetcher,
+  type UploadFile,
+} from "@/lib/api";
 import type { StageRobotPayload } from "@/stage/types";
 
 export interface RobotSummary {
@@ -63,6 +68,31 @@ export async function loadRobot(
       body: JSON.stringify({ name: normalized }),
       signal: options.signal,
     },
+    options.fetcher,
+  );
+}
+
+/** Persist a complete URDF bundle and return its loaded zero-pose payload. */
+export function uploadRobot(
+  files: Iterable<UploadFile | File>,
+  name: string,
+  options: RobotRequestOptions = {},
+): Promise<RobotPayload> {
+  return uploadFiles<RobotPayload>("/api/robot/upload", files, {
+    query: { name },
+    signal: options.signal,
+    fetcher: options.fetcher,
+  });
+}
+
+/** Remove one backend-confirmed user robot from the persistent library. */
+export function deleteRobot(
+  name: string,
+  options: RobotRequestOptions = {},
+): Promise<{ readonly ok: boolean; readonly deleted: string }> {
+  return requestJson(
+    `/api/robot/${encodeURIComponent(name)}`,
+    { method: "DELETE", signal: options.signal },
     options.fetcher,
   );
 }
