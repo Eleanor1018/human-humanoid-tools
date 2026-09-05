@@ -195,6 +195,8 @@ export function RobotToRobotView({
     readonly groundOffsetZ: number;
   } | null>(null);
   const [angleUnit, setAngleUnit] = useState<CalibrationAngleUnit>("rad");
+  const [selectedCalibrationJoint, setSelectedCalibrationJoint] =
+    useState<string | null>(null);
   const [calibrationBaseline, setCalibrationBaseline] = useState<
     Record<string, number>
   >({});
@@ -292,6 +294,7 @@ export function RobotToRobotView({
     referenceCallback.current?.(null);
     setJointQ({});
     setJointGeometry(null);
+    setSelectedCalibrationJoint(null);
     setCalibrationBaseline({});
     setCalibrationPath(null);
     setCalibrated(false);
@@ -368,6 +371,7 @@ export function RobotToRobotView({
       jointWorld: jointGeometry.jointWorld,
       groundOffsetZ: jointGeometry.groundOffsetZ,
       angleUnit,
+      selectedJoint: selectedCalibrationJoint,
       disabled: busy !== null,
       onJointChange: (name, value) => {
         setJointQ((current) =>
@@ -379,9 +383,17 @@ export function RobotToRobotView({
           ),
         );
       },
+      onSelectedJointChange: setSelectedCalibrationJoint,
       onAngleUnitChange: setAngleUnit,
     });
-  }, [angleUnit, busy, calibration, jointGeometry, jointQ]);
+  }, [
+    angleUnit,
+    busy,
+    calibration,
+    jointGeometry,
+    jointQ,
+    selectedCalibrationJoint,
+  ]);
 
   const selectedEntry = useMemo(
     () => entries.find((entry) => entry.source_path === trajectoryChoice) ?? null,
@@ -600,6 +612,7 @@ export function RobotToRobotView({
     setCalibration(null);
     setJointQ({});
     setJointGeometry(null);
+    setSelectedCalibrationJoint(null);
     setCalibrationBaseline({});
     referenceCallback.current?.(null);
     poseCallback.current?.(null);
@@ -786,11 +799,13 @@ export function RobotToRobotView({
                 robot={targetRobot!}
                 display={calibrationDisplay}
                 angleUnit={angleUnit}
+                selectedJoint={selectedCalibrationJoint}
                 disabled={busy !== null}
                 saving={busy === "calibration-save"}
                 onChange={setJointQ}
                 onDisplayChange={publishCalibrationDisplay}
                 onAngleUnitChange={setAngleUnit}
+                onJointSelected={setSelectedCalibrationJoint}
                 onCancel={() => closeCalibration(true)}
                 onSave={() => void saveCalibration()}
               />

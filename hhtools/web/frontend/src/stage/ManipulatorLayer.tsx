@@ -140,14 +140,12 @@ function Handle({
 /** Declarative R3F joint handles shared by H2R and R2R calibration. */
 export function ManipulatorLayer({
   interaction,
-  selectedJoint,
-  onSelectedJointChange,
   onDraggingChange,
+  onHoveredJointChange,
 }: {
   readonly interaction: CalibrationInteractionModel;
-  readonly selectedJoint: string | null;
-  readonly onSelectedJointChange: (name: string | null) => void;
   readonly onDraggingChange: (dragging: boolean) => void;
+  readonly onHoveredJointChange: (name: string | null) => void;
 }) {
   const root = useRef<THREE.Group | null>(null);
   const drag = useRef<ActiveDrag | null>(null);
@@ -167,9 +165,10 @@ export function ManipulatorLayer({
         active.captureTarget.releasePointerCapture(active.pointerId);
       }
       drag.current = null;
+      onHoveredJointChange(null);
       onDraggingChange(false);
     },
-    [onDraggingChange],
+    [onDraggingChange, onHoveredJointChange],
   );
 
   function worldGeometry(item: JointHandle): {
@@ -241,7 +240,7 @@ export function ManipulatorLayer({
         };
       }
     }
-    onSelectedJointChange(item.joint.name);
+    interaction.onSelectedJointChange(item.joint.name);
     if (!next) return;
     drag.current = next;
     captureTarget.setPointerCapture(event.pointerId);
@@ -296,6 +295,8 @@ export function ManipulatorLayer({
       active.captureTarget.releasePointerCapture(event.pointerId);
     }
     onDraggingChange(false);
+    setHoveredJoint(null);
+    onHoveredJointChange(null);
   }
 
   return (
@@ -308,16 +309,20 @@ export function ManipulatorLayer({
         <Handle
           key={item.joint.name}
           item={item}
-          selected={selectedJoint === item.joint.name}
+          selected={interaction.selectedJoint === item.joint.name}
           hovered={hoveredJoint === item.joint.name}
           disabled={Boolean(interaction.disabled)}
           onPointerOver={(event) => {
             event.stopPropagation();
             setHoveredJoint(item.joint.name);
+            onHoveredJointChange(item.joint.name);
           }}
           onPointerOut={(event) => {
             event.stopPropagation();
-            if (!drag.current) setHoveredJoint(null);
+            if (!drag.current) {
+              setHoveredJoint(null);
+              onHoveredJointChange(null);
+            }
           }}
           onPointerDown={(event) => beginDrag(item, event)}
           onPointerMove={moveDrag}

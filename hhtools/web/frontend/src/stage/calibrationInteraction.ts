@@ -9,6 +9,7 @@ export interface CalibrationJointWorld {
 
 export interface CalibrationInteractionJoint {
   readonly name: string;
+  readonly child_link?: string;
   readonly lower?: number;
   readonly upper?: number;
   readonly type?: string;
@@ -21,7 +22,9 @@ export interface CalibrationInteractionModel {
   readonly jointWorld: Readonly<Record<string, CalibrationJointWorld>>;
   readonly groundOffsetZ: number;
   readonly angleUnit: CalibrationAngleUnit;
+  readonly selectedJoint: string | null;
   readonly disabled?: boolean;
   readonly onJointChange: (name: string, value: number) => void;
+  readonly onSelectedJointChange: (name: string | null) => void;
   readonly onAngleUnitChange: (unit: CalibrationAngleUnit) => void;
 }

@@ -79,6 +79,17 @@ function PlaybackClock({
   return null;
 }
 
+function calibrationLink(
+  interaction: CalibrationInteractionModel | null,
+  jointName: string | null,
+): string | null {
+  if (!jointName) return null;
+  return (
+    interaction?.jointLimits.find((joint) => joint.name === jointName)
+      ?.child_link ?? null
+  );
+}
+
 function R2rLayers({
   presentation,
   playback,
@@ -89,6 +100,8 @@ function R2rLayers({
   mappingOverlay,
   onTargetPoseReaderChange,
   calibrationDisplay,
+  selectedLink,
+  hoveredLink,
 }: {
   presentation: StageR2rPresentationPayload;
   playback: StagePlaybackRef;
@@ -99,6 +112,8 @@ function R2rLayers({
   mappingOverlay?: RefObject<CalibrationMappingOverlayHandle | null>;
   onTargetPoseReaderChange: (reader: RobotLinkPoseReader | null) => void;
   calibrationDisplay: CalibrationDisplayOptions;
+  selectedLink: string | null;
+  hoveredLink: string | null;
 }) {
   const visibility = projectR2rStageVisibility(presentation, visibleLayers);
   if (presentation.phase === "calibration") {
@@ -123,6 +138,8 @@ function R2rLayers({
           name="r2r-target-robot"
           onObjectChange={onTargetRobotChange}
           onPoseReaderChange={onTargetPoseReaderChange}
+          selectedLink={selectedLink}
+          hoveredLink={hoveredLink}
         />
       </>
     );
@@ -197,8 +214,6 @@ function StageScene({
   calibration,
   calibrationDisplay,
   calibrationInteraction,
-  selectedJoint,
-  onSelectedJointChange,
   mappingOverlay,
 }: {
   motion: StageMotionPayload | null;
@@ -216,8 +231,6 @@ function StageScene({
   calibration: boolean;
   calibrationDisplay: CalibrationDisplayOptions;
   calibrationInteraction: CalibrationInteractionModel | null;
-  selectedJoint: string | null;
-  onSelectedJointChange: (name: string | null) => void;
   mappingOverlay?: RefObject<CalibrationMappingOverlayHandle | null>;
 }) {
   const content = useRef<THREE.Group | null>(null);
@@ -246,6 +259,12 @@ function StageScene({
     ready: boolean;
   }>({ owner: undefined, ready: false });
   const [manipulating, setManipulating] = useState(false);
+  const [hoveredJoint, setHoveredJoint] = useState<string | null>(null);
+  const selectedLink = calibrationLink(
+    calibrationInteraction,
+    calibrationInteraction?.selectedJoint ?? null,
+  );
+  const hoveredLink = calibrationLink(calibrationInteraction, hoveredJoint);
   const bodyReady = bodyStatus.owner === bodyMesh && bodyStatus.ready;
   const publishBodyReady = useCallback(
     (ready: boolean) => setBodyStatus({ owner: bodyMesh, ready }),
@@ -312,6 +331,8 @@ function StageScene({
               mappingOverlay={mappingOverlay}
               onTargetPoseReaderChange={publishTargetPoseReader}
               calibrationDisplay={calibrationDisplay}
+              selectedLink={selectedLink}
+              hoveredLink={hoveredLink}
             />
           ) : (
             <>
@@ -374,15 +395,16 @@ function StageScene({
                 opacity={robotOpacity}
                 onObjectChange={publishFollowedRobot}
                 onPoseReaderChange={publishTargetPoseReader}
+                selectedLink={selectedLink}
+                hoveredLink={hoveredLink}
               />
             </>
           )}
           {calibrationInteraction && (
             <ManipulatorLayer
               interaction={calibrationInteraction}
-              selectedJoint={selectedJoint}
-              onSelectedJointChange={onSelectedJointChange}
               onDraggingChange={setManipulating}
+              onHoveredJointChange={setHoveredJoint}
             />
           )}
         </group>
@@ -407,8 +429,6 @@ export function StageCanvas({
   calibration = false,
   calibrationDisplay,
   calibrationInteraction = null,
-  selectedJoint = null,
-  onSelectedJointChange,
   mappingOverlay,
 }: {
   motion: StageMotionPayload | null;
@@ -426,8 +446,6 @@ export function StageCanvas({
   calibration?: boolean;
   calibrationDisplay: CalibrationDisplayOptions;
   calibrationInteraction?: CalibrationInteractionModel | null;
-  selectedJoint?: string | null;
-  onSelectedJointChange?: (name: string | null) => void;
   mappingOverlay?: RefObject<CalibrationMappingOverlayHandle | null>;
 }) {
   return (
@@ -465,8 +483,6 @@ export function StageCanvas({
         calibration={calibration}
         calibrationDisplay={calibrationDisplay}
         calibrationInteraction={calibrationInteraction}
-        selectedJoint={selectedJoint}
-        onSelectedJointChange={onSelectedJointChange ?? (() => {})}
         mappingOverlay={mappingOverlay}
       />
     </Canvas>

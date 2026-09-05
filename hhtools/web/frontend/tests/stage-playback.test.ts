@@ -57,6 +57,7 @@ import {
   CAPSULE_BODY_VISUAL,
   ENVIRONMENT_VISUALS,
   ROBOT_VISUAL,
+  ROBOT_CALIBRATION_VISUALS,
   SKELETON_VISUALS,
 } from "../src/stage/visualStyle.ts";
 
@@ -295,6 +296,8 @@ test("keeps the original source and scaled Stage palette distinct", () => {
   assert.equal(ENVIRONMENT_VISUALS.source.objectColor, 0xff9f0a);
   assert.equal(ENVIRONMENT_VISUALS.scaled.objectColor, 0x6a9fd4);
   assert.equal(ROBOT_VISUAL.color, 0xc8ccd4);
+  assert.equal(ROBOT_CALIBRATION_VISUALS.hover.emissive, 0x3b82f6);
+  assert.equal(ROBOT_CALIBRATION_VISUALS.selected.emissive, 0x1d4ed8);
 });
 
 test("frames only visible Stage geometry", () => {

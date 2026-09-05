@@ -1,13 +1,17 @@
+import type { CalibrationAngleUnit } from "@/stage/calibrationInteraction";
+
 export interface CalibrationJointLimit {
   readonly name: string;
   readonly lower?: number;
   readonly upper?: number;
+  readonly type?: string;
 }
 
 export interface ResolvedCalibrationJointLimit {
   readonly name: string;
   readonly lower: number;
   readonly upper: number;
+  readonly type?: string;
 }
 
 export type CalibrationJointRegion =
@@ -92,7 +96,12 @@ export function resolveCalibrationJointLimits(
     let lower = Number.isFinite(candidate.lower) ? candidate.lower! : -Math.PI;
     let upper = Number.isFinite(candidate.upper) ? candidate.upper! : Math.PI;
     if (upper <= lower) [lower, upper] = [-Math.PI, Math.PI];
-    resolved.push({ name, lower, upper });
+    resolved.push({
+      name,
+      lower,
+      upper,
+      ...(candidate.type ? { type: candidate.type } : {}),
+    });
   }
   return resolved;
 }
@@ -166,6 +175,5 @@ export function isNearCalibrationLimit(
     (value - limit.lower < span * 0.03 || limit.upper - value < span * 0.03)
   );
 }
-import type { CalibrationAngleUnit } from "@/stage/calibrationInteraction";
 
 export type { CalibrationAngleUnit } from "@/stage/calibrationInteraction";

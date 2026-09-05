@@ -103,3 +103,16 @@ export const ROBOT_VISUAL = {
   fallbackRadius: 0.02,
   fallbackSegments: 8,
 } as const;
+
+export const ROBOT_CALIBRATION_VISUALS = {
+  hover: {
+    color: 0xd6e4ff,
+    emissive: 0x3b82f6,
+    emissiveIntensity: 0.92,
+  },
+  selected: {
+    color: 0xbfdbfe,
+    emissive: 0x1d4ed8,
+    emissiveIntensity: 1.15,
+  },
+} as const;

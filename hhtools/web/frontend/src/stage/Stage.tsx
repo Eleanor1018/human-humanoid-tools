@@ -64,7 +64,6 @@ export function Stage({
   const [visibleLayers, setVisibleLayers] = useState<StageLayerId[]>([]);
   const [r2rVisibleLayers, setR2rVisibleLayers] = useState<StageLayerId[]>([]);
   const [cameraRevision, setCameraRevision] = useState(0);
-  const [selectedJoint, setSelectedJoint] = useState<string | null>(null);
   const r2rVisibilityKey = useRef<string | null>(null);
   const mappingOverlay = useRef<CalibrationMappingOverlayHandle | null>(null);
   const timeline: StageTimelinePayload | null = r2r
@@ -175,18 +174,6 @@ export function Stage({
     if (hasContent) setCameraRevision((revision) => revision + 1);
   }, [hasContent, motion, presentation, r2rCameraIdentity, robot, scaledMotion]);
 
-  useEffect(() => {
-    if (
-      !activeCalibrationInteraction ||
-      (selectedJoint &&
-        !activeCalibrationInteraction.jointLimits.some(
-          (joint) => joint.name === selectedJoint,
-        ))
-    ) {
-      setSelectedJoint(null);
-    }
-  }, [activeCalibrationInteraction, selectedJoint]);
-
   return (
     <main
       className="app-content @container relative col-start-2 row-start-2 min-h-0 min-w-0 overflow-hidden bg-stage-canvas"
@@ -210,8 +197,6 @@ export function Stage({
         calibration={calibrating}
         calibrationDisplay={calibrationDisplay}
         calibrationInteraction={activeCalibrationInteraction}
-        selectedJoint={selectedJoint}
-        onSelectedJointChange={setSelectedJoint}
         mappingOverlay={mappingOverlay}
       />
       <CalibrationMappingOverlay
@@ -221,11 +206,13 @@ export function Stage({
         labels={calibrationDisplay.labels}
         mappingLines={calibrationDisplay.mappingLines}
       />
-      {activeCalibrationInteraction && selectedJoint && (
+      {activeCalibrationInteraction?.selectedJoint && (
         <CalibrationJointHud
           interaction={activeCalibrationInteraction}
-          jointName={selectedJoint}
-          onClose={() => setSelectedJoint(null)}
+          jointName={activeCalibrationInteraction.selectedJoint}
+          onClose={() =>
+            activeCalibrationInteraction.onSelectedJointChange(null)
+          }
         />
       )}
       <StageEmpty

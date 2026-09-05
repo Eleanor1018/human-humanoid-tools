@@ -35,11 +35,13 @@ interface CalibrationEditorProps {
   readonly robot: StageRobotPayload;
   readonly display: CalibrationDisplayOptions;
   readonly angleUnit?: CalibrationAngleUnit;
+  readonly selectedJoint?: string | null;
   readonly disabled?: boolean;
   readonly saving?: boolean;
   readonly onChange: (value: Record<string, number>) => void;
   readonly onDisplayChange: (value: CalibrationDisplayOptions) => void;
   readonly onAngleUnitChange?: (unit: CalibrationAngleUnit) => void;
+  readonly onJointSelected?: (name: string) => void;
   readonly onCancel: () => void;
   readonly onSave: () => void;
 }
@@ -65,38 +67,52 @@ function CalibrationJointRow({
   limit,
   value,
   unit,
+  selected,
   disabled,
+  onSelect,
   onChange,
 }: {
   readonly limit: ResolvedCalibrationJointLimit;
   readonly value: number;
   readonly unit: CalibrationAngleUnit;
+  readonly selected: boolean;
   readonly disabled: boolean;
+  readonly onSelect: () => void;
   readonly onChange: (valueRad: number) => void;
 }) {
   const editing = useRef(false);
   const [numberValue, setNumberValue] = useState(() =>
-    formatCalibrationAngle(value, unit),
+    limit.type === "prismatic" ? value.toFixed(3) : formatCalibrationAngle(value, unit),
   );
   const nearLimit = isNearCalibrationLimit(value, limit);
+  const linear = limit.type === "prismatic";
+  const displayValue = (next: number) =>
+    linear ? next : angleForDisplay(next, unit);
+  const storedValue = (next: number) =>
+    linear ? next : angleFromDisplay(next, unit);
+  const formatValue = (next: number) =>
+    linear ? next.toFixed(3) : formatCalibrationAngle(next, unit);
 
   useEffect(() => {
-    if (!editing.current) setNumberValue(formatCalibrationAngle(value, unit));
-  }, [unit, value]);
+    if (!editing.current) setNumberValue(formatValue(value));
+  }, [linear, unit, value]);
 
   const commit = (raw: string) => {
     const parsed = raw.trim() ? Number(raw) : Number.NaN;
     if (!Number.isFinite(parsed)) {
-      setNumberValue(formatCalibrationAngle(value, unit));
+      setNumberValue(formatValue(value));
       return;
     }
-    const next = clampCalibrationValue(angleFromDisplay(parsed, unit), limit);
+    const next = clampCalibrationValue(storedValue(parsed), limit);
     onChange(next);
-    setNumberValue(formatCalibrationAngle(next, unit));
+    setNumberValue(formatValue(next));
   };
 
   return (
-    <div className="grid grid-cols-[minmax(0,1fr)_minmax(72px,1fr)_76px] items-center gap-2 text-[11px]">
+    <div
+      className={`grid grid-cols-[minmax(0,1fr)_minmax(72px,1fr)_76px] items-center gap-2 rounded-sm px-1 py-0.5 text-[11px] ${selected ? "bg-accent" : ""}`}
+      onPointerDown={onSelect}
+    >
       <span
         className={nearLimit ? "truncate text-[#c98413]" : "truncate text-muted-foreground"}
         title={limit.name}
@@ -116,9 +132,9 @@ function CalibrationJointRow({
       />
       <input
         type="number"
-        min={angleForDisplay(limit.lower, unit)}
-        max={angleForDisplay(limit.upper, unit)}
-        step={unit === "deg" ? "0.1" : "0.001"}
+        min={displayValue(limit.lower)}
+        max={displayValue(limit.upper)}
+        step={!linear && unit === "deg" ? "0.1" : "0.001"}
         value={numberValue}
         disabled={disabled}
         onFocus={() => {
@@ -128,7 +144,7 @@ function CalibrationJointRow({
           const raw = event.currentTarget.value;
           setNumberValue(raw);
           const parsed = raw.trim() ? Number(raw) : Number.NaN;
-          if (Number.isFinite(parsed)) onChange(angleFromDisplay(parsed, unit));
+          if (Number.isFinite(parsed)) onChange(storedValue(parsed));
         }}
         onBlur={(event) => {
           editing.current = false;
@@ -138,8 +154,8 @@ function CalibrationJointRow({
           if (event.key === "Enter") event.currentTarget.blur();
         }}
         className={`${numberClass} ${nearLimit ? "border-[#c98413]/55" : ""}`}
-        aria-label={`${limit.name} ${unit === "deg" ? "degrees" : "radians"}`}
-        title={unit === "deg" ? "Degrees; stored in radians" : "Angle in radians"}
+        aria-label={`${limit.name} ${linear ? "metres" : unit === "deg" ? "degrees" : "radians"}`}
+        title={linear ? "Translation in metres" : unit === "deg" ? "Degrees; stored in radians" : "Angle in radians"}
       />
     </div>
   );
@@ -155,11 +171,13 @@ export function CalibrationEditor({
   robot,
   display,
   angleUnit: controlledAngleUnit,
+  selectedJoint = null,
   disabled = false,
   saving = false,
   onChange,
   onDisplayChange,
   onAngleUnitChange,
+  onJointSelected,
   onCancel,
   onSave,
 }: CalibrationEditorProps) {
@@ -392,7 +410,9 @@ export function CalibrationEditor({
             limit={limit}
             value={value[limit.name] ?? 0}
             unit={unit}
+            selected={selectedJoint === limit.name}
             disabled={disabled}
+            onSelect={() => onJointSelected?.(limit.name)}
             onChange={(next) =>
               publishEdit(
                 setCalibrationJointValue(limits, value, limit.name, next),

@@ -10,7 +10,7 @@ import type {
   StageRobotTrajectoryPayload,
 } from "./types";
 import type { RobotLinkPoseReader } from "./robotPoseReader";
-import { ROBOT_VISUAL } from "./visualStyle";
+import { ROBOT_CALIBRATION_VISUALS, ROBOT_VISUAL } from "./visualStyle";
 
 interface RobotLayerProps {
   robot: StageRobotPayload | null;
@@ -19,6 +19,8 @@ interface RobotLayerProps {
   visible: boolean;
   opacity?: number;
   name?: string;
+  selectedLink?: string | null;
+  hoveredLink?: string | null;
   onObjectChange?: (object: THREE.Group | null) => void;
   onPoseReaderChange?: (reader: RobotLinkPoseReader | null) => void;
 }
@@ -138,15 +140,16 @@ function fallbackResource(robot: StageRobotPayload): RobotResource {
     ROBOT_VISUAL.fallbackSegments,
     ROBOT_VISUAL.fallbackSegments,
   );
-  const material = new THREE.MeshStandardMaterial({
-    color: ROBOT_VISUAL.fallbackColor,
-  });
   const linkMeshes: Record<string, LinkMesh[]> = {};
   const zeroInverse: Record<string, THREE.Matrix4> = {};
   for (const link of robot.links) {
     const zero = matrix4(robot.link_transforms_zero[link]);
     zeroInverse[link] = zero.clone().invert();
-    const mesh = new THREE.Mesh(geometry, material);
+    // A material per link keeps calibration tint local to the selected link.
+    const mesh = new THREE.Mesh(
+      geometry,
+      createRobotMaterial(ROBOT_VISUAL.fallbackColor),
+    );
     mesh.matrixAutoUpdate = false;
     mesh.matrix.copy(zero);
     root.add(mesh);
@@ -155,9 +158,11 @@ function fallbackResource(robot: StageRobotPayload): RobotResource {
   return { root, residualRoots: [], detachedMaterials: [], linkMeshes, zeroInverse };
 }
 
-function createRobotMaterial(): THREE.MeshStandardMaterial {
-  return new THREE.MeshStandardMaterial({
-    color: ROBOT_VISUAL.color,
+function createRobotMaterial(
+  color: number = ROBOT_VISUAL.color,
+): THREE.MeshStandardMaterial {
+  const material = new THREE.MeshStandardMaterial({
+    color,
     emissive: ROBOT_VISUAL.emissive,
     emissiveIntensity: ROBOT_VISUAL.emissiveIntensity,
     roughness: ROBOT_VISUAL.roughness,
@@ -165,6 +170,46 @@ function createRobotMaterial(): THREE.MeshStandardMaterial {
     side: THREE.DoubleSide,
     vertexColors: false,
   });
+  material.userData.hhtoolsRobotBase = {
+    color,
+    emissive: ROBOT_VISUAL.emissive,
+    emissiveIntensity: ROBOT_VISUAL.emissiveIntensity,
+  };
+  return material;
+}
+
+function applyCalibrationHighlights(
+  resource: RobotResource,
+  selectedLink: string | null,
+  hoveredLink: string | null,
+): void {
+  for (const [link, entries] of Object.entries(resource.linkMeshes)) {
+    const tint =
+      link === selectedLink
+        ? ROBOT_CALIBRATION_VISUALS.selected
+        : link === hoveredLink
+          ? ROBOT_CALIBRATION_VISUALS.hover
+          : null;
+    for (const { mesh } of entries) {
+      const materials = Array.isArray(mesh.material)
+        ? mesh.material
+        : [mesh.material];
+      for (const material of materials) {
+        if (!(material instanceof THREE.MeshStandardMaterial)) continue;
+        const base = material.userData.hhtoolsRobotBase as
+          | { color: number; emissive: number; emissiveIntensity: number }
+          | undefined;
+        material.color.setHex(tint?.color ?? base?.color ?? ROBOT_VISUAL.color);
+        material.emissive.setHex(
+          tint?.emissive ?? base?.emissive ?? ROBOT_VISUAL.emissive,
+        );
+        material.emissiveIntensity =
+          tint?.emissiveIntensity ??
+          base?.emissiveIntensity ??
+          ROBOT_VISUAL.emissiveIntensity;
+      }
+    }
+  }
 }
 
 /** The original workbench intentionally gives every robot one neutral material. */
@@ -370,6 +415,8 @@ function RobotObject({
   visible,
   opacity,
   name,
+  selectedLink,
+  hoveredLink,
   onObjectChange,
   onPoseReaderChange,
 }: {
@@ -380,6 +427,8 @@ function RobotObject({
   visible: boolean;
   opacity: number;
   name: string;
+  selectedLink: string | null;
+  hoveredLink: string | null;
   onObjectChange?: (object: THREE.Group | null) => void;
   onPoseReaderChange?: (reader: RobotLinkPoseReader | null) => void;
 }) {
@@ -464,6 +513,10 @@ function RobotObject({
     });
   }, [opacity, resource]);
 
+  useEffect(() => {
+    applyCalibrationHighlights(resource, selectedLink, hoveredLink);
+  }, [hoveredLink, resource, selectedLink]);
+
   useFrame(() => {
     if (!visible || !group.current || !trajectory?.frames.length) return;
     const frame = timelineFrameAtTime(
@@ -504,6 +557,8 @@ export function RobotLayer({
   visible,
   opacity = 1,
   name = "robot-model",
+  selectedLink = null,
+  hoveredLink = null,
   onObjectChange,
   onPoseReaderChange,
 }: RobotLayerProps) {
@@ -555,6 +610,8 @@ export function RobotLayer({
       visible={visible}
       opacity={opacity}
       name={name}
+      selectedLink={selectedLink}
+      hoveredLink={hoveredLink}
       onObjectChange={onObjectChange}
       onPoseReaderChange={onPoseReaderChange}
     />

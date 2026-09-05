@@ -24,6 +24,8 @@ export interface CalibrationStatus {
 
 export interface CalibrationJointLimit {
   readonly name: string;
+  readonly child_link?: string;
+  readonly parent_link?: string;
   readonly lower?: number;
   readonly upper?: number;
   readonly value?: number;

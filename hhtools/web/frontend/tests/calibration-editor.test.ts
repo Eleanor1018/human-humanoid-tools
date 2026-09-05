@@ -69,6 +69,20 @@ test("keeps radians canonical while converting degree inputs", () => {
   assert.equal(angleFromDisplay(0.5, "rad"), 0.5);
 });
 
+test("retains prismatic type metadata for metre-based editors", () => {
+  assert.deepEqual(
+    resolveCalibrationJointLimits([
+      { name: "linear_joint", type: "prismatic", lower: -0.2, upper: 0.3 },
+    ])[0],
+    {
+      name: "linear_joint",
+      type: "prismatic",
+      lower: -0.2,
+      upper: 0.3,
+    },
+  );
+});
+
 test("filters named regions and zeros only the selected region", () => {
   assert.equal(classifyCalibrationJoint("left_shoulder_pitch"), "left-arm");
   assert.equal(classifyCalibrationJoint("right_knee"), "right-leg");
@@ -110,4 +124,3 @@ test("retains legacy display defaults and clamps opacity controls", () => {
     },
   );
 });
-
