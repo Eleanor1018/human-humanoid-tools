@@ -33,9 +33,11 @@ src/
 │   │   ├── RobotView.tsx    # Robot import and library view
 │   │   └── api.ts           # Robot catalog/selection transport
 │   ├── h2r/
-│   │   └── HumanToRobotView.tsx
+│   │   ├── HumanToRobotView.tsx
+│   │   └── api.ts           # Calibration, H2R job and export transport
 │   ├── r2r/
-│   │   └── RobotToRobotView.tsx
+│   │   ├── RobotToRobotView.tsx
+│   │   └── api.ts           # Source trajectory, R2R job and export transport
 │   ├── batch/
 │   │   └── BatchView.tsx    # Local V2M/H2R/R2R shells
 │   ├── video-to-motion/
@@ -51,7 +53,7 @@ src/
 │   ├── BodyMeshLayer.tsx    # Animated baked-body lifecycle
 │   ├── bodyMesh.ts          # Gzip decode and dynamic body geometry
 │   ├── EnvironmentLayer.tsx # Terrain and animated interaction objects
-│   ├── RobotLayer.tsx       # Zero-pose GLB/fallback robot layer
+│   ├── RobotLayer.tsx       # GLB/fallback robot and trajectory playback
 │   ├── types.ts             # Stage renderer data contracts
 │   └── StageViewMenu.tsx    # React visibility HUD
 └── styles.css
@@ -70,6 +72,8 @@ main -> App -> features -> components/ui
 
 - `main.tsx` only mounts `App`.
 - `App.tsx` composes views; it does not implement workflows.
+- `App.tsx` owns shared inputs and completed workflow results, then projects the
+  active workflow onto the single Stage.
 - A feature owns its view and local state.
 - Features do not reach into another feature's internal files.
 - `stage/` and shared components never import from features.
@@ -93,6 +97,8 @@ main -> App -> features -> components/ui
   after a second real feature needs it.
 - Extract shared code after a second real caller appears.
 - Keep server state authoritative; use React state for presentation state.
+- Keep H2R and R2R mounted while hidden so an in-flight server job and its
+  local form state survive navigation; only the active workflow owns Stage.
 - Add shadcn components individually. Do not prebuild a component library.
 - Keep only tokens and document-wide defaults in `styles.css`; colocate feature
   and component styling with their JSX using Tailwind utilities.
@@ -118,16 +124,19 @@ main -> App -> features -> components/ui
 - [x] Animated skeleton, baked body, terrain, and interaction-object layers
 - [x] Motion Library list, upload, job polling, and Stage handoff
 - [x] Robot catalog, zero-pose selection, GLB parsing, and Stage handoff
+- [x] Six curated robot presets installed from pinned upstream sources
+- [x] Human-to-Robot calibration, retarget job, playback, and export
+- [x] Robot-to-Robot upload/library source, calibration, retarget, and export
+- [x] Animated H2R/R2R robot trajectories and scaled scene layers
 
 The baked-body renderer is covered by the backend-compatible gzip/vertex test.
 The current development machine cannot generate a library body payload until
 its licensed SMPL/SMPL-X weights are installed; the renderer falls back to the
 skeleton while decoding or when a body surface is unavailable.
 
-Robot selection is intentionally server-authoritative. A clean checkout only
-contains the robot scaffold, so `/api/robots` can be empty until URDF + mesh
-folders are provisioned through `HHTOOLS_ROBOT_PATH` or the user robot library.
-The six curated names are presentation metadata, not fabricated availability.
+Robot selection remains server-authoritative. The six curated models are
+installed into the user Robot Library with `scripts/install_builtin_robots.py`;
+large model files and their upstream licenses are not copied into Git.
 
 ## References
 

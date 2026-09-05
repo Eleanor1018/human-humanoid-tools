@@ -1,0 +1,207 @@
+import {
+  requestJson,
+  waitForJob,
+  type Fetcher,
+  type JobSnapshot,
+} from "@/lib/api";
+import type {
+  StageMatrix4,
+  StageMotionPayload,
+  StageRobotTrajectoryPayload,
+} from "@/stage/types";
+
+export interface CalibrationStatus {
+  readonly calibrated: boolean;
+  readonly bundled?: boolean;
+  readonly path?: string | null;
+  readonly joint_q?: Readonly<Record<string, number>> | null;
+}
+
+export interface CalibrationJointLimit {
+  readonly name: string;
+  readonly lower?: number;
+  readonly upper?: number;
+  readonly value?: number;
+  readonly type?: string;
+}
+
+export interface CalibrationSession {
+  readonly joint_q: Readonly<Record<string, number>>;
+  readonly joint_limits: readonly CalibrationJointLimit[];
+  readonly reference: StageMotionPayload;
+  readonly reference_name: string;
+  readonly ground_offset_z: number;
+  readonly has_saved_calibration: boolean;
+}
+
+export interface CalibrationPose {
+  readonly links: readonly string[];
+  readonly link_transforms: Readonly<Record<string, StageMatrix4>>;
+  readonly ground_offset_z: number;
+}
+
+export interface RetargetDiagnostics {
+  readonly schema_version: number;
+  readonly available: boolean;
+  readonly reason?: string;
+  readonly [key: string]: unknown;
+}
+
+/** Live result retained by FastAPI until its export token expires. */
+export interface RetargetResult {
+  readonly trajectory: StageRobotTrajectoryPayload;
+  readonly scaled_preview?: StageMotionPayload;
+  readonly scaled_scene?: {
+    readonly terrain?: StageMotionPayload["terrain"];
+    readonly objects?: StageMotionPayload["objects"];
+  } | null;
+  readonly diagnostics?: RetargetDiagnostics;
+  readonly export_token: string;
+  readonly stem?: string;
+  readonly motion_source_fps?: number;
+  readonly retarget_fps?: number;
+  readonly source_fps?: number;
+  readonly has_scene?: boolean;
+  readonly num_frames: number;
+}
+
+export interface RetargetRequest {
+  readonly robot: string;
+  readonly motion_token: string;
+  readonly reference: string;
+  readonly backend: "newton" | "interaction_mesh";
+  readonly retarget_fps?: number;
+}
+
+interface RequestOptions {
+  readonly signal?: AbortSignal;
+  readonly fetcher?: Fetcher;
+}
+
+function jsonPost<T>(
+  url: string,
+  body: Readonly<Record<string, unknown>>,
+  options: RequestOptions = {},
+): Promise<T> {
+  return requestJson<T>(
+    url,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: options.signal,
+    },
+    options.fetcher,
+  );
+}
+
+export async function getCalibrationReferences(
+  options: RequestOptions = {},
+): Promise<readonly string[]> {
+  const response = await requestJson<{ references?: unknown }>(
+    "/api/calibration/references",
+    { signal: options.signal },
+    options.fetcher,
+  );
+  return Array.isArray(response.references)
+    ? response.references.filter(
+        (reference): reference is string => typeof reference === "string",
+      )
+    : [];
+}
+
+export function getCalibrationStatus(
+  robot: string,
+  reference: string,
+  options: RequestOptions = {},
+): Promise<CalibrationStatus> {
+  const query = new URLSearchParams({ robot, reference });
+  return requestJson<CalibrationStatus>(
+    `/api/calibration/status?${query.toString()}`,
+    { signal: options.signal },
+    options.fetcher,
+  );
+}
+
+export function startCalibrationSession(
+  body: {
+    readonly robot: string;
+    readonly reference: string;
+    readonly motion_token?: string;
+  },
+  options: RequestOptions = {},
+): Promise<CalibrationSession> {
+  return jsonPost<CalibrationSession>(
+    "/api/calibration/session",
+    body,
+    options,
+  );
+}
+
+export function saveCalibration(
+  body: {
+    readonly robot: string;
+    readonly reference: string;
+    readonly joint_q: Readonly<Record<string, number>>;
+    readonly motion_token?: string;
+  },
+  options: RequestOptions = {},
+): Promise<{ readonly ok: boolean; readonly path?: string }> {
+  return jsonPost("/api/calibration/save", body, options);
+}
+
+export function previewCalibrationPose(
+  robot: string,
+  jointQ: Readonly<Record<string, number>>,
+  options: RequestOptions = {},
+): Promise<CalibrationPose> {
+  return jsonPost("/api/robot/fk_preview", { robot, joint_q: jointQ }, options);
+}
+
+/** Start the existing Web H2R job and wait for its live result payload. */
+export async function retarget(
+  body: RetargetRequest,
+  options: RequestOptions & {
+    readonly onUpdate?: (job: JobSnapshot<RetargetResult>) => void;
+  } = {},
+): Promise<RetargetResult> {
+  const started = await jsonPost<{ job_id?: unknown }>(
+    "/api/retarget",
+    {
+      ...body,
+      backend: body.backend,
+      foot_clamp_anti_penetration: false,
+    },
+    options,
+  );
+  if (typeof started.job_id !== "string" || !started.job_id) {
+    throw new Error("The server did not return a retarget job ID.");
+  }
+  return waitForJob<RetargetResult>(started.job_id, {
+    signal: options.signal,
+    fetcher: options.fetcher,
+    expectedKind: "retarget",
+    onUpdate: options.onUpdate,
+  });
+}
+
+export interface ExportOptions {
+  readonly format: "csv" | "pkl";
+  readonly fps?: number;
+  readonly csvHeader?: boolean;
+  readonly start?: number;
+  readonly end?: number;
+}
+
+/** Build a same-origin download URL; export itself is synchronous, not a job. */
+export function retargetExportUrl(
+  token: string,
+  options: ExportOptions,
+): string {
+  const query = new URLSearchParams({ fmt: options.format });
+  if (options.fps !== undefined) query.set("fps", String(options.fps));
+  if (options.csvHeader === false) query.set("csv_header", "0");
+  if (options.start !== undefined) query.set("t_start", String(options.start));
+  if (options.end !== undefined) query.set("t_end", String(options.end));
+  return `/api/export/${encodeURIComponent(token)}?${query.toString()}`;
+}
