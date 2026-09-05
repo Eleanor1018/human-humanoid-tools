@@ -36,6 +36,63 @@ export interface ProjectedEndpoints {
   readonly targetY: number;
 }
 
+export interface CalibrationLabelBox {
+  readonly key: string;
+  readonly anchorX: number;
+  readonly anchorY: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+export interface CalibrationLabelPosition {
+  readonly key: string;
+  readonly left: number;
+  readonly top: number;
+}
+
+/** Place labels outside the actor and pack each side without overlap. */
+export function layoutCalibrationLabels(
+  boxes: readonly CalibrationLabelBox[],
+  viewportWidth: number,
+  viewportHeight: number,
+  padding = 4,
+  gap = 3,
+): readonly CalibrationLabelPosition[] {
+  if (viewportWidth <= 0 || viewportHeight <= 0) return [];
+  const center = viewportWidth / 2;
+  const groups = [
+    boxes.filter((box) => box.anchorX < center),
+    boxes.filter((box) => box.anchorX >= center),
+  ];
+  return groups.flatMap((group, side) => {
+    const ordered = [...group].sort(
+      (left, right) => left.anchorY - right.anchorY || left.anchorX - right.anchorX,
+    );
+    let cursor = padding;
+    const positions = ordered.map((box) => {
+      const left = Math.min(
+        viewportWidth - padding - box.width,
+        Math.max(
+          padding,
+          side === 0 ? box.anchorX - box.width - 8 : box.anchorX + 8,
+        ),
+      );
+      const preferredTop = Math.min(
+        viewportHeight - padding - box.height,
+        Math.max(padding, box.anchorY - box.height / 2),
+      );
+      const top = Math.max(cursor, preferredTop);
+      cursor = top + box.height + gap;
+      return { key: box.key, left, top };
+    });
+    const overflow = Math.max(0, cursor - gap + padding - viewportHeight);
+    return positions.map((position) => ({
+      ...position,
+      top: Math.max(padding, position.top - overflow),
+    }));
+  });
+}
+
 function normalizedSemantic(value: string): string {
   return value.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
 }
@@ -73,4 +130,3 @@ export function projectCalibrationEndpoints(
     targetY: (-targetWorld.y * 0.5 + 0.5) * height,
   };
 }
-

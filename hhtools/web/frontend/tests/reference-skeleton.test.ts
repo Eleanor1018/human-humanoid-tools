@@ -5,6 +5,7 @@ import * as THREE from "three";
 import {
   calibrationMappingKey,
   calibrationMappingLabel,
+  layoutCalibrationLabels,
   projectCalibrationEndpoints,
 } from "../src/stage/calibrationOverlay.ts";
 import {
@@ -151,4 +152,22 @@ test("projects reference-to-robot endpoints and hides points outside depth", () 
     ),
     null,
   );
+});
+
+test("packs projected calibration labels inside two non-overlapping lanes", () => {
+  const layout = layoutCalibrationLabels(
+    [
+      { key: "left-a", anchorX: 80, anchorY: 2, width: 70, height: 18 },
+      { key: "left-b", anchorX: 90, anchorY: 5, width: 70, height: 18 },
+      { key: "right-a", anchorX: 160, anchorY: 95, width: 70, height: 18 },
+      { key: "right-b", anchorX: 170, anchorY: 98, width: 70, height: 18 },
+    ],
+    240,
+    120,
+  );
+  const byKey = Object.fromEntries(layout.map((item) => [item.key, item]));
+  assert.ok(byKey["left-a"].top >= 4);
+  assert.ok(byKey["right-b"].top + 18 <= 116);
+  assert.ok(byKey["left-b"].top >= byKey["left-a"].top + 21);
+  assert.ok(byKey["right-b"].top >= byKey["right-a"].top + 21);
 });

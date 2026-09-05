@@ -8,6 +8,7 @@ import {
 import {
   calibrationMappingKey,
   calibrationMappingLabel,
+  layoutCalibrationLabels,
   type CalibrationMappingProjection,
 } from "./calibrationOverlay";
 import type { ReferenceJointMapping } from "./referenceSkeleton";
@@ -51,13 +52,38 @@ export const CalibrationMappingOverlay = forwardRef<
           const line = lines.current.get(projection.key);
           if (!label || !line) continue;
           label.style.display = showLabels ? "block" : "none";
-          label.style.left = `${projection.referenceX}px`;
-          label.style.top = `${projection.referenceY}px`;
           line.style.display = showLines ? "inline" : "none";
           line.setAttribute("x1", String(projection.referenceX));
           line.setAttribute("y1", String(projection.referenceY));
           line.setAttribute("x2", String(projection.targetX));
           line.setAttribute("y2", String(projection.targetY));
+        }
+        if (showLabels) {
+          const firstLabel = labels.current.values().next().value;
+          const host = firstLabel?.parentElement;
+          if (!host) return;
+          const layout = layoutCalibrationLabels(
+            projections.flatMap((projection) => {
+              const label = labels.current.get(projection.key);
+              return label
+                ? [{
+                    key: projection.key,
+                    anchorX: projection.referenceX,
+                    anchorY: projection.referenceY,
+                    width: label.offsetWidth,
+                    height: label.offsetHeight,
+                  }]
+                : [];
+            }),
+            host.clientWidth,
+            host.clientHeight,
+          );
+          for (const position of layout) {
+            const label = labels.current.get(position.key);
+            if (!label) continue;
+            label.style.left = `${position.left}px`;
+            label.style.top = `${position.top}px`;
+          }
         }
       },
     }),
@@ -112,12 +138,12 @@ export const CalibrationMappingOverlay = forwardRef<
                 if (element) labels.current.set(key, element);
                 else labels.current.delete(key);
               }}
-              className="absolute max-w-40 translate-x-2 -translate-y-1/2 whitespace-nowrap rounded-[4px] border px-1.5 py-[3px]"
+              className="absolute max-w-40 whitespace-nowrap rounded-[4px] border px-1.5 py-[3px]"
               style={{
                 display: "none",
                 borderColor: "color-mix(in srgb, var(--accent) 30%, transparent)",
                 background: "color-mix(in srgb, var(--surface) 90%, transparent)",
-                color: "#6e6e73",
+                color: "var(--text-muted)",
                 boxShadow: "0 1px 3px rgba(0, 0, 0, 0.08)",
                 font: "600 9px/1.2 -apple-system, sans-serif",
               }}
