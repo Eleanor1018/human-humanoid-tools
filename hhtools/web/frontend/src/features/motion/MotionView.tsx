@@ -3,6 +3,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ImportDropzone } from "@/components/ImportDropzone";
 import { InspectorPage } from "@/components/Inspector";
 import { SearchField } from "@/components/SearchField";
+import { ValidationSummary } from "@/components/ValidationSummary";
+import { motionValidationFacts } from "@/components/validationFacts";
 import { Button } from "@/components/ui/button";
 import type { ApplicationImportRequest } from "@/importIntent";
 import { SegmentedControl } from "@/components/SegmentedControl";
@@ -493,6 +495,10 @@ export function MotionView({
               </Button>
             )}
         </div>
+        <ValidationSummary
+          items={motionValidationFacts(currentMotion ?? null)}
+          label="Loaded motion validation"
+        />
       </div>
 
       <section

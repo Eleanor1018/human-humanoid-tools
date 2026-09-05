@@ -7,11 +7,11 @@ may improve spacing, rounded corners, accessibility, and narrow-screen layout.
 | Area | Current state | Required parity work |
 | --- | --- | --- |
 | Stage / Three.js | Mostly complete | Correct HUD family colors, availability, labels, and calibration projection |
-| Motion | Functional | Restore the compact validation summary |
-| Robot | Functional | Restore import/load validation summary |
+| Motion | Complete | Loaded assets include a compact validation summary |
+| Robot | Complete | Loaded models include mapping and renderability validation |
 | Video to Motion | Functional when GVHMR is ready | Add a real server-side running-job cancellation protocol |
-| Human to Robot | Functional | Restore richer input validation |
-| Robot to Robot | Functional | Restore richer input validation |
+| Human to Robot | Complete | Calibration, comparison, diagnostics, and export are connected |
+| Robot to Robot | Complete | Source loading, calibration, comparison, diagnostics, and export are connected |
 | Batch | Functional | Run full solver smoke when the licensed/runtime dependencies are available |
 | Analysis | Complete | Scatter preview, stable filtering, histogram brushing, and removable upload basket are connected |
 | Application menu | Complete | Typed navigation, imports, current export, settings, help, theme, and desktop exit are connected |
@@ -38,6 +38,7 @@ may improve spacing, rounded corners, accessibility, and narrow-screen layout.
   - [x] Connect the desktop Exit command through the trusted Electron IPC boundary.
   - [x] Connect all five application menus without global DOM commands.
   - [x] Refresh R2R robot and trajectory catalogs whenever the workspace is entered.
+  - [x] Restore compact Motion, Robot, and calibration validation summaries.
 - [ ] Run route-contract tests and desktop/narrow-screen browser smoke for every pipeline.
 
 ## Rules

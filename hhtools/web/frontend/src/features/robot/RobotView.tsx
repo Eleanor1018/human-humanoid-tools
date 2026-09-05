@@ -3,6 +3,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ImportDropzone } from "@/components/ImportDropzone";
 import { InspectorPage } from "@/components/Inspector";
 import { SearchField } from "@/components/SearchField";
+import { ValidationSummary } from "@/components/ValidationSummary";
+import { robotValidationFacts } from "@/components/validationFacts";
 import { Button } from "@/components/ui/button";
 import type { ApplicationImportRequest } from "@/importIntent";
 import type { UploadFile } from "@/lib/api";
@@ -362,6 +364,10 @@ export function RobotView({
                   ? `Loaded: ${currentRobot.display_name}`
                   : "No URDF selected."}
         </p>
+        <ValidationSummary
+          items={robotValidationFacts(currentRobot ?? null)}
+          label="Loaded robot validation"
+        />
       </div>
 
       <section

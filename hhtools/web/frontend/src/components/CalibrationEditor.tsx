@@ -5,6 +5,8 @@ import { updateCalibrationDisplay } from "@/stage/calibrationDisplay";
 import { prepareReferenceSkeleton } from "@/stage/referenceSkeleton";
 import type { StageMotionPayload, StageRobotPayload } from "@/stage/types";
 
+import { ValidationSummary } from "./ValidationSummary";
+import { calibrationValidationFacts } from "./validationFacts";
 import { Button } from "./ui/button";
 import {
   angleForDisplay,
@@ -377,6 +379,11 @@ export function CalibrationEditor({
           </label>
         </div>
       </div>
+
+      <ValidationSummary
+        items={calibrationValidationFacts(robot, limits, value)}
+        label="Calibration validation"
+      />
 
       <div className="grid max-h-64 gap-1.5 overflow-y-auto pr-1">
         {visibleLimits.map((limit) => (
