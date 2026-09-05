@@ -26,6 +26,7 @@ may improve spacing, rounded corners, accessibility, and narrow-screen layout.
   - [x] Refresh calibration on re-entry and feed completed V2M clips into the H2R draft.
 - [ ] Restore H2R scaled preview and omitted result/export controls.
   - [x] Load the calibrated scaled skeleton/scene before Retarget without forcing it visible.
+  - [x] Keep the optional pre-Retarget scaled preview frozen on its reference frame.
   - [x] Show shared diagnostics and complete FPS/time/header export controls for H2R/R2R.
   - [x] Restore persisted Source, Target, Result, and Overlay Stage presets.
 - [ ] Restore remaining Motion, Robot, V2M, Analysis, and application-menu actions.

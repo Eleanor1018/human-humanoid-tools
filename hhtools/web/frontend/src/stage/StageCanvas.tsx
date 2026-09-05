@@ -352,14 +352,16 @@ function StageScene({
               <SkeletonLayer
                 motion={scaledMotion}
                 visible={scaledSkeletonVisible}
-                playback={playback}
+                // Before IK there is no robot timeline to compare against, so
+                // keep the optional scaled preview on its reference frame.
+                playback={robotTrajectory ? playback : undefined}
                 variant="scaled"
                 name="scaled-skeleton"
               />
               <EnvironmentLayer
                 motion={scaledMotion}
                 visible={scaledEnvironmentVisible}
-                playback={playback}
+                playback={robotTrajectory ? playback : undefined}
                 timeline={robotTrajectory ?? scaledMotion}
                 variant="scaled"
                 name="scaled-environment"
