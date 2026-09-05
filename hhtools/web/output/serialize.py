@@ -216,7 +216,9 @@ def _serialize_body_mesh(
     meta = motion.meta if isinstance(motion.meta, dict) else {}
     baked = meta.get("baked_mesh")
     if not isinstance(baked, BakedMesh):
-        reason = meta.get("baked_mesh_error") or meta.get("baked_mesh_unavailable")
+        reason = meta.get("baked_mesh_error")
+        if not reason and meta.get("baked_mesh_unavailable"):
+            reason = meta.get("body_model_fallback_reason") or "body mesh unavailable"
         if reason:
             return {"available": False, "reason": str(reason)}
         return {"available": False, "reason": "no skinned mesh on this clip"}
@@ -480,7 +482,10 @@ def object_mesh_glb(obj, *, scale: float | None = None) -> bytes | None:
 
         loaded = trimesh.load(obj.mesh_path, force="mesh", process=False)
         verts = np.asarray(getattr(loaded, "vertices", np.zeros((0, 3))), dtype=np.float64)
-        faces = np.asarray(getattr(loaded, "faces", np.zeros((0, 3), dtype=np.int64)), dtype=np.int64)
+        faces = np.asarray(
+            getattr(loaded, "faces", np.zeros((0, 3), dtype=np.int64)),
+            dtype=np.int64,
+        )
         if verts.size == 0 or faces.size == 0:
             return None
         centroid = verts.mean(axis=0)

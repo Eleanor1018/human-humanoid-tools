@@ -373,4 +373,5 @@ smooth_joint_filter_masks:
 
 - **代码：** [Apache-2.0](LICENSE) · 第三方：[NOTICE](NOTICE)
 - **SMPL 系权重：** 不随仓库分发，需自行从 MPI 下载并放入 `configs/body_models/` — 见 [configs/body_models/README.md](configs/body_models/README.md)
+- 没有这些权重时，Motion Library 的参数动作仍会以 NumPy 骨架代理正常加载和播放；真实身体网格与精确关节回归仍需要本地授权权重。
 - **更多文档：** [framework.md](framework.md) · [CONTRIBUTING.md](CONTRIBUTING.md)

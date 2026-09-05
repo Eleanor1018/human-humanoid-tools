@@ -130,9 +130,10 @@ main -> App -> features -> components/ui
 - [x] Animated H2R/R2R robot trajectories and scaled scene layers
 
 The baked-body renderer is covered by the backend-compatible gzip/vertex test.
-The current development machine cannot generate a library body payload until
-its licensed SMPL/SMPL-X weights are installed; the renderer falls back to the
-skeleton while decoding or when a body surface is unavailable.
+SMPL-family parameter clips (AMASS, GVHMR, Motion-X, and PHUMA) now remain
+loadable without licensed weights through a NumPy kinematic proxy; the Stage
+shows the animated skeleton and marks the body mesh unavailable. Installing
+the licensed SMPL/SMPL-H/SMPL-X files enables exact joints and the real surface.
 
 Robot selection remains server-authoritative. The six curated models are
 installed into the user Robot Library with `scripts/install_builtin_robots.py`;

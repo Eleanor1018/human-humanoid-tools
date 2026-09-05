@@ -381,4 +381,5 @@ When publishing results built on bundled adapters, also cite the **upstream data
 
 - **Code:** [Apache-2.0](LICENSE) · third-party: [NOTICE](NOTICE)
 - **SMPL / SMPL-H / SMPL-X weights:** not included; register at MPI and place under `configs/body_models/` — see [configs/body_models/README.md](configs/body_models/README.md)
+- Motion Library parameter clips still load as an animated skeleton when those weights are absent; the exact body mesh and joint regression require the locally licensed files.
 - **More docs:** [framework.md](framework.md) · [CONTRIBUTING.md](CONTRIBUTING.md)
