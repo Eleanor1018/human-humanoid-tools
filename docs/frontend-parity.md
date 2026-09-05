@@ -24,6 +24,7 @@ may improve spacing, rounded corners, accessibility, and narrow-screen layout.
   - [x] Add the shared typed import, scan, job, progress, and download boundary.
 - [ ] Restore H2R scaled preview and omitted result/export controls.
 - [ ] Restore remaining Motion, Robot, V2M, Analysis, and application-menu actions.
+  - [x] Preserve the complete registered V2M Motion payload for Stage and H2R.
 - [ ] Run route-contract tests and desktop/narrow-screen browser smoke for every pipeline.
 
 ## Rules

@@ -18,19 +18,9 @@ export interface GvhmrRuntimeStatus {
   readonly uses_official_weights?: boolean;
 }
 
-export interface MotionResult {
-  readonly name?: string;
-  readonly token?: string;
-  readonly positions?: readonly unknown[];
+export interface MotionResult extends Partial<StageMotionPayload> {
+  readonly positions?: StageMotionPayload["positions"];
   readonly parent_indices?: readonly number[];
-  readonly exclude_joint_indices?: readonly number[];
-  readonly frame_indices?: readonly number[];
-  readonly playback_frames?: number;
-  readonly num_frames_total?: number;
-  readonly playback_duration?: number;
-  readonly duration?: number;
-  readonly framerate?: number;
-  readonly sample_rate?: number;
   readonly linked_folder?: string;
 }
 
@@ -46,17 +36,9 @@ export function toStageMotionPayload(
   ) {
     return null;
   }
-  return {
-    positions: result.positions as StageMotionPayload["positions"],
-    parent_indices: result.parent_indices,
-    exclude_joint_indices: result.exclude_joint_indices,
-    frame_indices: result.frame_indices,
-    playback_duration: result.playback_duration,
-    duration: result.duration,
-    framerate: result.framerate,
-    playback_frames: result.playback_frames,
-    num_frames_total: result.num_frames_total,
-  };
+  // The backend already returns the registered Motion payload. Preserve its
+  // token, scene, body mesh, metadata, and Library identity for H2R handoff.
+  return result as StageMotionPayload;
 }
 
 export interface MotionResultSummary {

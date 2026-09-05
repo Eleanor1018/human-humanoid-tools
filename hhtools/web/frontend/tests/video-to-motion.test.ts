@@ -116,20 +116,18 @@ test("summarizes total frames without retaining frame arrays", () => {
 });
 
 test("projects a completed motion payload for the Stage", () => {
-  const payload = toStageMotionPayload({
+  const result = {
     positions: [[[0, 0, 0]]],
     parent_indices: [-1],
     token: "motion-token",
-  });
-  assert.deepEqual(payload, {
-    positions: [[[0, 0, 0]]],
-    parent_indices: [-1],
-    exclude_joint_indices: undefined,
-    frame_indices: undefined,
-    playback_duration: undefined,
-    duration: undefined,
-    framerate: undefined,
-    playback_frames: undefined,
-    num_frames_total: undefined,
-  });
+    name: "generated-motion",
+    terrain: { vertices: [[0, 0, 0]], faces: [[0, 0, 0]] },
+    body_mesh: { available: false, reason: "weights unavailable" },
+    library_entry: { source_path: "/library/generated.pt" },
+  } satisfies MotionResult;
+  const payload = toStageMotionPayload(result);
+  assert.strictEqual(payload, result);
+  assert.equal(payload?.token, "motion-token");
+  assert.equal(payload?.library_entry?.source_path, "/library/generated.pt");
+  assert.ok(payload?.terrain);
 });
