@@ -31,19 +31,32 @@ export const SKELETON_VISUALS = {
     opacity: 1,
     lineOpacity: 0.85,
   },
-  reference: {
-    color: 0x5eb3ff,
-    jointRadius: 0.022,
-    jointSegments: 12,
-    roughness: 0.34,
-    metalness: 0.03,
-    emissive: 0x0a4d92,
-    opacity: 0.82,
-    lineOpacity: 0.82 * 0.38,
-  },
 } as const;
 
 export type SkeletonVisualVariant = keyof typeof SKELETON_VISUALS;
+
+export const REFERENCE_SKELETON_VISUAL = {
+  color: 0x5eb3ff,
+  jointRadius: 0.022,
+  jointSegments: 12,
+  sourceOpacity: 0.82,
+  mappedScale: 1.12,
+  contextScale: 0.62,
+  lineOpacityFactor: 0.38,
+  mapped: {
+    roughness: 0.34,
+    metalness: 0.03,
+    emissive: 0x0a4d92,
+    emissiveIntensity: 0.62,
+  },
+  context: {
+    roughness: 0.48,
+    metalness: 0.02,
+    emissive: 0x1a3a66,
+    emissiveIntensity: 0.18,
+    opacityFactor: 0.32,
+  },
+} as const;
 
 export const CAPSULE_BODY_VISUAL = {
   color: 0xf7a470,

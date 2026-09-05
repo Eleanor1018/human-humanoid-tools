@@ -1,13 +1,14 @@
-import { Canvas, useFrame, useThree } from "@react-three/fiber";
+import { Canvas, useFrame } from "@react-three/fiber";
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as THREE from "three";
-import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
 import { BodyMeshLayer } from "./BodyMeshLayer";
 import { CapsuleBodyLayer } from "./CapsuleBodyLayer";
 import { EnvironmentLayer } from "./EnvironmentLayer";
+import { ReferenceSkeletonLayer } from "./ReferenceSkeletonLayer";
 import { RobotLayer } from "./RobotLayer";
 import { SkeletonLayer } from "./SkeletonLayer";
+import { StageCameraController } from "./StageCameraController";
 import { timelineFrameAtTime, type StagePlaybackRef } from "./playback";
 import { projectR2rStageVisibility } from "./presentation";
 import type {
@@ -18,67 +19,6 @@ import type {
   StageRobotTrajectoryPayload,
   StageTimelinePayload,
 } from "./types";
-import type { SkeletonVisualVariant } from "./visualStyle";
-
-/**
- * Owns the orbit controller for the one R3F canvas. R3F owns rendering and
- * resize observation; this small adapter keeps the old interaction settings
- * without introducing a second animation loop or a global event listener.
- */
-function OrbitController() {
-  const { camera, gl } = useThree();
-  const controlsRef = useRef<OrbitControls | null>(null);
-
-  useEffect(() => {
-    const controls = new OrbitControls(camera, gl.domElement);
-    controls.target.set(0, 0.9, 0);
-    controls.enableDamping = true;
-    controls.dampingFactor = 0.08;
-    controls.screenSpacePanning = true;
-    // The legacy view uses a linear wheel dolly below instead of OrbitControls'
-    // exponential wheel implementation.
-    controls.enableZoom = false;
-    controls.update();
-    controlsRef.current = controls;
-
-    const smoothWheel = (event: WheelEvent): void => {
-      if (!controls.enabled) return;
-
-      let delta = event.deltaY;
-      if (event.deltaMode === 1) delta *= 16;
-      else if (event.deltaMode === 2) delta *= 400;
-
-      const step = THREE.MathUtils.clamp(-delta / 120, -2.5, 2.5);
-      const scale = Math.pow(0.968, step);
-      const offset = camera.position.clone().sub(controls.target);
-      const distance = offset.length();
-      if (distance < 1e-6) return;
-
-      const nextDistance = THREE.MathUtils.clamp(
-        distance * scale,
-        controls.minDistance,
-        controls.maxDistance,
-      );
-      offset.setLength(nextDistance);
-      camera.position.copy(controls.target).add(offset);
-      controls.update();
-      event.preventDefault();
-    };
-
-    gl.domElement.addEventListener("wheel", smoothWheel, { passive: false });
-    return () => {
-      gl.domElement.removeEventListener("wheel", smoothWheel);
-      controls.dispose();
-      controlsRef.current = null;
-    };
-  }, [camera, gl]);
-
-  useFrame(() => {
-    controlsRef.current?.update();
-  });
-
-  return null;
-}
 
 function GroundGrid() {
   const gridRef = useRef<THREE.GridHelper | null>(null);
@@ -140,11 +80,10 @@ function R2rLayers({
   if (presentation.phase === "calibration") {
     return (
       <>
-        <SkeletonLayer
-          motion={presentation.calibrationReference}
+        <ReferenceSkeletonLayer
+          reference={presentation.calibrationReference}
+          robot={presentation.target.robot}
           visible={visibility.calibrationReference}
-          playback={playback}
-          variant="reference"
           name="r2r-calibration-reference"
         />
         <RobotLayer
@@ -220,8 +159,10 @@ function StageScene({
   playback,
   onPlaybackChange,
   visibleLayers,
-  sourceSkeletonVariant,
   robotOpacity,
+  cameraRevision,
+  followRobot,
+  calibration,
 }: {
   motion: StageMotionPayload | null;
   scaledMotion: StageMotionPayload | null;
@@ -232,9 +173,16 @@ function StageScene({
   playback: StagePlaybackRef;
   onPlaybackChange?: () => void;
   visibleLayers: readonly StageLayerId[];
-  sourceSkeletonVariant: SkeletonVisualVariant;
   robotOpacity: number;
+  cameraRevision: number;
+  followRobot: boolean;
+  calibration: boolean;
 }) {
+  const content = useRef<THREE.Group | null>(null);
+  const followedRobot = useRef<THREE.Group | null>(null);
+  const publishFollowedRobot = useCallback((object: THREE.Group | null) => {
+    followedRobot.current = object;
+  }, []);
   const bodyMesh = motion?.body_mesh;
   const [bodyStatus, setBodyStatus] = useState<{
     owner: typeof bodyMesh;
@@ -270,7 +218,13 @@ function StageScene({
         playback={playback}
         onPlaybackChange={onPlaybackChange}
       />
-      <OrbitController />
+      <StageCameraController
+        content={content}
+        followTarget={followedRobot}
+        frameRevision={cameraRevision}
+        follow={followRobot}
+        calibration={calibration}
+      />
       <ambientLight intensity={0.55} />
       <hemisphereLight args={[0xffffff, 0x8899aa, 1.35]} />
       <directionalLight position={[3, 6, 4]} intensity={1.5} />
@@ -279,60 +233,71 @@ function StageScene({
       <GroundGrid />
       <group name="hhtools-world" rotation={[-Math.PI / 2, 0, 0]}>
         <axesHelper args={[1.2]} />
-        {r2r ? (
-          <R2rLayers
-            presentation={r2r}
-            playback={playback}
-            visibleLayers={visibleLayers}
-          />
-        ) : (
-          <>
-            <SkeletonLayer
-              motion={motion}
-              visible={skeletonVisible}
+        <group ref={content} name="stage-content">
+          {r2r ? (
+            <R2rLayers
+              presentation={r2r}
               playback={playback}
-              variant={sourceSkeletonVariant}
+              visibleLayers={visibleLayers}
             />
-            <CapsuleBodyLayer
-              motion={motion}
-              visible={capsuleVisible}
-              playback={playback}
-            />
-            <BodyMeshLayer
-              motion={motion}
-              visible={bodyVisible}
-              playback={playback}
-              onReadyChange={publishBodyReady}
-            />
-            <EnvironmentLayer
-              motion={motion}
-              visible={environmentVisible}
-              playback={playback}
-            />
-            <SkeletonLayer
-              motion={scaledMotion}
-              visible={scaledSkeletonVisible}
-              playback={playback}
-              variant="scaled"
-              name="scaled-skeleton"
-            />
-            <EnvironmentLayer
-              motion={scaledMotion}
-              visible={scaledEnvironmentVisible}
-              playback={playback}
-              timeline={robotTrajectory ?? scaledMotion}
-              variant="scaled"
-              name="scaled-environment"
-            />
-            <RobotLayer
-              robot={robot}
-              trajectory={robotTrajectory}
-              playback={playback}
-              visible={robotVisible}
-              opacity={robotOpacity}
-            />
-          </>
-        )}
+          ) : (
+            <>
+              {calibration ? (
+                <ReferenceSkeletonLayer
+                  reference={motion}
+                  robot={robot}
+                  visible={skeletonVisible}
+                />
+              ) : (
+                <SkeletonLayer
+                  motion={motion}
+                  visible={skeletonVisible}
+                  playback={playback}
+                  variant="source"
+                />
+              )}
+              <CapsuleBodyLayer
+                motion={motion}
+                visible={capsuleVisible}
+                playback={playback}
+              />
+              <BodyMeshLayer
+                motion={motion}
+                visible={bodyVisible}
+                playback={playback}
+                onReadyChange={publishBodyReady}
+              />
+              <EnvironmentLayer
+                motion={motion}
+                visible={environmentVisible}
+                playback={playback}
+              />
+              <SkeletonLayer
+                motion={scaledMotion}
+                visible={scaledSkeletonVisible}
+                playback={playback}
+                variant="scaled"
+                name="scaled-skeleton"
+              />
+              <EnvironmentLayer
+                motion={scaledMotion}
+                visible={scaledEnvironmentVisible}
+                playback={playback}
+                timeline={robotTrajectory ?? scaledMotion}
+                variant="scaled"
+                name="scaled-environment"
+              />
+              <RobotLayer
+                robot={robot}
+                trajectory={robotTrajectory}
+                playback={playback}
+                visible={robotVisible}
+                opacity={robotOpacity}
+                onObjectChange={publishFollowedRobot}
+              />
+            </>
+          )}
+        </group>
       </group>
     </>
   );
@@ -348,8 +313,10 @@ export function StageCanvas({
   playback,
   onPlaybackChange,
   visibleLayers,
-  sourceSkeletonVariant = "source",
   robotOpacity = 1,
+  cameraRevision = 0,
+  followRobot = false,
+  calibration = false,
 }: {
   motion: StageMotionPayload | null;
   scaledMotion?: StageMotionPayload | null;
@@ -360,8 +327,10 @@ export function StageCanvas({
   playback: StagePlaybackRef;
   onPlaybackChange?: () => void;
   visibleLayers: readonly StageLayerId[];
-  sourceSkeletonVariant?: SkeletonVisualVariant;
   robotOpacity?: number;
+  cameraRevision?: number;
+  followRobot?: boolean;
+  calibration?: boolean;
 }) {
   return (
     <Canvas
@@ -392,8 +361,10 @@ export function StageCanvas({
         playback={playback}
         onPlaybackChange={onPlaybackChange}
         visibleLayers={visibleLayers}
-        sourceSkeletonVariant={sourceSkeletonVariant}
         robotOpacity={robotOpacity}
+        cameraRevision={cameraRevision}
+        followRobot={followRobot}
+        calibration={calibration}
       />
     </Canvas>
   );

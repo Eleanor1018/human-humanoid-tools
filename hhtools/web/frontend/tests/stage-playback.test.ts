@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { gzipSync } from "node:zlib";
+import * as THREE from "three";
 
 import {
   createBodyMeshResource,
@@ -13,6 +14,7 @@ import {
   disposeCapsuleBody,
   setCapsuleBodyFrame,
 } from "../src/stage/capsuleBody.ts";
+import { cameraFrame, visibleObjectBounds } from "../src/stage/camera.ts";
 import {
   frameAtTime,
   motionDuration,
@@ -201,7 +203,6 @@ test("keeps the original source and scaled Stage palette distinct", () => {
   assert.equal(SKELETON_VISUALS.source.color, 0x0a84ff);
   assert.equal(SKELETON_VISUALS["r2r-source"].color, 0x60a5fa);
   assert.equal(SKELETON_VISUALS.scaled.color, 0xffb020);
-  assert.equal(SKELETON_VISUALS.reference.color, 0x5eb3ff);
   assert.equal(CAPSULE_BODY_VISUAL.color, 0xf7a470);
   assert.equal(BAKED_BODY_VISUAL.color, 0xb4c8dc);
   assert.equal(ENVIRONMENT_VISUALS.source.terrainColor, 0x9a9aa0);
@@ -209,6 +210,22 @@ test("keeps the original source and scaled Stage palette distinct", () => {
   assert.equal(ENVIRONMENT_VISUALS.source.objectColor, 0xff9f0a);
   assert.equal(ENVIRONMENT_VISUALS.scaled.objectColor, 0x6a9fd4);
   assert.equal(ROBOT_VISUAL.color, 0xc8ccd4);
+});
+
+test("frames only visible Stage geometry", () => {
+  const root = new THREE.Group();
+  const shown = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2));
+  shown.position.set(4, 0, 0);
+  root.add(shown);
+  const hidden = new THREE.Mesh(new THREE.BoxGeometry(100, 100, 100));
+  hidden.visible = false;
+  root.add(hidden);
+
+  const bounds = visibleObjectBounds(root);
+  assert.ok(bounds);
+  const frame = cameraFrame(bounds);
+  assert.deepEqual(frame.target.toArray(), [4, 0, 0]);
+  assert.ok(frame.position.distanceTo(frame.target) > 1.35);
 });
 
 test("projects the original Motion and workflow layer defaults", () => {

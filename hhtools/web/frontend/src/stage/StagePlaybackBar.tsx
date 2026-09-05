@@ -91,7 +91,7 @@ export function StagePlaybackBar({
 
   return (
     <div
-      className="absolute right-3 bottom-3 left-3 z-20 flex min-w-0 items-center gap-1.5 rounded-lg border border-black/10 bg-white/[.88] px-2.5 py-2 shadow-[0_1px_3px_rgba(0,0,0,0.08)] backdrop-blur-[20px]"
+      className="pointer-events-auto flex min-w-0 flex-1 items-center gap-1.5 rounded-lg border border-black/10 bg-white/[.88] px-2.5 py-2 shadow-[0_1px_3px_rgba(0,0,0,0.08)] backdrop-blur-[20px]"
       role="group"
       aria-label="Motion playback"
       data-playback-frame={Math.round(snapshot.frame)}

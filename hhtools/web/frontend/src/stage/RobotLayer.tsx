@@ -18,6 +18,7 @@ interface RobotLayerProps {
   visible: boolean;
   opacity?: number;
   name?: string;
+  onObjectChange?: (object: THREE.Group | null) => void;
 }
 
 interface LinkMesh {
@@ -341,6 +342,7 @@ function RobotObject({
   visible,
   opacity,
   name,
+  onObjectChange,
 }: {
   resource: RobotResource;
   robot: StageRobotPayload;
@@ -349,6 +351,7 @@ function RobotObject({
   visible: boolean;
   opacity: number;
   name: string;
+  onObjectChange?: (object: THREE.Group | null) => void;
 }) {
   const group = useRef<THREE.Group | null>(null);
   const lastFrame = useRef<number | null>(null);
@@ -395,7 +398,14 @@ function RobotObject({
   });
 
   return (
-    <group ref={group} name={name} visible={visible}>
+    <group
+      ref={(object) => {
+        group.current = object;
+        onObjectChange?.(object);
+      }}
+      name={name}
+      visible={visible}
+    >
       <primitive object={resource.root} dispose={null} />
     </group>
   );
@@ -409,6 +419,7 @@ export function RobotLayer({
   visible,
   opacity = 1,
   name = "robot-model",
+  onObjectChange,
 }: RobotLayerProps) {
   const [loaded, setLoaded] = useState<{
     owner: StageRobotPayload;
@@ -458,6 +469,7 @@ export function RobotLayer({
       visible={visible}
       opacity={opacity}
       name={name}
+      onObjectChange={onObjectChange}
     />
   );
 }

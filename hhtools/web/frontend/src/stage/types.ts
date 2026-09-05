@@ -83,6 +83,9 @@ export interface StageMotionPayload {
   readonly source_format?: string;
   readonly up_axis?: string;
   readonly bone_names?: readonly string[];
+  readonly canonical_names?: readonly string[];
+  readonly quaternions?: readonly (readonly StageQuaternion[])[];
+  readonly color?: number;
   readonly objects?: readonly StageObjectPayload[];
   readonly terrain?: StageTerrainPayload | null;
   readonly has_terrain?: boolean;

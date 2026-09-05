@@ -146,6 +146,8 @@ main -> App -> features -> components/ui
 - [x] Robot-to-Robot upload/library source, calibration, retarget, and export
 - [x] Animated H2R/R2R robot trajectories and scaled scene layers
 - [x] R2R source/target six-layer overlay with legacy visibility defaults
+- [x] Visible-layer camera reset and H2R target-follow behavior
+- [x] IK-mapped calibration reference skeleton with original materials
 - [x] Dataset scan, folder upload, cached analysis, and progress polling
 - [x] Analysis metrics, tags, embedding scatter, histograms, and filters
 - [x] Analysis subset recommendation, manifest/robot export, and human preview
@@ -182,9 +184,9 @@ Those compact-topology rules live in the renderer-neutral `hhtools.human`
 package and are shared downward by Web and Viser rather than between hosts.
 
 The remaining legacy capabilities are Stage/workflow additions rather than
-asset-loading blockers: playback speed and loop controls, camera reset/follow,
-detailed validation cards, and Batch basket actions. They should be restored as
-separate, bounded changes.
+asset-loading blockers: playback speed and loop controls, detailed validation
+cards, and Batch basket actions. They should be restored as separate, bounded
+changes.
 
 ## References
 
