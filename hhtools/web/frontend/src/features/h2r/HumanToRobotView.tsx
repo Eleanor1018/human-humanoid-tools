@@ -27,6 +27,7 @@ import {
 import {
   getCalibrationReferences,
   getCalibrationStatus,
+  loadScaledPreview,
   previewCalibrationPose,
   retarget,
   retargetExportUrl,
@@ -36,6 +37,7 @@ import {
   type CalibrationPose,
   type CalibrationStatus,
   type RetargetResult,
+  type ScaledPreviewResult,
 } from "./api";
 
 const pipeline = ["Motion", "Robot", "Calibration", "Result"];
@@ -51,6 +53,7 @@ export interface HumanToRobotViewProps {
   readonly onRetargetResult?: (result: RetargetResult | null) => void;
   readonly onCalibrationReference?: (reference: StageMotionPayload | null) => void;
   readonly onRobotPose?: (pose: CalibrationPose | null) => void;
+  readonly onScaledPreview?: (preview: ScaledPreviewResult | null) => void;
   readonly calibrationDisplay?: CalibrationDisplayOptions;
   readonly onCalibrationDisplayChange?: (value: CalibrationDisplayOptions) => void;
 }
@@ -120,6 +123,7 @@ export function HumanToRobotView({
   onRetargetResult,
   onCalibrationReference,
   onRobotPose,
+  onScaledPreview,
   calibrationDisplay: controlledCalibrationDisplay,
   onCalibrationDisplayChange,
 }: HumanToRobotViewProps) {
@@ -174,6 +178,8 @@ export function HumanToRobotView({
   referenceCallback.current = onCalibrationReference;
   const poseCallback = useRef(onRobotPose);
   poseCallback.current = onRobotPose;
+  const scaledPreviewCallback = useRef(onScaledPreview);
+  scaledPreviewCallback.current = onScaledPreview;
   const inputKey = `${motion?.token ?? ""}|${robot?.name ?? ""}|${reference}`;
   const previousInputKey = useRef(inputKey);
 
@@ -274,10 +280,61 @@ export function HumanToRobotView({
     return () => request.abort();
   }, [robot, reference]);
 
+  // A scaled preview belongs to one exact calibrated input tuple. Keep the
+  // optional visualization out of the retarget transaction and discard stale
+  // responses when any owner changes or calibration editing starts.
+  useEffect(() => {
+    scaledPreviewCallback.current?.(null);
+    if (
+      !motion?.token ||
+      !robot ||
+      !reference ||
+      checking ||
+      !calibration?.calibrated ||
+      session
+    ) {
+      return;
+    }
+
+    const request = new AbortController();
+    void loadScaledPreview(
+      {
+        robot: robot.name,
+        motion_token: motion.token,
+        reference,
+      },
+      { signal: request.signal },
+    )
+      .then((preview) => {
+        if (!request.signal.aborted) {
+          scaledPreviewCallback.current?.(preview);
+        }
+      })
+      .catch((reason: unknown) => {
+        if (!request.signal.aborted) {
+          scaledPreviewCallback.current?.(null);
+          console.warn("scaled preview", errorMessage(reason));
+        }
+      });
+
+    return () => {
+      request.abort();
+      scaledPreviewCallback.current?.(null);
+    };
+  }, [
+    calibration?.calibrated,
+    checking,
+    motion?.token,
+    reference,
+    robot?.name,
+    session,
+  ]);
+
   useEffect(
     () => () => {
       referenceCallback.current?.(null);
       poseCallback.current?.(null);
+      scaledPreviewCallback.current?.(null);
     },
     [],
   );

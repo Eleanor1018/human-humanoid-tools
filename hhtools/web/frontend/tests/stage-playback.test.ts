@@ -355,7 +355,7 @@ test("projects the original Motion and workflow layer defaults", () => {
       robot: robot("robot"),
       robotTrajectory: { frames: [{ links: {} }] },
     }),
-    ["skeleton", "scaled-skeleton", "robot"],
+    ["skeleton", "robot"],
   );
 
   assert.deepEqual(

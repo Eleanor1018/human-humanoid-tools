@@ -10,7 +10,7 @@ may improve spacing, rounded corners, accessibility, and narrow-screen layout.
 | Motion | Functional | Restore validation summary, Batch basket handoff, and linked-folder removal |
 | Robot | Functional | Restore import/load validation summary |
 | Video to Motion | Functional when GVHMR is ready | Restore existing-result import and explicit running-job cancellation |
-| Human to Robot | Functional | Restore scaled preview, full calibration editor, validation/evaluation, and complete export options |
+| Human to Robot | Functional | Restore validation/evaluation and complete export options |
 | Robot to Robot | Functional | Restore full calibration editor, validation/evaluation, and complete export options |
 | Batch | Visual shell only | Implement V2M, H2R, and R2R input queues, jobs, progress, failures, and downloads |
 | Analysis | Functional | Restore scatter-point preview and removable multi-folder upload basket |
@@ -23,9 +23,11 @@ may improve spacing, rounded corners, accessibility, and narrow-screen layout.
 - [ ] Implement the three Batch pipelines against the existing FastAPI routes.
   - [x] Add the shared typed import, scan, job, progress, and download boundary.
 - [ ] Restore H2R scaled preview and omitted result/export controls.
+  - [x] Load the calibrated scaled skeleton/scene before Retarget without forcing it visible.
 - [ ] Restore remaining Motion, Robot, V2M, Analysis, and application-menu actions.
   - [x] Preserve the complete registered V2M Motion payload for Stage and H2R.
   - [x] Preserve the last successful Motion while a replacement video is pending or invalid.
+  - [x] Keep V2M and Batch mounted while their jobs or drafts are inactive.
 - [ ] Run route-contract tests and desktop/narrow-screen browser smoke for every pipeline.
 
 ## Rules

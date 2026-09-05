@@ -261,7 +261,9 @@ export function defaultStageLayers({
   }
 
   const comparison = mode === "h2r" || mode === "r2r";
-  if (comparison && (scaledMotion || robotTrajectory)) {
+  // H2R preloads its calibrated overlay for manual inspection, but the legacy
+  // presentation keeps it hidden until a result exists or the user enables it.
+  if (mode === "r2r" && (scaledMotion || robotTrajectory)) {
     if (available.skeleton && !layers.includes("skeleton")) layers.push("skeleton");
     if (available["scaled-skeleton"]) layers.push("scaled-skeleton");
     if (available["scaled-scene"]) layers.push("scaled-scene");

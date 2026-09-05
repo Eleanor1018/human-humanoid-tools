@@ -47,14 +47,22 @@ export interface RetargetDiagnostics {
   readonly [key: string]: unknown;
 }
 
+export interface H2rScenePayload {
+  readonly terrain?: StageMotionPayload["terrain"];
+  readonly objects?: StageMotionPayload["objects"];
+}
+
+/** Calibration-scaled human motion and scene, computed before IK runs. */
+export interface ScaledPreviewResult {
+  readonly preview: StageMotionPayload;
+  readonly scaled_scene: H2rScenePayload | null;
+}
+
 /** Live result retained by FastAPI until its export token expires. */
 export interface RetargetResult {
   readonly trajectory: StageRobotTrajectoryPayload;
-  readonly scaled_preview?: StageMotionPayload;
-  readonly scaled_scene?: {
-    readonly terrain?: StageMotionPayload["terrain"];
-    readonly objects?: StageMotionPayload["objects"];
-  } | null;
+  readonly scaled_preview?: StageMotionPayload | null;
+  readonly scaled_scene?: H2rScenePayload | null;
   readonly diagnostics?: RetargetDiagnostics;
   readonly export_token: string;
   readonly stem?: string;
@@ -156,6 +164,17 @@ export function previewCalibrationPose(
   options: RequestOptions = {},
 ): Promise<CalibrationPose> {
   return jsonPost("/api/robot/fk_preview", { robot, joint_q: jointQ }, options);
+}
+
+export function loadScaledPreview(
+  body: {
+    readonly robot: string;
+    readonly motion_token: string;
+    readonly reference: string;
+  },
+  options: RequestOptions = {},
+): Promise<ScaledPreviewResult> {
+  return jsonPost("/api/scaled_preview", body, options);
 }
 
 /** Start the existing Web H2R job and wait for its live result payload. */

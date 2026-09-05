@@ -10,7 +10,7 @@ registerHooks({
   },
 });
 
-const { retarget: runH2rRetarget, retargetExportUrl } =
+const { loadScaledPreview, retarget: runH2rRetarget, retargetExportUrl } =
   await import("../src/features/h2r/api.ts");
 const { getR2rLibrary, r2rExportUrl, runR2rRetarget } =
   await import("../src/features/r2r/api.ts");
@@ -66,6 +66,38 @@ test("H2R preserves the selected backend and polls its retarget job", async () =
     foot_clamp_anti_penetration: false,
   });
   assert.equal(result.export_token, "h2r-export");
+});
+
+test("H2R requests its calibrated pre-retarget preview through the typed route", async () => {
+  let requestUrl = "";
+  let requestInit: RequestInit | undefined;
+  const result = await loadScaledPreview(
+    {
+      robot: "g1_29dof",
+      motion_token: "motion-token",
+      reference: "smpl",
+    },
+    {
+      fetcher: async (input, init) => {
+        requestUrl = String(input);
+        requestInit = init;
+        return Response.json({
+          preview: { positions: [[[0, 0, 0]]], parent_indices: [-1] },
+          scaled_scene: null,
+        });
+      },
+    },
+  );
+
+  assert.equal(requestUrl, "/api/scaled_preview");
+  assert.equal(requestInit?.method, "POST");
+  assert.deepEqual(JSON.parse(String(requestInit?.body)), {
+    robot: "g1_29dof",
+    motion_token: "motion-token",
+    reference: "smpl",
+  });
+  assert.equal(result.preview.positions.length, 1);
+  assert.equal(result.scaled_scene, null);
 });
 
 test("R2R library accepts only entries explicitly marked robot_trajectory", async () => {

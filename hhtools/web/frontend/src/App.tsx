@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ComponentType } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Inspector } from "./components/Inspector";
 import { Navbar } from "./components/Navbar";
@@ -12,6 +12,7 @@ import { HumanToRobotView } from "./features/h2r/HumanToRobotView";
 import type {
   CalibrationPose,
   RetargetResult as H2rResult,
+  ScaledPreviewResult as H2rScaledPreview,
 } from "./features/h2r/api";
 import { RobotToRobotView } from "./features/r2r/RobotToRobotView";
 import type {
@@ -30,16 +31,6 @@ import type {
   StageRobotPayload,
   StageRobotTrajectoryPayload,
 } from "./stage/types";
-
-const inspectorViews: Record<ViewId, ComponentType> = {
-  motion: MotionView,
-  "robot-assets": RobotView,
-  "video-to-motion": VideoToMotionView,
-  h2r: HumanToRobotView,
-  r2r: RobotToRobotView,
-  batch: BatchView,
-  "dataset-viz": AnalysisView,
-};
 
 function motionWithScene(
   motion: StageMotionPayload | null | undefined,
@@ -88,6 +79,7 @@ export function App() {
   const [stageScaledMotion, setStageScaledMotion] =
     useState<StageMotionPayload | null>(null);
   const [h2rResult, setH2rResult] = useState<H2rResult | null>(null);
+  const [h2rPreview, setH2rPreview] = useState<H2rScaledPreview | null>(null);
   const [h2rCalibrationReference, setH2rCalibrationReference] =
     useState<StageMotionPayload | null>(null);
   const [h2rCalibrationPose, setH2rCalibrationPose] =
@@ -110,7 +102,6 @@ export function App() {
   const [r2rCalibrationDisplay, setR2rCalibrationDisplay] = useState(
     DEFAULT_CALIBRATION_DISPLAY,
   );
-  const ActiveInspector = inspectorViews[activeView];
   const stagePresentation: StagePresentation =
     activeView === "robot-assets"
       ? "robot"
@@ -181,12 +172,14 @@ export function App() {
   const publishMotion = useCallback((motion: StageMotionPayload | null) => {
     setWorkspaceMotion(motion);
     setH2rResult(null);
+    setH2rPreview(null);
     setH2rCalibrationReference(null);
     setH2rCalibrationPose(null);
   }, []);
   const publishRobot = useCallback((robot: StageRobotPayload | null) => {
     setWorkspaceRobot(robot);
     setH2rResult(null);
+    setH2rPreview(null);
     setH2rCalibrationReference(null);
     setH2rCalibrationPose(null);
   }, []);
@@ -255,6 +248,14 @@ export function App() {
       return;
     }
     if (activeView === "h2r") {
+      const resultOwnsScaledSkeleton = Boolean(
+        h2rResult && h2rResult.scaled_preview !== undefined,
+      );
+      const resultOwnsScaledPair = Boolean(
+        h2rResult &&
+          (resultOwnsScaledSkeleton ||
+            h2rResult.scaled_scene !== undefined),
+      );
       setStageMotion(h2rCalibrationReference ?? workspaceMotion);
       setStageRobot(workspaceRobot);
       setStageRobotTrajectory(
@@ -266,8 +267,12 @@ export function App() {
         h2rCalibrationReference
           ? null
           : motionWithScene(
-              h2rResult?.scaled_preview,
-              h2rResult?.scaled_scene,
+              resultOwnsScaledSkeleton
+                ? h2rResult?.scaled_preview
+                : h2rPreview?.preview,
+              resultOwnsScaledPair
+                ? h2rResult?.scaled_scene
+                : h2rPreview?.scaled_scene,
               workspaceMotion?.token
                 ? { kind: "motion", token: workspaceMotion.token }
                 : undefined,
@@ -295,6 +300,7 @@ export function App() {
     analysisRobotPreview,
     h2rCalibrationPose,
     h2rCalibrationReference,
+    h2rPreview,
     h2rResult,
     r2rCalibrationPose,
     r2rCalibrationReference,
@@ -305,15 +311,6 @@ export function App() {
     workspaceMotion,
     workspaceRobot,
   ]);
-
-  // Feature panels own transport. App keeps only the inputs and results needed
-  // to project the active workflow onto the shared R3F Stage.
-  const inspector =
-    activeView === "video-to-motion" ? (
-      <VideoToMotionView onMotionLoaded={publishMotion} />
-    ) : (
-      <ActiveInspector />
-    );
 
   return (
     <div
@@ -348,6 +345,9 @@ export function App() {
             onRobotLoaded={publishRobot}
           />
         </div>
+        <div className={activeView === "video-to-motion" ? "h-full" : "hidden"}>
+          <VideoToMotionView onMotionLoaded={publishMotion} />
+        </div>
         <div className={activeView === "h2r" ? "h-full" : "hidden"}>
           <HumanToRobotView
             currentMotion={workspaceMotion}
@@ -358,6 +358,7 @@ export function App() {
             onRetargetResult={setH2rResult}
             onCalibrationReference={setH2rCalibrationReference}
             onRobotPose={setH2rCalibrationPose}
+            onScaledPreview={setH2rPreview}
             calibrationDisplay={h2rCalibrationDisplay}
             onCalibrationDisplayChange={setH2rCalibrationDisplay}
           />
@@ -378,19 +379,15 @@ export function App() {
             onCalibrationDisplayChange={setR2rCalibrationDisplay}
           />
         </div>
+        <div className={activeView === "batch" ? "h-full" : "hidden"}>
+          <BatchView />
+        </div>
         <div className={activeView === "dataset-viz" ? "h-full" : "hidden"}>
           <AnalysisView
             onMotionLoaded={publishAnalysisMotion}
             onRobotPreviewLoaded={publishAnalysisRobotPreview}
           />
         </div>
-        {activeView !== "motion" &&
-        activeView !== "robot-assets" &&
-        activeView !== "h2r" &&
-        activeView !== "r2r" &&
-        activeView !== "dataset-viz"
-          ? inspector
-          : null}
       </Inspector>
     </div>
   );
