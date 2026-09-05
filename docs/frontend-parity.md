@@ -6,7 +6,7 @@ may improve spacing, rounded corners, accessibility, and narrow-screen layout.
 
 | Area | Current state | Required parity work |
 | --- | --- | --- |
-| Stage / Three.js | Mostly complete | Correct HUD family colors, availability, labels, and calibration projection |
+| Stage / Three.js | Complete | Rendering, playback, HUD state, calibration projection, and interaction match or improve on the old renderer |
 | Motion | Complete | Loaded assets include a compact validation summary |
 | Robot | Complete | Loaded models include mapping and renderability validation |
 | Video to Motion | Functional when GVHMR is ready | Add a real server-side running-job cancellation protocol |
@@ -23,10 +23,11 @@ may improve spacing, rounded corners, accessibility, and narrow-screen layout.
 - [x] Restore Canvas joint selection, constrained dragging, and synchronized calibration HUD controls.
 - [x] Synchronize Inspector/Canvas joint selection and restore robot-link hover/selected feedback.
 - [x] Keep projected calibration labels inside the Stage without collisions.
+- [x] Apply light/dark semantic tokens to Stage overlays and workflow status surfaces.
 - [x] Implement the three Batch pipelines against the existing FastAPI routes.
   - [x] Add the shared typed import, scan, job, progress, and download boundary.
   - [x] Refresh calibration on re-entry and feed completed V2M clips into the H2R draft.
-- [ ] Restore H2R scaled preview and omitted result/export controls.
+- [x] Restore H2R scaled preview and omitted result/export controls.
   - [x] Load the calibrated scaled skeleton/scene before Retarget without forcing it visible.
   - [x] Keep the optional pre-Retarget scaled preview frozen on its reference frame.
   - [x] Show shared diagnostics and complete FPS/time/header export controls for H2R/R2R.

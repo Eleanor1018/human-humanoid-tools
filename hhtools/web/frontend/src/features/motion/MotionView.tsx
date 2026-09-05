@@ -602,7 +602,7 @@ export function MotionView({
               Remove folder
             </Button>
             {pendingFolderRemoval === managedFolder && (
-              <div className="col-span-2 grid gap-2 rounded-md border border-[#efcccc] bg-[#fff5f4] p-2.5 text-[11px] leading-relaxed text-[#8c2929]">
+              <div className="col-span-2 grid gap-2 rounded-md border border-danger-border bg-danger-muted p-2.5 text-[11px] leading-relaxed text-danger">
                 <p className="[overflow-wrap:anywhere]">
                   Remove <strong>{managedFolder}</strong> from this managed
                   library? External linked source data is kept; files copied
@@ -618,7 +618,7 @@ export function MotionView({
                   </Button>
                   <Button
                     size="sm"
-                    className="border-[#c53c3c] text-[#8c2929] hover:border-[#8c2929] hover:bg-[#ffe9e7]"
+                    className="border-danger-border text-danger hover:border-danger hover:bg-danger-muted"
                     disabled={libraryAction !== null}
                     onClick={() => void removeManagedFolder()}
                   >
@@ -631,7 +631,7 @@ export function MotionView({
         )}
         {error && (
           <p
-            className="rounded-md border border-[#efcccc] bg-[#fff5f4] px-2.5 py-2 text-[11px] leading-relaxed break-words text-[#8c2929]"
+            className="rounded-md border border-danger-border bg-danger-muted px-2.5 py-2 text-[11px] leading-relaxed break-words text-danger"
             role="alert"
           >
             {error}

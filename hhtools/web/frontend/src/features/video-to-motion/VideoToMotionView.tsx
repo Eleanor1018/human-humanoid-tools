@@ -261,10 +261,10 @@ export function VideoToMotionView({
           : "Check failed";
   const runtimeDot =
     runtimePhase === "ready"
-      ? "bg-[#16845b]"
+      ? "bg-success"
       : runtimePhase === "checking"
-        ? "bg-[#c98413]"
-        : "bg-[#c53c3c]";
+        ? "bg-warning"
+        : "bg-danger";
   const missing = runtime?.missing ?? [];
   const progress = workflowPhase === "uploading" ? 0 : (job?.progress ?? 0);
   const canRun = Boolean(video) && runtimePhase === "ready" && !busy;
@@ -392,7 +392,7 @@ export function VideoToMotionView({
               </select>
             </Field>
             {(runtimeError || missing.length > 0) && (
-              <div className="rounded-md border border-[#efcccc] bg-[#fff5f4] px-2.5 py-2 text-[11px] leading-relaxed text-[#8c2929] break-all" role="alert">
+              <div className="rounded-md border border-danger-border bg-danger-muted px-2.5 py-2 text-[11px] leading-relaxed text-danger break-all" role="alert">
                 <p>{runtimeError ?? missing[0]}</p>
                 {!runtimeError && missing.length > 1 && (
                   <details className="mt-1">
@@ -465,7 +465,7 @@ export function VideoToMotionView({
               </div>
             )}
             {workflowPhase === "error" && workflowError && (
-              <p className="rounded-md border border-[#efcccc] bg-[#fff5f4] px-2.5 py-2 text-[11px] leading-relaxed text-[#8c2929] break-words" role="alert">
+              <p className="rounded-md border border-danger-border bg-danger-muted px-2.5 py-2 text-[11px] leading-relaxed text-danger break-words" role="alert">
                 {workflowError}
               </p>
             )}
@@ -521,7 +521,7 @@ export function VideoToMotionView({
               </div>
             )}
             {importError && (
-              <p className="rounded-md border border-[#efcccc] bg-[#fff5f4] px-2.5 py-2 text-[11px] leading-relaxed text-[#8c2929] break-words" role="alert">
+              <p className="rounded-md border border-danger-border bg-danger-muted px-2.5 py-2 text-[11px] leading-relaxed text-danger break-words" role="alert">
                 {importError}
               </p>
             )}

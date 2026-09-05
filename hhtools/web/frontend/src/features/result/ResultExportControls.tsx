@@ -121,7 +121,7 @@ export function ResultExportControls({
         {hasScene ? " Terrain or object results download as a ZIP bundle." : ""}
       </p>
       {!validation.valid && (
-        <p className="text-[11px] text-[#a43c35]" role="alert">
+        <p className="text-[11px] text-danger" role="alert">
           {validation.error}
         </p>
       )}

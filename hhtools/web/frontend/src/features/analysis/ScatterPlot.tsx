@@ -173,7 +173,7 @@ export function ScatterPlot({
                 r={selected || recommended ? 6 : 4}
                 fill={clusterColor(clip.cluster_id)}
                 opacity={visible ? 1 : 0.16}
-                stroke={selected ? "#02122e" : recommended ? "#ff9f0a" : "#fff"}
+                stroke={selected ? "var(--text)" : recommended ? "#ff9f0a" : "var(--surface)"}
                 strokeWidth={selected || recommended ? 2 : 1}
                 className="cursor-pointer outline-none focus:stroke-[3px]"
                 role="button"
@@ -217,7 +217,7 @@ export function ScatterPlot({
       </div>
       <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-muted-foreground">
         <span><i className="mr-1 inline-block size-2 rounded-full bg-[#ff9f0a]" />recommended</span>
-        <span><i className="mr-1 inline-block size-2 rounded-full bg-[#02122e]" />manual</span>
+        <span><i className="mr-1 inline-block size-2 rounded-full bg-foreground" />manual</span>
       </div>
     </div>
   );

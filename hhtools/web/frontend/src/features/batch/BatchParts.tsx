@@ -31,7 +31,7 @@ export function StatusMessage({
       className={cn(
         "rounded-md border px-2.5 py-2 text-[11px] leading-relaxed [overflow-wrap:anywhere]",
         error
-          ? "border-[#efcccc] bg-[#fff5f4] text-[#8c2929]"
+          ? "border-danger-border bg-danger-muted text-danger"
           : "border-border-subtle bg-background text-muted-foreground",
       )}
       role={error ? "alert" : "status"}
@@ -464,15 +464,15 @@ export function BatchProgress({ job }: { job: JobSnapshot<BatchResult> | null })
 function FailureList({ failures }: { failures: readonly BatchFailure[] }) {
   if (!failures.length) return null;
   return (
-    <details className="rounded-md border border-[#efcccc] bg-[#fff5f4]" open>
-      <summary className="cursor-pointer list-none px-2.5 py-2 text-xs font-semibold text-[#8c2929] [&::-webkit-details-marker]:hidden">
+    <details className="rounded-md border border-danger-border bg-danger-muted" open>
+      <summary className="cursor-pointer list-none px-2.5 py-2 text-xs font-semibold text-danger [&::-webkit-details-marker]:hidden">
         Failures ({failures.length})
       </summary>
-      <ul className="grid max-h-44 gap-2 overflow-y-auto border-t border-[#efcccc] p-2.5">
+      <ul className="grid max-h-44 gap-2 overflow-y-auto border-t border-danger-border p-2.5">
         {failures.map((failure, index) => (
-          <li key={`${failure.stem ?? "clip"}-${index}`} className="text-[11px] leading-relaxed text-[#8c2929]">
+          <li key={`${failure.stem ?? "clip"}-${index}`} className="text-[11px] leading-relaxed text-danger">
             <strong>{failure.stem || "Untitled clip"}</strong>
-            <span className="ml-1 rounded bg-white/70 px-1 py-0.5 text-[9px] uppercase">
+            <span className="ml-1 rounded bg-surface/70 px-1 py-0.5 text-[9px] uppercase">
               {failure.stage || "unknown"}
             </span>
             <p className="break-words">{failure.reason || "Unknown error"}</p>

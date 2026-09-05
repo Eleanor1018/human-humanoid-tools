@@ -393,7 +393,7 @@ export function RobotView({
           disabled={loadingLibrary}
         />
         {error && (
-          <p className="rounded-md border border-[#efcccc] bg-[#fff5f4] px-2.5 py-2 text-[11px] leading-relaxed text-[#8c2929] break-words" role="alert">
+          <p className="rounded-md border border-danger-border bg-danger-muted px-2.5 py-2 text-[11px] leading-relaxed text-danger break-words" role="alert">
             {error}
           </p>
         )}
@@ -471,7 +471,7 @@ export function RobotView({
                     {robot.deletable && !robot.builtin && (
                       <button
                         type="button"
-                        className="size-8 rounded-md text-lg leading-none text-muted-foreground hover:bg-[#fff1f0] hover:text-[#a62c2c] focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-50"
+                        className="size-8 rounded-md text-lg leading-none text-muted-foreground hover:bg-danger-muted hover:text-danger focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-50"
                         title="Remove from Robot Library"
                         aria-label={`Delete robot ${robotLabel(robot)}`}
                         disabled={busy}

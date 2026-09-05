@@ -233,7 +233,7 @@ export function Stage({
         <div className="pointer-events-none absolute right-3 bottom-3 left-3 z-20 flex min-w-0 items-center gap-2.5">
           <button
             type="button"
-            className="pointer-events-auto grid size-11 shrink-0 cursor-pointer place-items-center rounded-full border-[1.5px] border-primary/30 bg-white/[.88] text-primary shadow-[0_1px_3px_rgba(0,0,0,0.08)] backdrop-blur-[20px] transition hover:border-primary hover:bg-primary/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring active:scale-95 @max-[520px]:size-[38px]"
+            className="pointer-events-auto grid size-11 shrink-0 cursor-pointer place-items-center rounded-full border-[1.5px] border-primary/30 bg-surface/[.88] text-primary shadow-[0_1px_3px_rgba(0,0,0,0.08)] backdrop-blur-[20px] transition hover:border-primary hover:bg-primary/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring active:scale-95 @max-[520px]:size-[38px]"
             aria-label="Reset view"
             title="Reset view"
             onClick={() => setCameraRevision((revision) => revision + 1)}

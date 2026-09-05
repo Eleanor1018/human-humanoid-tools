@@ -54,12 +54,12 @@ export function ResultDiagnostics({
   const quality = !resolved.available || tracking == null
     ? { label: "Unavailable", className: "bg-accent text-muted-foreground" }
     : tracking.p95_error_m <= 0.05
-      ? { label: "Stable", className: "bg-[#e8f7ee] text-[#237344]" }
+      ? { label: "Stable", className: "bg-success/10 text-success" }
       : tracking.p95_error_m <= 0.1
-        ? { label: "Review", className: "bg-[#fff4dc] text-[#815d12]" }
+        ? { label: "Review", className: "bg-warning-muted text-warning" }
         : {
             label: "Large deviation",
-            className: "bg-[#fff0ef] text-[#a43c35]",
+            className: "bg-danger-muted text-danger",
           };
 
   return (

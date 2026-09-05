@@ -8,10 +8,10 @@ export interface ValidationItem {
 }
 
 const toneClass: Readonly<Record<ValidationTone, string>> = {
-  ok: "bg-[#2da44e]",
-  warning: "bg-[#c98413]",
-  error: "bg-[#c53c3c]",
-  neutral: "bg-[#8c959f]",
+  ok: "bg-success",
+  warning: "bg-warning",
+  error: "bg-danger",
+  neutral: "bg-muted-foreground",
 };
 
 /** Compact, unframed facts derived from the current authoritative payload. */

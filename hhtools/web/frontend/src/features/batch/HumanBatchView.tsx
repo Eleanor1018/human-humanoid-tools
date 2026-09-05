@@ -344,7 +344,7 @@ export function HumanBatchView({
                 return (
                   <div key={reference} className="flex min-h-9 items-center justify-between gap-3 border-b border-border-subtle px-2.5 py-1.5 text-[11px] last:border-b-0">
                     <span><strong className="text-foreground">{reference.toUpperCase()}</strong> · {count} clips</span>
-                    <span className={status === "ready" ? "text-[#16845b]" : status === "missing" || status === "error" ? "text-[#b35c00]" : "text-muted-foreground"}>
+                    <span className={status === "ready" ? "text-success" : status === "missing" ? "text-warning" : status === "error" ? "text-danger" : "text-muted-foreground"}>
                       {!robot ? "Load robot" : status === "checking" ? "Checking…" : status === "ready" ? "Ready" : status === "error" ? "Check failed" : "Calibration needed"}
                     </span>
                   </div>

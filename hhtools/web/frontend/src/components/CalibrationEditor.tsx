@@ -114,7 +114,7 @@ function CalibrationJointRow({
       onPointerDown={onSelect}
     >
       <span
-        className={nearLimit ? "truncate text-[#c98413]" : "truncate text-muted-foreground"}
+        className={nearLimit ? "truncate text-warning" : "truncate text-muted-foreground"}
         title={limit.name}
       >
         {limit.name}
@@ -153,7 +153,7 @@ function CalibrationJointRow({
         onKeyDown={(event) => {
           if (event.key === "Enter") event.currentTarget.blur();
         }}
-        className={`${numberClass} ${nearLimit ? "border-[#c98413]/55" : ""}`}
+        className={`${numberClass} ${nearLimit ? "border-warning/55" : ""}`}
         aria-label={`${limit.name} ${linear ? "metres" : unit === "deg" ? "degrees" : "radians"}`}
         title={linear ? "Translation in metres" : unit === "deg" ? "Degrees; stored in radians" : "Angle in radians"}
       />

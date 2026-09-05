@@ -871,7 +871,7 @@ export function RobotToRobotView({
             <p className="min-h-4 text-xs text-muted-foreground" aria-live="polite">{status}</p>
             {error && (
               <p
-                className="rounded-md border border-[#efcccc] bg-[#fff5f4] px-2.5 py-2 text-[11px] leading-relaxed break-words text-[#8c2929]"
+                className="rounded-md border border-danger-border bg-danger-muted px-2.5 py-2 text-[11px] leading-relaxed break-words text-danger"
                 role="alert"
               >
                 {error}

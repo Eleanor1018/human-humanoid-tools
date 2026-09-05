@@ -304,7 +304,7 @@ export function RobotBatchView({
             onLoad={() => void loadSelectedRobot("target")}
           />
           <p
-            className={`text-[11px] ${calibration === "ready" ? "text-[#16845b]" : calibration === "missing" || calibration === "error" ? "text-[#b35c00]" : "text-muted-foreground"}`}
+            className={`text-[11px] ${calibration === "ready" ? "text-success" : calibration === "missing" ? "text-warning" : calibration === "error" ? "text-danger" : "text-muted-foreground"}`}
           >
             {calibrationLabel}
           </p>

@@ -99,7 +99,7 @@ export function CalibrationJointHud({
                 type="button"
                 className={
                   interaction.angleUnit === unit
-                    ? "bg-primary px-1.5 py-0.5 text-white"
+                    ? "bg-primary px-1.5 py-0.5 text-primary-foreground"
                     : "px-1.5 py-0.5 text-muted-foreground hover:bg-muted"
                 }
                 onClick={() => interaction.onAngleUnitChange(unit)}
@@ -111,12 +111,15 @@ export function CalibrationJointHud({
         )}
         <button
           type="button"
-          className="grid size-5 place-items-center rounded text-base leading-none text-muted-foreground hover:bg-muted hover:text-foreground"
+          className="grid size-5 place-items-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
           aria-label="Close joint controls"
           title="Close"
           onClick={onClose}
         >
-          &times;
+          <span
+            className="size-3.5 bg-current [mask:url(/icons/common/close.svg)_center/contain_no-repeat] [-webkit-mask:url(/icons/common/close.svg)_center/contain_no-repeat]"
+            aria-hidden="true"
+          />
         </button>
       </div>
       <div className="grid grid-cols-[minmax(0,1fr)_74px] items-center gap-2">

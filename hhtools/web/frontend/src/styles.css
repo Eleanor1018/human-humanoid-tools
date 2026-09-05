@@ -17,6 +17,9 @@
   --color-danger-muted: var(--danger-bg);
   --color-danger-border: var(--danger-border);
   --color-success: var(--success-text);
+  --color-warning: var(--warning-text);
+  --color-warning-muted: var(--warning-bg);
+  --color-warning-border: var(--warning-border);
   --color-canvas: var(--canvas);
   --color-stage-canvas: var(--stage-canvas);
   --radius-sm: var(--radius-compact);
@@ -42,6 +45,9 @@
   --danger-border: #efcccc;
   --danger-text: #8c2929;
   --success-text: #16845b;
+  --warning-bg: #fffaf0;
+  --warning-border: #ead7b0;
+  --warning-text: #7a4b00;
   --radius-compact: 4px;
   --radius-control: 6px;
   --radius-overlay: 8px;
@@ -68,6 +74,9 @@
   --danger-border: #6b343b;
   --danger-text: #ffaaa4;
   --success-text: #62d6a2;
+  --warning-bg: #342b1c;
+  --warning-border: #6f592c;
+  --warning-text: #f0c36b;
   color-scheme: dark;
 }
 

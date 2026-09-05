@@ -805,7 +805,7 @@ export function HumanToRobotView({
       )}
       {error && (
         <p
-          className="rounded-md border border-[#efcccc] bg-[#fff5f4] px-2.5 py-2 text-[11px] text-[#8c2929] break-words"
+          className="rounded-md border border-danger-border bg-danger-muted px-2.5 py-2 text-[11px] text-danger break-words"
           role="alert"
         >
           {error}

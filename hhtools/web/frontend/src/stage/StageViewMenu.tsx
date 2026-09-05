@@ -192,7 +192,7 @@ export function StageViewMenu({
       }
       size="sm"
       aria-label="Stage visibility"
-      className="stage-view-menu absolute top-3 left-3 z-[25] flex w-fit max-w-[calc(100%_-_36px)] flex-col items-stretch gap-1 rounded-lg border border-black/10 bg-white/[.85] px-2 py-1.5 shadow-[0_1px_3px_rgba(0,0,0,0.08)] backdrop-blur-[20px] @max-[440px]:top-2 @max-[440px]:left-2 @max-[440px]:max-w-[calc(100%_-_16px)]"
+      className="stage-view-menu absolute top-3 left-3 z-[25] flex w-fit max-w-[calc(100%_-_36px)] flex-col items-stretch gap-1 rounded-lg border border-border-subtle bg-surface/[.85] px-2 py-1.5 shadow-[0_1px_3px_rgba(0,0,0,0.08)] backdrop-blur-[20px] @max-[440px]:top-2 @max-[440px]:left-2 @max-[440px]:max-w-[calc(100%_-_16px)]"
     >
       {rows.map((row) => (
         <div
@@ -201,7 +201,7 @@ export function StageViewMenu({
           className="flex flex-nowrap items-center gap-[3px]"
         >
           {row.label && (
-            <span className="min-w-[2.2em] shrink-0 text-center text-[11px] font-bold text-[#a1a1a6]">
+            <span className="min-w-[2.2em] shrink-0 text-center text-[11px] font-bold text-muted-foreground/60">
               {row.label}
             </span>
           )}
@@ -215,7 +215,7 @@ export function StageViewMenu({
               aria-label={layer.accessibleLabel ?? layer.label}
               data-family={layer.family}
               className={cn(
-                "group h-auto w-auto cursor-pointer gap-[5px] rounded-sm border-0 bg-transparent px-3 py-1.5 text-xs leading-[normal] font-semibold text-[#6e6e73] transition-[background-color,color,opacity] duration-150 hover:bg-[rgba(0,113,227,0.12)] hover:text-[#1d1d1f] focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring disabled:pointer-events-auto disabled:cursor-not-allowed disabled:opacity-35 disabled:grayscale-[.35] data-[state=on]:text-white",
+                "group h-auto w-auto cursor-pointer gap-[5px] rounded-sm border-0 bg-transparent px-3 py-1.5 text-xs leading-[normal] font-semibold text-muted-foreground transition-[background-color,color,opacity] duration-150 hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring disabled:pointer-events-auto disabled:cursor-not-allowed disabled:opacity-35 disabled:grayscale-[.35] data-[state=on]:text-white",
                 activeFamilyClass[layer.family],
               )}
             >

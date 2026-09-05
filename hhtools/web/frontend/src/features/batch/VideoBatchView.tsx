@@ -252,7 +252,7 @@ export function VideoBatchView({
                 <div className="min-w-0">
                   <p className="truncate text-xs font-semibold text-foreground" title={item.file.name}>{item.file.name}</p>
                   <p className="text-[10px] text-muted-foreground">{formatFileSize(item.file.size)} · {statusLabel(item.status)}</p>
-                  {item.message && <p className={`mt-1 break-words text-[10px] ${item.status === "error" ? "text-[#8c2929]" : "text-muted-foreground"}`}>{item.message}</p>}
+                  {item.message && <p className={`mt-1 break-words text-[10px] ${item.status === "error" ? "text-danger" : "text-muted-foreground"}`}>{item.message}</p>}
                   {(item.status === "uploading" || item.status === "running") && (
                     <progress className="mt-1 h-1 w-full accent-primary" value={item.progress} max="1" />
                   )}

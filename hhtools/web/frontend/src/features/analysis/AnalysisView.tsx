@@ -768,7 +768,7 @@ export function AnalysisView({
               {status || "Run analysis to calculate dynamics, quality, tags, embedding, and clusters."}
             </p>
             {error && (
-              <p className="break-words rounded-md border border-[#efcccc] bg-[#fff5f4] px-2.5 py-2 text-[11px] text-[#8c2929]" role="alert">
+              <p className="break-words rounded-md border border-danger-border bg-danger-muted px-2.5 py-2 text-[11px] text-danger" role="alert">
                 {error}
               </p>
             )}
@@ -805,15 +805,15 @@ export function AnalysisView({
               )}
 
               {summary.num_error > 0 && (
-                <details className="rounded-md border border-[#ead7b0] bg-[#fffaf0] px-2.5 py-2">
-                  <summary className="cursor-pointer list-none text-xs font-semibold text-[#7a4b00] [&::-webkit-details-marker]:hidden">
+                <details className="rounded-md border border-warning-border bg-warning-muted px-2.5 py-2">
+                  <summary className="cursor-pointer list-none text-xs font-semibold text-warning [&::-webkit-details-marker]:hidden">
                     {summary.num_error} clips could not be analyzed
                   </summary>
                   <div className="mt-2 grid gap-1.5">
                     {result.clips
                       .filter((clip) => clip.error)
                       .map((clip) => (
-                        <div key={clip.clip_id} className="grid gap-0.5 text-[11px] text-[#7a4b00]">
+                        <div key={clip.clip_id} className="grid gap-0.5 text-[11px] text-warning">
                           <span className="font-medium">{clipLabel(clip)}</span>
                           <span className="break-words opacity-80">{clip.error}</span>
                         </div>
@@ -924,7 +924,7 @@ export function AnalysisView({
                         </button>
                         <span className="text-right text-[11px] text-muted-foreground">{formatNumber(clip.metrics[metric])}</span>
                         <div className="flex items-center gap-1">
-                          {recommended && <span className="text-[10px] font-semibold text-[#b35b00]">FPS</span>}
+                          {recommended && <span className="text-[10px] font-semibold text-warning">FPS</span>}
                           <Button size="sm" disabled={busy !== null} onClick={() => void previewClip(clip)}>{previewing === clip.clip_id ? "..." : "Preview"}</Button>
                         </div>
                       </div>
