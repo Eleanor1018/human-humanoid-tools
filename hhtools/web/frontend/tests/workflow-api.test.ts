@@ -14,6 +14,11 @@ const { retarget: runH2rRetarget, retargetExportUrl } =
   await import("../src/features/h2r/api.ts");
 const { getR2rLibrary, r2rExportUrl, runR2rRetarget } =
   await import("../src/features/r2r/api.ts");
+const {
+  analyzeDataset,
+  computeDatasetSubset,
+  uploadDataset,
+} = await import("../src/features/analysis/api.ts");
 
 test("H2R preserves the selected backend and polls its retarget job", async () => {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
@@ -176,4 +181,92 @@ test("workflow export URLs encode tokens and requested options", () => {
     csv_header: "false",
     fps: "30",
   });
+});
+
+test("analysis starts the dataset job and enforces its job kind", async () => {
+  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  const result = await analyzeDataset(
+    { source: "/data/motions", embedding: "handcrafted", force: true },
+    {
+      pollIntervalMs: 0,
+      fetcher: async (input, init) => {
+        calls.push({ url: String(input), init });
+        if (calls.length === 1) return Response.json({ job_id: "analysis-job" });
+        return Response.json({
+          id: "analysis-job",
+          kind: "dataset_analyze",
+          status: "done",
+          result: {
+            meta: { source_root: "/data/motions", embedding: "handcrafted" },
+            clips: [],
+            summary: { num_clips: 0, num_ok: 0, num_error: 0 },
+          },
+        });
+      },
+    },
+  );
+  assert.deepEqual(calls.map((call) => call.url), [
+    "/api/dataset/analyze",
+    "/api/job/analysis-job",
+  ]);
+  assert.deepEqual(JSON.parse(String(calls[0].init?.body)), {
+    source: "/data/motions",
+    embedding: "handcrafted",
+    force: true,
+  });
+  assert.equal(result.meta.source_root, "/data/motions");
+});
+
+test("analysis upload preserves append query and folder-relative filenames", async () => {
+  let requestUrl = "";
+  let form: FormData | null = null;
+  const file = new File(["motion"], "walk.bvh", { type: "application/octet-stream" }) as File & {
+    _relpath?: string;
+  };
+  file._relpath = "LAFAN/walk.bvh";
+  await uploadDataset([file], {
+    appendTo: "/tmp/hhtools/dataset/abc",
+    userSourceRoot: "/home/nora/data",
+    fetcher: async (input, init) => {
+      requestUrl = String(input);
+      form = init?.body as FormData;
+      return Response.json({
+        source: "/tmp/hhtools/dataset/abc",
+        clip_count: 1,
+        human_count: 1,
+        robot_count: 0,
+        folders: { LAFAN: 1 },
+        clips: [],
+      });
+    },
+  });
+  assert.match(requestUrl, /append_to=%2Ftmp%2Fhhtools%2Fdataset%2Fabc/);
+  assert.match(requestUrl, /user_source_root=%2Fhome%2Fnora%2Fdata/);
+  assert.equal(form?.get("files") instanceof File, true);
+  assert.equal((form?.get("files") as File).name, "LAFAN/walk.bvh");
+});
+
+test("analysis subset sends the analyzed clips and selection parameters", async () => {
+  const clip = {
+    clip_id: "walk",
+    source_kind: "human",
+    source_path: "/data/walk.bvh",
+    dataset: "lafan",
+    folder_label: "LAFAN",
+    metrics: { complexity: 1 },
+    tags: [],
+    embedding: [0.1],
+    scatter: null,
+    cluster_id: null,
+    error: null,
+  };
+  let body: unknown;
+  const value = await computeDatasetSubset([clip], 1, 0.75, {
+    fetcher: async (_input, init) => {
+      body = JSON.parse(String(init?.body));
+      return Response.json({ selected: ["walk"], count: 1 });
+    },
+  });
+  assert.deepEqual(body, { clips: [clip], k: 1, alpha: 0.75 });
+  assert.deepEqual(value, { selected: ["walk"], count: 1 });
 });

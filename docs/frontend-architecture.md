@@ -43,7 +43,8 @@ src/
 │   ├── video-to-motion/
 │   │   └── VideoToMotionView.tsx
 │   └── analysis/
-│       └── AnalysisView.tsx # Dataset analysis shell
+│       ├── AnalysisView.tsx # Dataset analysis view and local presentation state
+│       └── api.ts           # Dataset scan, analysis jobs, subset and exports
 ├── stage/                   # R3F Stage surface and floating view controls
 │   ├── StageCanvas.tsx      # One Canvas, camera, controls, lights and grid
 │   ├── StageEmpty.tsx       # Legacy initial empty-state copy
@@ -128,6 +129,15 @@ main -> App -> features -> components/ui
 - [x] Human-to-Robot calibration, retarget job, playback, and export
 - [x] Robot-to-Robot upload/library source, calibration, retarget, and export
 - [x] Animated H2R/R2R robot trajectories and scaled scene layers
+- [x] Dataset scan, folder upload, cached analysis, and progress polling
+- [x] Analysis metrics, tags, embedding scatter, histograms, and filters
+- [x] Analysis subset recommendation, manifest/robot export, and human preview
+
+Analysis keeps the server as the source of truth: the view starts and polls the
+`dataset_analyze` job, renders the returned manifest, and sends subset/export
+requests back to the existing FastAPI dataset routes. Human result rows hand a
+typed motion payload to the shared Stage; robot rows remain available through
+the Robot-to-Robot workflow until the Stage gains a dataset-scene token layer.
 
 The baked-body renderer is covered by the backend-compatible gzip/vertex test.
 SMPL-family parameter clips (AMASS, GVHMR, Motion-X, and PHUMA) now remain

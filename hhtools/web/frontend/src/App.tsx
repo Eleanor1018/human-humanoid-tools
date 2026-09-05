@@ -146,6 +146,13 @@ export function App() {
       setStageScaledMotion(null);
       return;
     }
+    if (activeView === "dataset-viz") {
+      setStageMotion(workspaceMotion);
+      setStageRobot(null);
+      setStageRobotTrajectory(null);
+      setStageScaledMotion(null);
+      return;
+    }
     if (activeView === "h2r") {
       setStageMotion(h2rCalibrationReference ?? workspaceMotion);
       setStageRobot(workspaceRobot);
@@ -274,7 +281,12 @@ export function App() {
             onTargetPose={setR2rCalibrationPose}
           />
         </div>
-        {activeView !== "h2r" && activeView !== "r2r" ? inspector : null}
+        <div className={activeView === "dataset-viz" ? "h-full" : "hidden"}>
+          <AnalysisView onMotionLoaded={publishMotion} />
+        </div>
+        {activeView !== "h2r" && activeView !== "r2r" && activeView !== "dataset-viz"
+          ? inspector
+          : null}
       </Inspector>
     </div>
   );
