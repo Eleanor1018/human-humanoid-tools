@@ -5,6 +5,10 @@ import {
   type JobSnapshot,
 } from "@/lib/api";
 import type {
+  ExportOptions,
+  ResultDiagnosticsPayload,
+} from "@/features/result/model";
+import type {
   StageMatrix4,
   StageMotionPayload,
   StageRobotTrajectoryPayload,
@@ -40,13 +44,6 @@ export interface CalibrationPose {
   readonly ground_offset_z: number;
 }
 
-export interface RetargetDiagnostics {
-  readonly schema_version: number;
-  readonly available: boolean;
-  readonly reason?: string;
-  readonly [key: string]: unknown;
-}
-
 export interface H2rScenePayload {
   readonly terrain?: StageMotionPayload["terrain"];
   readonly objects?: StageMotionPayload["objects"];
@@ -63,7 +60,7 @@ export interface RetargetResult {
   readonly trajectory: StageRobotTrajectoryPayload;
   readonly scaled_preview?: StageMotionPayload | null;
   readonly scaled_scene?: H2rScenePayload | null;
-  readonly diagnostics?: RetargetDiagnostics;
+  readonly diagnostics?: ResultDiagnosticsPayload;
   readonly export_token: string;
   readonly stem?: string;
   readonly motion_source_fps?: number;
@@ -202,14 +199,6 @@ export async function retarget(
     expectedKind: "retarget",
     onUpdate: options.onUpdate,
   });
-}
-
-export interface ExportOptions {
-  readonly format: "csv" | "pkl";
-  readonly fps?: number;
-  readonly csvHeader?: boolean;
-  readonly start?: number;
-  readonly end?: number;
 }
 
 /** Build a same-origin download URL; export itself is synchronous, not a job. */

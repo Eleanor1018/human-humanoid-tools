@@ -18,6 +18,10 @@ import {
   type RobotSummary,
 } from "@/features/robot/api";
 import type {
+  ExportOptions,
+  ResultDiagnosticsPayload,
+} from "@/features/result/model";
+import type {
   StageMatrix4,
   StageMotionPayload,
   StageObjectPayload,
@@ -108,7 +112,7 @@ export interface R2rRetargetResult {
   readonly source_fps: number;
   readonly scaled_preview?: StageMotionPayload;
   readonly scaled_scene?: R2rScenePayload;
-  readonly diagnostics?: unknown;
+  readonly diagnostics?: ResultDiagnosticsPayload;
   readonly has_scene?: boolean;
 }
 
@@ -270,11 +274,7 @@ export async function runR2rRetarget(
 
 export function r2rExportUrl(
   token: string,
-  options: {
-    readonly format?: "csv" | "pkl";
-    readonly fps?: number;
-    readonly csvHeader?: boolean;
-  } = {},
+  options: Partial<ExportOptions> = {},
 ): string {
   const query = new URLSearchParams({
     fmt: options.format ?? "csv",
@@ -282,5 +282,7 @@ export function r2rExportUrl(
   });
   const fps = validFps(options.fps);
   if (fps !== undefined) query.set("fps", String(fps));
+  if (options.start !== undefined) query.set("t_start", String(options.start));
+  if (options.end !== undefined) query.set("t_end", String(options.end));
   return `/api/export/${encodeURIComponent(token)}?${query.toString()}`;
 }

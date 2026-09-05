@@ -18,6 +18,8 @@ import {
   type RobotPayload,
   type RobotSummary,
 } from "@/features/robot/api";
+import { ResultDiagnostics } from "@/features/result/ResultDiagnostics";
+import { ResultExportControls } from "@/features/result/ResultExportControls";
 import type { StageMotionPayload } from "@/stage/types";
 import {
   DEFAULT_CALIBRATION_DISPLAY,
@@ -169,7 +171,6 @@ export function HumanToRobotView({
   );
   const [retargetFps, setRetargetFps] = useState("");
   const [backend, setBackend] = useState<Backend>("newton");
-  const [exportFormat, setExportFormat] = useState<"csv" | "pkl">("csv");
   const actionRequest = useRef<AbortController | null>(null);
   const calibrationStatusRequest = useRef<AbortController | null>(null);
   const resultCallback = useRef(onRetargetResult);
@@ -539,10 +540,6 @@ export function HumanToRobotView({
         : !calibration?.calibrated
           ? 2
           : 3;
-  const exportUrl = result
-    ? retargetExportUrl(result.export_token, { format: exportFormat })
-    : null;
-
   return (
     <InspectorPage title="Human → Robot">
       <WorkflowPipeline
@@ -710,27 +707,17 @@ export function HumanToRobotView({
                 />
               </div>
             )}
-            {result && exportUrl && (
-              <div className="grid grid-cols-[1fr_auto] gap-2 rounded-md border border-border-subtle bg-background p-2.5">
-                <select
-                  className={fieldClass}
-                  aria-label="Export format"
-                  value={exportFormat}
-                  onChange={(event) =>
-                    setExportFormat(event.currentTarget.value as "csv" | "pkl")
-                  }
-                >
-                  <option value="csv">CSV</option>
-                  <option value="pkl">PKL</option>
-                </select>
-                <a
-                  className="inline-flex min-h-[30px] items-center rounded-md border border-border bg-surface px-3 text-xs font-medium hover:border-primary hover:bg-accent"
-                  href={exportUrl}
-                  download
-                >
-                  Download
-                </a>
-              </div>
+            {result && (
+              <>
+                <ResultDiagnostics diagnostics={result.diagnostics} />
+                <ResultExportControls
+                  key={result.export_token}
+                  token={result.export_token}
+                  resultFps={result.retarget_fps ?? result.source_fps}
+                  hasScene={result.has_scene}
+                  buildUrl={retargetExportUrl}
+                />
+              </>
             )}
           </div>
         </WorkflowStep>

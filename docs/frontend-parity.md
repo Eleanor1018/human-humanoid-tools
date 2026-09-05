@@ -10,8 +10,8 @@ may improve spacing, rounded corners, accessibility, and narrow-screen layout.
 | Motion | Functional | Restore validation summary, Batch basket handoff, and linked-folder removal |
 | Robot | Functional | Restore import/load validation summary |
 | Video to Motion | Functional when GVHMR is ready | Add a real server-side running-job cancellation protocol |
-| Human to Robot | Functional | Restore validation/evaluation and complete export options |
-| Robot to Robot | Functional | Restore full calibration editor, validation/evaluation, and complete export options |
+| Human to Robot | Functional | Restore comparison presets and richer input validation |
+| Robot to Robot | Functional | Restore comparison presets and richer input validation |
 | Batch | Functional | Run full solver smoke when the licensed/runtime dependencies are available |
 | Analysis | Functional | Restore scatter-point preview and removable multi-folder upload basket |
 | Application menu | Visual shell only | Wire navigation, import commands, current export, settings, help, and desktop exit |
@@ -24,6 +24,7 @@ may improve spacing, rounded corners, accessibility, and narrow-screen layout.
   - [x] Add the shared typed import, scan, job, progress, and download boundary.
 - [ ] Restore H2R scaled preview and omitted result/export controls.
   - [x] Load the calibrated scaled skeleton/scene before Retarget without forcing it visible.
+  - [x] Show shared diagnostics and complete FPS/time/header export controls for H2R/R2R.
 - [ ] Restore remaining Motion, Robot, V2M, Analysis, and application-menu actions.
   - [x] Preserve the complete registered V2M Motion payload for Stage and H2R.
   - [x] Preserve the last successful Motion while a replacement video is pending or invalid.

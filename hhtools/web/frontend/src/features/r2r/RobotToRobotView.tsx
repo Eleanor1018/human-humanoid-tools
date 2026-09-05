@@ -6,6 +6,8 @@ import { normalizeCalibrationValues } from "@/components/calibrationEditorState"
 import { InspectorPage } from "@/components/Inspector";
 import { Button } from "@/components/ui/button";
 import { WorkflowPipeline, WorkflowStep } from "@/components/WorkflowSteps";
+import { ResultDiagnostics } from "@/features/result/ResultDiagnostics";
+import { ResultExportControls } from "@/features/result/ResultExportControls";
 import {
   DEFAULT_CALIBRATION_DISPLAY,
   type CalibrationDisplayOptions,
@@ -187,8 +189,6 @@ export function RobotToRobotView({
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [exportFormat, setExportFormat] = useState<"csv" | "pkl">("csv");
-  const [exportFps, setExportFps] = useState("");
   const fileInput = useRef<HTMLInputElement | null>(null);
   const folderInput = useRef<HTMLInputElement | null>(null);
   const actionRequest = useRef<AbortController | null>(null);
@@ -793,32 +793,16 @@ export function RobotToRobotView({
               </p>
             )}
             {retargetResult && (
-              <div className="grid grid-cols-[minmax(0,1fr)_92px_auto] gap-2 border-t border-border-subtle pt-2.5">
-                <input
-                  className={fieldClass}
-                  inputMode="decimal"
-                  placeholder="Export FPS"
-                  value={exportFps}
-                  onChange={(event) => setExportFps(event.target.value)}
+              <>
+                <ResultDiagnostics diagnostics={retargetResult.diagnostics} />
+                <ResultExportControls
+                  key={retargetResult.export_token}
+                  token={retargetResult.export_token}
+                  resultFps={retargetResult.source_fps}
+                  hasScene={retargetResult.has_scene}
+                  buildUrl={r2rExportUrl}
                 />
-                <select
-                  className={fieldClass}
-                  value={exportFormat}
-                  onChange={(event) => setExportFormat(event.target.value as "csv" | "pkl")}
-                >
-                  <option value="csv">CSV</option>
-                  <option value="pkl">PKL</option>
-                </select>
-                <a
-                  className="inline-flex min-h-[30px] items-center justify-center rounded-md border border-primary bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-accent-foreground"
-                  href={r2rExportUrl(retargetResult.export_token, {
-                    format: exportFormat,
-                    fps: positiveNumber(exportFps),
-                  })}
-                >
-                  Export
-                </a>
-              </div>
+              </>
             )}
           </div>
         </WorkflowStep>
