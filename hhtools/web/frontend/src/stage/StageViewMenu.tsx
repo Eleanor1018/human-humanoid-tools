@@ -40,7 +40,6 @@ const layerRows: readonly (readonly StageLayer[])[] = [
       label: "Objects/Terrain",
       title: "Show or hide source terrain and interaction objects",
       family: "source",
-      disabled: true,
     },
   ],
   [
@@ -79,12 +78,14 @@ interface StageViewMenuProps {
   value: StageLayerId[];
   onValueChange(value: StageLayerId[]): void;
   robotAvailable?: boolean;
+  environmentAvailable?: boolean;
 }
 
 export function StageViewMenu({
   value,
   onValueChange,
   robotAvailable = false,
+  environmentAvailable = false,
 }: StageViewMenuProps) {
   return (
     <ToggleGroup
@@ -104,7 +105,11 @@ export function StageViewMenu({
             <ToggleGroupItem
               key={layer.id}
               value={layer.id}
-              disabled={layer.disabled || (layer.id === "robot" && !robotAvailable)}
+              disabled={
+                layer.disabled ||
+                (layer.id === "robot" && !robotAvailable) ||
+                (layer.id === "objects" && !environmentAvailable)
+              }
               title={layer.title}
               aria-label={layer.accessibleLabel ?? layer.label}
               data-family={layer.family}

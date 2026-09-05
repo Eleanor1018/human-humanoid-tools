@@ -45,7 +45,12 @@ src/
 ├── stage/                   # R3F Stage surface and floating view controls
 │   ├── StageCanvas.tsx      # One Canvas, camera, controls, lights and grid
 │   ├── StageEmpty.tsx       # Legacy initial empty-state copy
-│   ├── SkeletonLayer.tsx    # Data-only source skeleton first-frame layer
+│   ├── StagePlaybackBar.tsx # Play, pause, seek and single-frame controls
+│   ├── playback.ts          # Shared renderer playback cursor and timing
+│   ├── SkeletonLayer.tsx    # Animated source skeleton layer
+│   ├── BodyMeshLayer.tsx    # Animated baked-body lifecycle
+│   ├── bodyMesh.ts          # Gzip decode and dynamic body geometry
+│   ├── EnvironmentLayer.tsx # Terrain and animated interaction objects
 │   ├── RobotLayer.tsx       # Zero-pose GLB/fallback robot layer
 │   ├── types.ts             # Stage renderer data contracts
 │   └── StageViewMenu.tsx    # React visibility HUD
@@ -109,10 +114,15 @@ main -> App -> features -> components/ui
 - [x] Batch inspector visual shell
 - [x] Data Analysis inspector visual shell
 - [x] R3F Stage base scene (camera, controls, lights, axes, grid)
-- [x] R3F source skeleton first-frame layer and V2M result handoff
+- [x] Shared R3F timeline with play/pause, seek, and frame stepping
+- [x] Animated skeleton, baked body, terrain, and interaction-object layers
 - [x] Motion Library list, upload, job polling, and Stage handoff
 - [x] Robot catalog, zero-pose selection, GLB parsing, and Stage handoff
-- [ ] R3F environment/body playback layers
+
+The baked-body renderer is covered by the backend-compatible gzip/vertex test.
+The current development machine cannot generate a library body payload until
+its licensed SMPL/SMPL-X weights are installed; the renderer falls back to the
+skeleton while decoding or when a body surface is unavailable.
 
 Robot selection is intentionally server-authoritative. A clean checkout only
 contains the robot scaffold, so `/api/robots` can be empty until URDF + mesh

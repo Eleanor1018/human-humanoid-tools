@@ -1,12 +1,16 @@
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
+import { BodyMeshLayer } from "./BodyMeshLayer";
+import { EnvironmentLayer } from "./EnvironmentLayer";
 import { RobotLayer } from "./RobotLayer";
 import { SkeletonLayer } from "./SkeletonLayer";
+import { frameAtTime, type StagePlaybackRef } from "./playback";
 import type { StageLayerId } from "./StageViewMenu";
 import type { StageMotionPayload, StageRobotPayload } from "./types";
+
 /**
  * Owns the orbit controller for the one R3F canvas. R3F owns rendering and
  * resize observation; this small adapter keeps the old interaction settings
@@ -86,23 +90,81 @@ function GroundGrid() {
   );
 }
 
+/** Advances the cursor owned by Stage inside the one R3F render loop. */
+function PlaybackClock({
+  motion,
+  playback,
+  onPlaybackChange,
+}: {
+  motion: StageMotionPayload | null;
+  playback: StagePlaybackRef;
+  onPlaybackChange?: () => void;
+}) {
+  const reportElapsed = useRef(0);
+  useFrame((_state, delta) => {
+    const cursor = playback.current;
+    if (!motion || !cursor.playing || cursor.duration <= 0) {
+      return;
+    }
+    const step = Math.min(Math.max(delta, 0), 0.1);
+    cursor.elapsed += step;
+    if (cursor.elapsed >= cursor.duration) {
+      // Restart exactly at frame zero; carrying background-tab overshoot into
+      // a locomotion clip makes the loop boundary look like a random jump.
+      cursor.elapsed = 0;
+    }
+    cursor.frame = frameAtTime(motion, cursor.elapsed);
+    reportElapsed.current += step;
+    if (reportElapsed.current >= 0.1) {
+      reportElapsed.current = 0;
+      onPlaybackChange?.();
+    }
+  });
+  return null;
+}
+
 /** Static scene content migrated from the legacy renderer bootstrap. */
 function StageScene({
   motion,
   robot,
+  playback,
+  onPlaybackChange,
   visibleLayers,
 }: {
   motion: StageMotionPayload | null;
   robot: StageRobotPayload | null;
+  playback: StagePlaybackRef;
+  onPlaybackChange?: () => void;
   visibleLayers: readonly StageLayerId[];
 }) {
+  const bodyMesh = motion?.body_mesh;
+  const [bodyStatus, setBodyStatus] = useState<{
+    owner: typeof bodyMesh;
+    ready: boolean;
+  }>({ owner: undefined, ready: false });
+  const bodyReady = bodyStatus.owner === bodyMesh && bodyStatus.ready;
+  const publishBodyReady = useCallback(
+    (ready: boolean) => setBodyStatus({ owner: bodyMesh, ready }),
+    [bodyMesh],
+  );
+  const hasBodyMesh = bodyMesh?.available === true;
+  const hasEnvironment = Boolean(
+    motion?.terrain || (motion?.objects && motion.objects.length > 0),
+  );
   const skeletonVisible =
     visibleLayers.includes("skeleton") ||
-    (motion !== null && visibleLayers.includes("body"));
+    (motion !== null && visibleLayers.includes("body") && !bodyReady);
+  const bodyVisible = hasBodyMesh && bodyReady && visibleLayers.includes("body");
   const robotVisible = robot !== null && visibleLayers.includes("robot");
+  const environmentVisible = hasEnvironment && visibleLayers.includes("objects");
 
   return (
     <>
+      <PlaybackClock
+        motion={motion}
+        playback={playback}
+        onPlaybackChange={onPlaybackChange}
+      />
       <OrbitController />
       <ambientLight intensity={0.55} />
       <hemisphereLight args={[0xffffff, 0x8899aa, 1.35]} />
@@ -112,7 +174,22 @@ function StageScene({
       <GroundGrid />
       <group name="hhtools-world" rotation={[-Math.PI / 2, 0, 0]}>
         <axesHelper args={[1.2]} />
-        <SkeletonLayer motion={motion} visible={skeletonVisible} />
+        <SkeletonLayer
+          motion={motion}
+          visible={skeletonVisible}
+          playback={playback}
+        />
+        <BodyMeshLayer
+          motion={motion}
+          visible={bodyVisible}
+          playback={playback}
+          onReadyChange={publishBodyReady}
+        />
+        <EnvironmentLayer
+          motion={motion}
+          visible={environmentVisible}
+          playback={playback}
+        />
         <RobotLayer robot={robot} visible={robotVisible} />
       </group>
     </>
@@ -122,10 +199,14 @@ function StageScene({
 export function StageCanvas({
   motion,
   robot = null,
+  playback,
+  onPlaybackChange,
   visibleLayers,
 }: {
   motion: StageMotionPayload | null;
   robot?: StageRobotPayload | null;
+  playback: StagePlaybackRef;
+  onPlaybackChange?: () => void;
   visibleLayers: readonly StageLayerId[];
 }) {
   return (
@@ -150,6 +231,8 @@ export function StageCanvas({
       <StageScene
         motion={motion}
         robot={robot}
+        playback={playback}
+        onPlaybackChange={onPlaybackChange}
         visibleLayers={visibleLayers}
       />
     </Canvas>
