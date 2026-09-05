@@ -24,6 +24,7 @@ may improve spacing, rounded corners, accessibility, and narrow-screen layout.
 - [x] Synchronize Inspector/Canvas joint selection and restore robot-link hover/selected feedback.
 - [x] Keep projected calibration labels inside the Stage without collisions.
 - [x] Apply light/dark semantic tokens to Stage overlays and workflow status surfaces.
+- [x] Fit tall robot models against the actual Stage field of view and aspect ratio.
 - [x] Implement the three Batch pipelines against the existing FastAPI routes.
   - [x] Add the shared typed import, scan, job, progress, and download boundary.
   - [x] Refresh calibration on re-entry and feed completed V2M clips into the H2R draft.

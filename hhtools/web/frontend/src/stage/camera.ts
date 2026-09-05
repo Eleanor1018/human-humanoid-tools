@@ -37,11 +37,14 @@ export function combinedVisibleBounds(
   return combined;
 }
 
-export function cameraFrame(bounds: THREE.Box3 | null, fitBounds = true): {
-  target: THREE.Vector3;
-  position: THREE.Vector3;
-  span: number;
-} {
+export function cameraFrame(
+  bounds: THREE.Box3 | null,
+  fitBounds = true,
+  viewport = {
+    verticalFovRadians: THREE.MathUtils.degToRad(50),
+    aspect: 1,
+  },
+): { target: THREE.Vector3; position: THREE.Vector3; span: number } {
   if (!bounds) {
     return {
       target: DEFAULT_CAMERA_TARGET.clone(),
@@ -58,12 +61,21 @@ export function cameraFrame(bounds: THREE.Box3 | null, fitBounds = true): {
       span,
     };
   }
-  const distance = Math.max(1.35, span * 0.9);
+  const verticalHalfFov = Math.max(0.05, viewport.verticalFovRadians / 2);
+  const horizontalHalfFov = Math.atan(
+    Math.tan(verticalHalfFov) * Math.max(0.1, viewport.aspect),
+  );
+  const limitingHalfFov = Math.min(verticalHalfFov, horizontalHalfFov);
+  const distance = Math.max(
+    1.35,
+    (span * 0.5 * 1.12) / Math.sin(limitingHalfFov),
+  );
+  const offset = new THREE.Vector3(0.58, 0.44, 0.68)
+    .normalize()
+    .multiplyScalar(distance);
   return {
     target,
-    position: target.clone().add(
-      new THREE.Vector3(distance * 0.58, distance * 0.44, distance * 0.68),
-    ),
+    position: target.clone().add(offset),
     span,
   };
 }

@@ -100,7 +100,14 @@ export function StageCameraController({
       if (bounds) {
         // The old workbench fits robots and calibration precisely, but keeps
         // ordinary motion clips at its more spacious default camera distance.
-        const frame = cameraFrame(bounds, calibration || targetBounds !== null);
+        const frame = cameraFrame(bounds, calibration || targetBounds !== null, {
+          verticalFovRadians:
+            camera instanceof THREE.PerspectiveCamera
+              ? THREE.MathUtils.degToRad(camera.fov)
+              : THREE.MathUtils.degToRad(50),
+          aspect:
+            camera instanceof THREE.PerspectiveCamera ? camera.aspect : 1,
+        });
         controls.target.copy(frame.target);
         camera.position.copy(frame.position);
         controls.minDistance = calibration ? Math.max(0.28, frame.span * 0.12) : 0;

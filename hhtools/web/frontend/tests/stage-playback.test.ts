@@ -325,6 +325,24 @@ test("frames only visible Stage geometry", () => {
   );
 });
 
+test("fits tall robot bounds within the limiting camera field of view", () => {
+  const bounds = new THREE.Box3(
+    new THREE.Vector3(-0.4, -0.4, 0),
+    new THREE.Vector3(0.4, 0.4, 2.5),
+  );
+  const verticalFovRadians = THREE.MathUtils.degToRad(50);
+  const frame = cameraFrame(bounds, true, {
+    verticalFovRadians,
+    aspect: 0.8,
+  });
+  const horizontalHalfFov = Math.atan(Math.tan(verticalFovRadians / 2) * 0.8);
+  const radius = bounds.getSize(new THREE.Vector3()).length() / 2;
+  assert.ok(
+    frame.position.distanceTo(frame.target) * Math.sin(horizontalHalfFov) >
+      radius,
+  );
+});
+
 test("projects the original Motion and workflow layer defaults", () => {
   const skeletonOnly = motion({ body_mesh: { available: false } });
   assert.deepEqual(
