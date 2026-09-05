@@ -54,6 +54,22 @@ export interface MotionLibraryLinkResult {
   readonly motions_library_root: string;
 }
 
+export interface MotionLibraryRemoveResult {
+  readonly removed: string;
+}
+
+/** List only folders owned by the managed library; bundled assets are immutable. */
+export function managedMotionLibraryFolders(
+  entries: readonly MotionLibraryEntry[],
+): readonly string[] {
+  const folders = new Set<string>();
+  for (const entry of entries) {
+    const label = entry.folder_label?.trim();
+    if (entry.origin === "link" && label) folders.add(label);
+  }
+  return [...folders].sort((left, right) => left.localeCompare(right));
+}
+
 /** Full result emitted by `/api/motion/load_library` or `/api/motion/upload`. */
 export interface MotionPayload extends StageMotionPayload {
   readonly name: string;
@@ -136,6 +152,20 @@ export function linkMotionLibraryPath(
       body: JSON.stringify({ path }),
       signal: options.signal,
     },
+    options.fetcher,
+  );
+}
+
+/** Remove one backend-owned folder without ever targeting bundled assets. */
+export function removeMotionLibraryFolder(
+  folderLabel: string,
+  options: { signal?: AbortSignal; fetcher?: Fetcher } = {},
+): Promise<MotionLibraryRemoveResult> {
+  const normalized = folderLabel.trim();
+  if (!normalized) throw new Error("Select a managed Motion Library folder.");
+  return requestJson<MotionLibraryRemoveResult>(
+    `/api/library/link/${encodeURIComponent(normalized)}`,
+    { method: "DELETE", signal: options.signal },
     options.fetcher,
   );
 }

@@ -63,6 +63,17 @@ export function appendUniqueEntries(
   return next;
 }
 
+/** Remove entries invalidated with a managed folder while preserving bundled assets. */
+export function withoutManagedFolder(
+  entries: readonly MotionLibraryEntry[],
+  folderLabel: string,
+): readonly MotionLibraryEntry[] {
+  return entries.filter(
+    (entry) =>
+      entry.folder_label !== folderLabel || entry.origin === "assets",
+  );
+}
+
 export function suggestedBackend(
   entries: readonly MotionLibraryEntry[],
 ): BatchBackend | undefined {
@@ -106,4 +117,3 @@ export function uploadFileKey(file: UploadFile | File): string {
   const path = upload._relpath || upload.webkitRelativePath || upload.name;
   return `${path}:${upload.size}:${upload.lastModified}`;
 }
-

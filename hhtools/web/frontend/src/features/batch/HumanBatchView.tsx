@@ -1,4 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import { Button } from "@/components/ui/button";
 import { WorkflowStep } from "@/components/WorkflowSteps";
@@ -65,17 +70,20 @@ function invalidPositive(label: string, value: string): string | null {
 export function HumanBatchView({
   library,
   robots,
+  entries,
+  onEntriesChange,
   catalogError,
 }: {
   library: readonly MotionLibraryEntry[];
   robots: readonly RobotSummary[];
+  entries: readonly MotionLibraryEntry[];
+  onEntriesChange(entries: readonly MotionLibraryEntry[]): void;
   catalogError?: string | null;
 }) {
   const humanLibrary = useMemo(
     () => library.filter((entry) => entry.asset_kind !== "robot_trajectory"),
     [library],
   );
-  const [entries, setEntries] = useState<readonly MotionLibraryEntry[]>([]);
   const [librarySelection, setLibrarySelection] = useState<ReadonlySet<string>>(new Set());
   const [libraryQuery, setLibraryQuery] = useState("");
   const [robotChoice, setRobotChoice] = useState("");
@@ -89,6 +97,8 @@ export function HumanBatchView({
   const [notice, setNotice] = useState("");
   const [error, setError] = useState<string | null>(null);
   const operation = useRef<AbortController | null>(null);
+  const entriesRef = useRef(entries);
+  entriesRef.current = entries;
   const busy = action !== null;
 
   const referenceGroups = useMemo(() => {
@@ -138,9 +148,10 @@ export function HumanBatchView({
   }
 
   function addEntries(incoming: readonly MotionLibraryEntry[]): void {
-    const next = appendUniqueEntries(entries, incoming);
-    const added = next.length - entries.length;
-    setEntries(next);
+    const current = entriesRef.current;
+    const next = appendUniqueEntries(current, incoming);
+    const added = next.length - current.length;
+    onEntriesChange(next);
     setNotice(`${added} added · ${incoming.length - added} duplicates skipped`);
     const backend = suggestedBackend(incoming);
     if (backend) setSettings((current) => ({ ...current, backend }));
@@ -215,8 +226,10 @@ export function HumanBatchView({
     .join("|");
   const checksAreCurrent = checkedReferenceKey === referenceKey;
   const missingReferences = checks.filter((check) => check.status !== "ready");
-  const disabledReason = action === "run"
-    ? "A batch task is running."
+  const disabledReason = busy
+    ? action === "run"
+      ? "A batch task is running."
+      : "Finish the current Batch operation first."
     : !entries.length
       ? "Add at least one motion."
       : !robot
@@ -297,11 +310,13 @@ export function HumanBatchView({
             kind="human"
             busy={busy}
             onRemove={(key) => {
-              setEntries((current) => current.filter((entry) => entryKey(entry) !== key));
+              onEntriesChange(
+                entriesRef.current.filter((entry) => entryKey(entry) !== key),
+              );
               resetRunResult();
             }}
             onClear={() => {
-              setEntries([]);
+              onEntriesChange([]);
               resetRunResult();
             }}
           />

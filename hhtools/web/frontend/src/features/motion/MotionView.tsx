@@ -11,6 +11,8 @@ import {
   getMotionLibrary,
   linkMotionLibraryPath,
   loadMotionLibraryEntry,
+  managedMotionLibraryFolders,
+  removeMotionLibraryFolder,
   setMotionLibraryRoot,
   toStageMotionPayload,
   uploadMotion,
@@ -109,18 +111,27 @@ async function chooseServerDirectory(message: string, current = ""): Promise<str
 export function MotionView({
   currentMotion,
   onMotionLoaded,
+  humanBatchEntries = [],
+  onAddToHumanBatch,
+  onRemoveHumanBatchFolder,
 }: {
   /** App-owned stable input; failed replacements leave it untouched. */
   currentMotion?: StageMotionPayload | null;
   /** App publishes this payload to the shared R3F Stage. */
   onMotionLoaded?: (motion: StageMotionPayload | null) => void;
+  /** App-owned H2R Batch draft; Motion only requests additions. */
+  humanBatchEntries?: readonly MotionLibraryEntry[];
+  onAddToHumanBatch?: (entry: MotionLibraryEntry) => void;
+  onRemoveHumanBatchFolder?: (folderLabel: string) => void;
 }) {
   const [profile, setProfile] = useState<MotionProfile>("mimic");
   const [entries, setEntries] = useState<readonly MotionLibraryEntry[]>([]);
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState<"all" | MotionCategory>("all");
   const [loadingLibrary, setLoadingLibrary] = useState(true);
-  const [libraryAction, setLibraryAction] = useState<"root" | "link" | null>(null);
+  const [libraryAction, setLibraryAction] = useState<"root" | "link" | "remove" | null>(null);
+  const [managedFolder, setManagedFolder] = useState("");
+  const [pendingFolderRemoval, setPendingFolderRemoval] = useState<string | null>(null);
   const [libraryRoot, setLibraryRoot] = useState("");
   const [loadingKey, setLoadingKey] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
@@ -132,6 +143,22 @@ export function MotionView({
   const folderInput = useRef<HTMLInputElement | null>(null);
   const selected = profiles.find((item) => item.id === profile) ?? profiles[0];
   const selectedKey = currentMotion?.library_entry?.source_path ?? null;
+
+  const batchPaths = useMemo(
+    () => new Set(humanBatchEntries.map((entry) => entry.source_path)),
+    [humanBatchEntries],
+  );
+  const managedFolders = useMemo(
+    () => managedMotionLibraryFolders(entries),
+    [entries],
+  );
+  const loadedBatchEntry = useMemo(() => {
+    if (!selectedKey) return null;
+    const catalogEntry = entries.find((entry) => entry.source_path === selectedKey);
+    if (catalogEntry) return catalogEntry;
+    const snapshot = currentMotion?.library_entry as MotionLibraryEntry | undefined;
+    return snapshot?.folder_label && snapshot.sequence_id ? snapshot : null;
+  }, [currentMotion?.library_entry, entries, selectedKey]);
 
   const refreshLibrary = useCallback(() => {
     libraryRequest.current?.abort();
@@ -166,6 +193,27 @@ export function MotionView({
   useEffect(() => {
     folderInput.current?.setAttribute("webkitdirectory", "");
   }, []);
+
+  useEffect(() => {
+    if (!managedFolders.includes(managedFolder)) {
+      setManagedFolder(managedFolders[0] ?? "");
+    }
+    if (
+      pendingFolderRemoval &&
+      !managedFolders.includes(pendingFolderRemoval)
+    ) {
+      setPendingFolderRemoval(null);
+    }
+  }, [managedFolder, managedFolders, pendingFolderRemoval]);
+
+  const addToHumanBatch = useCallback(
+    (entry: MotionLibraryEntry) => {
+      if (entry.asset_kind === "robot_trajectory" || batchPaths.has(entry.source_path)) return;
+      onAddToHumanBatch?.(entry);
+      setStatus(`Added ${entryLabel(entry)} to H2R Batch`);
+    },
+    [batchPaths, onAddToHumanBatch],
+  );
 
   const visibleEntries = useMemo(() => {
     const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
@@ -305,6 +353,46 @@ export function MotionView({
     [libraryAction, libraryRoot, loadingKey, refreshLibrary],
   );
 
+  const removeManagedFolder = useCallback(async () => {
+    if (
+      !managedFolder ||
+      !managedFolders.includes(managedFolder) ||
+      pendingFolderRemoval !== managedFolder ||
+      libraryAction ||
+      loadingKey
+    ) {
+      return;
+    }
+    libraryActionRequest.current?.abort();
+    const request = new AbortController();
+    libraryActionRequest.current = request;
+    setLibraryAction("remove");
+    setError(null);
+    try {
+      const result = await removeMotionLibraryFolder(managedFolder, {
+        signal: request.signal,
+      });
+      if (request.signal.aborted) return;
+      setStatus(`Removed ${result.removed} from Motion Library`);
+      onRemoveHumanBatchFolder?.(result.removed);
+      setManagedFolder("");
+      setPendingFolderRemoval(null);
+      refreshLibrary();
+    } catch (reason) {
+      if (!request.signal.aborted) setError(errorMessage(reason));
+    } finally {
+      if (!request.signal.aborted) setLibraryAction(null);
+    }
+  }, [
+    libraryAction,
+    loadingKey,
+    managedFolder,
+    managedFolders,
+    pendingFolderRemoval,
+    refreshLibrary,
+    onRemoveHumanBatchFolder,
+  ]);
+
   return (
     <InspectorPage title="Motion">
       <div className="flex shrink-0 flex-col gap-2.5">
@@ -359,9 +447,32 @@ export function MotionView({
             }}
           />
         </ImportDropzone>
-        <p className="min-h-4 text-xs text-muted-foreground" aria-live="polite">
-          {status || ""}
-        </p>
+        <div className="flex min-h-[30px] items-center gap-2">
+          <p
+            className="min-w-0 flex-1 truncate text-xs text-muted-foreground"
+            aria-live="polite"
+            title={status || undefined}
+          >
+            {status || ""}
+          </p>
+          {loadedBatchEntry &&
+            loadedBatchEntry.asset_kind !== "robot_trajectory" &&
+            onAddToHumanBatch && (
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={
+                  Boolean(loadingKey) ||
+                  batchPaths.has(loadedBatchEntry.source_path)
+                }
+                onClick={() => addToHumanBatch(loadedBatchEntry)}
+              >
+                {batchPaths.has(loadedBatchEntry.source_path)
+                  ? "In H2R Batch"
+                  : "Add loaded to Batch"}
+              </Button>
+            )}
+        </div>
       </div>
 
       <section
@@ -433,6 +544,65 @@ export function MotionView({
             {libraryAction === "link" ? "Linking..." : "Link directory"}
           </Button>
         </div>
+        {managedFolders.length > 0 && (
+          <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-1.5">
+            <select
+              className={fieldClass}
+              aria-label="Managed Motion Library folder"
+              value={managedFolder}
+              disabled={loadingLibrary || libraryAction !== null}
+              onChange={(event) => {
+                setManagedFolder(event.currentTarget.value);
+                setPendingFolderRemoval(null);
+              }}
+            >
+              {managedFolders.map((folder) => (
+                <option key={folder} value={folder}>
+                  {folder}
+                </option>
+              ))}
+            </select>
+            <Button
+              size="sm"
+              disabled={
+                loadingLibrary ||
+                Boolean(loadingKey) ||
+                libraryAction !== null ||
+                !managedFolder
+              }
+              title="Remove a linked or uploaded folder from this managed library"
+              onClick={() => setPendingFolderRemoval(managedFolder)}
+            >
+              Remove folder
+            </Button>
+            {pendingFolderRemoval === managedFolder && (
+              <div className="col-span-2 grid gap-2 rounded-md border border-[#efcccc] bg-[#fff5f4] p-2.5 text-[11px] leading-relaxed text-[#8c2929]">
+                <p className="[overflow-wrap:anywhere]">
+                  Remove <strong>{managedFolder}</strong> from this managed
+                  library? External linked source data is kept; files copied
+                  into the managed folder are deleted.
+                </p>
+                <div className="grid grid-cols-2 gap-2">
+                  <Button
+                    size="sm"
+                    disabled={libraryAction !== null}
+                    onClick={() => setPendingFolderRemoval(null)}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    size="sm"
+                    className="border-[#c53c3c] text-[#8c2929] hover:border-[#8c2929] hover:bg-[#ffe9e7]"
+                    disabled={libraryAction !== null}
+                    onClick={() => void removeManagedFolder()}
+                  >
+                    {libraryAction === "remove" ? "Removing..." : "Confirm remove"}
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
         {error && (
           <p
             className="rounded-md border border-[#efcccc] bg-[#fff5f4] px-2.5 py-2 text-[11px] leading-relaxed break-words text-[#8c2929]"
@@ -463,15 +633,22 @@ export function MotionView({
                 const active = selectedKey === key;
                 const busy = loadingKey === key;
                 const motionCategory = entryCategory(entry);
+                const inBatch = batchPaths.has(entry.source_path);
+                const canAddToBatch =
+                  entry.asset_kind !== "robot_trajectory" &&
+                  Boolean(onAddToHumanBatch);
                 return (
-                  <li key={key} className="min-w-0 list-none">
+                  <li
+                    key={key}
+                    className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-1 list-none"
+                  >
                     <button
                       type="button"
                       className="grid min-h-12 w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-md border border-transparent bg-transparent px-2 py-1.5 text-left text-foreground transition-colors hover:border-border-subtle hover:bg-background focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring data-[active=true]:border-primary data-[active=true]:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
                       data-active={active}
                       aria-current={active ? "true" : undefined}
                       aria-label={`Load motion ${entryLabel(entry)}`}
-                      disabled={Boolean(loadingKey) && !busy}
+                      disabled={Boolean(loadingKey)}
                       onClick={() => loadEntry(entry)}
                     >
                       <span
@@ -493,6 +670,19 @@ export function MotionView({
                         {busy ? "Loading…" : active ? "Loaded" : "Load"}
                       </span>
                     </button>
+                    {canAddToBatch && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="w-[62px] px-1.5"
+                        aria-label={`Add ${entryLabel(entry)} to H2R Batch`}
+                        title={inBatch ? "Already in H2R Batch" : "Add to H2R Batch"}
+                        disabled={Boolean(loadingKey) || inBatch}
+                        onClick={() => addToHumanBatch(entry)}
+                      >
+                        {inBatch ? "Added" : "+ Batch"}
+                      </Button>
+                    )}
                   </li>
                 );
               })}

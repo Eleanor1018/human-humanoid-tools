@@ -21,8 +21,49 @@ const {
   previewDatasetRobot,
   uploadDataset,
 } = await import("../src/features/analysis/api.ts");
-const { linkMotionLibraryPath, setMotionLibraryRoot } =
-  await import("../src/features/motion/api.ts");
+const {
+  linkMotionLibraryPath,
+  managedMotionLibraryFolders,
+  removeMotionLibraryFolder,
+  setMotionLibraryRoot,
+  uploadMotion,
+} = await import("../src/features/motion/api.ts");
+
+test("Motion import uploads a GVHMR result with the mimic profile", async () => {
+  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  const file = new File(["result"], "walk.pt", {
+    type: "application/octet-stream",
+  });
+  const result = await uploadMotion([file], {
+    profile: "mimic",
+    pollIntervalMs: 0,
+    fetcher: async (input, init) => {
+      calls.push({ url: String(input), init });
+      if (calls.length === 1) return Response.json({ job_id: "motion-import" });
+      return Response.json({
+        id: "motion-import",
+        kind: "motion_link",
+        status: "done",
+        progress: 1,
+        result: {
+          name: "walk",
+          token: "motion-token",
+          positions: [[[0, 0, 0]]],
+          parent_indices: [-1],
+          body_mesh: { available: true },
+          library_entry: { source_path: "/library/walk.pt" },
+        },
+      });
+    },
+  });
+
+  assert.equal(calls[0].url, "/api/motion/upload?profile=mimic");
+  assert.equal((calls[0].init?.body as FormData).get("files") instanceof File, true);
+  assert.equal(calls[1].url, "/api/job/motion-import");
+  assert.equal(result.token, "motion-token");
+  assert.equal(result.body_mesh?.available, true);
+  assert.equal(result.library_entry?.source_path, "/library/walk.pt");
+});
 
 test("H2R preserves the selected backend and polls its retarget job", async () => {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
@@ -208,14 +249,22 @@ test("workflow export URLs encode tokens and requested options", () => {
   });
 
   const r2r = new URL(
-    r2rExportUrl("r2r token", { format: "csv", fps: 30, csvHeader: false }),
+    r2rExportUrl("r2r token", {
+      format: "csv",
+      fps: 30,
+      csvHeader: false,
+      start: 0.5,
+      end: 4,
+    }),
     "http://localhost",
   );
   assert.equal(r2r.pathname, "/api/export/r2r%20token");
   assert.deepEqual(Object.fromEntries(r2r.searchParams), {
     fmt: "csv",
-    csv_header: "false",
     fps: "30",
+    csv_header: "false",
+    t_start: "0.5",
+    t_end: "4",
   });
 });
 
@@ -384,4 +433,30 @@ test("motion library management uses the existing settings and link routes", asy
   assert.deepEqual(JSON.parse(String(calls[0].init?.body)), { root: "/data/library" });
   assert.equal(calls[1].url, "/api/library/link");
   assert.deepEqual(JSON.parse(String(calls[1].init?.body)), { path: "/datasets/AMASS" });
+});
+
+test("motion library removal targets one encoded managed folder", async () => {
+  let request: { url: string; init?: RequestInit } | undefined;
+  const result = await removeMotionLibraryFolder("My linked motions", {
+    fetcher: async (input, init) => {
+      request = { url: String(input), init };
+      return Response.json({ removed: "My linked motions" });
+    },
+  });
+  assert.equal(request?.url, "/api/library/link/My%20linked%20motions");
+  assert.equal(request?.init?.method, "DELETE");
+  assert.equal(result.removed, "My linked motions");
+  assert.throws(() => removeMotionLibraryFolder("   "), /Select a managed/);
+});
+
+test("motion library removal choices never include bundled asset folders", () => {
+  assert.deepEqual(
+    managedMotionLibraryFolders([
+      { source_path: "/assets/AMASS/walk.npz", folder_label: "AMASS", origin: "assets" },
+      { source_path: "/library/custom/a.bvh", folder_label: "custom", origin: "link" },
+      { source_path: "/library/custom/b.bvh", folder_label: "custom", origin: "link" },
+      { source_path: "/library/z/a.bvh", folder_label: "z-folder", origin: "link" },
+    ]),
+    ["custom", "z-folder"],
+  );
 });

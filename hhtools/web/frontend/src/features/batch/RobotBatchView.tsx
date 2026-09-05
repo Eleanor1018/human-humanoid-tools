@@ -175,8 +175,10 @@ export function RobotBatchView({
     invalidPositive("Source FPS", sourceFps) ||
     invalidPositive("Retarget FPS", settings.retargetFps) ||
     invalidPositive("Export FPS", settings.exportFps);
-  const disabledReason = action === "run"
-    ? "An R2R batch task is running."
+  const disabledReason = busy
+    ? action === "run"
+      ? "An R2R batch task is running."
+      : "Finish the current Batch operation first."
     : !entries.length
       ? "Add at least one source trajectory."
       : !sourceRobot

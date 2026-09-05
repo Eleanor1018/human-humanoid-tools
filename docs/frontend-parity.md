@@ -7,7 +7,7 @@ may improve spacing, rounded corners, accessibility, and narrow-screen layout.
 | Area | Current state | Required parity work |
 | --- | --- | --- |
 | Stage / Three.js | Mostly complete | Correct HUD family colors, availability, labels, and calibration projection |
-| Motion | Functional | Restore validation summary, Batch basket handoff, and linked-folder removal |
+| Motion | Functional | Restore the compact validation summary |
 | Robot | Functional | Restore import/load validation summary |
 | Video to Motion | Functional when GVHMR is ready | Add a real server-side running-job cancellation protocol |
 | Human to Robot | Functional | Restore comparison presets and richer input validation |
@@ -26,6 +26,7 @@ may improve spacing, rounded corners, accessibility, and narrow-screen layout.
   - [x] Load the calibrated scaled skeleton/scene before Retarget without forcing it visible.
   - [x] Show shared diagnostics and complete FPS/time/header export controls for H2R/R2R.
 - [ ] Restore remaining Motion, Robot, V2M, Analysis, and application-menu actions.
+  - [x] Share one persistent H2R Batch draft with Motion and remove managed folders safely.
   - [x] Preserve the complete registered V2M Motion payload for Stage and H2R.
   - [x] Preserve the last successful Motion while a replacement video is pending or invalid.
   - [x] Keep V2M and Batch mounted while their jobs or drafts are inactive.

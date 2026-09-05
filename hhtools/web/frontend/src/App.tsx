@@ -4,7 +4,12 @@ import { Inspector } from "./components/Inspector";
 import { Navbar } from "./components/Navbar";
 import { Sidebar } from "./components/Sidebar";
 import { MotionView } from "./features/motion/MotionView";
+import type { MotionLibraryEntry } from "./features/motion/api";
 import { BatchView } from "./features/batch/BatchView";
+import {
+  appendUniqueEntries,
+  withoutManagedFolder,
+} from "./features/batch/model";
 import { AnalysisView } from "./features/analysis/AnalysisView";
 import type { AnalysisRobotPreview } from "./features/analysis/api";
 import { RobotView } from "./features/robot/RobotView";
@@ -68,6 +73,9 @@ export function App() {
     useState<StageMotionPayload | null>(null);
   const [workspaceRobot, setWorkspaceRobot] =
     useState<StageRobotPayload | null>(null);
+  const [humanBatchEntries, setHumanBatchEntries] = useState<
+    readonly MotionLibraryEntry[]
+  >([]);
   const [analysisMotion, setAnalysisMotion] =
     useState<StageMotionPayload | null>(null);
   const [analysisRobotPreview, setAnalysisRobotPreview] =
@@ -182,6 +190,14 @@ export function App() {
     setH2rPreview(null);
     setH2rCalibrationReference(null);
     setH2rCalibrationPose(null);
+  }, []);
+  const addHumanBatchEntry = useCallback((entry: MotionLibraryEntry) => {
+    setHumanBatchEntries((current) => appendUniqueEntries(current, [entry]));
+  }, []);
+  const removeHumanBatchFolder = useCallback((folderLabel: string) => {
+    setHumanBatchEntries((current) =>
+      withoutManagedFolder(current, folderLabel),
+    );
   }, []);
   const publishR2rSourceRobot = useCallback((robot: StageRobotPayload | null) => {
     setR2rSourceRobot(robot);
@@ -337,6 +353,9 @@ export function App() {
           <MotionView
             currentMotion={workspaceMotion}
             onMotionLoaded={publishMotion}
+            humanBatchEntries={humanBatchEntries}
+            onAddToHumanBatch={addHumanBatchEntry}
+            onRemoveHumanBatchFolder={removeHumanBatchFolder}
           />
         </div>
         <div className={activeView === "robot-assets" ? "h-full" : "hidden"}>
@@ -380,7 +399,10 @@ export function App() {
           />
         </div>
         <div className={activeView === "batch" ? "h-full" : "hidden"}>
-          <BatchView />
+          <BatchView
+            humanEntries={humanBatchEntries}
+            onHumanEntriesChange={setHumanBatchEntries}
+          />
         </div>
         <div className={activeView === "dataset-viz" ? "h-full" : "hidden"}>
           <AnalysisView

@@ -1,4 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 
 import { InspectorPage } from "@/components/Inspector";
 import { SegmentedControl } from "@/components/SegmentedControl";
@@ -31,7 +36,13 @@ function errorMessage(error: unknown): string {
  * Batch owns one lightweight catalog snapshot and three independent drafts.
  * Hidden modes remain mounted so switching workflows never destroys a queue or job.
  */
-export function BatchView() {
+export function BatchView({
+  humanEntries,
+  onHumanEntriesChange,
+}: {
+  humanEntries: readonly MotionLibraryEntry[];
+  onHumanEntriesChange(entries: readonly MotionLibraryEntry[]): void;
+}) {
   const [mode, setMode] = useState<BatchMode>("h2r");
   const [motions, setMotions] = useState<readonly MotionLibraryEntry[]>([]);
   const [robots, setRobots] = useState<readonly RobotSummary[]>([]);
@@ -92,7 +103,13 @@ export function BatchView() {
         <VideoBatchView />
       </div>
       <div hidden={mode !== "h2r"}>
-        <HumanBatchView library={motions} robots={robots} catalogError={catalogError} />
+        <HumanBatchView
+          library={motions}
+          robots={robots}
+          entries={humanEntries}
+          onEntriesChange={onHumanEntriesChange}
+          catalogError={catalogError}
+        />
       </div>
       <div hidden={mode !== "r2r"}>
         <RobotBatchView robots={robots} catalogError={catalogError} />
