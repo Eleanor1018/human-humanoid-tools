@@ -9,6 +9,10 @@ import {
   CalibrationMappingOverlay,
   type CalibrationMappingOverlayHandle,
 } from "./CalibrationMappingOverlay";
+import {
+  DEFAULT_CALIBRATION_DISPLAY,
+  type CalibrationDisplayOptions,
+} from "./calibrationDisplay";
 import { prepareReferenceSkeleton } from "./referenceSkeleton";
 import { StageViewMenu } from "./StageViewMenu";
 import { StageCanvas } from "./StageCanvas";
@@ -20,6 +24,7 @@ import {
   r2rLayerAvailability,
   r2rPlaybackTimeline,
   r2rVisibilityIdentity,
+  standardStageLayerAvailability,
   type StagePresentation,
 } from "./presentation";
 import type {
@@ -38,6 +43,7 @@ export function Stage({
   robotTrajectory = null,
   presentation = "empty",
   r2r = null,
+  calibrationDisplay = DEFAULT_CALIBRATION_DISPLAY,
 }: {
   motion?: StageMotionPayload | null;
   scaledMotion?: StageMotionPayload | null;
@@ -45,6 +51,7 @@ export function Stage({
   robotTrajectory?: StageRobotTrajectoryPayload | null;
   presentation?: StagePresentation;
   r2r?: StageR2rPresentationPayload | null;
+  calibrationDisplay?: CalibrationDisplayOptions;
 }) {
   const [visibleLayers, setVisibleLayers] = useState<StageLayerId[]>([]);
   const [r2rVisibleLayers, setR2rVisibleLayers] = useState<StageLayerId[]>([]);
@@ -76,13 +83,11 @@ export function Stage({
   const playbackSnapshot = playbackView.owner === playback
     ? playbackView.value
     : playback.current;
-  const hasEnvironment = Boolean(
-    motion?.terrain || (motion?.objects && motion.objects.length > 0),
-  );
-  const hasScaledEnvironment = Boolean(
-    scaledMotion?.terrain ||
-      (scaledMotion?.objects && scaledMotion.objects.length > 0),
-  );
+  const availability = standardStageLayerAvailability({
+    motion,
+    scaledMotion,
+    robot,
+  });
   const calibrating = r2r
     ? r2r.phase === "calibration"
     : presentation.endsWith("-calibration");
@@ -156,18 +161,21 @@ export function Stage({
         playback={playback}
         onPlaybackChange={publishPlayback}
         visibleLayers={activeLayers}
-        robotOpacity={calibrating ? 0.72 : 1}
+        robotOpacity={calibrating ? calibrationDisplay.robotOpacity : 1}
         cameraRevision={cameraRevision}
         followRobot={
           presentation === "h2r-result" && activeLayers.includes("robot")
         }
         calibration={calibrating}
+        calibrationDisplay={calibrationDisplay}
         mappingOverlay={mappingOverlay}
       />
       <CalibrationMappingOverlay
         ref={mappingOverlay}
         mappings={calibrationMappings}
         visible={calibrating}
+        labels={calibrationDisplay.labels}
+        mappingLines={calibrationDisplay.mappingLines}
       />
       <StageEmpty
         visible={
@@ -179,10 +187,7 @@ export function Stage({
       <StageViewMenu
         value={activeLayers}
         onValueChange={setActiveLayers}
-        robotAvailable={robot !== null}
-        environmentAvailable={hasEnvironment}
-        scaledMotionAvailable={Boolean(scaledMotion?.positions.length)}
-        scaledEnvironmentAvailable={hasScaledEnvironment}
+        availability={availability}
         calibration={calibrating}
         r2rAvailability={r2rAvailability}
       />

@@ -1,9 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Field, fieldClass } from "@/components/Field";
+import { CalibrationEditor } from "@/components/CalibrationEditor";
+import { normalizeCalibrationValues } from "@/components/calibrationEditorState";
 import { InspectorPage } from "@/components/Inspector";
 import { Button } from "@/components/ui/button";
 import { WorkflowPipeline, WorkflowStep } from "@/components/WorkflowSteps";
+import {
+  DEFAULT_CALIBRATION_DISPLAY,
+  type CalibrationDisplayOptions,
+} from "@/stage/calibrationDisplay";
 
 import {
   getR2rCalibrationSession,
@@ -40,7 +46,8 @@ type BusyAction =
   | "source-robot"
   | "source-trajectory"
   | "target-robot"
-  | "calibration"
+  | "calibration-open"
+  | "calibration-save"
   | "retarget";
 
 export interface RobotToRobotViewProps {
@@ -54,6 +61,8 @@ export interface RobotToRobotViewProps {
   onResultLoaded?: (result: R2rRetargetResult | null) => void;
   onCalibrationReference?: (reference: R2rCalibrationReference | null) => void;
   onTargetPose?: (pose: R2rCalibrationPose | null) => void;
+  calibrationDisplay?: CalibrationDisplayOptions;
+  onCalibrationDisplayChange?: (value: CalibrationDisplayOptions) => void;
 }
 
 function errorMessage(error: unknown): string {
@@ -135,6 +144,8 @@ export function RobotToRobotView({
   onResultLoaded,
   onCalibrationReference,
   onTargetPose,
+  calibrationDisplay: controlledCalibrationDisplay,
+  onCalibrationDisplayChange,
 }: RobotToRobotViewProps) {
   const [robots, setRobots] = useState<readonly RobotSummary[]>([]);
   const [entries, setEntries] = useState<readonly MotionLibraryEntry[]>([]);
@@ -161,6 +172,16 @@ export function RobotToRobotView({
   const [checkingCalibration, setCheckingCalibration] = useState(false);
   const [calibration, setCalibration] = useState<R2rCalibrationSession | null>(null);
   const [jointQ, setJointQ] = useState<Record<string, number>>({});
+  const [calibrationBaseline, setCalibrationBaseline] = useState<
+    Record<string, number>
+  >({});
+  const [localCalibrationDisplay, setLocalCalibrationDisplay] = useState(
+    DEFAULT_CALIBRATION_DISPLAY,
+  );
+  const calibrationDisplay =
+    controlledCalibrationDisplay ?? localCalibrationDisplay;
+  const publishCalibrationDisplay =
+    onCalibrationDisplayChange ?? setLocalCalibrationDisplay;
   const [calibrationPath, setCalibrationPath] = useState<string | null>(null);
   const [busy, setBusy] = useState<BusyAction | null>(null);
   const [progress, setProgress] = useState(0);
@@ -241,6 +262,7 @@ export function RobotToRobotView({
     setCalibration(null);
     referenceCallback.current?.(null);
     setJointQ({});
+    setCalibrationBaseline({});
     setCalibrationPath(null);
     setCalibrated(false);
     setCheckingCalibration(false);
@@ -302,9 +324,9 @@ export function RobotToRobotView({
     () => entries.find((entry) => entry.source_path === trajectoryChoice) ?? null,
     [entries, trajectoryChoice],
   );
-  const activeStep = retargetResult
-    ? 4
-    : calibrated
+  const activeStep = calibration
+    ? 3
+    : retargetResult || calibrated
       ? 4
       : targetRobot
         ? 3
@@ -313,17 +335,15 @@ export function RobotToRobotView({
           : sourceRobot
             ? 1
             : 0;
-  const blockedReason = !sourceRobot
-    ? "Load the source robot first."
-    : !sourceResult
-      ? "Load a source trajectory first."
-      : !targetRobot
-        ? "Load the target robot first."
-        : calibration
-          ? "Save the open calibration before retargeting."
-        : !calibrated
-          ? "Save calibration for this robot pair first."
-          : null;
+  const blockedReason = (() => {
+    if (!sourceRobot) return "Load the source robot first.";
+    if (!sourceResult) return "Load a source trajectory first.";
+    if (!targetRobot) return "Load the target robot first.";
+    if (calibration) return "Save the open calibration before retargeting.";
+    if (checkingCalibration) return "Checking calibration…";
+    if (!calibrated) return "Save calibration for this robot pair first.";
+    return null;
+  })();
 
   function beginAction(action: BusyAction): AbortController {
     actionRequest.current?.abort();
@@ -347,7 +367,7 @@ export function RobotToRobotView({
   }
 
   async function loadSourceRobot(): Promise<void> {
-    if (!sourceChoice) return;
+    if (!sourceChoice || calibration) return;
     const request = beginAction("source-robot");
     setStatus(`Loading source robot ${sourceChoice}…`);
     try {
@@ -367,7 +387,7 @@ export function RobotToRobotView({
   }
 
   async function loadTargetRobot(): Promise<void> {
-    if (!targetChoice) return;
+    if (!targetChoice || calibration) return;
     const request = beginAction("target-robot");
     setStatus(`Loading target robot ${targetChoice}…`);
     try {
@@ -387,7 +407,7 @@ export function RobotToRobotView({
   async function receiveSourceResult(
     load: (request: AbortController) => Promise<R2rSourceResult>,
   ): Promise<void> {
-    if (!sourceRobot) return;
+    if (!sourceRobot || calibration) return;
     const request = beginAction("source-trajectory");
     setStatus("Loading source trajectory…");
     try {
@@ -452,8 +472,8 @@ export function RobotToRobotView({
   }
 
   async function openCalibration(): Promise<void> {
-    if (!sourceRobot || !targetRobot) return;
-    const request = beginAction("calibration");
+    if (!sourceRobot || !targetRobot || calibration) return;
+    const request = beginAction("calibration-open");
     setStatus("Loading calibration…");
     try {
       const session = await getR2rCalibrationSession(
@@ -462,8 +482,13 @@ export function RobotToRobotView({
         { signal: request.signal },
       );
       if (request.signal.aborted) return;
+      const initial = normalizeCalibrationValues(
+        session.joint_limits,
+        session.joint_q,
+      );
       setCalibration(session);
-      setJointQ({ ...session.joint_q });
+      setJointQ(initial);
+      setCalibrationBaseline(initial);
       clearRetargetResult();
       referenceCallback.current?.(session.reference);
       setStatus(`Calibration ready: ${session.reference_name}`);
@@ -478,20 +503,23 @@ export function RobotToRobotView({
     if (!sourceRobot || !targetRobot || !calibration) return;
     calibrationStatusRequest.current?.abort();
     setCheckingCalibration(false);
-    const request = beginAction("calibration");
+    const request = beginAction("calibration-save");
     setStatus("Saving calibration…");
     try {
+      const safeJointQ = normalizeCalibrationValues(
+        calibration.joint_limits,
+        jointQ,
+      );
       const response = await saveR2rCalibration(
         targetRobot.name,
         sourceRobot.name,
-        jointQ,
+        safeJointQ,
         { signal: request.signal },
       );
       if (request.signal.aborted) return;
       setCalibrationPath(response.path);
       setCalibrated(true);
-      setCalibration(null);
-      referenceCallback.current?.(null);
+      closeCalibration();
       clearRetargetResult();
       setStatus("Calibration saved.");
     } catch (reason) {
@@ -499,6 +527,16 @@ export function RobotToRobotView({
     } finally {
       finishAction(request);
     }
+  }
+
+  function closeCalibration(cancelled = false): void {
+    setCalibration(null);
+    setJointQ({});
+    setCalibrationBaseline({});
+    referenceCallback.current?.(null);
+    poseCallback.current?.(null);
+    poseWasActive.current = false;
+    if (cancelled) setStatus("Calibration cancelled.");
   }
 
   async function retarget(): Promise<void> {
@@ -551,7 +589,7 @@ export function RobotToRobotView({
             robots={robots}
             value={sourceChoice}
             loaded={sourceRobot}
-            disabled={busy !== null}
+            disabled={busy !== null || calibration !== null}
             onChange={setSourceChoice}
             onLoad={() => void loadSourceRobot()}
           />
@@ -563,7 +601,7 @@ export function RobotToRobotView({
               <select
                 className={fieldClass}
                 value={trajectoryChoice}
-                disabled={!sourceRobot || busy !== null || entries.length === 0}
+                disabled={!sourceRobot || busy !== null || calibration !== null || entries.length === 0}
                 onChange={(event) => setTrajectoryChoice(event.target.value)}
               >
                 {!entries.length && <option value="">No robot trajectories available</option>}
@@ -575,15 +613,15 @@ export function RobotToRobotView({
               </select>
             </Field>
             <div className="grid grid-cols-3 gap-2">
-              <Button size="sm" disabled={!sourceRobot || !selectedEntry || busy !== null} onClick={loadLibraryTrajectory}>
+              <Button size="sm" disabled={!sourceRobot || !selectedEntry || busy !== null || calibration !== null} onClick={loadLibraryTrajectory}>
                 Load from library
               </Button>
-              <Button size="sm" disabled={!sourceRobot || busy !== null} onClick={() => fileInput.current?.click()}>
+              <Button size="sm" disabled={!sourceRobot || busy !== null || calibration !== null} onClick={() => fileInput.current?.click()}>
                 Upload files
               </Button>
               <Button
                 size="sm"
-                disabled={!sourceRobot || busy !== null}
+                disabled={!sourceRobot || busy !== null || calibration !== null}
                 onClick={() => folderInput.current?.click()}
               >
                 Upload folder
@@ -616,7 +654,7 @@ export function RobotToRobotView({
                 inputMode="decimal"
                 placeholder="Use trajectory FPS"
                 value={sourceFps}
-                disabled={!sourceRobot || busy !== null}
+                disabled={!sourceRobot || busy !== null || calibration !== null}
                 onChange={(event) => setSourceFps(event.target.value)}
               />
             </Field>
@@ -629,7 +667,7 @@ export function RobotToRobotView({
             robots={robots}
             value={targetChoice}
             loaded={targetRobot}
-            disabled={busy !== null}
+            disabled={busy !== null || calibration !== null}
             onChange={setTargetChoice}
             onLoad={() => void loadTargetRobot()}
           />
@@ -637,7 +675,17 @@ export function RobotToRobotView({
 
         <WorkflowStep
           title="4. Calibration"
-          status={checkingCalibration ? "Checking…" : calibrated ? "Ready" : "Required"}
+          status={
+            calibration
+              ? busy === "calibration-save"
+                ? "Saving…"
+                : "Editing…"
+              : checkingCalibration
+                ? "Checking…"
+                : calibrated
+                  ? "Ready"
+                  : "Required"
+          }
         >
           <div className="grid gap-2.5">
             <div className="flex items-center justify-between gap-3">
@@ -652,59 +700,30 @@ export function RobotToRobotView({
                   !sourceRobot ||
                   !targetRobot ||
                   checkingCalibration ||
-                  busy !== null
+                  busy !== null ||
+                  calibration !== null
                 }
                 onClick={() => void openCalibration()}
               >
-                {calibrated ? "Edit" : "Calibrate"}
+                {calibration ? "Editing…" : calibrated ? "Edit" : "Calibrate"}
               </Button>
             </div>
             {calibration && (
-              <div className="grid max-h-52 gap-2 overflow-y-auto rounded-md border border-border-subtle bg-surface p-2">
-                {calibration.joint_limits.map((limit) => (
-                  <label
-                    key={limit.name}
-                    className="grid grid-cols-[minmax(0,1fr)_92px] items-center gap-2 text-[11px] text-foreground"
-                  >
-                    <span className="truncate" title={limit.name}>{limit.name}</span>
-                    <input
-                      className={fieldClass}
-                      type="number"
-                      step="0.01"
-                      min={limit.lower}
-                      max={limit.upper}
-                      value={jointQ[limit.name] ?? 0}
-                      disabled={busy !== null}
-                      onChange={(event) => {
-                        const value = Number(event.target.value);
-                        if (Number.isFinite(value)) {
-                          setJointQ((current) => ({ ...current, [limit.name]: value }));
-                        }
-                      }}
-                    />
-                  </label>
-                ))}
-                <div className="grid grid-cols-2 gap-2">
-                  <Button
-                    size="sm"
-                    disabled={busy !== null}
-                    onClick={() => {
-                      setCalibration(null);
-                      referenceCallback.current?.(null);
-                    }}
-                  >
-                    Cancel
-                  </Button>
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    disabled={busy !== null}
-                    onClick={() => void saveCalibration()}
-                  >
-                    Save calibration
-                  </Button>
-                </div>
-              </div>
+              <CalibrationEditor
+                limits={calibration.joint_limits}
+                value={jointQ}
+                baseline={calibrationBaseline}
+                hasSavedBaseline={Boolean(calibration.has_saved_calibration)}
+                reference={calibration.reference}
+                robot={targetRobot!}
+                display={calibrationDisplay}
+                disabled={busy !== null}
+                saving={busy === "calibration-save"}
+                onChange={setJointQ}
+                onDisplayChange={publishCalibrationDisplay}
+                onCancel={() => closeCalibration(true)}
+                onSave={() => void saveCalibration()}
+              />
             )}
             {calibrationPath && (
               <p className="truncate text-[11px] text-muted-foreground" title={calibrationPath}>
@@ -724,7 +743,7 @@ export function RobotToRobotView({
                 <select
                   className={fieldClass}
                   value={backend}
-                  disabled={busy !== null}
+                  disabled={busy !== null || calibration !== null}
                   onChange={(event) => {
                     const value = event.target.value as R2rBackend;
                     setBackend(value);
@@ -741,7 +760,7 @@ export function RobotToRobotView({
                   inputMode="decimal"
                   placeholder="Trajectory FPS"
                   value={retargetFps}
-                  disabled={busy !== null}
+                  disabled={busy !== null || calibration !== null}
                   onChange={(event) => {
                     setRetargetFps(event.target.value);
                     clearRetargetResult();

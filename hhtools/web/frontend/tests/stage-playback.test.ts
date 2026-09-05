@@ -35,12 +35,15 @@ import {
   type StagePlaybackState,
 } from "../src/stage/playback.ts";
 import {
+  applyStageMenuValue,
   defaultR2rStageLayers,
   defaultStageLayers,
+  projectStageMenuValue,
   projectR2rStageVisibility,
   r2rLayerAvailability,
   r2rPlaybackTimeline,
   r2rVisibilityIdentity,
+  standardStageLayerAvailability,
 } from "../src/stage/presentation.ts";
 import type {
   StageMotionPayload,
@@ -76,7 +79,7 @@ function robot(name: string): StageRobotPayload {
   return {
     name,
     display_name: name,
-    links: [],
+    links: ["base"],
     link_transforms_zero: {},
   };
 }
@@ -349,12 +352,7 @@ test("projects the original Motion and workflow layer defaults", () => {
       mode: "h2r",
       motion: skeletonOnly,
       scaledMotion: motion(),
-      robot: {
-        name: "robot",
-        display_name: "Robot",
-        links: [],
-        link_transforms_zero: {},
-      },
+      robot: robot("robot"),
       robotTrajectory: { frames: [{ links: {} }] },
     }),
     ["skeleton", "scaled-skeleton", "robot"],
@@ -370,15 +368,65 @@ test("projects the original Motion and workflow layer defaults", () => {
       scaledMotion: motion({
         terrain: { vertices: [[0, 0, 0]], faces: [[0, 0, 0]] },
       }),
-      robot: {
-        name: "robot",
-        display_name: "Robot",
-        links: [],
-        link_transforms_zero: {},
-      },
+      robot: robot("robot"),
       robotTrajectory: { frames: [{ links: {} }] },
     }),
     ["skeleton", "scaled-skeleton", "scaled-scene", "robot"],
+  );
+});
+
+test("derives Stage control availability from renderable resources", () => {
+  assert.deepEqual(
+    standardStageLayerAvailability({
+      motion: null,
+      scaledMotion: null,
+      robot: null,
+    }),
+    {
+      skeleton: false,
+      body: false,
+      objects: false,
+      "scaled-skeleton": false,
+      "scaled-scene": false,
+      robot: false,
+    },
+  );
+
+  assert.deepEqual(
+    standardStageLayerAvailability({
+      motion: motion({
+        objects: [{ extents: [1, 1, 1], positions: [], quaternions: [] }],
+      }),
+      scaledMotion: motion({
+        terrain: { vertices: [[0, 0, 0]], faces: [[0, 0, 0]] },
+      }),
+      robot: robot("target"),
+    }),
+    {
+      skeleton: true,
+      body: true,
+      objects: true,
+      "scaled-skeleton": true,
+      "scaled-scene": true,
+      robot: true,
+    },
+  );
+});
+
+test("keeps calibration reference visibility outside the H2R menu state", () => {
+  const internal = ["skeleton", "scaled-skeleton", "robot"] as const;
+  assert.deepEqual(projectStageMenuValue(internal, true, false), ["robot"]);
+  assert.deepEqual(applyStageMenuValue(internal, [], true, false), [
+    "skeleton",
+    "scaled-skeleton",
+  ]);
+  assert.deepEqual(
+    applyStageMenuValue(internal, ["robot"], true, false),
+    ["skeleton", "scaled-skeleton", "robot"],
+  );
+  assert.deepEqual(
+    projectStageMenuValue(["r2r-target-robot"], true, true),
+    ["r2r-target-robot"],
   );
 });
 

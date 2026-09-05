@@ -20,13 +20,18 @@ export interface CalibrationMappingOverlayHandle {
 interface CalibrationMappingOverlayProps {
   readonly mappings: readonly ReferenceJointMapping[];
   readonly visible: boolean;
+  readonly labels?: boolean;
+  readonly mappingLines?: boolean;
 }
 
 /** React owns the nodes; the renderer only updates their projected coordinates. */
 export const CalibrationMappingOverlay = forwardRef<
   CalibrationMappingOverlayHandle,
   CalibrationMappingOverlayProps
->(function CalibrationMappingOverlay({ mappings, visible }, forwardedRef) {
+>(function CalibrationMappingOverlay(
+  { mappings, visible, labels: showLabels = true, mappingLines: showLines = true },
+  forwardedRef,
+) {
   const labels = useRef(new Map<string, HTMLSpanElement>());
   const lines = useRef(new Map<string, SVGLineElement>());
 
@@ -45,10 +50,10 @@ export const CalibrationMappingOverlay = forwardRef<
           const label = labels.current.get(projection.key);
           const line = lines.current.get(projection.key);
           if (!label || !line) continue;
-          label.style.display = "block";
+          label.style.display = showLabels ? "block" : "none";
           label.style.left = `${projection.referenceX}px`;
           label.style.top = `${projection.referenceY}px`;
-          line.style.display = "inline";
+          line.style.display = showLines ? "inline" : "none";
           line.setAttribute("x1", String(projection.referenceX));
           line.setAttribute("y1", String(projection.referenceY));
           line.setAttribute("x2", String(projection.targetX));
@@ -67,7 +72,7 @@ export const CalibrationMappingOverlay = forwardRef<
       <svg
         className="pointer-events-none absolute inset-0 z-[9] size-full overflow-hidden"
         aria-hidden="true"
-        style={{ display: visible ? undefined : "none" }}
+        style={{ display: visible && showLines ? undefined : "none" }}
       >
         <g>
           {mappings.map((mapping) => {
@@ -94,7 +99,7 @@ export const CalibrationMappingOverlay = forwardRef<
       <div
         className="pointer-events-none absolute inset-0 z-[9] size-full overflow-hidden"
         aria-hidden="true"
-        hidden={!visible}
+        hidden={!visible || !showLabels}
       >
         {mappings.map((mapping) => {
           const key = calibrationMappingKey(mapping);

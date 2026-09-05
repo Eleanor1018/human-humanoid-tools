@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { Field, fieldClass } from "@/components/Field";
+import { CalibrationEditor } from "@/components/CalibrationEditor";
+import { normalizeCalibrationValues } from "@/components/calibrationEditorState";
 import { InspectorPage } from "@/components/Inspector";
 import { Button } from "@/components/ui/button";
 import { WorkflowPipeline, WorkflowStep } from "@/components/WorkflowSteps";
@@ -17,6 +19,10 @@ import {
   type RobotSummary,
 } from "@/features/robot/api";
 import type { StageMotionPayload } from "@/stage/types";
+import {
+  DEFAULT_CALIBRATION_DISPLAY,
+  type CalibrationDisplayOptions,
+} from "@/stage/calibrationDisplay";
 
 import {
   getCalibrationReferences,
@@ -45,6 +51,8 @@ export interface HumanToRobotViewProps {
   readonly onRetargetResult?: (result: RetargetResult | null) => void;
   readonly onCalibrationReference?: (reference: StageMotionPayload | null) => void;
   readonly onRobotPose?: (pose: CalibrationPose | null) => void;
+  readonly calibrationDisplay?: CalibrationDisplayOptions;
+  readonly onCalibrationDisplayChange?: (value: CalibrationDisplayOptions) => void;
 }
 
 function errorMessage(error: unknown): string {
@@ -112,6 +120,8 @@ export function HumanToRobotView({
   onRetargetResult,
   onCalibrationReference,
   onRobotPose,
+  calibrationDisplay: controlledCalibrationDisplay,
+  onCalibrationDisplayChange,
 }: HumanToRobotViewProps) {
   const [motionEntries, setMotionEntries] = useState<
     readonly MotionLibraryEntry[]
@@ -135,6 +145,16 @@ export function HumanToRobotView({
   );
   const [session, setSession] = useState<CalibrationSession | null>(null);
   const [jointQ, setJointQ] = useState<Record<string, number>>({});
+  const [calibrationBaseline, setCalibrationBaseline] = useState<
+    Record<string, number>
+  >({});
+  const [localCalibrationDisplay, setLocalCalibrationDisplay] = useState(
+    DEFAULT_CALIBRATION_DISPLAY,
+  );
+  const calibrationDisplay =
+    controlledCalibrationDisplay ?? localCalibrationDisplay;
+  const publishCalibrationDisplay =
+    onCalibrationDisplayChange ?? setLocalCalibrationDisplay;
   const [checking, setChecking] = useState(false);
   const [busy, setBusy] = useState<Action | null>(null);
   const [progress, setProgress] = useState(0);
@@ -220,6 +240,8 @@ export function HumanToRobotView({
     actionRequest.current?.abort();
     setBusy(null);
     setSession(null);
+    setJointQ({});
+    setCalibrationBaseline({});
     setResult(null);
     setProgress(0);
     referenceCallback.current?.(null);
@@ -310,7 +332,7 @@ export function HumanToRobotView({
 
   function selectMotion() {
     const entry = motionEntries.find((item) => item.source_path === motionPath);
-    if (!entry || busy) return;
+    if (!entry || busy || session) return;
     void runAction("motion", async (signal) => {
       setStatus(`Loading ${motionLabel(entry)}…`);
       const payload = await loadMotionLibraryEntry(entry, {
@@ -329,7 +351,7 @@ export function HumanToRobotView({
   }
 
   function selectRobot() {
-    if (!robotName || busy) return;
+    if (!robotName || busy || session) return;
     void runAction("robot", async (signal) => {
       setStatus("Loading robot…");
       const payload = await loadRobot(robotName, { signal });
@@ -341,7 +363,7 @@ export function HumanToRobotView({
   }
 
   function editCalibration() {
-    if (!robot || !reference || busy) return;
+    if (!robot || !reference || busy || session) return;
     void runAction("calibration", async (signal) => {
       setStatus("Opening calibration…");
       const value = await startCalibrationSession(
@@ -354,17 +376,25 @@ export function HumanToRobotView({
       );
       if (signal.aborted) return;
       clearResult();
+      const initial = normalizeCalibrationValues(
+        value.joint_limits,
+        value.joint_q,
+      );
       setSession(value);
-      setJointQ({ ...value.joint_q });
+      setJointQ(initial);
+      setCalibrationBaseline(initial);
       referenceCallback.current?.(value.reference);
       setStatus("Edit joint values, then save calibration.");
     });
   }
 
-  function closeCalibration() {
+  function closeCalibration(cancelled = false) {
     setSession(null);
+    setJointQ({});
+    setCalibrationBaseline({});
     referenceCallback.current?.(null);
     poseCallback.current?.(null);
+    if (cancelled) setStatus("Calibration cancelled.");
   }
 
   function persistCalibration() {
@@ -373,11 +403,12 @@ export function HumanToRobotView({
     setChecking(false);
     void runAction("save", async (signal) => {
       setStatus("Saving calibration…");
+      const safeJointQ = normalizeCalibrationValues(session.joint_limits, jointQ);
       const saved = await saveCalibration(
         {
           robot: robot.name,
           reference,
-          joint_q: jointQ,
+          joint_q: safeJointQ,
           ...(motion?.token ? { motion_token: motion.token } : {}),
         },
         { signal },
@@ -393,10 +424,11 @@ export function HumanToRobotView({
     if (!motion?.token) return "Select a human motion first.";
     if (!robot) return "Select a target robot first.";
     if (!reference) return "Select a reference pose.";
+    if (session) return "Save or cancel the open calibration before retargeting.";
     if (checking) return "Checking calibration…";
     if (!calibration?.calibrated) return "Save calibration before retargeting.";
     return null;
-  }, [calibration?.calibrated, checking, motion?.token, reference, robot]);
+  }, [calibration?.calibrated, checking, motion?.token, reference, robot, session]);
 
   function startRetarget() {
     if (!motion?.token || !robot || !reference || blockedReason || busy) return;
@@ -430,20 +462,26 @@ export function HumanToRobotView({
     });
   }
 
-  const calibrationLabel = checking
-    ? "Checking…"
-    : calibration?.calibrated
-      ? calibration.bundled && !calibration.path
-        ? "Built-in"
-        : "Calibrated"
-      : "Not calibrated";
-  const activeIndex = !motion
-    ? 0
-    : !robot
-      ? 1
-      : !calibration?.calibrated
-        ? 2
-        : 3;
+  const calibrationLabel = session
+    ? busy === "save"
+      ? "Saving…"
+      : "Editing…"
+    : checking
+      ? "Checking…"
+      : calibration?.calibrated
+        ? calibration.bundled && !calibration.path
+          ? "Built-in"
+          : "Calibrated"
+        : "Not calibrated";
+  const activeIndex = session
+    ? 2
+    : !motion
+      ? 0
+      : !robot
+        ? 1
+        : !calibration?.calibrated
+          ? 2
+          : 3;
   const exportUrl = result
     ? retargetExportUrl(result.export_token, { format: exportFormat })
     : null;
@@ -464,7 +502,7 @@ export function HumanToRobotView({
           <Picker
             label="Select human motion"
             value={motionPath}
-            disabled={Boolean(busy)}
+            disabled={Boolean(busy || session)}
             buttonLabel="Load motion"
             onChange={setMotionPath}
             onLoad={selectMotion}
@@ -487,7 +525,7 @@ export function HumanToRobotView({
           <Picker
             label="Select target robot"
             value={robotName}
-            disabled={Boolean(busy)}
+            disabled={Boolean(busy || session)}
             buttonLabel="Load robot"
             onChange={setRobotName}
             onLoad={selectRobot}
@@ -511,7 +549,7 @@ export function HumanToRobotView({
               <select
                 className={fieldClass}
                 value={reference}
-                disabled={!motion || Boolean(busy)}
+                disabled={!motion || Boolean(busy || session)}
                 onChange={(event) => {
                   const value = event.currentTarget.value;
                   setReference(value);
@@ -527,62 +565,31 @@ export function HumanToRobotView({
             </Field>
             <Button
               size="sm"
-              disabled={!robot || !reference || checking || Boolean(busy)}
+              disabled={!robot || !reference || checking || Boolean(busy || session)}
               onClick={editCalibration}
             >
-              {calibration?.calibrated ? "Edit calibration" : "Calibrate"}
+              {session
+                ? "Editing…"
+                : calibration?.calibrated
+                  ? "Edit calibration"
+                  : "Calibrate"}
             </Button>
             {session && (
-              <div className="grid gap-2 rounded-md border border-border-subtle bg-background p-2.5">
-                <p className="text-[11px] text-muted-foreground">
-                  Joint values are radians.
-                </p>
-                <div className="grid max-h-56 gap-1.5 overflow-y-auto pr-1">
-                  {session.joint_limits.map((limit) => (
-                    <label
-                      key={limit.name}
-                      className="grid grid-cols-[minmax(0,1fr)_90px] items-center gap-2 text-[11px]"
-                    >
-                      <span className="truncate" title={limit.name}>
-                        {limit.name}
-                      </span>
-                      <input
-                        className={fieldClass}
-                        type="number"
-                        step="0.01"
-                        min={limit.lower}
-                        max={limit.upper}
-                        value={jointQ[limit.name] ?? 0}
-                        onChange={(event) => {
-                          const value = Number(event.currentTarget.value);
-                          if (Number.isFinite(value))
-                            setJointQ((current) => ({
-                              ...current,
-                              [limit.name]: value,
-                            }));
-                        }}
-                      />
-                    </label>
-                  ))}
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <Button
-                    size="sm"
-                    disabled={Boolean(busy)}
-                    onClick={closeCalibration}
-                  >
-                    Cancel
-                  </Button>
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    disabled={Boolean(busy)}
-                    onClick={persistCalibration}
-                  >
-                    Save calibration
-                  </Button>
-                </div>
-              </div>
+              <CalibrationEditor
+                limits={session.joint_limits}
+                value={jointQ}
+                baseline={calibrationBaseline}
+                hasSavedBaseline={session.has_saved_calibration}
+                reference={session.reference}
+                robot={robot!}
+                display={calibrationDisplay}
+                disabled={Boolean(busy)}
+                saving={busy === "save"}
+                onChange={setJointQ}
+                onDisplayChange={publishCalibrationDisplay}
+                onCancel={() => closeCalibration(true)}
+                onSave={persistCalibration}
+              />
             )}
           </div>
         </WorkflowStep>
@@ -594,7 +601,7 @@ export function HumanToRobotView({
                 <select
                   className={fieldClass}
                   value={backend}
-                  disabled={Boolean(busy)}
+                  disabled={Boolean(busy || session)}
                   onChange={(event) => {
                     const value = event.currentTarget.value as Backend;
                     setBackend(value);
@@ -613,7 +620,7 @@ export function HumanToRobotView({
                   step="1"
                   placeholder="Original FPS"
                   value={retargetFps}
-                  disabled={Boolean(busy)}
+                  disabled={Boolean(busy || session)}
                   onChange={(event) => {
                     setRetargetFps(event.currentTarget.value);
                     clearResult();

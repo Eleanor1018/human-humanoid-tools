@@ -18,8 +18,8 @@ may improve spacing, rounded corners, accessibility, and narrow-screen layout.
 
 ## Order
 
-- [ ] Match the Stage visibility HUD state and asset-family colors.
-- [ ] Share one complete React calibration editor between H2R and R2R.
+- [x] Match the Stage visibility HUD state and asset-family colors.
+- [x] Share one complete React calibration editor between H2R and R2R.
 - [ ] Implement the three Batch pipelines against the existing FastAPI routes.
   - [x] Add the shared typed import, scan, job, progress, and download boundary.
 - [ ] Restore H2R scaled preview and omitted result/export controls.

@@ -31,21 +31,75 @@ interface PresentationInput {
   readonly robotTrajectory: StageRobotTrajectoryPayload | null;
 }
 
+export type StandardStageLayerId = Exclude<StageLayerId, R2rStageLayerId>;
+export type StandardStageLayerAvailability = Readonly<
+  Record<StandardStageLayerId, boolean>
+>;
+
 function hasEnvironment(motion: StageMotionPayload | null): boolean {
   return Boolean(
     motion?.terrain || (motion?.objects && motion.objects.length > 0),
   );
 }
 
+/** Renderer capabilities that drive the disabled state of the H2R controls. */
+export function standardStageLayerAvailability({
+  motion,
+  scaledMotion,
+  robot,
+}: Pick<
+  PresentationInput,
+  "motion" | "scaledMotion" | "robot"
+>): StandardStageLayerAvailability {
+  const hasSkeleton = Boolean(motion?.positions.length);
+  const hasBody = Boolean(
+    motion &&
+      (motion.body_mesh?.available ||
+        (motion.positions.length > 0 && motion.parent_indices.length > 0)),
+  );
+  return {
+    skeleton: hasSkeleton,
+    body: hasBody,
+    objects: hasEnvironment(motion),
+    "scaled-skeleton": Boolean(scaledMotion?.positions.length),
+    "scaled-scene": hasEnvironment(scaledMotion),
+    robot: Boolean(robot?.links.length),
+  };
+}
+
+/** Reference skeleton visibility is independent from the six legacy controls. */
+export function projectStageMenuValue(
+  requested: readonly StageLayerId[],
+  calibration: boolean,
+  r2r: boolean,
+): StageLayerId[] {
+  return calibration && !r2r
+    ? requested.filter((layer) => layer === "robot")
+    : [...requested];
+}
+
+/** Preserve the hidden reference bit when calibration exposes only Robot. */
+export function applyStageMenuValue(
+  current: readonly StageLayerId[],
+  next: readonly StageLayerId[],
+  calibration: boolean,
+  r2r: boolean,
+): StageLayerId[] {
+  if (!calibration || r2r) return [...next];
+  const preserved = current.filter((layer) => layer !== "robot");
+  return next.includes("robot") ? [...preserved, "robot"] : preserved;
+}
+
 export function r2rLayerAvailability(
   presentation: StageR2rPresentationPayload,
 ): R2rLayerAvailability {
   return {
-    "r2r-source-robot": presentation.source.robot !== null,
+    "r2r-source-robot": Boolean(presentation.source.robot?.links.length),
     "r2r-source-skeleton": Boolean(presentation.source.skeleton?.positions.length),
     "r2r-source-scene": hasEnvironment(presentation.source.environment),
-    "r2r-target-robot":
-      presentation.target.robot !== null && presentation.phase !== "source",
+    "r2r-target-robot": Boolean(
+      presentation.target.robot?.links.length && presentation.phase !== "source",
+    ),
     "r2r-target-skeleton": Boolean(presentation.target.skeleton?.positions.length),
     "r2r-target-scene": hasEnvironment(presentation.target.environment),
   };
@@ -169,28 +223,29 @@ export function defaultStageLayers({
   robot,
   robotTrajectory,
 }: PresentationInput): StageLayerId[] {
+  const available = standardStageLayerAvailability({ motion, scaledMotion, robot });
   if (mode === "empty") return [];
-  if (mode === "robot") return robot ? ["robot"] : [];
+  if (mode === "robot") return available.robot ? ["robot"] : [];
 
   if (mode === "h2r-calibration" || mode === "r2r-calibration") {
     return [
-      ...(motion ? ["skeleton" as const] : []),
-      ...(robot ? ["robot" as const] : []),
+      ...(available.skeleton ? ["skeleton" as const] : []),
+      ...(available.robot ? ["robot" as const] : []),
     ];
   }
 
   if (mode === "h2r-result" || mode === "r2r-result") {
     return [
-      ...(motion ? ["skeleton" as const] : []),
-      ...(scaledMotion?.positions.length ? ["scaled-skeleton" as const] : []),
-      ...(hasEnvironment(scaledMotion) ? ["scaled-scene" as const] : []),
-      ...(robot ? ["robot" as const] : []),
+      ...(available.skeleton ? ["skeleton" as const] : []),
+      ...(available["scaled-skeleton"] ? ["scaled-skeleton" as const] : []),
+      ...(available["scaled-scene"] ? ["scaled-scene" as const] : []),
+      ...(available.robot ? ["robot" as const] : []),
     ];
   }
 
-  if (mode === "analysis" && robot) {
+  if (mode === "analysis" && available.robot) {
     return [
-      ...(hasEnvironment(scaledMotion) ? ["scaled-scene" as const] : []),
+      ...(available["scaled-scene"] ? ["scaled-scene" as const] : []),
       "robot",
     ];
   }
@@ -198,17 +253,19 @@ export function defaultStageLayers({
   const layers: StageLayerId[] = [];
   if (motion) {
     const hasSkin = motion.body_mesh?.available === true;
-    if (!hasSkin || isParcMotion(motion)) layers.push("skeleton");
-    if (hasSkin) layers.push("body");
-    if (hasEnvironment(motion)) layers.push("objects");
+    if (available.skeleton && (!hasSkin || isParcMotion(motion))) {
+      layers.push("skeleton");
+    }
+    if (available.body && hasSkin) layers.push("body");
+    if (available.objects) layers.push("objects");
   }
 
   const comparison = mode === "h2r" || mode === "r2r";
   if (comparison && (scaledMotion || robotTrajectory)) {
-    if (motion && !layers.includes("skeleton")) layers.push("skeleton");
-    if (scaledMotion?.positions.length) layers.push("scaled-skeleton");
-    if (hasEnvironment(scaledMotion)) layers.push("scaled-scene");
+    if (available.skeleton && !layers.includes("skeleton")) layers.push("skeleton");
+    if (available["scaled-skeleton"]) layers.push("scaled-skeleton");
+    if (available["scaled-scene"]) layers.push("scaled-scene");
   }
-  if (comparison && robot) layers.push("robot");
+  if (comparison && available.robot) layers.push("robot");
   return layers;
 }
