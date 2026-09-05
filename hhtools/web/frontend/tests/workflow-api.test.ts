@@ -18,6 +18,7 @@ const { deleteRobot, uploadRobot } = await import("../src/features/robot/api.ts"
 const {
   analyzeDataset,
   computeDatasetSubset,
+  previewDatasetRobot,
   uploadDataset,
 } = await import("../src/features/analysis/api.ts");
 const { linkMotionLibraryPath, setMotionLibraryRoot } =
@@ -218,6 +219,46 @@ test("analysis starts the dataset job and enforces its job kind", async () => {
     force: true,
   });
   assert.equal(result.meta.source_root, "/data/motions");
+});
+
+test("analysis robot preview uses its dedicated job contract", async () => {
+  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  const result = await previewDatasetRobot(
+    { source_path: "/data/robot/walk.csv", robot: "g1_29dof" },
+    {
+      pollIntervalMs: 0,
+      fetcher: async (input, init) => {
+        calls.push({ url: String(input), init });
+        if (calls.length === 1) return Response.json({ job_id: "preview-job" });
+        return Response.json({
+          id: "preview-job",
+          kind: "dataset_robot_preview",
+          status: "done",
+          result: {
+            preview_token: "scene-token",
+            trajectory: { frames: [{ links: {} }] },
+            robot: "g1_29dof",
+            inferred_robot: "g1_29dof",
+            num_frames: 1,
+            framerate: 30,
+            has_scene: false,
+            scaled_scene: null,
+            name: "walk",
+          },
+        });
+      },
+    },
+  );
+
+  assert.deepEqual(calls.map((call) => call.url), [
+    "/api/dataset/preview_robot",
+    "/api/job/preview-job",
+  ]);
+  assert.deepEqual(JSON.parse(String(calls[0].init?.body)), {
+    source_path: "/data/robot/walk.csv",
+    robot: "g1_29dof",
+  });
+  assert.equal(result.preview_token, "scene-token");
 });
 
 test("analysis upload preserves append query and folder-relative filenames", async () => {

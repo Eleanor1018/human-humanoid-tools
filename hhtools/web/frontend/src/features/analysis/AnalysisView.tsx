@@ -5,6 +5,7 @@ import { InspectorPage } from "@/components/Inspector";
 import { Button } from "@/components/ui/button";
 import { WorkflowPipeline, WorkflowStep } from "@/components/WorkflowSteps";
 import { getMotionLibrary, loadMotionLibraryEntry } from "@/features/motion/api";
+import { getRobotLibrary, loadRobot, type RobotSummary } from "@/features/robot/api";
 import type { StageMotionPayload } from "@/stage/types";
 
 import {
@@ -16,8 +17,10 @@ import {
   getCachedDatasetResult,
   getDatasetCatalog,
   motionEntryForAnalysisClip,
+  previewDatasetRobot,
   scanDataset,
   uploadDataset,
+  type AnalysisRobotPreview,
   type AnalysisEmbedding,
   type DatasetAnalysisResult,
   type DatasetCatalog,
@@ -33,6 +36,8 @@ type BusyAction = "scan" | "upload" | "analyze" | "subset" | "preview" | null;
 export interface AnalysisViewProps {
   /** Optional Stage handoff for human clips selected from the result table. */
   readonly onMotionLoaded?: (motion: StageMotionPayload | null) => void;
+  /** Robot previews remain owned by Analysis instead of replacing a workspace robot. */
+  readonly onRobotPreviewLoaded?: (preview: AnalysisRobotPreview | null) => void;
 }
 
 function errorMessage(error: unknown): string {
@@ -191,8 +196,12 @@ function SummaryCards({ summary }: { summary: DatasetSummary }) {
   );
 }
 
-export function AnalysisView({ onMotionLoaded }: AnalysisViewProps) {
+export function AnalysisView({
+  onMotionLoaded,
+  onRobotPreviewLoaded,
+}: AnalysisViewProps) {
   const [catalog, setCatalog] = useState<DatasetCatalog>({});
+  const [robots, setRobots] = useState<readonly RobotSummary[]>([]);
   const [source, setSource] = useState("");
   const [defaultSource, setDefaultSource] = useState("");
   const [sourceSummary, setSourceSummary] = useState<DatasetUploadSummary | null>(null);
@@ -214,6 +223,7 @@ export function AnalysisView({ onMotionLoaded }: AnalysisViewProps) {
   const [subsetRatio, setSubsetRatio] = useState("10");
   const [subsetAlpha, setSubsetAlpha] = useState("0.99");
   const [previewing, setPreviewing] = useState<string | null>(null);
+  const [previewRobot, setPreviewRobot] = useState("");
   const folderInput = useRef<HTMLInputElement | null>(null);
   const requestRef = useRef<AbortController | null>(null);
 
@@ -224,12 +234,14 @@ export function AnalysisView({ onMotionLoaded }: AnalysisViewProps) {
     void Promise.all([
       getDatasetCatalog({ signal: request.signal }),
       getMotionLibrary({ signal: request.signal }),
+      getRobotLibrary({ signal: request.signal }),
     ])
-      .then(([loadedCatalog, library]) => {
+      .then(([loadedCatalog, library, robotLibrary]) => {
         if (request.signal.aborted) return;
         setCatalog(loadedCatalog);
         setSource(library.source_root);
         setDefaultSource(library.source_root);
+        setRobots(robotLibrary.robots.filter((robot) => robot.has_urdf));
       })
       .catch((reason: unknown) => {
         if (!request.signal.aborted) setError(errorMessage(reason));
@@ -277,6 +289,9 @@ export function AnalysisView({ onMotionLoaded }: AnalysisViewProps) {
       ).length,
     [exportIds, result],
   );
+  const hasRobotClips = availableClips.some(
+    (clip) => clip.source_kind === "robot" || clip.dataset === "robot",
+  );
   const catalogMetric = (catalog.metrics?.[metric] ?? {}) as Record<string, unknown>;
   const summary = result?.summary;
   const tags = summary?.tag_order ?? [];
@@ -311,6 +326,7 @@ export function AnalysisView({ onMotionLoaded }: AnalysisViewProps) {
       setUploadSource(null);
       setResult(null);
       onMotionLoaded?.(null);
+      onRobotPreviewLoaded?.(null);
       setStatus(`${value.clip_count} clips found.`);
     } catch (reason) {
       if (!request.signal.aborted) setError(errorMessage(reason));
@@ -329,6 +345,7 @@ export function AnalysisView({ onMotionLoaded }: AnalysisViewProps) {
     const request = begin("upload");
     setResult(null);
     onMotionLoaded?.(null);
+    onRobotPreviewLoaded?.(null);
     setStatus(`Uploading ${selected.length} files...`);
     void uploadDataset(selected, {
       appendTo: uploadSource ?? undefined,
@@ -462,7 +479,43 @@ export function AnalysisView({ onMotionLoaded }: AnalysisViewProps) {
 
   async function previewClip(clip: DatasetClip): Promise<void> {
     if (clip.source_kind === "robot" || clip.dataset === "robot") {
-      setStatus("Robot preview is available from the Robot -> Robot workflow.");
+      const request = begin("preview");
+      setPreviewing(clip.clip_id);
+      setStatus(`Loading robot trajectory ${clipLabel(clip)}...`);
+      try {
+        const inferred = typeof clip.metrics.robot_preset === "string"
+          ? clip.metrics.robot_preset.trim()
+          : "";
+        const result = await previewDatasetRobot(
+          {
+            source_path: clip.source_path,
+            ...(previewRobot || inferred ? { robot: previewRobot || inferred } : {}),
+          },
+          {
+            signal: request.signal,
+            onUpdate: (job) => {
+              if (!request.signal.aborted) {
+                setStatus(job.message || "Loading robot trajectory...");
+              }
+            },
+          },
+        );
+        if (request.signal.aborted) return;
+        const robot = await loadRobot(result.robot, { signal: request.signal });
+        if (request.signal.aborted) return;
+        onRobotPreviewLoaded?.({
+          robot,
+          trajectory: result.trajectory,
+          scene: result.scaled_scene,
+          previewToken: result.preview_token,
+        });
+        setStatus(`Previewing ${result.name}.`);
+      } catch (reason) {
+        if (!request.signal.aborted) setError(errorMessage(reason));
+      } finally {
+        setPreviewing(null);
+        finish(request);
+      }
       return;
     }
     const request = begin("preview");
@@ -476,6 +529,7 @@ export function AnalysisView({ onMotionLoaded }: AnalysisViewProps) {
         },
       });
       if (!request.signal.aborted) {
+        onRobotPreviewLoaded?.(null);
         onMotionLoaded?.(motion);
         setStatus(`Previewing ${clipLabel(clip)}.`);
       }
@@ -517,6 +571,7 @@ export function AnalysisView({ onMotionLoaded }: AnalysisViewProps) {
                   setSelectedIds(new Set());
                   setSubsetIds(new Set());
                   onMotionLoaded?.(null);
+                  onRobotPreviewLoaded?.(null);
                 }}
               />
               <Button size="sm" disabled={!source.trim() || busy !== null} onClick={() => void scanCurrentSource()}>
@@ -643,6 +698,24 @@ export function AnalysisView({ onMotionLoaded }: AnalysisViewProps) {
           ) : (
             <div className="grid gap-3">
               <SummaryCards summary={summary} />
+
+              {hasRobotClips && (
+                <Field label="Preview robot">
+                  <select
+                    className={fieldClass}
+                    value={previewRobot}
+                    disabled={busy !== null}
+                    onChange={(event) => setPreviewRobot(event.target.value)}
+                  >
+                    <option value="">Auto-detect from trajectory</option>
+                    {robots.map((robot) => (
+                      <option key={robot.name} value={robot.name}>
+                        {robot.display_name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+              )}
 
               {summary.num_error > 0 && (
                 <details className="rounded-md border border-[#ead7b0] bg-[#fffaf0] px-2.5 py-2">

@@ -98,7 +98,7 @@ export interface StageMotionPayload {
     readonly source_path: string;
   };
   readonly object_mesh_source?: {
-    readonly kind: "motion" | "r2r";
+    readonly kind: "motion" | "r2r" | "dataset";
     readonly token: string;
   };
 }

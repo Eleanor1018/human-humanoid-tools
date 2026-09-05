@@ -9,6 +9,11 @@ import {
   type JobSnapshot,
   type UploadFile,
 } from "@/lib/api";
+import type {
+  StageMotionPayload,
+  StageRobotPayload,
+  StageRobotTrajectoryPayload,
+} from "@/stage/types";
 
 export type AnalysisEmbedding = "handcrafted" | "pae";
 
@@ -57,6 +62,29 @@ export interface DatasetAnalysisResult {
   };
   readonly clips: readonly DatasetClip[];
   readonly summary: DatasetSummary;
+}
+
+export interface DatasetRobotPreviewResult {
+  readonly preview_token: string;
+  readonly trajectory: StageRobotTrajectoryPayload;
+  readonly robot: string;
+  readonly inferred_robot: string;
+  readonly num_frames: number;
+  readonly framerate: number;
+  readonly has_scene: boolean;
+  readonly scaled_scene?: {
+    readonly terrain?: StageMotionPayload["terrain"];
+    readonly objects?: StageMotionPayload["objects"];
+  } | null;
+  readonly name: string;
+}
+
+/** Complete Analysis-owned projection for one robot trajectory preview. */
+export interface AnalysisRobotPreview {
+  readonly robot: StageRobotPayload;
+  readonly trajectory: StageRobotTrajectoryPayload;
+  readonly scene: DatasetRobotPreviewResult["scaled_scene"];
+  readonly previewToken: string;
 }
 
 export interface DatasetUploadSummary {
@@ -160,6 +188,30 @@ export async function analyzeDataset(
     signal: options.signal,
     fetcher: options.fetcher,
     expectedKind: "dataset_analyze",
+    pollIntervalMs: options.pollIntervalMs,
+    onUpdate: options.onUpdate,
+  });
+}
+
+export async function previewDatasetRobot(
+  body: {
+    readonly source_path: string;
+    readonly robot?: string;
+  },
+  options: JobOptions<DatasetRobotPreviewResult> = {},
+): Promise<DatasetRobotPreviewResult> {
+  const started = await jsonPost<{ job_id?: unknown }>(
+    "/api/dataset/preview_robot",
+    body,
+    options,
+  );
+  if (typeof started.job_id !== "string" || !started.job_id) {
+    throw new Error("The server did not return a robot preview job ID.");
+  }
+  return waitForJob<DatasetRobotPreviewResult>(started.job_id, {
+    signal: options.signal,
+    fetcher: options.fetcher,
+    expectedKind: "dataset_robot_preview",
     pollIntervalMs: options.pollIntervalMs,
     onUpdate: options.onUpdate,
   });

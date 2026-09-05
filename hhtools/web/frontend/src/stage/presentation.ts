@@ -188,6 +188,13 @@ export function defaultStageLayers({
     ];
   }
 
+  if (mode === "analysis" && robot) {
+    return [
+      ...(hasEnvironment(scaledMotion) ? ["scaled-scene" as const] : []),
+      "robot",
+    ];
+  }
+
   const layers: StageLayerId[] = [];
   if (motion) {
     const hasSkin = motion.body_mesh?.available === true;

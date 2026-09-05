@@ -215,6 +215,11 @@ function objectMeshUrl(
     query.set("mesh", object.mesh_file);
     return `/api/r2r/scene_glb?${query.toString()}`;
   }
+  if (source.kind === "dataset") {
+    if (!object.mesh_file) return null;
+    query.set("mesh", object.mesh_file);
+    return `/api/dataset/scene_glb?${query.toString()}`;
+  }
   query.set("index", String(object.source_index ?? index));
   return `/api/object_glb?${query.toString()}`;
 }

@@ -382,6 +382,22 @@ test("projects the original Motion and workflow layer defaults", () => {
   );
 });
 
+test("shows an Analysis robot preview with its synchronized scene", () => {
+  assert.deepEqual(
+    defaultStageLayers({
+      mode: "analysis",
+      motion: null,
+      scaledMotion: motion({
+        positions: [],
+        terrain: { vertices: [[0, 0, 0]], faces: [[0, 0, 0]] },
+      }),
+      robot: robot("g1_29dof"),
+      robotTrajectory: { frames: [{ links: {} }] },
+    }),
+    ["scaled-scene", "robot"],
+  );
+});
+
 test("projects R2R layer availability independently for both actors", () => {
   const scene = motion({
     positions: [],

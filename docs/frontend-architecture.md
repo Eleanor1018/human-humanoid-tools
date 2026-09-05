@@ -152,6 +152,7 @@ main -> App -> features -> components/ui
 - [x] Dataset scan, folder upload, cached analysis, and progress polling
 - [x] Analysis metrics, tags, embedding scatter, histograms, and filters
 - [x] Analysis subset recommendation, manifest/robot export, and human preview
+- [x] Analysis robot trajectory, model, and synchronized scene preview
 
 Analysis keeps the server as the source of truth: the view starts and polls the
 `dataset_analyze` job, renders the returned manifest, and sends subset/export

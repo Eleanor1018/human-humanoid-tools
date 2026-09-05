@@ -6,6 +6,7 @@ import { Sidebar } from "./components/Sidebar";
 import { MotionView } from "./features/motion/MotionView";
 import { BatchView } from "./features/batch/BatchView";
 import { AnalysisView } from "./features/analysis/AnalysisView";
+import type { AnalysisRobotPreview } from "./features/analysis/api";
 import { RobotView } from "./features/robot/RobotView";
 import { HumanToRobotView } from "./features/h2r/HumanToRobotView";
 import type {
@@ -75,6 +76,10 @@ export function App() {
     useState<StageMotionPayload | null>(null);
   const [workspaceRobot, setWorkspaceRobot] =
     useState<StageRobotPayload | null>(null);
+  const [analysisMotion, setAnalysisMotion] =
+    useState<StageMotionPayload | null>(null);
+  const [analysisRobotPreview, setAnalysisRobotPreview] =
+    useState<AnalysisRobotPreview | null>(null);
   const [stageMotion, setStageMotion] = useState<StageMotionPayload | null>(null);
   const [stageRobot, setStageRobot] = useState<StageRobotPayload | null>(null);
   const [stageRobotTrajectory, setStageRobotTrajectory] =
@@ -196,9 +201,19 @@ export function App() {
     setR2rSourceResult(result);
     setR2rResult(null);
   }, []);
+  const publishAnalysisMotion = useCallback((motion: StageMotionPayload | null) => {
+    setAnalysisMotion(motion);
+    if (motion) setAnalysisRobotPreview(null);
+  }, []);
+  const publishAnalysisRobotPreview = useCallback(
+    (preview: AnalysisRobotPreview | null) => {
+      setAnalysisRobotPreview(preview);
+      if (preview) setAnalysisMotion(null);
+    },
+    [],
+  );
 
-  // Workflow state is durable; this effect is the only place that projects it
-  // onto the shared Stage when a user enters H2R or R2R.
+  // Workflow state is durable; this is the only projection into the shared Stage.
   useEffect(() => {
     if (activeView === "motion" || activeView === "video-to-motion") {
       setStageMotion(workspaceMotion);
@@ -215,10 +230,21 @@ export function App() {
       return;
     }
     if (activeView === "dataset-viz") {
-      setStageMotion(workspaceMotion);
-      setStageRobot(null);
-      setStageRobotTrajectory(null);
-      setStageScaledMotion(null);
+      setStageMotion(analysisMotion);
+      setStageRobot(analysisRobotPreview?.robot ?? null);
+      setStageRobotTrajectory(analysisRobotPreview?.trajectory ?? null);
+      setStageScaledMotion(
+        analysisRobotPreview
+          ? motionWithScene(
+              null,
+              analysisRobotPreview.scene,
+              {
+                kind: "dataset",
+                token: analysisRobotPreview.previewToken,
+              },
+            )
+          : null,
+      );
       return;
     }
     if (activeView === "h2r") {
@@ -258,6 +284,8 @@ export function App() {
     setStageScaledMotion(null);
   }, [
     activeView,
+    analysisMotion,
+    analysisRobotPreview,
     h2rCalibrationPose,
     h2rCalibrationReference,
     h2rResult,
@@ -337,7 +365,10 @@ export function App() {
           />
         </div>
         <div className={activeView === "dataset-viz" ? "h-full" : "hidden"}>
-          <AnalysisView onMotionLoaded={publishMotion} />
+          <AnalysisView
+            onMotionLoaded={publishAnalysisMotion}
+            onRobotPreviewLoaded={publishAnalysisRobotPreview}
+          />
         </div>
         {activeView !== "motion" &&
         activeView !== "robot-assets" &&
