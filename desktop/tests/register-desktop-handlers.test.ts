@@ -38,9 +38,14 @@ describe('registerDesktopHandlers', () => {
     })
   })
 
-  function register(): { event: IpcMainInvokeEvent; mainWindow: BrowserWindow } {
+  function register(): {
+    event: IpcMainInvokeEvent
+    mainWindow: BrowserWindow
+    closeWindow: ReturnType<typeof vi.fn>
+  } {
     const event = {} as IpcMainInvokeEvent
-    const mainWindow = {} as BrowserWindow
+    const closeWindow = vi.fn()
+    const mainWindow = { close: closeWindow } as unknown as BrowserWindow
     registerDesktopHandlers({
       mainWindow,
       trustedOrigin: 'http://127.0.0.1:43100',
@@ -66,7 +71,7 @@ describe('registerDesktopHandlers', () => {
       }),
       restartBackend: async () => ({ appPhase: 'ready', backendState: 'ready' })
     })
-    return { event, mainWindow }
+    return { event, mainWindow, closeWindow }
   }
 
   it('opens a trusted native directory picker and returns the selected path', async () => {
@@ -101,6 +106,35 @@ describe('registerDesktopHandlers', () => {
     await expect(handler?.(event)).resolves.toBeNull()
   })
 
+  it('closes the trusted main window when application exit is requested', async () => {
+    const { event, mainWindow, closeWindow } = register()
+
+    const handler = electronMocks.handlers.get(DESKTOP_CHANNELS.exitApplication)
+    await expect(handler?.(event)).resolves.toBeUndefined()
+
+    expect(securityMocks.assertTrustedIpcSender).toHaveBeenCalledWith(
+      event,
+      mainWindow,
+      'http://127.0.0.1:43100'
+    )
+    expect(closeWindow).toHaveBeenCalledOnce()
+    expect(securityMocks.assertTrustedIpcSender.mock.invocationCallOrder[0]).toBeLessThan(
+      closeWindow.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY
+    )
+  })
+
+  it('does not close the window when application exit is requested by an untrusted sender', async () => {
+    const { event, closeWindow } = register()
+    securityMocks.assertTrustedIpcSender.mockImplementationOnce(() => {
+      throw new Error('Rejected IPC from an unknown WebContents')
+    })
+
+    const handler = electronMocks.handlers.get(DESKTOP_CHANNELS.exitApplication)
+
+    await expect(handler?.(event)).rejects.toThrow('Rejected IPC from an unknown WebContents')
+    expect(closeWindow).not.toHaveBeenCalled()
+  })
+
   it('removes the directory picker handler during cleanup', () => {
     const mainWindow = {} as BrowserWindow
     const unregister = registerDesktopHandlers({
@@ -132,5 +166,6 @@ describe('registerDesktopHandlers', () => {
     unregister()
 
     expect(electronMocks.removeHandler).toHaveBeenCalledWith(DESKTOP_CHANNELS.selectDirectory)
+    expect(electronMocks.removeHandler).toHaveBeenCalledWith(DESKTOP_CHANNELS.exitApplication)
   })
 })

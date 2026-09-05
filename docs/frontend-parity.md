@@ -32,6 +32,7 @@ may improve spacing, rounded corners, accessibility, and narrow-screen layout.
   - [x] Keep V2M and Batch mounted while their jobs or drafts are inactive.
   - [x] Preview selected videos and import existing GVHMR `.pt` results.
   - [x] Restore Analysis scatter selection/preview, fixed coordinates, histogram brushing, and upload-basket removal.
+  - [x] Connect the desktop Exit command through the trusted Electron IPC boundary.
 - [ ] Run route-contract tests and desktop/narrow-screen browser smoke for every pipeline.
 
 ## Rules
