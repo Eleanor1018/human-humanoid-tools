@@ -4,6 +4,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
 import { BodyMeshLayer } from "./BodyMeshLayer";
+import { CapsuleBodyLayer } from "./CapsuleBodyLayer";
 import { EnvironmentLayer } from "./EnvironmentLayer";
 import { RobotLayer } from "./RobotLayer";
 import { SkeletonLayer } from "./SkeletonLayer";
@@ -163,10 +164,9 @@ function StageScene({
     scaledMotion?.terrain ||
       (scaledMotion?.objects && scaledMotion.objects.length > 0),
   );
-  const skeletonVisible =
-    visibleLayers.includes("skeleton") ||
-    (motion !== null && visibleLayers.includes("body") && !bodyReady);
+  const skeletonVisible = motion !== null && visibleLayers.includes("skeleton");
   const bodyVisible = hasBodyMesh && bodyReady && visibleLayers.includes("body");
+  const capsuleVisible = motion !== null && !bodyReady && visibleLayers.includes("body");
   const robotVisible = robot !== null && visibleLayers.includes("robot");
   const environmentVisible = hasEnvironment && visibleLayers.includes("objects");
   const scaledSkeletonVisible =
@@ -193,6 +193,11 @@ function StageScene({
         <SkeletonLayer
           motion={motion}
           visible={skeletonVisible}
+          playback={playback}
+        />
+        <CapsuleBodyLayer
+          motion={motion}
+          visible={capsuleVisible}
           playback={playback}
         />
         <BodyMeshLayer

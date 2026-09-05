@@ -9,6 +9,11 @@ import {
   type CompleteBodyMeshPayload,
 } from "../src/stage/bodyMesh.ts";
 import {
+  createCapsuleBodyResource,
+  disposeCapsuleBody,
+  setCapsuleBodyFrame,
+} from "../src/stage/capsuleBody.ts";
+import {
   frameAtTime,
   motionDuration,
   timelineDuration,
@@ -92,5 +97,49 @@ test("decodes and interpolates the backend baked-body layout", async () => {
     ]);
   } finally {
     disposeBodyMesh(resource);
+  }
+});
+
+test("builds and animates the legacy capsule body for any skeleton", () => {
+  const payload = motion({
+    positions: [
+      [[0, 0, 0], [0, 0, 1]],
+      [[1, 0, 0], [1, 0, 1]],
+    ],
+    parent_indices: [-1, 0],
+  });
+  const resource = createCapsuleBodyResource(payload);
+  assert.ok(resource);
+  try {
+    assert.equal(resource.mesh.material.color.getHex(), 0xf7a470);
+    assert.equal(resource.mesh.geometry.getAttribute("position").count, 36);
+    assert.equal(resource.mesh.geometry.getIndex()?.count, 156);
+    const before = resource.positions[0];
+    setCapsuleBodyFrame(resource, payload, 1);
+    assert.equal(resource.positions[0], before + 1);
+  } finally {
+    disposeCapsuleBody(resource);
+  }
+});
+
+test("capsule body does not interpolate across sparse source frames", () => {
+  const payload = motion({
+    positions: [
+      [[0, 0, 0], [0, 0, 1]],
+      [[10, 0, 0], [10, 0, 1]],
+    ],
+    parent_indices: [-1, 0],
+    frame_indices: [0, 20],
+  });
+  const resource = createCapsuleBodyResource(payload);
+  assert.ok(resource);
+  try {
+    const first = resource.positions[0];
+    setCapsuleBodyFrame(resource, payload, 0.25);
+    assert.equal(resource.positions[0], first);
+    setCapsuleBodyFrame(resource, payload, 0.75);
+    assert.equal(resource.positions[0], first + 10);
+  } finally {
+    disposeCapsuleBody(resource);
   }
 });

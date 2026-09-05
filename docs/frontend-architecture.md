@@ -51,6 +51,8 @@ src/
 │   ├── StagePlaybackBar.tsx # Play, pause, seek and single-frame controls
 │   ├── playback.ts          # Shared renderer playback cursor and timing
 │   ├── SkeletonLayer.tsx    # Animated source skeleton layer
+│   ├── CapsuleBodyLayer.tsx # Universal tube-and-joint body fallback
+│   ├── capsuleBody.ts       # Capsule geometry and frame updates
 │   ├── BodyMeshLayer.tsx    # Animated baked-body lifecycle
 │   ├── bodyMesh.ts          # Gzip decode and dynamic body geometry
 │   ├── EnvironmentLayer.tsx # Terrain and animated interaction objects
@@ -125,6 +127,7 @@ main -> App -> features -> components/ui
 - [x] R3F Stage base scene (camera, controls, lights, axes, grid)
 - [x] Shared R3F timeline with play/pause, seek, and frame stepping
 - [x] Animated skeleton, baked body, terrain, and interaction-object layers
+- [x] Legacy-compatible capsule body when a baked skin is unavailable
 - [x] Motion Library list, upload, job polling, and Stage handoff
 - [x] Robot catalog, zero-pose selection, GLB parsing, and Stage handoff
 - [x] Six curated robot presets installed from pinned upstream sources
