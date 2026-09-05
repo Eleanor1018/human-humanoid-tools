@@ -5,6 +5,7 @@ import {
   boundedProgress,
   canSetupGvhmrInDesktop,
   getGvhmrRuntimeStatus,
+  isGvhmrResultName,
   isSupportedVideoName,
   parseOptionalFocalLength,
   setupGvhmrInDesktop,
@@ -31,6 +32,8 @@ test("uses the desktop setup bridge only when Electron exposes it", async () => 
 test("validates video names and optional focal length", () => {
   assert.equal(isSupportedVideoName("walk.MP4"), true);
   assert.equal(isSupportedVideoName("walk.txt"), false);
+  assert.equal(isGvhmrResultName("walk.PT"), true);
+  assert.equal(isGvhmrResultName("walk.pt.json"), false);
   assert.equal(parseOptionalFocalLength(""), undefined);
   assert.equal(parseOptionalFocalLength(" 35 "), 35);
   assert.throws(() => parseOptionalFocalLength("1.5"), /positive integer/);
@@ -130,4 +133,5 @@ test("projects a completed motion payload for the Stage", () => {
   assert.equal(payload?.token, "motion-token");
   assert.equal(payload?.library_entry?.source_path, "/library/generated.pt");
   assert.ok(payload?.terrain);
+  assert.equal(toStageMotionPayload({ name: "incomplete" }), null);
 });

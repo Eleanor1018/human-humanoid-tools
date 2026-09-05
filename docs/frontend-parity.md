@@ -9,7 +9,7 @@ may improve spacing, rounded corners, accessibility, and narrow-screen layout.
 | Stage / Three.js | Mostly complete | Correct HUD family colors, availability, labels, and calibration projection |
 | Motion | Functional | Restore validation summary, Batch basket handoff, and linked-folder removal |
 | Robot | Functional | Restore import/load validation summary |
-| Video to Motion | Functional when GVHMR is ready | Restore existing-result import and explicit running-job cancellation |
+| Video to Motion | Functional when GVHMR is ready | Add a real server-side running-job cancellation protocol |
 | Human to Robot | Functional | Restore validation/evaluation and complete export options |
 | Robot to Robot | Functional | Restore full calibration editor, validation/evaluation, and complete export options |
 | Batch | Functional | Run full solver smoke when the licensed/runtime dependencies are available |
@@ -28,6 +28,7 @@ may improve spacing, rounded corners, accessibility, and narrow-screen layout.
   - [x] Preserve the complete registered V2M Motion payload for Stage and H2R.
   - [x] Preserve the last successful Motion while a replacement video is pending or invalid.
   - [x] Keep V2M and Batch mounted while their jobs or drafts are inactive.
+  - [x] Preview selected videos and import existing GVHMR `.pt` results.
 - [ ] Run route-contract tests and desktop/narrow-screen browser smoke for every pipeline.
 
 ## Rules

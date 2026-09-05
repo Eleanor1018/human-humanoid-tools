@@ -131,6 +131,12 @@ export function isSupportedVideoName(name: string): boolean {
   return (SUPPORTED_VIDEO_EXTENSIONS as readonly string[]).includes(extension);
 }
 
+/** GVHMR's reusable result boundary is intentionally narrower than Motion import. */
+export function isGvhmrResultName(name: string): boolean {
+  const separator = name.lastIndexOf(".");
+  return separator >= 0 && name.slice(separator + 1).toLowerCase() === "pt";
+}
+
 export function parseOptionalFocalLength(value: string): number | undefined {
   const normalized = value.trim();
   if (!normalized) return undefined;
