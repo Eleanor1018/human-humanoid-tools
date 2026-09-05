@@ -168,6 +168,18 @@ export function uploadDataset(
   });
 }
 
+export function removeDatasetUploadFolder(
+  source: string,
+  folderLabel: string,
+  options: RequestOptions = {},
+): Promise<DatasetUploadSummary> {
+  return jsonPost(
+    "/api/dataset/upload/remove",
+    { source, folder_label: folderLabel },
+    options,
+  );
+}
+
 export async function analyzeDataset(
   body: {
     readonly source?: string;

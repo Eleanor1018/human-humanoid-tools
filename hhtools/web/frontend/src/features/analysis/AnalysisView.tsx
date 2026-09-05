@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 
 import { Field, fieldClass } from "@/components/Field";
 import { InspectorPage } from "@/components/Inspector";
@@ -18,6 +18,7 @@ import {
   getDatasetCatalog,
   motionEntryForAnalysisClip,
   previewDatasetRobot,
+  removeDatasetUploadFolder,
   scanDataset,
   uploadDataset,
   type AnalysisRobotPreview,
@@ -29,9 +30,12 @@ import {
   type DatasetUploadSummary,
   type Histogram,
 } from "./api";
+import { clipMatchesFilters, selectScatterClip } from "./model";
+import { ScatterPlot } from "./ScatterPlot";
+import { UploadBasket } from "./UploadBasket";
 
 const pipeline = ["Select Data", "Configure", "Analyze", "Results"];
-type BusyAction = "scan" | "upload" | "analyze" | "subset" | "preview" | null;
+type BusyAction = "scan" | "upload" | "remove" | "analyze" | "subset" | "preview" | null;
 
 export interface AnalysisViewProps {
   /** Optional Stage handoff for human clips selected from the result table. */
@@ -67,7 +71,16 @@ function validClips(result: DatasetAnalysisResult | null): DatasetClip[] {
   ) ?? [];
 }
 
-function HistogramChart({ histogram }: { histogram: Histogram | undefined }) {
+function HistogramChart({
+  histogram,
+  range,
+  onRangeChange,
+}: {
+  histogram: Histogram | undefined;
+  range: readonly [number, number] | null;
+  onRangeChange: (range: readonly [number, number] | null) => void;
+}) {
+  const drag = useRef<{ pointerId: number; start: number } | null>(null);
   if (!histogram) {
     return <p className="text-xs text-muted-foreground">No values for this metric.</p>;
   }
@@ -76,16 +89,57 @@ function HistogramChart({ histogram }: { histogram: Histogram | undefined }) {
   const height = 116;
   const gap = 2;
   const barWidth = width / Math.max(histogram.counts.length, 1);
+
+  function binAt(event: ReactPointerEvent<SVGSVGElement>): number {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const x = ((event.clientX - rect.left) / rect.width) * width;
+    return Math.max(0, Math.min(histogram!.counts.length - 1, Math.floor(x / barWidth)));
+  }
+
+  function applyBins(first: number, last: number): void {
+    const low = Math.min(first, last);
+    const high = Math.max(first, last);
+    const lo = histogram!.edges[low];
+    const hi = histogram!.edges[high + 1];
+    if (Number.isFinite(lo) && Number.isFinite(hi)) onRangeChange([lo, hi]);
+  }
+
   return (
     <div className="grid gap-1.5">
       <svg
-        className="h-[116px] w-full overflow-visible"
+        className="h-[116px] w-full touch-none overflow-visible"
         viewBox={`0 0 ${width} ${height}`}
-        role="img"
+        role="group"
         aria-label="Metric histogram"
+        onPointerDown={(event) => {
+          if (event.button !== 0 || !histogram.counts.length) return;
+          const start = binAt(event);
+          event.currentTarget.setPointerCapture(event.pointerId);
+          drag.current = { pointerId: event.pointerId, start };
+          applyBins(start, start);
+        }}
+        onPointerMove={(event) => {
+          if (drag.current?.pointerId !== event.pointerId) return;
+          applyBins(drag.current.start, binAt(event));
+        }}
+        onPointerUp={(event) => {
+          if (drag.current?.pointerId !== event.pointerId) return;
+          if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+            event.currentTarget.releasePointerCapture(event.pointerId);
+          }
+          drag.current = null;
+        }}
+        onPointerCancel={() => {
+          drag.current = null;
+        }}
       >
         {histogram.counts.map((count, index) => {
           const barHeight = (count / max) * (height - 18);
+          const selected = Boolean(
+            range &&
+            histogram.edges[index + 1] >= range[0] &&
+            histogram.edges[index] <= range[1],
+          );
           return (
             <rect
               key={index}
@@ -94,7 +148,18 @@ function HistogramChart({ histogram }: { histogram: Histogram | undefined }) {
               width={Math.max(1, barWidth - gap)}
               height={barHeight}
               rx="2"
-              className="fill-primary/75"
+              className={!range ? "fill-primary/75" : selected ? "fill-primary" : "fill-primary/25"}
+              stroke={selected ? "currentColor" : "none"}
+              strokeWidth={selected ? 1 : 0}
+              role="button"
+              tabIndex={0}
+              aria-label={`${formatNumber(histogram.edges[index])} to ${formatNumber(histogram.edges[index + 1])}: ${count} clips`}
+              aria-pressed={selected}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter" && event.key !== " ") return;
+                event.preventDefault();
+                applyBins(index, index);
+              }}
             />
           );
         })}
@@ -102,78 +167,16 @@ function HistogramChart({ histogram }: { histogram: Histogram | undefined }) {
       </svg>
       <div className="flex justify-between text-[10px] text-muted-foreground">
         <span>{formatNumber(histogram.min)}</span>
-        <span>mean {formatNumber(histogram.mean)}</span>
+        {range ? (
+          <button type="button" className="rounded-sm px-1 text-primary hover:bg-accent" onClick={() => onRangeChange(null)}>
+            {formatNumber(range[0])}–{formatNumber(range[1])} · Clear
+          </button>
+        ) : (
+          <span>mean {formatNumber(histogram.mean)}</span>
+        )}
         <span>{formatNumber(histogram.max)}</span>
       </div>
     </div>
-  );
-}
-
-function ScatterPlot({
-  clips,
-  selectedIds,
-  subsetIds,
-  onSelect,
-}: {
-  clips: readonly DatasetClip[];
-  selectedIds: ReadonlySet<string>;
-  subsetIds: ReadonlySet<string>;
-  onSelect: (id: string) => void;
-}) {
-  const points = clips.filter(
-    (clip): clip is DatasetClip & { scatter: readonly [number, number] } =>
-      Array.isArray(clip.scatter) && clip.scatter.length === 2,
-  );
-  if (!points.length) {
-    return <p className="text-xs text-muted-foreground">No embedding coordinates.</p>;
-  }
-  const xs = points.map((point) => point.scatter[0]);
-  const ys = points.map((point) => point.scatter[1]);
-  const minX = Math.min(...xs);
-  const maxX = Math.max(...xs);
-  const minY = Math.min(...ys);
-  const maxY = Math.max(...ys);
-  const scaleX = (value: number) =>
-    18 + ((value - minX) / Math.max(maxX - minX, 1e-6)) * 604;
-  const scaleY = (value: number) =>
-    198 - ((value - minY) / Math.max(maxY - minY, 1e-6)) * 176;
-  const color = (cluster: number | null) => {
-    const palette = ["#0071e3", "#e05d44", "#2da44e", "#8250df", "#bf8700", "#0a7b83"];
-    if (cluster === null || cluster < 0) return "#8c959f";
-    return palette[cluster % palette.length];
-  };
-  return (
-    <svg
-      className="h-[220px] w-full rounded-md border border-border-subtle bg-background"
-      viewBox="0 0 640 220"
-      role="img"
-      aria-label="Embedding scatter plot"
-    >
-      <line x1="18" y1="198" x2="622" y2="198" className="stroke-border" />
-      <line x1="18" y1="22" x2="18" y2="198" className="stroke-border" />
-      {points.map((clip) => {
-        const selected = selectedIds.has(clip.clip_id);
-        const recommended = subsetIds.has(clip.clip_id);
-        return (
-          <circle
-            key={clip.clip_id}
-            cx={scaleX(clip.scatter[0])}
-            cy={scaleY(clip.scatter[1])}
-            r={selected || recommended ? 6 : 4}
-            fill={color(clip.cluster_id)}
-            stroke={selected ? "#02122e" : recommended ? "#ff9f0a" : "#fff"}
-            strokeWidth={selected || recommended ? 2 : 1}
-            className="cursor-pointer"
-            tabIndex={0}
-            aria-label={clipLabel(clip)}
-            onClick={() => onSelect(clip.clip_id)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" || event.key === " ") onSelect(clip.clip_id);
-            }}
-          />
-        );
-      })}
-    </svg>
   );
 }
 
@@ -218,6 +221,7 @@ export function AnalysisView({
   const [kindFilter, setKindFilter] = useState("all");
   const [folderFilter, setFolderFilter] = useState("all");
   const [metric, setMetric] = useState("complexity");
+  const [metricRange, setMetricRange] = useState<readonly [number, number] | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [subsetIds, setSubsetIds] = useState<Set<string>>(new Set());
   const [subsetRatio, setSubsetRatio] = useState("10");
@@ -258,6 +262,7 @@ export function AnalysisView({
     setTagFilter("all");
     setKindFilter("all");
     setFolderFilter("all");
+    setMetricRange(null);
     setSelectedIds(new Set());
     setSubsetIds(new Set());
   }, [result]);
@@ -269,13 +274,20 @@ export function AnalysisView({
   );
   const filteredClips = useMemo(
     () =>
-      availableClips.filter(
-        (clip) =>
-          (tagFilter === "all" || clip.tags.includes(tagFilter)) &&
-          (kindFilter === "all" || clip.source_kind === kindFilter) &&
-          (folderFilter === "all" || clip.folder_label === folderFilter),
+      availableClips.filter((clip) =>
+        clipMatchesFilters(clip, {
+          tag: tagFilter,
+          kind: kindFilter,
+          folder: folderFilter,
+          metric,
+          metricRange,
+        }),
       ),
-    [availableClips, folderFilter, kindFilter, tagFilter],
+    [availableClips, folderFilter, kindFilter, metric, metricRange, tagFilter],
+  );
+  const visibleIds = useMemo(
+    () => new Set(filteredClips.map((clip) => clip.clip_id)),
+    [filteredClips],
   );
   const exportIds = useMemo(() => {
     const combined = new Set([...subsetIds, ...selectedIds]);
@@ -313,6 +325,23 @@ export function AnalysisView({
     setBusy(null);
   }
 
+  function clearAnalysisOutput(): void {
+    setResult(null);
+    setMetricRange(null);
+    setSelectedIds(new Set());
+    setSubsetIds(new Set());
+    setPreviewing(null);
+    onMotionLoaded?.(null);
+    onRobotPreviewLoaded?.(null);
+  }
+
+  function applyUploadSummary(value: DatasetUploadSummary): void {
+    setSource(value.source);
+    setUploadSource(value.source || null);
+    setSourceSummary(value.clip_count ? value : null);
+    clearAnalysisOutput();
+  }
+
   async function scanPath(path: string): Promise<void> {
     if (!path.trim()) return;
     const request = begin("scan");
@@ -324,9 +353,7 @@ export function AnalysisView({
       setSource(value.source);
       setSourceSummary(value);
       setUploadSource(null);
-      setResult(null);
-      onMotionLoaded?.(null);
-      onRobotPreviewLoaded?.(null);
+      clearAnalysisOutput();
       setStatus(`${value.clip_count} clips found.`);
     } catch (reason) {
       if (!request.signal.aborted) setError(errorMessage(reason));
@@ -343,9 +370,6 @@ export function AnalysisView({
     const selected = files ? Array.from(files) : [];
     if (!selected.length) return;
     const request = begin("upload");
-    setResult(null);
-    onMotionLoaded?.(null);
-    onRobotPreviewLoaded?.(null);
     setStatus(`Uploading ${selected.length} files...`);
     void uploadDataset(selected, {
       appendTo: uploadSource ?? undefined,
@@ -354,16 +378,58 @@ export function AnalysisView({
     })
       .then((value) => {
         if (request.signal.aborted) return;
-        setSource(value.source);
-        setSourceSummary(value);
-        setUploadSource(value.source);
-        setResult(null);
+        applyUploadSummary(value);
         setStatus(`${value.clip_count} clips ready for analysis.`);
       })
       .catch((reason: unknown) => {
         if (!request.signal.aborted) setError(errorMessage(reason));
       })
       .finally(() => finish(request));
+  }
+
+  async function removeUploadedFolder(folder: string): Promise<void> {
+    if (!uploadSource) return;
+    const request = begin("remove");
+    setStatus(`Removing ${folder}...`);
+    try {
+      const value = await removeDatasetUploadFolder(uploadSource, folder, {
+        signal: request.signal,
+      });
+      if (request.signal.aborted) return;
+      applyUploadSummary(value);
+      setStatus(
+        value.clip_count
+          ? `Removed ${folder}. ${value.clip_count} clips remain.`
+          : `Removed ${folder}. Upload basket is empty.`,
+      );
+    } catch (reason) {
+      if (!request.signal.aborted) setError(errorMessage(reason));
+    } finally {
+      finish(request);
+    }
+  }
+
+  async function clearUploadBasket(): Promise<void> {
+    if (!uploadSource || !sourceSummary) return;
+    const request = begin("remove");
+    const folders = Object.keys(sourceSummary.folders);
+    let currentSource = uploadSource;
+    setStatus("Clearing upload basket...");
+    try {
+      for (const folder of folders) {
+        const value = await removeDatasetUploadFolder(currentSource, folder, {
+          signal: request.signal,
+        });
+        if (request.signal.aborted) return;
+        applyUploadSummary(value);
+        if (value.source) currentSource = value.source;
+      }
+      setStatus("Upload basket cleared.");
+    } catch (reason) {
+      if (!request.signal.aborted) setError(errorMessage(reason));
+    } finally {
+      finish(request);
+    }
   }
 
   function runAnalysis(): void {
@@ -428,7 +494,11 @@ export function AnalysisView({
     void computeDatasetSubset(filteredClips, k, alpha, { signal: request.signal })
       .then((value) => {
         if (!request.signal.aborted) {
-          setSubsetIds(new Set(value.selected));
+          const recommended = new Set(value.selected);
+          setSubsetIds(recommended);
+          setSelectedIds((current) =>
+            new Set([...current].filter((id) => !recommended.has(id))),
+          );
           setStatus(`Recommended ${value.count} clips.`);
         }
       })
@@ -440,11 +510,19 @@ export function AnalysisView({
 
   function toggleSelected(id: string): void {
     setSelectedIds((current) => {
+      if (subsetIds.has(id)) return current;
       const next = new Set(current);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
     });
+  }
+
+  function activateScatterClip(clip: DatasetClip, additive: boolean): void {
+    setSelectedIds((current) =>
+      selectScatterClip(current, clip.clip_id, additive, subsetIds),
+    );
+    void previewClip(clip);
   }
 
   async function exportManifest(format: "json" | "csv"): Promise<void> {
@@ -513,7 +591,7 @@ export function AnalysisView({
       } catch (reason) {
         if (!request.signal.aborted) setError(errorMessage(reason));
       } finally {
-        setPreviewing(null);
+        if (requestRef.current === request) setPreviewing(null);
         finish(request);
       }
       return;
@@ -536,7 +614,7 @@ export function AnalysisView({
     } catch (reason) {
       if (!request.signal.aborted) setError(errorMessage(reason));
     } finally {
-      setPreviewing(null);
+      if (requestRef.current === request) setPreviewing(null);
       finish(request);
     }
   }
@@ -568,6 +646,7 @@ export function AnalysisView({
                   setSourceSummary(null);
                   setUploadSource(null);
                   setResult(null);
+                  setMetricRange(null);
                   setSelectedIds(new Set());
                   setSubsetIds(new Set());
                   onMotionLoaded?.(null);
@@ -615,6 +694,14 @@ export function AnalysisView({
               <p className="text-xs text-muted-foreground">
                 {sourceSummary.human_count} human · {sourceSummary.robot_count} robot · {Object.keys(sourceSummary.folders).length} folders
               </p>
+            )}
+            {sourceSummary && uploadSource && (
+              <UploadBasket
+                summary={sourceSummary}
+                disabled={busy !== null}
+                onRemove={(folder) => void removeUploadedFolder(folder)}
+                onClear={() => void clearUploadBasket()}
+              />
             )}
           </div>
         </WorkflowStep>
@@ -740,7 +827,13 @@ export function AnalysisView({
                   <h2 className="text-sm font-semibold text-foreground">Embedding map</h2>
                   <span className="text-[11px] text-muted-foreground">{Object.keys(summary.cluster_counts).length} clusters</span>
                 </div>
-                <ScatterPlot clips={filteredClips} selectedIds={selectedIds} subsetIds={subsetIds} onSelect={toggleSelected} />
+                <ScatterPlot
+                  clips={availableClips}
+                  visibleIds={visibleIds}
+                  selectedIds={selectedIds}
+                  subsetIds={subsetIds}
+                  onActivate={activateScatterClip}
+                />
               </div>
 
               <div className="grid gap-2 rounded-md border border-border-subtle bg-background p-2.5">
@@ -760,7 +853,15 @@ export function AnalysisView({
                 </div>
                 <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
                   <div>
-                    <select className={fieldClass} aria-label="Analysis metric" value={metric} onChange={(event) => setMetric(event.target.value)}>
+                    <select
+                      className={fieldClass}
+                      aria-label="Analysis metric"
+                      value={metric}
+                      onChange={(event) => {
+                        setMetric(event.target.value);
+                        setMetricRange(null);
+                      }}
+                    >
                       {summary.numeric_keys.map((key) => <option key={key} value={key}>{key}</option>)}
                     </select>
                     {typeof catalogMetric.desc === "string" && <p className="mt-1 text-[11px] text-muted-foreground">{catalogMetric.desc}</p>}
@@ -770,7 +871,11 @@ export function AnalysisView({
                     <p>mean {formatNumber(summary.histograms[metric]?.mean)}</p>
                   </div>
                 </div>
-                <HistogramChart histogram={summary.histograms[metric]} />
+                <HistogramChart
+                  histogram={summary.histograms[metric]}
+                  range={metricRange}
+                  onRangeChange={setMetricRange}
+                />
               </div>
 
               <div className="grid gap-2 rounded-md border border-border-subtle bg-background p-2.5">
@@ -784,7 +889,17 @@ export function AnalysisView({
                   <Button size="sm" disabled={busy !== null || !filteredClips.length} onClick={recommendSubset}>{busy === "subset" ? "Selecting..." : "Recommend"}</Button>
                 </div>
                 <div className="grid grid-cols-4 gap-1.5">
-                  <Button size="sm" disabled={busy !== null || !filteredClips.length} onClick={() => setSelectedIds(new Set(filteredClips.map((clip) => clip.clip_id)))}>Select visible</Button>
+                  <Button
+                    size="sm"
+                    disabled={busy !== null || !filteredClips.length}
+                    onClick={() => setSelectedIds(new Set(
+                      filteredClips
+                        .map((clip) => clip.clip_id)
+                        .filter((id) => !subsetIds.has(id)),
+                    ))}
+                  >
+                    Select visible
+                  </Button>
                   <Button size="sm" disabled={busy !== null || !selectedIds.size} onClick={() => setSelectedIds(new Set())}>Clear selection</Button>
                   <Button size="sm" disabled={busy !== null || !exportIds.length} onClick={() => void exportManifest("json")}>Export JSON</Button>
                   <Button size="sm" disabled={busy !== null || !exportIds.length} onClick={() => void exportManifest("csv")}>Export CSV</Button>
