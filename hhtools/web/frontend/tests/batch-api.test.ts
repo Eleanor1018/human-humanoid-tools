@@ -18,6 +18,48 @@ const {
   scanHumanBatchInputs,
   uploadR2rBatchInputs,
 } = await import("../src/features/batch/api.ts");
+const {
+  appendUniqueEntries,
+  entryReference,
+  optionalNonNegativeNumber,
+  optionalPositiveNumber,
+  suggestedBackend,
+  timeRangeError,
+  uploadFileKey,
+} = await import("../src/features/batch/model.ts");
+
+test("Batch draft helpers preserve intrinsic references and deduplicate inputs", () => {
+  const existing = [{ source_path: "/motions/walk.npz", dataset: "amass" }];
+  const incoming = [
+    { source_path: "/motions/walk.npz", reference: "smplx" },
+    {
+      source_path: "/motions/reach.npy",
+      dataset: "motion_x",
+      suggested_backend: "interaction_mesh",
+    },
+  ];
+  const combined = appendUniqueEntries(existing, incoming);
+  assert.equal(combined.length, 2);
+  assert.equal(entryReference(existing[0]), "smpl");
+  assert.equal(entryReference(incoming[1]), "smplx");
+  assert.equal(suggestedBackend(incoming), "interaction_mesh");
+});
+
+test("Batch settings helpers validate optional FPS and time ranges", () => {
+  assert.equal(optionalPositiveNumber(" 60 "), 60);
+  assert.equal(optionalPositiveNumber("0"), undefined);
+  assert.equal(optionalNonNegativeNumber("0"), 0);
+  assert.equal(optionalNonNegativeNumber("-1"), undefined);
+  assert.equal(timeRangeError("1", "2"), null);
+  assert.match(timeRangeError("2", "1") ?? "", /cannot be later/);
+  assert.match(timeRangeError("bad", "") ?? "", /non-negative/);
+});
+
+test("Video queue identity includes relative path and file metadata", () => {
+  const file = new File(["video"], "turn.mp4", { lastModified: 42 });
+  Object.assign(file, { _relpath: "session/turn.mp4" });
+  assert.equal(uploadFileKey(file), "session/turn.mp4:5:42");
+});
 
 test("H2R Batch sends entries and returns its download identity", async () => {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
@@ -127,4 +169,3 @@ test("Batch scan and upload keep their separate input contracts", async () => {
   );
   assert.equal(uploaded.entries[0]?.source_path, "/tmp/walk.csv");
 });
-

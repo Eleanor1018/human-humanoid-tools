@@ -1,11 +1,20 @@
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-import { Field, fieldClass } from "@/components/Field";
 import { InspectorPage } from "@/components/Inspector";
-import { RobotPicker } from "@/components/RobotPicker";
 import { SegmentedControl } from "@/components/SegmentedControl";
 import { Button } from "@/components/ui/button";
-import { WorkflowStep } from "@/components/WorkflowSteps";
+import {
+  getMotionLibrary,
+  type MotionLibraryEntry,
+} from "@/features/motion/api";
+import {
+  getRobotLibrary,
+  type RobotSummary,
+} from "@/features/robot/api";
+
+import { HumanBatchView } from "./HumanBatchView";
+import { RobotBatchView } from "./RobotBatchView";
+import { VideoBatchView } from "./VideoBatchView";
 
 type BatchMode = "v2m" | "h2r" | "r2r";
 
@@ -15,135 +24,79 @@ const modes = [
   { id: "r2r", label: "R2R" },
 ] as const;
 
-function InputSummary({ label, unit }: { label: string; unit: string }) {
-  return (
-    <div className="flex min-h-10 items-center justify-between border-b border-border-subtle text-[13px] font-semibold text-foreground">
-      <span>{label}</span>
-      <strong className="text-xs text-muted-foreground">0 {unit}</strong>
-    </div>
-  );
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
-
-function BatchSettings({ step = 3 }: { step?: number }) {
-  return (
-    <WorkflowStep title={`${step}. Run settings`} defaultOpen>
-      <div className="grid grid-cols-2 gap-2">
-        <Field label="Solver">
-          <select className={fieldClass} defaultValue="newton" disabled>
-            <option value="newton">Newton IK</option>
-            <option value="interaction-mesh">Interaction-Mesh</option>
-          </select>
-        </Field>
-        <Field label="Output format">
-          <select className={fieldClass} defaultValue="pkl" disabled>
-            <option value="pkl">PKL</option>
-            <option value="csv">CSV</option>
-          </select>
-        </Field>
-      </div>
-    </WorkflowStep>
-  );
-}
-
-function RunPanel({ label, hint }: { label: string; hint: string }) {
-  return (
-    <section className="grid gap-2.5 pt-4">
-      <p className="text-xs text-muted-foreground">{hint}</p>
-      <Button variant="primary" size="sm" disabled>
-        {label}
-      </Button>
-    </section>
-  );
-}
-
-function HumanBatch() {
-  return (
-    <div>
-      <InputSummary label="1. Inputs" unit="clips" />
-      <WorkflowStep title="2. Target robot & compatibility" defaultOpen>
-        <RobotPicker label="Select target robot" status="Not loaded" />
-      </WorkflowStep>
-      <BatchSettings />
-      <RunPanel
-        label="Start batch task"
-        hint="Add motions and select a target robot first."
-      />
-    </div>
-  );
-}
-
-function RobotBatch() {
-  return (
-    <div>
-      <InputSummary label="1. Source trajectories" unit="trajectories" />
-      <WorkflowStep title="2. Source robot" defaultOpen>
-        <RobotPicker label="Select source robot" status="Not loaded" />
-      </WorkflowStep>
-      <WorkflowStep title="3. Target robot" defaultOpen>
-        <RobotPicker label="Select target robot" status="Not loaded" />
-      </WorkflowStep>
-      <BatchSettings step={4} />
-      <RunPanel
-        label="Start R2R batch task"
-        hint="Add trajectories and load both robots first."
-      />
-    </div>
-  );
-}
-
-function VideoBatch() {
-  return (
-    <div>
-      <InputSummary label="1. Videos" unit="videos" />
-      <WorkflowStep title="2. Environment" defaultOpen>
-        <div className="grid gap-2.5">
-          <Field label="Runtime">
-            <select className={fieldClass} defaultValue="official" disabled>
-              <option value="official">GVHMR Official</option>
-            </select>
-          </Field>
-          <Button size="sm" disabled>
-            Confirm environment
-          </Button>
-        </div>
-      </WorkflowStep>
-      <WorkflowStep title="3. Generate motions" defaultOpen>
-        <div className="grid gap-2.5">
-          <label className="flex min-h-8 items-center justify-between gap-3 text-xs font-medium text-foreground">
-            Static camera
-            <input type="checkbox" defaultChecked disabled className="size-4 accent-primary" />
-          </label>
-          <Field label="Focal length">
-            <input className={fieldClass} placeholder="Auto" disabled />
-          </Field>
-          <Button variant="primary" size="sm" disabled>
-            Start V2M batch
-          </Button>
-        </div>
-      </WorkflowStep>
-    </div>
-  );
-}
-
-const modeViews: Record<BatchMode, () => React.JSX.Element> = {
-  v2m: VideoBatch,
-  h2r: HumanBatch,
-  r2r: RobotBatch,
-};
-
+/**
+ * Batch owns one lightweight catalog snapshot and three independent drafts.
+ * Hidden modes remain mounted so switching workflows never destroys a queue or job.
+ */
 export function BatchView() {
   const [mode, setMode] = useState<BatchMode>("h2r");
-  const ActiveMode = modeViews[mode];
+  const [motions, setMotions] = useState<readonly MotionLibraryEntry[]>([]);
+  const [robots, setRobots] = useState<readonly RobotSummary[]>([]);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [catalogBusy, setCatalogBusy] = useState(false);
+  const catalogRequest = useRef<AbortController | null>(null);
+
+  const refreshCatalogs = useCallback(() => {
+    catalogRequest.current?.abort();
+    const request = new AbortController();
+    catalogRequest.current = request;
+    setCatalogBusy(true);
+    setCatalogError(null);
+    void Promise.all([
+      getMotionLibrary({ signal: request.signal }),
+      getRobotLibrary({ signal: request.signal }),
+    ])
+      .then(([motionLibrary, robotLibrary]) => {
+        if (request.signal.aborted) return;
+        setMotions(motionLibrary.entries);
+        setRobots(robotLibrary.robots);
+      })
+      .catch((reason: unknown) => {
+        if (!request.signal.aborted) setCatalogError(errorMessage(reason));
+      })
+      .finally(() => {
+        if (!request.signal.aborted) setCatalogBusy(false);
+      });
+  }, []);
+
+  useEffect(() => {
+    refreshCatalogs();
+    return () => catalogRequest.current?.abort();
+  }, [refreshCatalogs]);
 
   return (
     <InspectorPage title="Batch">
-      <SegmentedControl
-        label="Batch workflow"
-        items={modes}
-        value={mode}
-        onValueChange={setMode}
-      />
-      <ActiveMode />
+      <div className="grid gap-2">
+        <SegmentedControl
+          label="Batch workflow"
+          items={modes}
+          value={mode}
+          onValueChange={setMode}
+        />
+        <div className="flex min-h-7 items-center justify-between gap-3 text-[10px] text-muted-foreground">
+          <span>
+            {catalogBusy
+              ? "Refreshing catalogs…"
+              : `${motions.length} library items · ${robots.length} robots`}
+          </span>
+          <Button size="sm" variant="ghost" disabled={catalogBusy} onClick={refreshCatalogs}>
+            Refresh
+          </Button>
+        </div>
+      </div>
+
+      <div hidden={mode !== "v2m"}>
+        <VideoBatchView />
+      </div>
+      <div hidden={mode !== "h2r"}>
+        <HumanBatchView library={motions} robots={robots} catalogError={catalogError} />
+      </div>
+      <div hidden={mode !== "r2r"}>
+        <RobotBatchView robots={robots} catalogError={catalogError} />
+      </div>
     </InspectorPage>
   );
 }

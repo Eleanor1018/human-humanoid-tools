@@ -40,7 +40,11 @@ src/
 │   │   ├── RobotToRobotView.tsx
 │   │   └── api.ts           # Source trajectory, R2R job and export transport
 │   ├── batch/
-│   │   └── BatchView.tsx    # Local V2M/H2R/R2R shells
+│   │   ├── BatchView.tsx    # Catalog and three persistent workflow drafts
+│   │   ├── HumanBatchView.tsx
+│   │   ├── RobotBatchView.tsx
+│   │   ├── VideoBatchView.tsx
+│   │   └── api.ts           # Batch import, jobs, progress, and downloads
 │   ├── video-to-motion/
 │   │   └── VideoToMotionView.tsx
 │   └── analysis/
@@ -136,6 +140,7 @@ main -> App -> features -> components/ui
 - [x] Human-to-Robot inspector visual shell
 - [x] Robot-to-Robot inspector visual shell
 - [x] Batch inspector visual shell
+- [x] V2M, H2R, and R2R Batch queues, jobs, failures, and ZIP downloads
 - [x] Data Analysis inspector visual shell
 - [x] R3F Stage base scene (camera, controls, lights, axes, grid)
 - [x] Shared R3F timeline with play/pause, seek, and frame stepping
@@ -162,9 +167,8 @@ main -> App -> features -> components/ui
 
 Analysis keeps the server as the source of truth: the view starts and polls the
 `dataset_analyze` job, renders the returned manifest, and sends subset/export
-requests back to the existing FastAPI dataset routes. Human result rows hand a
-typed motion payload to the shared Stage; robot rows remain available through
-the Robot-to-Robot workflow until the Stage gains a dataset-scene token layer.
+requests back to the existing FastAPI dataset routes. Human and robot result
+rows both hand typed preview payloads to the shared Stage.
 
 The baked-body renderer is covered by the backend-compatible gzip/vertex test.
 SMPL-family parameter clips (AMASS, GVHMR, Motion-X, and PHUMA) now remain
@@ -191,9 +195,7 @@ Web payload omits dense face, finger, and toe joints from compact body views.
 Those compact-topology rules live in the renderer-neutral `hhtools.human`
 package and are shared downward by Web and Viser rather than between hosts.
 
-The remaining legacy capabilities are workflow additions rather than
-asset-loading blockers: detailed validation cards and Batch basket actions.
-They should be restored as separate, bounded changes.
+The remaining parity work is tracked by feature in `frontend-parity.md`.
 
 ## References
 

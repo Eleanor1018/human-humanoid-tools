@@ -12,7 +12,7 @@ may improve spacing, rounded corners, accessibility, and narrow-screen layout.
 | Video to Motion | Functional when GVHMR is ready | Restore existing-result import and explicit running-job cancellation |
 | Human to Robot | Functional | Restore validation/evaluation and complete export options |
 | Robot to Robot | Functional | Restore full calibration editor, validation/evaluation, and complete export options |
-| Batch | Visual shell only | Implement V2M, H2R, and R2R input queues, jobs, progress, failures, and downloads |
+| Batch | Functional | Run full solver smoke when the licensed/runtime dependencies are available |
 | Analysis | Functional | Restore scatter-point preview and removable multi-folder upload basket |
 | Application menu | Visual shell only | Wire navigation, import commands, current export, settings, help, and desktop exit |
 
@@ -20,7 +20,7 @@ may improve spacing, rounded corners, accessibility, and narrow-screen layout.
 
 - [x] Match the Stage visibility HUD state and asset-family colors.
 - [x] Share one complete React calibration editor between H2R and R2R.
-- [ ] Implement the three Batch pipelines against the existing FastAPI routes.
+- [x] Implement the three Batch pipelines against the existing FastAPI routes.
   - [x] Add the shared typed import, scan, job, progress, and download boundary.
 - [ ] Restore H2R scaled preview and omitted result/export controls.
   - [x] Load the calibrated scaled skeleton/scene before Retarget without forcing it visible.
