@@ -76,7 +76,9 @@ main -> App -> features -> components/ui
 - `App.tsx` owns shared inputs and completed workflow results, then projects the
   active workflow onto the single Stage.
 - A feature owns its view and local state.
-- Features do not reach into another feature's internal files.
+- Features do not reach into another feature's view or state. An explicit
+  cross-feature handoff may reuse an exported, side-effect-free transport API
+  (for example, Analysis uses Motion's library loader for Stage preview).
 - `stage/` and shared components never import from features.
 - Browser code never imports Python, Node, or Electron directly.
 
