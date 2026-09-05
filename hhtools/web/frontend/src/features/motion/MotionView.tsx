@@ -9,7 +9,9 @@ import type { StageMotionPayload } from "@/stage/types";
 
 import {
   getMotionLibrary,
+  linkMotionLibraryPath,
   loadMotionLibraryEntry,
+  setMotionLibraryRoot,
   toStageMotionPayload,
   uploadMotion,
   type MotionCategory,
@@ -87,6 +89,17 @@ function uploadFolderLabel(files: readonly File[]): string | undefined {
   return label || undefined;
 }
 
+interface DesktopDirectoryBridge {
+  selectDirectory?: () => Promise<string | null>;
+}
+
+async function chooseServerDirectory(message: string, current = ""): Promise<string | null> {
+  const desktop = (window as Window & { hhtoolsDesktop?: DesktopDirectoryBridge })
+    .hhtoolsDesktop;
+  if (desktop?.selectDirectory) return desktop.selectDirectory();
+  return window.prompt(message, current);
+}
+
 export function MotionView({
   currentMotion,
   onMotionLoaded,
@@ -101,10 +114,13 @@ export function MotionView({
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState<"all" | MotionCategory>("all");
   const [loadingLibrary, setLoadingLibrary] = useState(true);
+  const [libraryAction, setLibraryAction] = useState<"root" | "link" | null>(null);
+  const [libraryRoot, setLibraryRoot] = useState("");
   const [loadingKey, setLoadingKey] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const libraryRequest = useRef<AbortController | null>(null);
+  const libraryActionRequest = useRef<AbortController | null>(null);
   const motionRequest = useRef<AbortController | null>(null);
   const fileInput = useRef<HTMLInputElement | null>(null);
   const folderInput = useRef<HTMLInputElement | null>(null);
@@ -121,6 +137,7 @@ export function MotionView({
       .then((response) => {
         if (request.signal.aborted) return;
         setEntries(response.entries);
+        setLibraryRoot(response.motions_library_root);
       })
       .catch((reason: unknown) => {
         if (request.signal.aborted) return;
@@ -135,6 +152,7 @@ export function MotionView({
     refreshLibrary();
     return () => {
       libraryRequest.current?.abort();
+      libraryActionRequest.current?.abort();
       motionRequest.current?.abort();
     };
   }, [refreshLibrary]);
@@ -241,6 +259,46 @@ export function MotionView({
     [loadingKey, onMotionLoaded, profile, refreshLibrary],
   );
 
+  const manageLibrary = useCallback(
+    async (action: "root" | "link") => {
+      if (libraryAction || loadingKey) return;
+      setLibraryAction(action);
+      setError(null);
+      try {
+        const path = await chooseServerDirectory(
+          action === "root"
+            ? "Enter the Motion Library directory on the server"
+            : "Enter a motion dataset directory to link",
+          action === "root" ? libraryRoot : "",
+        );
+        if (!path?.trim()) return;
+        libraryActionRequest.current?.abort();
+        const request = new AbortController();
+        libraryActionRequest.current = request;
+        if (action === "root") {
+          const result = await setMotionLibraryRoot(path.trim(), {
+            signal: request.signal,
+          });
+          if (request.signal.aborted) return;
+          setLibraryRoot(result.root);
+          setStatus(`Motion Library: ${result.root}`);
+        } else {
+          const result = await linkMotionLibraryPath(path.trim(), {
+            signal: request.signal,
+          });
+          if (request.signal.aborted) return;
+          setStatus(`Linked ${result.folder_label}: ${result.clip_count} clips`);
+        }
+        refreshLibrary();
+      } catch (reason) {
+        setError(errorMessage(reason));
+      } finally {
+        setLibraryAction(null);
+      }
+    },
+    [libraryAction, libraryRoot, loadingKey, refreshLibrary],
+  );
+
   return (
     <InspectorPage title="Motion">
       <div className="flex shrink-0 flex-col gap-2.5">
@@ -322,10 +380,11 @@ export function MotionView({
         <div className="grid grid-cols-[minmax(0,1fr)_minmax(110px,42%)] gap-1.5">
           <Button
             size="sm"
-            disabled
-            title="Use Link directory to add an external library"
+            disabled={loadingLibrary || Boolean(loadingKey) || libraryAction !== null}
+            title={libraryRoot}
+            onClick={() => void manageLibrary("root")}
           >
-            Choose library directory
+            {libraryAction === "root" ? "Choosing..." : "Choose library directory"}
           </Button>
           <select
             className={fieldClass}
@@ -361,10 +420,11 @@ export function MotionView({
           />
           <Button
             size="sm"
-            disabled
-            title="Linking an external directory is not available in the browser shell"
+            disabled={loadingLibrary || Boolean(loadingKey) || libraryAction !== null}
+            title="Add a server-local directory without copying its clips"
+            onClick={() => void manageLibrary("link")}
           >
-            Link directory
+            {libraryAction === "link" ? "Linking..." : "Link directory"}
           </Button>
         </div>
         {error && (

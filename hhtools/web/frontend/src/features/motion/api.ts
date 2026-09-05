@@ -40,6 +40,20 @@ export interface MotionLibraryResponse {
   readonly entries: readonly MotionLibraryEntry[];
 }
 
+export interface MotionLibrarySettings {
+  readonly root: string;
+  readonly default_root: string;
+  readonly editable: boolean;
+  readonly readonly_reason?: string | null;
+}
+
+export interface MotionLibraryLinkResult {
+  readonly folder_label: string;
+  readonly clip_count: number;
+  readonly path: string;
+  readonly motions_library_root: string;
+}
+
 /** Full result emitted by `/api/motion/load_library` or `/api/motion/upload`. */
 export interface MotionPayload extends StageMotionPayload {
   readonly name: string;
@@ -90,6 +104,38 @@ export function getMotionLibrary(
   return requestJson<MotionLibraryResponse>(
     "/api/library",
     { signal: options.signal },
+    options.fetcher,
+  );
+}
+
+export function setMotionLibraryRoot(
+  root: string,
+  options: { signal?: AbortSignal; fetcher?: Fetcher } = {},
+): Promise<MotionLibrarySettings> {
+  return requestJson<MotionLibrarySettings>(
+    "/api/settings/motion-library",
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ root }),
+      signal: options.signal,
+    },
+    options.fetcher,
+  );
+}
+
+export function linkMotionLibraryPath(
+  path: string,
+  options: { signal?: AbortSignal; fetcher?: Fetcher } = {},
+): Promise<MotionLibraryLinkResult> {
+  return requestJson<MotionLibraryLinkResult>(
+    "/api/library/link",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+      signal: options.signal,
+    },
     options.fetcher,
   );
 }

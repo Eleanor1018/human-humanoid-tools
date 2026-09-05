@@ -132,6 +132,7 @@ main -> App -> features -> components/ui
 - [x] Animated skeleton, baked body, terrain, and interaction-object layers
 - [x] Legacy-compatible capsule body when a baked skin is unavailable
 - [x] Motion Library list, upload, job polling, and Stage handoff
+- [x] Motion Library root selection, external directory links, and recursive drops
 - [x] Robot catalog, zero-pose selection, GLB parsing, and Stage handoff
 - [x] Persistent URDF/mesh-folder robot import and user-robot removal
 - [x] Six curated robot presets installed from pinned upstream sources

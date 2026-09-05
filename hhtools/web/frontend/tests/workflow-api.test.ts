@@ -20,6 +20,8 @@ const {
   computeDatasetSubset,
   uploadDataset,
 } = await import("../src/features/analysis/api.ts");
+const { linkMotionLibraryPath, setMotionLibraryRoot } =
+  await import("../src/features/motion/api.ts");
 
 test("H2R preserves the selected backend and polls its retarget job", async () => {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
@@ -287,4 +289,26 @@ test("robot import preserves bundle paths and deletion encodes its name", async 
   assert.equal(((calls[0].init?.body as FormData).get("files") as File).name, "meshes/arm.stl");
   assert.equal(calls[1].url, "/api/robot/my%20robot");
   assert.equal(calls[1].init?.method, "DELETE");
+});
+
+test("motion library management uses the existing settings and link routes", async () => {
+  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
+    calls.push({ url: String(input), init });
+    return calls.length === 1
+      ? Response.json({ root: "/data/library", default_root: "/default", editable: true })
+      : Response.json({
+          folder_label: "AMASS",
+          clip_count: 4,
+          path: "/data/library/AMASS",
+          motions_library_root: "/data/library",
+        });
+  };
+  await setMotionLibraryRoot("/data/library", { fetcher });
+  await linkMotionLibraryPath("/datasets/AMASS", { fetcher });
+  assert.equal(calls[0].url, "/api/settings/motion-library");
+  assert.equal(calls[0].init?.method, "PATCH");
+  assert.deepEqual(JSON.parse(String(calls[0].init?.body)), { root: "/data/library" });
+  assert.equal(calls[1].url, "/api/library/link");
+  assert.deepEqual(JSON.parse(String(calls[1].init?.body)), { path: "/datasets/AMASS" });
 });
