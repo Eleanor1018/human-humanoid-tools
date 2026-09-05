@@ -36,6 +36,7 @@ may improve spacing, rounded corners, accessibility, and narrow-screen layout.
   - [x] Restore Analysis scatter selection/preview, fixed coordinates, histogram brushing, and upload-basket removal.
   - [x] Connect the desktop Exit command through the trusted Electron IPC boundary.
   - [x] Connect all five application menus without global DOM commands.
+  - [x] Refresh R2R robot and trajectory catalogs whenever the workspace is entered.
 - [ ] Run route-contract tests and desktop/narrow-screen browser smoke for every pipeline.
 
 ## Rules

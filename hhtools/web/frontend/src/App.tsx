@@ -489,6 +489,7 @@ export function App() {
         </div>
         <div className={activeView === "r2r" ? "h-full" : "hidden"}>
           <RobotToRobotView
+            active={activeView === "r2r"}
             currentSourceRobot={r2rSourceRobot}
             currentTargetRobot={r2rTargetRobot}
             currentSourceResult={r2rSourceResult}

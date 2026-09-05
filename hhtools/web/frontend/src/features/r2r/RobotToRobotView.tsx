@@ -58,6 +58,7 @@ type BusyAction =
   | "retarget";
 
 export interface RobotToRobotViewProps {
+  active: boolean;
   currentSourceRobot?: RobotPayload | null;
   currentTargetRobot?: RobotPayload | null;
   currentSourceResult?: R2rSourceResult | null;
@@ -144,6 +145,7 @@ function RobotSelect({
 }
 
 export function RobotToRobotView({
+  active,
   currentSourceRobot,
   currentTargetRobot,
   currentSourceResult,
@@ -215,7 +217,17 @@ export function RobotToRobotView({
   referenceCallback.current = onCalibrationReference;
   interactionCallback.current = onCalibrationInteraction;
 
+  useEffect(
+    () => () => {
+      actionRequest.current?.abort();
+      calibrationStatusRequest.current?.abort();
+    },
+    [],
+  );
+
+  // This view stays mounted to preserve jobs, so refresh its catalogs on entry.
   useEffect(() => {
+    if (!active) return;
     const request = new AbortController();
     void getRobotLibrary({ signal: request.signal })
       .then((catalog) => {
@@ -238,12 +250,8 @@ export function RobotToRobotView({
       .catch((reason: unknown) => {
         if (!request.signal.aborted) setError(errorMessage(reason));
       });
-    return () => {
-      request.abort();
-      actionRequest.current?.abort();
-      calibrationStatusRequest.current?.abort();
-    };
-  }, []);
+    return () => request.abort();
+  }, [active]);
 
   useEffect(() => {
     folderInput.current?.setAttribute("webkitdirectory", "");
