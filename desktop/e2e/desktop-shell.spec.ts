@@ -62,16 +62,70 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
     await expect(page).toHaveTitle('Human-Humanoid Tools')
     await expect(page.locator("#app[data-hhtools-ready='true']")).toBeVisible()
     await expect(page.getByLabel('HHTOOLS')).toBeVisible()
-    const menu = page.getByRole('navigation', { name: 'Application menu' })
-    await expect(menu.getByRole('button')).toHaveText([
+    const menu = page.getByRole('menubar', { name: 'Application menu' })
+    await expect(menu.getByRole('menuitem')).toHaveText([
       'File',
       'Workflows',
       'Analysis',
       'Settings',
       'Help'
     ])
+
+    const fileTrigger = menu.getByRole('menuitem', { name: 'File', exact: true })
+    const fileMenu = page.getByRole('menu', { name: 'File' })
+    await fileTrigger.hover()
+    await expect(fileMenu).toBeVisible()
+    await expect(fileMenu.getByRole('menuitem')).toHaveCount(7)
+    for (const command of [
+      'Import Motion File',
+      'Import Motion Folder',
+      'Import Video',
+      'Import Robot URDF',
+      'Import Robot Mesh Folder'
+    ]) {
+      await expect(fileMenu.getByRole('menuitem', { name: command, exact: true })).toBeEnabled()
+    }
+    await expect(fileMenu.getByRole('menuitem', { name: /^Current Result/ })).toBeDisabled()
+    await expect(fileMenu.getByRole('menuitem', { name: 'Exit', exact: true })).toBeEnabled()
+
+    const settingsTrigger = menu.getByRole('menuitem', { name: 'Settings', exact: true })
+    const settingsMenu = page.getByRole('menu', { name: 'Settings' })
+    await settingsTrigger.hover()
+    await expect(fileMenu).toBeHidden()
+    await expect(settingsMenu.getByRole('menuitem')).toHaveText(['Settings', 'Dark Mode'])
+    await settingsMenu.getByRole('menuitem', { name: 'Settings', exact: true }).click()
+    const settingsDialog = page.getByRole('dialog', { name: 'Settings' })
+    await expect(settingsDialog).toBeVisible()
+    await expect(settingsDialog.getByLabel('Concurrent jobs')).toBeEnabled()
+    await expect(settingsDialog.getByLabel('Queued jobs')).toBeEnabled()
+    await expect(settingsDialog.getByRole('button', { name: 'Save' })).toBeEnabled()
+    await settingsDialog.getByRole('button', { name: 'Close' }).click()
+    await expect(settingsDialog).toBeHidden()
+
+    await settingsTrigger.hover()
+    await settingsMenu.getByRole('menuitem', { name: 'Dark Mode', exact: true }).click()
+    await expect(page.locator('#app')).toHaveAttribute('data-theme', 'dark')
+    await settingsTrigger.hover()
+    await settingsMenu.getByRole('menuitem', { name: 'Light Mode', exact: true }).click()
+    await expect(page.locator('#app')).toHaveAttribute('data-theme', 'light')
+
+    const helpTrigger = menu.getByRole('menuitem', { name: 'Help', exact: true })
+    const helpMenu = page.getByRole('menu', { name: 'Help' })
+    await helpTrigger.hover()
+    await expect(helpMenu.getByRole('menuitem')).toHaveText(['Tutorial', 'About hhtools'])
+    await expect(helpMenu.getByRole('menuitem', { name: 'Tutorial' })).toBeEnabled()
+    await helpMenu.getByRole('menuitem', { name: 'About hhtools' }).click()
+    const aboutDialog = page.getByRole('dialog', { name: 'About hhtools' })
+    await expect(aboutDialog).toBeVisible()
+    await expect(aboutDialog.getByRole('link', { name: 'Project source and documentation' }))
+      .toHaveAttribute(
+        'href',
+        'https://github.com/Eleanor1018/human-humanoid-tools#readme'
+      )
+    await aboutDialog.getByRole('button', { name: 'Close' }).click()
+
     const workflowsMenu = page.getByRole('menu', { name: 'Workflows' })
-    await menu.getByRole('button', { name: 'Workflows', exact: true }).hover()
+    await menu.getByRole('menuitem', { name: 'Workflows', exact: true }).hover()
     await expect(workflowsMenu).toBeVisible()
     await expect(workflowsMenu.getByRole('menuitem')).toHaveText([
       'Video to MotionAlt+7',
@@ -79,7 +133,7 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
       'Robot to RobotAlt+4',
       'BatchAlt+5'
     ])
-    await menu.getByRole('button', { name: 'Analysis', exact: true }).hover()
+    await menu.getByRole('menuitem', { name: 'Analysis', exact: true }).hover()
     await expect(workflowsMenu).toBeHidden()
     await expect(page.getByRole('menu', { name: 'Analysis' })).toBeVisible()
     await page.keyboard.press('Escape')
@@ -149,15 +203,20 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
     )
     await expect(inspector.getByRole('heading', { name: 'Human → Robot' })).toBeVisible()
     await expect(page.getByRole('list', { name: 'Human to Robot pipeline' })).toBeVisible()
-    await expect(inspector.locator('details')).toHaveCount(4)
-    await expect(inspector.getByRole('button', { name: 'Select motion' })).toBeDisabled()
+    const h2rPage = inspector.locator('section[aria-label="Human → Robot"]')
+    await expect(h2rPage.locator('details')).toHaveCount(4)
+    await expect(inspector.getByLabel('Select human motion')).toBeVisible()
+    await expect(inspector.getByRole('button', { name: 'Load motion' })).toBeDisabled()
     await expect(inspector.getByRole('heading', { name: 'Motion' })).toHaveCount(0)
 
     await sidebar.getByRole('button', { name: 'Robot → Robot' }).click()
     await expect(inspector.getByRole('heading', { name: 'Robot → Robot' })).toBeVisible()
     await expect(page.getByRole('list', { name: 'Robot to Robot pipeline' })).toBeVisible()
-    await expect(inspector.locator('details')).toHaveCount(5)
-    await expect(inspector.getByText('No source robot loaded.')).toBeVisible()
+    const r2rPage = inspector.locator('section[aria-label="Robot → Robot"]')
+    await expect(r2rPage.locator('details')).toHaveCount(5)
+    const r2rSourceStep = r2rPage.locator('details').first()
+    await expect(r2rSourceStep.getByLabel('Select source robot')).toHaveValue('')
+    await expect(r2rSourceStep.getByRole('button', { name: 'Load' })).toBeDisabled()
 
     await sidebar.getByRole('button', { name: 'Batch', exact: true }).click()
     await expect(inspector.getByRole('heading', { name: 'Batch' })).toBeVisible()
@@ -169,13 +228,11 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
     await sidebar.getByRole('button', { name: 'Data Analysis' }).click()
     await expect(inspector.getByRole('heading', { name: 'Data Analysis' })).toBeVisible()
     await expect(page.getByRole('list', { name: 'Data Analysis pipeline' })).toBeVisible()
-    await expect(inspector.locator('details')).toHaveCount(5)
-    await expect(
-      inspector.getByRole('group', { name: 'Motion dataset import area' })
-    ).toBeVisible()
-    await expect(
-      inspector.getByRole('group', { name: 'Robot trajectory import area' })
-    ).toBeVisible()
+    const analysisPage = inspector.locator('section[aria-label="Data Analysis"]')
+    await expect(analysisPage.locator('details')).toHaveCount(4)
+    await expect(analysisPage.getByLabel('Dataset source path')).toBeVisible()
+    await expect(analysisPage.getByRole('button', { name: 'Choose folder' })).toBeEnabled()
+    await expect(analysisPage.getByRole('button', { name: 'Built-in library' })).toBeEnabled()
     await expect(page.locator('.workspace-drawer-handle, .col-resizer')).toHaveCount(0)
 
     const stage = page.getByRole('main', { name: 'Workspace content' })
@@ -212,15 +269,18 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
       'Scaled',
       'Robot'
     ])
+    expect(
+      await stageToggles.evaluateAll((toggles) =>
+        toggles.every((toggle) => (toggle as HTMLButtonElement).disabled)
+      )
+    ).toBe(true)
     await expect(stageMenu.getByRole('button', { name: 'Body', exact: true })).toHaveAttribute(
       'aria-pressed',
-      'true'
+      'false'
     )
-    await expect(stageMenu.getByRole('button', { name: 'Robot', exact: true })).toBeDisabled()
-    await stageMenu.getByRole('button', { name: 'Skeleton', exact: true }).click()
-    await expect(stageMenu.getByRole('button', { name: 'Skeleton', exact: true })).toHaveAttribute(
+    await expect(stageMenu.getByRole('button', { name: 'Robot', exact: true })).toHaveAttribute(
       'aria-pressed',
-      'true'
+      'false'
     )
     const [stageBounds, menuBounds, menuStyle, bodyStyle, eyeMask] = await Promise.all([
       stage.boundingBox(),
@@ -251,7 +311,7 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
     expect(menuBounds?.height).toBeGreaterThan(64)
     expect(menuStyle).toEqual({ borderRadius: '8px', gap: '4px', padding: '6px 8px' })
     expect(bodyStyle).toEqual({
-      backgroundColor: 'rgb(0, 113, 227)',
+      backgroundColor: 'rgba(0, 0, 0, 0)',
       fontSize: '12px',
       padding: '6px 12px'
     })

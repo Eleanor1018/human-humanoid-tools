@@ -9,7 +9,7 @@ may improve spacing, rounded corners, accessibility, and narrow-screen layout.
 | Stage / Three.js | Complete | Rendering, playback, HUD state, calibration projection, and interaction match or improve on the old renderer |
 | Motion | Complete | Loaded assets include a compact validation summary |
 | Robot | Complete | Loaded models include mapping and renderability validation |
-| Video to Motion | Functional when GVHMR is ready | Add a real server-side running-job cancellation protocol |
+| Video to Motion | Runtime-gated | Official GVHMR flow is connected; local execution only lacks the licensed SMPL-X neutral model |
 | Human to Robot | Complete | Calibration, comparison, diagnostics, and export are connected |
 | Robot to Robot | Complete | Source loading, calibration, comparison, diagnostics, and export are connected |
 | Batch | Functional | Run full solver smoke when the licensed/runtime dependencies are available |
@@ -33,7 +33,7 @@ may improve spacing, rounded corners, accessibility, and narrow-screen layout.
   - [x] Keep the optional pre-Retarget scaled preview frozen on its reference frame.
   - [x] Show shared diagnostics and complete FPS/time/header export controls for H2R/R2R.
   - [x] Restore persisted Source, Target, Result, and Overlay Stage presets.
-- [ ] Restore remaining Motion, Robot, V2M, Analysis, and application-menu actions.
+- [x] Restore remaining Motion, Robot, V2M, Analysis, and application-menu actions.
   - [x] Share one persistent H2R Batch draft with Motion and remove managed folders safely.
   - [x] Preserve the complete registered V2M Motion payload for Stage and H2R.
   - [x] Preserve the last successful Motion while a replacement video is pending or invalid.
@@ -44,7 +44,24 @@ may improve spacing, rounded corners, accessibility, and narrow-screen layout.
   - [x] Connect all five application menus without global DOM commands.
   - [x] Refresh R2R robot and trajectory catalogs whenever the workspace is entered.
   - [x] Restore compact Motion, Robot, and calibration validation summaries.
-- [ ] Run route-contract tests and desktop/narrow-screen browser smoke for every pipeline.
+- [x] Run route-contract tests and desktop/narrow-screen browser smoke for every pipeline.
+
+## Verification
+
+- Frontend: 87 tests passed; production build passed.
+- Web backend: 277 tests passed; 2 dependency-gated tests skipped.
+- Desktop: 38 tests and the Electron window E2E passed.
+- Browser: desktop and 390 x 844 layouts have no overflow or panel overlap;
+  Motion, all six built-in robots, H2R/R2R calibration, Analysis, and menus were
+  exercised without running a long solver.
+
+## External Gate
+
+GVHMR is installed with its public checkpoints and CUDA runtime. A real V2M run
+still requires the licensed file at
+`/home/nora/GVHMR/inputs/checkpoints/body_models/smplx/SMPLX_NEUTRAL.npz`.
+True server-side cancellation remains a future job-protocol enhancement; the UI
+does not present a client-only abort as cancellation.
 
 ## Rules
 
