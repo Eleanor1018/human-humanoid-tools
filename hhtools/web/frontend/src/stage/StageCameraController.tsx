@@ -3,10 +3,15 @@ import { useEffect, useRef, type RefObject } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
-import { cameraFrame, visibleObjectBounds } from "./camera";
+import {
+  cameraFrame,
+  combinedVisibleBounds,
+  visibleObjectBounds,
+} from "./camera";
 
 interface StageCameraControllerProps {
   content: RefObject<THREE.Group | null>;
+  focusTargets: readonly RefObject<THREE.Group | null>[];
   followTarget: RefObject<THREE.Group | null>;
   frameRevision: number;
   follow: boolean;
@@ -16,6 +21,7 @@ interface StageCameraControllerProps {
 /** Owns orbit interaction, content framing, and H2R robot following. */
 export function StageCameraController({
   content,
+  focusTargets,
   followTarget,
   frameRevision,
   follow,
@@ -80,9 +86,14 @@ export function StageCameraController({
     if (!controls) return;
 
     if (framedRevision.current !== frameRevision) {
-      const bounds = visibleObjectBounds(content.current);
+      const targetBounds = calibration
+        ? visibleObjectBounds(content.current)
+        : combinedVisibleBounds(focusTargets.map((target) => target.current));
+      const bounds = targetBounds ?? visibleObjectBounds(content.current);
       if (bounds) {
-        const frame = cameraFrame(bounds);
+        // The old workbench fits robots and calibration precisely, but keeps
+        // ordinary motion clips at its more spacious default camera distance.
+        const frame = cameraFrame(bounds, calibration || targetBounds !== null);
         controls.target.copy(frame.target);
         camera.position.copy(frame.position);
         controls.minDistance = calibration ? Math.max(0.28, frame.span * 0.12) : 0;
@@ -107,4 +118,3 @@ export function StageCameraController({
 
   return null;
 }
-

@@ -24,7 +24,20 @@ export function visibleObjectBounds(root: THREE.Object3D | null): THREE.Box3 | n
   return found ? bounds : null;
 }
 
-export function cameraFrame(bounds: THREE.Box3 | null): {
+export function combinedVisibleBounds(
+  roots: readonly (THREE.Object3D | null)[],
+): THREE.Box3 | null {
+  let combined: THREE.Box3 | null = null;
+  for (const root of roots) {
+    const bounds = visibleObjectBounds(root);
+    if (!bounds) continue;
+    if (combined) combined.union(bounds);
+    else combined = bounds.clone();
+  }
+  return combined;
+}
+
+export function cameraFrame(bounds: THREE.Box3 | null, fitBounds = true): {
   target: THREE.Vector3;
   position: THREE.Vector3;
   span: number;
@@ -38,6 +51,13 @@ export function cameraFrame(bounds: THREE.Box3 | null): {
   }
   const target = bounds.getCenter(new THREE.Vector3());
   const span = Math.max(0.55, bounds.getSize(new THREE.Vector3()).length());
+  if (!fitBounds) {
+    return {
+      target,
+      position: target.clone().add(DEFAULT_CAMERA_OFFSET),
+      span,
+    };
+  }
   const distance = Math.max(1.35, span * 0.9);
   return {
     target,

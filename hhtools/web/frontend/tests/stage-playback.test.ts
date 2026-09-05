@@ -14,12 +14,25 @@ import {
   disposeCapsuleBody,
   setCapsuleBodyFrame,
 } from "../src/stage/capsuleBody.ts";
-import { cameraFrame, visibleObjectBounds } from "../src/stage/camera.ts";
 import {
+  cameraFrame,
+  combinedVisibleBounds,
+  DEFAULT_CAMERA_OFFSET,
+  visibleObjectBounds,
+} from "../src/stage/camera.ts";
+import {
+  advancePlayback,
   frameAtTime,
   motionDuration,
+  normalizePlaybackSpeed,
+  playbackLoop,
+  playbackSpeed,
+  setPlaybackLoop,
+  setPlaybackSpeed,
   timelineDuration,
   timelineFrameAtTime,
+  togglePlaybackLoop,
+  type StagePlaybackState,
 } from "../src/stage/playback.ts";
 import {
   defaultR2rStageLayers,
@@ -121,6 +134,75 @@ test("maps elapsed time onto serialized robot trajectory frames", () => {
   assert.equal(timelineDuration(trajectory), 1);
   assert.equal(timelineFrameAtTime(trajectory, 0.5), 1);
   assert.equal(timelineFrameAtTime(trajectory, 2), 2);
+});
+
+test("normalizes playback speed to the original 0.1x to 4x range", () => {
+  assert.equal(normalizePlaybackSpeed(0), 0.1);
+  assert.equal(normalizePlaybackSpeed(1.5), 1.5);
+  assert.equal(normalizePlaybackSpeed(9), 4);
+  assert.equal(normalizePlaybackSpeed(Number.NaN), 1);
+});
+
+test("advances playback with speed, capped delta, and exact loop restart", () => {
+  const payload = motion();
+  const state: StagePlaybackState = {
+    elapsed: 0,
+    frame: 0,
+    duration: 2,
+    playing: true,
+    speed: 2,
+    loop: true,
+  };
+  assert.equal(advancePlayback(state, payload, 1), "advanced");
+  assert.equal(state.elapsed, 0.2);
+  assert.equal(state.frame, 0.4);
+
+  state.elapsed = 1.95;
+  assert.equal(advancePlayback(state, payload, 0.1), "looped");
+  assert.equal(state.elapsed, 0);
+  assert.equal(state.frame, 0);
+  assert.equal(state.playing, true);
+});
+
+test("stops on the last frame when playback loop is disabled", () => {
+  const payload = motion();
+  const state: StagePlaybackState = {
+    elapsed: 1.95,
+    frame: 3.9,
+    duration: 2,
+    playing: true,
+    speed: 1,
+    loop: false,
+  };
+  assert.equal(advancePlayback(state, payload, 0.1), "ended");
+  assert.equal(state.elapsed, 2);
+  assert.equal(state.frame, 4);
+  assert.equal(state.playing, false);
+});
+
+test("keeps playback speed and loop defaults across new clip cursors", () => {
+  const current: StagePlaybackState = {
+    elapsed: 0,
+    frame: 0,
+    duration: 1,
+    playing: false,
+  };
+  setPlaybackSpeed(current, 1.7);
+  assert.equal(playbackSpeed(current), 1.7);
+  assert.equal(togglePlaybackLoop(current), false);
+
+  const next: StagePlaybackState = {
+    elapsed: 0,
+    frame: 0,
+    duration: 1,
+    playing: false,
+  };
+  assert.equal(playbackSpeed(next), 1.7);
+  assert.equal(playbackLoop(next), false);
+
+  // Leave module defaults deterministic for any later tests in this process.
+  setPlaybackSpeed(next, 1);
+  setPlaybackLoop(next, true);
 });
 
 test("decodes and interpolates the backend baked-body layout", async () => {
@@ -226,6 +308,15 @@ test("frames only visible Stage geometry", () => {
   const frame = cameraFrame(bounds);
   assert.deepEqual(frame.target.toArray(), [4, 0, 0]);
   assert.ok(frame.position.distanceTo(frame.target) > 1.35);
+  assert.ok(
+    cameraFrame(bounds, false).position
+      .sub(frame.target)
+      .distanceTo(DEFAULT_CAMERA_OFFSET) < 1e-10,
+  );
+  assert.deepEqual(
+    combinedVisibleBounds([shown, hidden])?.getCenter(new THREE.Vector3()).toArray(),
+    [4, 0, 0],
+  );
 });
 
 test("projects the original Motion and workflow layer defaults", () => {

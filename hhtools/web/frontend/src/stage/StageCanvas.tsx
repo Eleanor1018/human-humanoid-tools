@@ -9,7 +9,7 @@ import { ReferenceSkeletonLayer } from "./ReferenceSkeletonLayer";
 import { RobotLayer } from "./RobotLayer";
 import { SkeletonLayer } from "./SkeletonLayer";
 import { StageCameraController } from "./StageCameraController";
-import { timelineFrameAtTime, type StagePlaybackRef } from "./playback";
+import { advancePlayback, type StagePlaybackRef } from "./playback";
 import { projectR2rStageVisibility } from "./presentation";
 import type {
   StageLayerId,
@@ -52,13 +52,14 @@ function PlaybackClock({
   const reportElapsed = useRef(0);
   useFrame((_state, delta) => {
     const cursor = playback.current;
-    if (!timeline || !cursor.playing || cursor.duration <= 0) {
+    const result = advancePlayback(cursor, timeline, delta);
+    if (result === "idle") return;
+    if (result === "looped" || result === "ended") {
+      reportElapsed.current = 0;
+      onPlaybackChange?.();
       return;
     }
-    const step = Math.max(delta, 0);
-    cursor.elapsed = (cursor.elapsed + step) % cursor.duration;
-    cursor.frame = timelineFrameAtTime(timeline, cursor.elapsed);
-    reportElapsed.current += step;
+    reportElapsed.current += Math.min(0.1, Math.max(0, delta));
     if (reportElapsed.current >= 0.1) {
       reportElapsed.current %= 0.1;
       onPlaybackChange?.();
@@ -71,10 +72,14 @@ function R2rLayers({
   presentation,
   playback,
   visibleLayers,
+  onSourceRobotChange,
+  onTargetRobotChange,
 }: {
   presentation: StageR2rPresentationPayload;
   playback: StagePlaybackRef;
   visibleLayers: readonly StageLayerId[];
+  onSourceRobotChange: (object: THREE.Group | null) => void;
+  onTargetRobotChange: (object: THREE.Group | null) => void;
 }) {
   const visibility = projectR2rStageVisibility(presentation, visibleLayers);
   if (presentation.phase === "calibration") {
@@ -93,6 +98,7 @@ function R2rLayers({
           visible={visibility.targetRobot}
           opacity={0.72}
           name="r2r-target-robot"
+          onObjectChange={onTargetRobotChange}
         />
       </>
     );
@@ -106,6 +112,7 @@ function R2rLayers({
         playback={playback}
         visible={visibility.sourceRobot}
         name="r2r-source-robot"
+        onObjectChange={onSourceRobotChange}
       />
       <SkeletonLayer
         motion={presentation.source.skeleton}
@@ -128,6 +135,7 @@ function R2rLayers({
         playback={playback}
         visible={visibility.targetRobot}
         name="r2r-target-robot"
+        onObjectChange={onTargetRobotChange}
       />
       <SkeletonLayer
         motion={presentation.target.skeleton}
@@ -180,8 +188,16 @@ function StageScene({
 }) {
   const content = useRef<THREE.Group | null>(null);
   const followedRobot = useRef<THREE.Group | null>(null);
+  const sourceRobot = useRef<THREE.Group | null>(null);
+  const targetRobot = useRef<THREE.Group | null>(null);
   const publishFollowedRobot = useCallback((object: THREE.Group | null) => {
     followedRobot.current = object;
+  }, []);
+  const publishSourceRobot = useCallback((object: THREE.Group | null) => {
+    sourceRobot.current = object;
+  }, []);
+  const publishTargetRobot = useCallback((object: THREE.Group | null) => {
+    targetRobot.current = object;
   }, []);
   const bodyMesh = motion?.body_mesh;
   const [bodyStatus, setBodyStatus] = useState<{
@@ -220,6 +236,7 @@ function StageScene({
       />
       <StageCameraController
         content={content}
+        focusTargets={r2r ? [sourceRobot, targetRobot] : [followedRobot]}
         followTarget={followedRobot}
         frameRevision={cameraRevision}
         follow={followRobot}
@@ -239,6 +256,8 @@ function StageScene({
               presentation={r2r}
               playback={playback}
               visibleLayers={visibleLayers}
+              onSourceRobotChange={publishSourceRobot}
+              onTargetRobotChange={publishTargetRobot}
             />
           ) : (
             <>

@@ -48,7 +48,7 @@ src/
 ├── stage/                   # R3F Stage surface and floating view controls
 │   ├── StageCanvas.tsx      # One Canvas, camera, controls, lights and grid
 │   ├── StageEmpty.tsx       # Legacy initial empty-state copy
-│   ├── StagePlaybackBar.tsx # Play, pause, seek and single-frame controls
+│   ├── StagePlaybackBar.tsx # Playback, speed, loop, seek and frame controls
 │   ├── playback.ts          # Shared renderer playback cursor and timing
 │   ├── presentation.ts      # Pure workflow-to-layer default projection
 │   ├── SkeletonLayer.tsx    # Animated source skeleton layer
@@ -134,6 +134,7 @@ main -> App -> features -> components/ui
 - [x] Data Analysis inspector visual shell
 - [x] R3F Stage base scene (camera, controls, lights, axes, grid)
 - [x] Shared R3F timeline with play/pause, seek, and frame stepping
+- [x] Session-wide 0.1x-4x playback speed and exact loop/end behavior
 - [x] Animated skeleton, baked body, terrain, and interaction-object layers
 - [x] Legacy-compatible capsule body when a baked skin is unavailable
 - [x] Original source/scaled terrain, object, skeleton, body, and robot materials
@@ -183,10 +184,9 @@ Web payload omits dense face, finger, and toe joints from compact body views.
 Those compact-topology rules live in the renderer-neutral `hhtools.human`
 package and are shared downward by Web and Viser rather than between hosts.
 
-The remaining legacy capabilities are Stage/workflow additions rather than
-asset-loading blockers: playback speed and loop controls, detailed validation
-cards, and Batch basket actions. They should be restored as separate, bounded
-changes.
+The remaining legacy capabilities are workflow additions rather than
+asset-loading blockers: detailed validation cards and Batch basket actions.
+They should be restored as separate, bounded changes.
 
 ## References
 

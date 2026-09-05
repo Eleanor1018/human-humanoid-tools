@@ -1,7 +1,13 @@
 import type { ChangeEvent, CSSProperties } from "react";
 
 import {
+  MAX_PLAYBACK_SPEED,
+  MIN_PLAYBACK_SPEED,
+  playbackLoop,
+  playbackSpeed,
+  setPlaybackSpeed,
   timelineFrameCount,
+  togglePlaybackLoop,
   type StagePlaybackRef,
   type StagePlaybackState,
 } from "./playback";
@@ -62,6 +68,8 @@ export function StagePlaybackBar({
   const frameCount = timelineFrameCount(timeline);
   if (!timeline || frameCount < 2) return null;
   const maximumFrame = Math.max(0, frameCount - 1);
+  const speed = playbackSpeed(snapshot);
+  const loop = playbackLoop(snapshot);
 
   const seek = (frame: number, pause = false): void => {
     const cursor = playback.current;
@@ -86,6 +94,16 @@ export function StagePlaybackBar({
     const cursor = playback.current;
     if (cursor.frame >= maximumFrame && !cursor.playing) seek(0);
     cursor.playing = !cursor.playing;
+    onChange();
+  };
+
+  const changeSpeed = (value: unknown): void => {
+    setPlaybackSpeed(playback.current, value);
+    onChange();
+  };
+
+  const toggleLoop = (): void => {
+    togglePlaybackLoop(playback.current);
     onChange();
   };
 
@@ -129,6 +147,41 @@ export function StagePlaybackBar({
       <span className="min-w-[86px] text-right text-[11px] leading-tight text-muted-foreground tabular-nums @max-[520px]:hidden">
         {formatTime(snapshot.elapsed)} / {formatTime(snapshot.duration)}
       </span>
+      <label
+        className="flex shrink-0 items-center gap-1.5 text-[11px] text-muted-foreground select-none @max-[390px]:hidden"
+        title="Playback speed; double-click to reset to 1x"
+        onDoubleClick={() => changeSpeed(1)}
+      >
+        <span className="sr-only">Playback speed</span>
+        <input
+          className="h-4 w-[70px] cursor-pointer accent-primary @max-[520px]:hidden"
+          type="range"
+          min={MIN_PLAYBACK_SPEED}
+          max={MAX_PLAYBACK_SPEED}
+          step={0.1}
+          value={speed}
+          aria-label="Playback speed"
+          onChange={(event) => changeSpeed(event.currentTarget.value)}
+        />
+        <span className="min-w-8 text-right tabular-nums">{speed.toFixed(1)}×</span>
+      </label>
+      <button
+        type="button"
+        className={
+          loop
+            ? "grid size-8 shrink-0 cursor-pointer place-items-center rounded-md border border-transparent bg-primary/10 text-primary transition-colors hover:bg-primary/15 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            : "grid size-8 shrink-0 cursor-pointer place-items-center rounded-md border border-transparent text-muted-foreground opacity-40 transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+        }
+        aria-label="Toggle loop playback"
+        aria-pressed={loop}
+        title={loop ? "Loop playback: on" : "Loop playback: off"}
+        onClick={toggleLoop}
+      >
+        <span
+          className="size-4 bg-current [mask:url(/icons/playback/loop.svg)_center/contain_no-repeat] [-webkit-mask:url(/icons/playback/loop.svg)_center/contain_no-repeat]"
+          aria-hidden="true"
+        />
+      </button>
     </div>
   );
 }
