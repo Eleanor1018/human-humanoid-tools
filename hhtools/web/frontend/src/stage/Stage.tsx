@@ -76,11 +76,6 @@ export function Stage({
   const playbackSnapshot = playbackView.owner === playback
     ? playbackView.value
     : playback.current;
-  const [canvasVisible, setCanvasVisible] = useState(
-    () =>
-      typeof window === "undefined" ||
-      !window.matchMedia("(max-width: 780px)").matches,
-  );
   const hasEnvironment = Boolean(
     motion?.terrain || (motion?.objects && motion.objects.length > 0),
   );
@@ -121,14 +116,6 @@ export function Stage({
     setPlaybackView({ owner: playback, value: { ...playback.current } });
   }, [playback]);
 
-  useEffect(() => {
-    const query = window.matchMedia("(max-width: 780px)");
-    const update = () => setCanvasVisible(!query.matches);
-    update();
-    query.addEventListener("change", update);
-    return () => query.removeEventListener("change", update);
-  }, []);
-
   // New inputs and view transitions receive deterministic legacy defaults.
   // Manual toggles remain local until one of those presentation facts changes.
   useEffect(() => {
@@ -156,33 +143,31 @@ export function Stage({
 
   return (
     <main
-      className="app-content @container relative col-start-2 row-start-2 min-h-0 min-w-0 overflow-hidden bg-stage-canvas max-[780px]:hidden"
+      className="app-content @container relative col-start-2 row-start-2 min-h-0 min-w-0 overflow-hidden bg-stage-canvas"
       aria-label="Workspace content"
     >
-      {canvasVisible && (
-        <StageCanvas
-          motion={motion}
-          scaledMotion={scaledMotion}
-          robot={robot}
-          robotTrajectory={robotTrajectory}
-          r2r={r2r}
-          timeline={timeline}
-          playback={playback}
-          onPlaybackChange={publishPlayback}
-          visibleLayers={activeLayers}
-          robotOpacity={calibrating ? 0.72 : 1}
-          cameraRevision={cameraRevision}
-          followRobot={
-            presentation === "h2r-result" && activeLayers.includes("robot")
-          }
-          calibration={calibrating}
-          mappingOverlay={mappingOverlay}
-        />
-      )}
+      <StageCanvas
+        motion={motion}
+        scaledMotion={scaledMotion}
+        robot={robot}
+        robotTrajectory={robotTrajectory}
+        r2r={r2r}
+        timeline={timeline}
+        playback={playback}
+        onPlaybackChange={publishPlayback}
+        visibleLayers={activeLayers}
+        robotOpacity={calibrating ? 0.72 : 1}
+        cameraRevision={cameraRevision}
+        followRobot={
+          presentation === "h2r-result" && activeLayers.includes("robot")
+        }
+        calibration={calibrating}
+        mappingOverlay={mappingOverlay}
+      />
       <CalibrationMappingOverlay
         ref={mappingOverlay}
         mappings={calibrationMappings}
-        visible={canvasVisible && calibrating}
+        visible={calibrating}
       />
       <StageEmpty
         visible={

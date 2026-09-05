@@ -15,7 +15,7 @@ export function Sidebar({ activeView, onSelect }: SidebarProps) {
   return (
     <aside
       id="sidebar"
-      className="col-start-1 row-start-2 min-h-0 min-w-0 overflow-hidden border-r border-border-subtle bg-surface"
+      className="col-start-1 row-start-2 min-h-0 min-w-0 overflow-hidden border-r border-border-subtle bg-surface max-[780px]:row-span-2"
       aria-label="Workspace navigation"
     >
       <nav className="h-full min-h-0 min-w-0 overflow-y-auto px-3 py-3.5 max-[900px]:px-2">

@@ -152,6 +152,7 @@ main -> App -> features -> components/ui
 - [x] Animated H2R/R2R robot trajectories and scaled scene layers
 - [x] R2R source/target six-layer overlay with legacy visibility defaults
 - [x] Visible-layer camera reset and H2R target-follow behavior
+- [x] Narrow-screen Stage and Inspector vertical layout
 - [x] IK-mapped calibration reference with original materials, labels, and link lines
 - [x] Dataset scan, folder upload, cached analysis, and progress polling
 - [x] Analysis metrics, tags, embedding scatter, histograms, and filters

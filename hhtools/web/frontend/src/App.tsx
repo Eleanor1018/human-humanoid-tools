@@ -311,7 +311,7 @@ export function App() {
   return (
     <div
       id="app"
-      className="grid h-dvh min-h-0 min-w-0 grid-cols-[208px_minmax(0,1fr)_360px] grid-rows-[40px_minmax(0,1fr)] max-[900px]:grid-cols-[64px_minmax(0,1fr)_360px] max-[780px]:grid-cols-[64px_minmax(0,1fr)]"
+      className="grid h-dvh min-h-0 min-w-0 grid-cols-[208px_minmax(0,1fr)_360px] grid-rows-[40px_minmax(0,1fr)] max-[900px]:grid-cols-[64px_minmax(0,1fr)_360px] max-[780px]:grid-cols-[64px_minmax(0,1fr)] max-[780px]:grid-rows-[40px_minmax(240px,42vh)_minmax(0,1fr)]"
       data-hhtools-ready="true"
       data-active-view={activeView}
     >
