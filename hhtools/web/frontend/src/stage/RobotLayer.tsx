@@ -25,6 +25,7 @@ interface LinkMesh {
 interface RobotResource {
   root: THREE.Group;
   residualRoots: readonly THREE.Object3D[];
+  detachedMaterials: readonly THREE.Material[];
   linkMeshes: Readonly<Record<string, readonly LinkMesh[]>>;
   zeroInverse: Readonly<Record<string, THREE.Matrix4>>;
 }
@@ -68,28 +69,30 @@ function decodeGlb(base64: string): ArrayBuffer {
   return bytes.buffer;
 }
 
-function disposeScene(root: THREE.Object3D): void {
-  root.traverse((object) => {
-    const mesh = object as THREE.Mesh;
-    mesh.geometry?.dispose();
-    const materials = Array.isArray(mesh.material)
-      ? mesh.material
-      : mesh.material
-        ? [mesh.material]
-        : [];
-    for (const material of materials) {
-      for (const value of Object.values(material)) {
-        if (value instanceof THREE.Texture) value.dispose();
-      }
-      material.dispose();
-    }
-  });
-}
-
 function disposeResource(resource: RobotResource): void {
+  const geometries = new Set<THREE.BufferGeometry>();
+  const materials = new Set<THREE.Material>(resource.detachedMaterials);
   for (const root of new Set([resource.root, ...resource.residualRoots])) {
-    disposeScene(root);
+    root.traverse((object) => {
+      const mesh = object as THREE.Mesh;
+      if (mesh.geometry) geometries.add(mesh.geometry);
+      const ownedMaterials = Array.isArray(mesh.material)
+        ? mesh.material
+        : mesh.material
+          ? [mesh.material]
+          : [];
+      ownedMaterials.forEach((material) => materials.add(material));
+    });
   }
+  const textures = new Set<THREE.Texture>();
+  for (const geometry of geometries) geometry.dispose();
+  for (const material of materials) {
+    for (const value of Object.values(material)) {
+      if (value instanceof THREE.Texture) textures.add(value);
+    }
+    material.dispose();
+  }
+  for (const texture of textures) texture.dispose();
 }
 
 function normalizedName(value: unknown): string {
@@ -124,8 +127,8 @@ function linkForNode(node: THREE.Object3D, robot: StageRobotPayload): string | n
 
 function fallbackResource(robot: StageRobotPayload): RobotResource {
   const root = new THREE.Group();
-  const geometry = new THREE.SphereGeometry(0.025, 10, 10);
-  const material = new THREE.MeshStandardMaterial({ color: 0x8e44ad });
+  const geometry = new THREE.SphereGeometry(0.02, 8, 8);
+  const material = new THREE.MeshStandardMaterial({ color: 0xb8bdc6 });
   const linkMeshes: Record<string, LinkMesh[]> = {};
   const zeroInverse: Record<string, THREE.Matrix4> = {};
   for (const link of robot.links) {
@@ -137,7 +140,31 @@ function fallbackResource(robot: StageRobotPayload): RobotResource {
     root.add(mesh);
     linkMeshes[link] = [{ mesh, baked: zero }];
   }
-  return { root, residualRoots: [], linkMeshes, zeroInverse };
+  return { root, residualRoots: [], detachedMaterials: [], linkMeshes, zeroInverse };
+}
+
+function createRobotMaterial(): THREE.MeshStandardMaterial {
+  return new THREE.MeshStandardMaterial({
+    color: 0xc8ccd4,
+    emissive: 0x6b7280,
+    emissiveIntensity: 0.55,
+    roughness: 0.6,
+    metalness: 0.15,
+    side: THREE.DoubleSide,
+    vertexColors: false,
+  });
+}
+
+/** The original workbench intentionally gives every robot one neutral material. */
+function applyRobotMaterial(
+  mesh: THREE.Mesh,
+  detachedMaterials: THREE.Material[],
+): void {
+  const original = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+  detachedMaterials.push(...original);
+  mesh.material = Array.isArray(mesh.material)
+    ? original.map(() => createRobotMaterial())
+    : createRobotMaterial();
 }
 
 async function glbResource(robot: StageRobotPayload): Promise<RobotResource> {
@@ -155,6 +182,7 @@ async function glbResource(robot: StageRobotPayload): Promise<RobotResource> {
   }
   const residualRoots = [...new Set([gltf.scene, ...(gltf.scenes ?? [])])];
   const root = new THREE.Group();
+  const detachedMaterials: THREE.Material[] = [];
   try {
     gltf.scene.updateMatrixWorld(true);
     const meshes: THREE.Mesh[] = [];
@@ -171,17 +199,18 @@ async function glbResource(robot: StageRobotPayload): Promise<RobotResource> {
     for (const mesh of meshes) {
       const link = linkForNode(mesh, robot);
       const baked = mesh.matrixWorld.clone();
-      mesh.matrixAutoUpdate = false;
-      if (!mesh.geometry.getAttribute("normal")) {
-        mesh.geometry.computeVertexNormals();
-      }
-      root.add(mesh);
-      mesh.matrix.copy(baked);
-      mesh.matrixWorldNeedsUpdate = true;
       if (!link || !zeroInverse[link]) {
         unmappedMeshes += 1;
         continue;
       }
+      mesh.matrixAutoUpdate = false;
+      if (!mesh.geometry.getAttribute("normal")) {
+        mesh.geometry.computeVertexNormals();
+      }
+      applyRobotMaterial(mesh, detachedMaterials);
+      root.add(mesh);
+      mesh.matrix.copy(baked);
+      mesh.matrixWorldNeedsUpdate = true;
       (linkMeshes[link] ??= []).push({ mesh, baked });
     }
     if (Object.keys(linkMeshes).length === 0) {
@@ -189,14 +218,19 @@ async function glbResource(robot: StageRobotPayload): Promise<RobotResource> {
     }
     if (unmappedMeshes > 0) {
       console.warn(
-        `${unmappedMeshes} robot meshes have no link mapping and will remain static`,
+        `${unmappedMeshes} robot meshes have no link mapping and were omitted`,
       );
     }
     root.updateMatrixWorld(true);
-    return { root, residualRoots, linkMeshes, zeroInverse };
+    return { root, residualRoots, detachedMaterials, linkMeshes, zeroInverse };
   } catch (error) {
-    disposeScene(root);
-    for (const residual of residualRoots) disposeScene(residual);
+    disposeResource({
+      root,
+      residualRoots,
+      detachedMaterials,
+      linkMeshes: {},
+      zeroInverse: {},
+    });
     console.warn("Unable to prepare robot GLB; using link fallback", error);
     return fallbackResource(robot);
   }

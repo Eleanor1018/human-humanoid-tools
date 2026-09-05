@@ -153,6 +153,8 @@ the licensed SMPL/SMPL-H/SMPL-X files enables exact joints and the real surface.
 Robot selection remains server-authoritative. The six curated models are
 installed into the user Robot Library with `scripts/install_builtin_robots.py`;
 large model files and their upstream licenses are not copied into Git.
+Their GLB meshes receive the same neutral silver material as the original
+workbench so models with missing or inconsistent source materials look uniform.
 
 ## References
 
