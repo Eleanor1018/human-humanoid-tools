@@ -55,9 +55,11 @@ function invalidPositive(label: string, value: string): string | null {
 }
 
 export function RobotBatchView({
+  active,
   robots,
   catalogError,
 }: {
+  active: boolean;
   robots: readonly RobotSummary[];
   catalogError?: string | null;
 }) {
@@ -86,6 +88,7 @@ export function RobotBatchView({
   useEffect(() => () => operation.current?.abort(), []);
 
   useEffect(() => {
+    if (!active) return;
     if (!sourceRobot || !targetRobot || !loadedPair) {
       setCalibration("idle");
       return;
@@ -102,7 +105,7 @@ export function RobotBatchView({
         if (!request.signal.aborted) setCalibration("error");
       });
     return () => request.abort();
-  }, [loadedPair, sourceRobot, targetRobot]);
+  }, [active, loadedPair, sourceRobot, targetRobot]);
 
   function resetRunResult(): void {
     setJob(null);

@@ -68,12 +68,14 @@ function invalidPositive(label: string, value: string): string | null {
 }
 
 export function HumanBatchView({
+  active,
   library,
   robots,
   entries,
   onEntriesChange,
   catalogError,
 }: {
+  active: boolean;
   library: readonly MotionLibraryEntry[];
   robots: readonly RobotSummary[];
   entries: readonly MotionLibraryEntry[];
@@ -114,6 +116,7 @@ export function HumanBatchView({
   useEffect(() => () => operation.current?.abort(), []);
 
   useEffect(() => {
+    if (!active) return;
     if (!robot || !referenceGroups.length) {
       setChecks([]);
       return;
@@ -140,7 +143,7 @@ export function HumanBatchView({
     });
     return () => request.abort();
     // `referenceKey` is the compact identity of all unique calibration scopes.
-  }, [robot, referenceKey]);
+  }, [active, robot, referenceKey]);
 
   function resetRunResult(): void {
     setJob(null);

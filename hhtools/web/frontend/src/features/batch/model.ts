@@ -63,6 +63,15 @@ export function appendUniqueEntries(
   return next;
 }
 
+/** Keep the backend's complete Library row when a generated motion is published. */
+export function publishedMotionEntry(value: unknown): MotionLibraryEntry | null {
+  if (!value || typeof value !== "object") return null;
+  const sourcePath = (value as { source_path?: unknown }).source_path;
+  return typeof sourcePath === "string" && sourcePath.trim()
+    ? (value as MotionLibraryEntry)
+    : null;
+}
+
 /** Remove entries invalidated with a managed folder while preserving bundled assets. */
 export function withoutManagedFolder(
   entries: readonly MotionLibraryEntry[],

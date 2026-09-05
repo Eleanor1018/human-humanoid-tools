@@ -506,6 +506,7 @@ export function App() {
         </div>
         <div className={activeView === "batch" ? "h-full" : "hidden"}>
           <BatchView
+            active={activeView === "batch"}
             humanEntries={humanBatchEntries}
             onHumanEntriesChange={setHumanBatchEntries}
           />

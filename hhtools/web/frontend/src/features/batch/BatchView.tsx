@@ -20,6 +20,7 @@ import {
 import { HumanBatchView } from "./HumanBatchView";
 import { RobotBatchView } from "./RobotBatchView";
 import { VideoBatchView } from "./VideoBatchView";
+import { appendUniqueEntries } from "./model";
 
 type BatchMode = "v2m" | "h2r" | "r2r";
 
@@ -37,9 +38,11 @@ function errorMessage(error: unknown): string {
  * Hidden modes remain mounted so switching workflows never destroys a queue or job.
  */
 export function BatchView({
+  active = true,
   humanEntries,
   onHumanEntriesChange,
 }: {
+  active?: boolean;
   humanEntries: readonly MotionLibraryEntry[];
   onHumanEntriesChange(entries: readonly MotionLibraryEntry[]): void;
 }) {
@@ -49,6 +52,8 @@ export function BatchView({
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [catalogBusy, setCatalogBusy] = useState(false);
   const catalogRequest = useRef<AbortController | null>(null);
+  const humanEntriesRef = useRef(humanEntries);
+  humanEntriesRef.current = humanEntries;
 
   const refreshCatalogs = useCallback(() => {
     catalogRequest.current?.abort();
@@ -74,9 +79,18 @@ export function BatchView({
   }, []);
 
   useEffect(() => {
+    if (active) refreshCatalogs();
+    else catalogRequest.current?.abort();
+  }, [active, refreshCatalogs]);
+
+  useEffect(() => () => catalogRequest.current?.abort(), []);
+
+  function addPublishedMotion(entry: MotionLibraryEntry): void {
+    const next = appendUniqueEntries(humanEntriesRef.current, [entry]);
+    humanEntriesRef.current = next;
+    onHumanEntriesChange(next);
     refreshCatalogs();
-    return () => catalogRequest.current?.abort();
-  }, [refreshCatalogs]);
+  }
 
   return (
     <InspectorPage title="Batch">
@@ -100,10 +114,11 @@ export function BatchView({
       </div>
 
       <div hidden={mode !== "v2m"}>
-        <VideoBatchView />
+        <VideoBatchView onMotionPublished={addPublishedMotion} />
       </div>
       <div hidden={mode !== "h2r"}>
         <HumanBatchView
+          active={active && mode === "h2r"}
           library={motions}
           robots={robots}
           entries={humanEntries}
@@ -112,7 +127,11 @@ export function BatchView({
         />
       </div>
       <div hidden={mode !== "r2r"}>
-        <RobotBatchView robots={robots} catalogError={catalogError} />
+        <RobotBatchView
+          active={active && mode === "r2r"}
+          robots={robots}
+          catalogError={catalogError}
+        />
       </div>
     </InspectorPage>
   );

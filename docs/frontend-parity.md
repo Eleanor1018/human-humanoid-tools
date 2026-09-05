@@ -23,6 +23,7 @@ may improve spacing, rounded corners, accessibility, and narrow-screen layout.
 - [x] Restore Canvas joint selection, constrained dragging, and synchronized calibration HUD controls.
 - [x] Implement the three Batch pipelines against the existing FastAPI routes.
   - [x] Add the shared typed import, scan, job, progress, and download boundary.
+  - [x] Refresh calibration on re-entry and feed completed V2M clips into the H2R draft.
 - [ ] Restore H2R scaled preview and omitted result/export controls.
   - [x] Load the calibrated scaled skeleton/scene before Retarget without forcing it visible.
   - [x] Show shared diagnostics and complete FPS/time/header export controls for H2R/R2R.

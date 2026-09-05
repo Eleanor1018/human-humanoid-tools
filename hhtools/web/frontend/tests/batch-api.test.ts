@@ -23,6 +23,7 @@ const {
   entryReference,
   optionalNonNegativeNumber,
   optionalPositiveNumber,
+  publishedMotionEntry,
   suggestedBackend,
   timeRangeError,
   uploadFileKey,
@@ -44,6 +45,20 @@ test("Batch draft helpers preserve intrinsic references and deduplicate inputs",
   assert.equal(entryReference(existing[0]), "smpl");
   assert.equal(entryReference(incoming[1]), "smplx");
   assert.equal(suggestedBackend(incoming), "interaction_mesh");
+});
+
+test("published V2M motions retain their complete Library row for H2R", () => {
+  const entry = {
+    source_path: "/motions/generated.pt",
+    dataset: "gvhmr",
+    reference: "gvhmr",
+    token: "generated-token",
+    suggested_backend: "newton",
+  };
+  assert.equal(publishedMotionEntry(entry), entry);
+  assert.equal(publishedMotionEntry({ dataset: "gvhmr" }), null);
+  assert.equal(publishedMotionEntry({ source_path: "  " }), null);
+  assert.deepEqual(appendUniqueEntries([entry], [entry]), [entry]);
 });
 
 test("managed folder removal prunes dangling Batch entries but keeps assets", () => {

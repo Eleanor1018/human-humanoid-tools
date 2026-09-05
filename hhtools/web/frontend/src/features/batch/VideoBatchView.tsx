@@ -16,10 +16,11 @@ import {
   type GvhmrRuntimeStatus,
   type MotionResultSummary,
 } from "@/features/video-to-motion/api";
+import type { MotionLibraryEntry } from "@/features/motion/api";
 import type { UploadFile } from "@/lib/api";
 
 import { FileImport, StatusMessage } from "./BatchParts";
-import { uploadFileKey } from "./model";
+import { publishedMotionEntry, uploadFileKey } from "./model";
 
 type VideoStatus = "queued" | "uploading" | "running" | "done" | "error";
 
@@ -44,7 +45,11 @@ function statusLabel(status: VideoStatus): string {
   return "Failed";
 }
 
-export function VideoBatchView() {
+export function VideoBatchView({
+  onMotionPublished,
+}: {
+  onMotionPublished(entry: MotionLibraryEntry): void;
+}) {
   const [videos, setVideos] = useState<readonly VideoItem[]>([]);
   const [runtime, setRuntime] = useState<GvhmrRuntimeStatus | null>(null);
   const [runtimeChecking, setRuntimeChecking] = useState(false);
@@ -192,6 +197,8 @@ export function VideoBatchView() {
           });
           if (request.signal.aborted) return;
           const result = summarizeMotionResult(motion, item.file.name);
+          const libraryEntry = publishedMotionEntry(motion.library_entry);
+          if (libraryEntry) onMotionPublished(libraryEntry);
           patchVideo(item.id, {
             status: "done",
             progress: 1,
