@@ -4,6 +4,7 @@ import { ImportDropzone } from "@/components/ImportDropzone";
 import { InspectorPage } from "@/components/Inspector";
 import { SearchField } from "@/components/SearchField";
 import { Button } from "@/components/ui/button";
+import type { ApplicationImportRequest } from "@/importIntent";
 import { SegmentedControl } from "@/components/SegmentedControl";
 import type { StageMotionPayload } from "@/stage/types";
 
@@ -114,6 +115,7 @@ export function MotionView({
   humanBatchEntries = [],
   onAddToHumanBatch,
   onRemoveHumanBatchFolder,
+  importRequest,
 }: {
   /** App-owned stable input; failed replacements leave it untouched. */
   currentMotion?: StageMotionPayload | null;
@@ -123,6 +125,8 @@ export function MotionView({
   humanBatchEntries?: readonly MotionLibraryEntry[];
   onAddToHumanBatch?: (entry: MotionLibraryEntry) => void;
   onRemoveHumanBatchFolder?: (folderLabel: string) => void;
+  /** App-owned File-menu intent; this mounted view owns its input elements. */
+  importRequest?: ApplicationImportRequest | null;
 }) {
   const [profile, setProfile] = useState<MotionProfile>("mimic");
   const [entries, setEntries] = useState<readonly MotionLibraryEntry[]>([]);
@@ -141,6 +145,7 @@ export function MotionView({
   const motionRequest = useRef<AbortController | null>(null);
   const fileInput = useRef<HTMLInputElement | null>(null);
   const folderInput = useRef<HTMLInputElement | null>(null);
+  const handledImportRequest = useRef<number | null>(null);
   const selected = profiles.find((item) => item.id === profile) ?? profiles[0];
   const selectedKey = currentMotion?.library_entry?.source_path ?? null;
 
@@ -193,6 +198,21 @@ export function MotionView({
   useEffect(() => {
     folderInput.current?.setAttribute("webkitdirectory", "");
   }, []);
+
+  useEffect(() => {
+    if (
+      !importRequest ||
+      handledImportRequest.current === importRequest.id ||
+      (importRequest.target !== "motion-file" &&
+        importRequest.target !== "motion-folder")
+    ) {
+      return;
+    }
+    handledImportRequest.current = importRequest.id;
+    setProfile("mimic");
+    if (importRequest.target === "motion-file") fileInput.current?.click();
+    else folderInput.current?.click();
+  }, [importRequest]);
 
   useEffect(() => {
     if (!managedFolders.includes(managedFolder)) {

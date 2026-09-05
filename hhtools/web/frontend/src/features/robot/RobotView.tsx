@@ -4,6 +4,7 @@ import { ImportDropzone } from "@/components/ImportDropzone";
 import { InspectorPage } from "@/components/Inspector";
 import { SearchField } from "@/components/SearchField";
 import { Button } from "@/components/ui/button";
+import type { ApplicationImportRequest } from "@/importIntent";
 import type { UploadFile } from "@/lib/api";
 
 import {
@@ -83,11 +84,14 @@ function uploadName(file: File): string {
 export function RobotView({
   currentRobot,
   onRobotLoaded,
+  importRequest,
 }: {
   /** App-owned stable input; failed replacements leave it untouched. */
   currentRobot?: RobotPayload | null;
   /** App uses this to publish the server payload to the shared Stage. */
   onRobotLoaded?: (payload: RobotPayload | null) => void;
+  /** App-owned File-menu intent; this mounted view owns its input elements. */
+  importRequest?: ApplicationImportRequest | null;
 }) {
   const [robots, setRobots] = useState<RobotSummary[]>([]);
   const [search, setSearch] = useState("");
@@ -102,6 +106,7 @@ export function RobotView({
   const robotRequest = useRef<AbortController | null>(null);
   const urdfInput = useRef<HTMLInputElement | null>(null);
   const meshInput = useRef<HTMLInputElement | null>(null);
+  const handledImportRequest = useRef<number | null>(null);
 
   const refresh = useCallback(() => {
     libraryRequest.current?.abort();
@@ -135,6 +140,20 @@ export function RobotView({
   useEffect(() => {
     meshInput.current?.setAttribute("webkitdirectory", "");
   }, []);
+
+  useEffect(() => {
+    if (
+      !importRequest ||
+      handledImportRequest.current === importRequest.id ||
+      (importRequest.target !== "robot-urdf" &&
+        importRequest.target !== "robot-mesh-folder")
+    ) {
+      return;
+    }
+    handledImportRequest.current = importRequest.id;
+    if (importRequest.target === "robot-urdf") urdfInput.current?.click();
+    else meshInput.current?.click();
+  }, [importRequest]);
 
   const filteredRobots = useMemo(() => {
     const tokens = search.trim().toLowerCase().split(/\s+/).filter(Boolean);

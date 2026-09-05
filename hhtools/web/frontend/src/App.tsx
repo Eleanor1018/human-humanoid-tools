@@ -1,5 +1,18 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import {
+  PROJECT_README_URL,
+  THEME_STORAGE_KEY,
+  storedTheme,
+  viewForImport,
+  type ApplicationImportRequest,
+  type ApplicationImportTarget,
+  type ApplicationTheme,
+} from "./appCommands";
+import {
+  ApplicationDialogs,
+  type ApplicationDialog,
+} from "./components/ApplicationDialogs";
 import { Inspector } from "./components/Inspector";
 import { Navbar } from "./components/Navbar";
 import { Sidebar } from "./components/Sidebar";
@@ -14,16 +27,18 @@ import { AnalysisView } from "./features/analysis/AnalysisView";
 import type { AnalysisRobotPreview } from "./features/analysis/api";
 import { RobotView } from "./features/robot/RobotView";
 import { HumanToRobotView } from "./features/h2r/HumanToRobotView";
-import type {
-  CalibrationPose,
-  RetargetResult as H2rResult,
-  ScaledPreviewResult as H2rScaledPreview,
+import {
+  retargetExportUrl,
+  type CalibrationPose,
+  type RetargetResult as H2rResult,
+  type ScaledPreviewResult as H2rScaledPreview,
 } from "./features/h2r/api";
 import { RobotToRobotView } from "./features/r2r/RobotToRobotView";
-import type {
-  R2rRetargetResult,
-  R2rScenePayload,
-  R2rSourceResult,
+import {
+  r2rExportUrl,
+  type R2rRetargetResult,
+  type R2rScenePayload,
+  type R2rSourceResult,
 } from "./features/r2r/api";
 import { VideoToMotionView } from "./features/video-to-motion/VideoToMotionView";
 import type { ViewId } from "./navigation";
@@ -67,8 +82,27 @@ function calibrationTrajectory(
   };
 }
 
+interface ApplicationDesktopBridge {
+  readonly openExternal?: (url: string) => Promise<void>;
+  readonly exitApplication?: () => Promise<void>;
+}
+
+function desktopBridge(): ApplicationDesktopBridge | undefined {
+  return (
+    window as Window & { readonly hhtoolsDesktop?: ApplicationDesktopBridge }
+  ).hhtoolsDesktop;
+}
+
 export function App() {
   const [activeView, setActiveView] = useState<ViewId>("motion");
+  const [theme, setTheme] = useState<ApplicationTheme>(() =>
+    storedTheme(window.localStorage),
+  );
+  const [dialog, setDialog] = useState<ApplicationDialog>(null);
+  const [importRequest, setImportRequest] =
+    useState<ApplicationImportRequest | null>(null);
+  const nextImportRequestId = useRef(0);
+  const exportLink = useRef<HTMLAnchorElement>(null);
   const [workspaceMotion, setWorkspaceMotion] =
     useState<StageMotionPayload | null>(null);
   const [workspaceRobot, setWorkspaceRobot] =
@@ -110,6 +144,42 @@ export function App() {
   const [r2rCalibrationDisplay, setR2rCalibrationDisplay] = useState(
     DEFAULT_CALIBRATION_DISPLAY,
   );
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    try {
+      window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+    } catch {
+      // Private browser contexts can reject storage; the live theme still works.
+    }
+  }, [theme]);
+
+  const requestImport = useCallback((target: ApplicationImportTarget) => {
+    setActiveView(viewForImport(target));
+    nextImportRequestId.current += 1;
+    setImportRequest({ id: nextImportRequestId.current, target });
+  }, []);
+
+  const currentExportUrl =
+    activeView === "h2r" && h2rResult
+      ? retargetExportUrl(h2rResult.export_token, {
+          format: "csv",
+          csvHeader: true,
+        })
+      : activeView === "r2r" && r2rResult
+        ? r2rExportUrl(r2rResult.export_token, {
+            format: "csv",
+            csvHeader: true,
+          })
+        : null;
+
+  const openTutorial = useCallback(() => {
+    const bridge = desktopBridge();
+    if (bridge?.openExternal) {
+      void bridge.openExternal(PROJECT_README_URL);
+      return;
+    }
+    window.open(PROJECT_README_URL, "_blank", "noopener,noreferrer");
+  }, []);
   const stagePresentation: StagePresentation =
     activeView === "robot-assets"
       ? "robot"
@@ -334,8 +404,23 @@ export function App() {
       className="grid h-dvh min-h-0 min-w-0 grid-cols-[208px_minmax(0,1fr)_360px] grid-rows-[40px_minmax(0,1fr)] max-[900px]:grid-cols-[64px_minmax(0,1fr)_360px] max-[780px]:grid-cols-[64px_minmax(0,1fr)] max-[780px]:grid-rows-[40px_minmax(240px,42vh)_minmax(0,1fr)]"
       data-hhtools-ready="true"
       data-active-view={activeView}
+      data-theme={theme}
     >
-      <Navbar />
+      <Navbar
+        theme={theme}
+        canExportResult={currentExportUrl !== null}
+        canExitApplication={Boolean(desktopBridge()?.exitApplication)}
+        onNavigate={setActiveView}
+        onImport={requestImport}
+        onExportResult={() => exportLink.current?.click()}
+        onOpenSettings={() => setDialog("settings")}
+        onToggleTheme={() =>
+          setTheme((current) => (current === "light" ? "dark" : "light"))
+        }
+        onOpenTutorial={openTutorial}
+        onOpenAbout={() => setDialog("about")}
+        onExitApplication={() => void desktopBridge()?.exitApplication?.()}
+      />
       <Sidebar activeView={activeView} onSelect={setActiveView} />
       <Stage
         motion={stageMotion}
@@ -356,16 +441,21 @@ export function App() {
             humanBatchEntries={humanBatchEntries}
             onAddToHumanBatch={addHumanBatchEntry}
             onRemoveHumanBatchFolder={removeHumanBatchFolder}
+            importRequest={importRequest}
           />
         </div>
         <div className={activeView === "robot-assets" ? "h-full" : "hidden"}>
           <RobotView
             currentRobot={workspaceRobot}
             onRobotLoaded={publishRobot}
+            importRequest={importRequest}
           />
         </div>
         <div className={activeView === "video-to-motion" ? "h-full" : "hidden"}>
-          <VideoToMotionView onMotionLoaded={publishMotion} />
+          <VideoToMotionView
+            onMotionLoaded={publishMotion}
+            importRequest={importRequest}
+          />
         </div>
         <div className={activeView === "h2r" ? "h-full" : "hidden"}>
           <HumanToRobotView
@@ -411,6 +501,14 @@ export function App() {
           />
         </div>
       </Inspector>
+      <a
+        ref={exportLink}
+        className="hidden"
+        href={currentExportUrl ?? undefined}
+        download
+        aria-hidden="true"
+      />
+      <ApplicationDialogs dialog={dialog} onClose={() => setDialog(null)} />
     </div>
   );
 }

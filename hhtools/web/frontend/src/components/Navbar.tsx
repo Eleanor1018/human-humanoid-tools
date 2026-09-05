@@ -1,84 +1,47 @@
 import { useEffect, useRef, useState } from "react";
 
+import {
+  createApplicationMenus,
+  viewForNavigationShortcut,
+  type ApplicationCommandContext,
+  type ApplicationMenuId,
+} from "@/appCommands";
 import { cn } from "@/lib/utils";
 
-interface MenuCommand {
-  label: string;
-  shortcut?: string;
-  dividerBefore?: boolean;
+interface OpenMenu {
+  readonly id: ApplicationMenuId;
+  readonly interaction: "hover" | "click";
 }
 
-type MenuId = "file" | "workflows" | "analysis" | "settings" | "help";
-
-interface MenuDefinition {
-  id: MenuId;
-  label: string;
-  commands: readonly MenuCommand[];
-}
-
-const menus: readonly MenuDefinition[] = [
-  {
-    id: "file",
-    label: "File",
-    commands: [
-      { label: "Import Motion File" },
-      { label: "Import Motion Folder" },
-      { label: "Import Video", dividerBefore: true },
-      { label: "Import Robot URDF", dividerBefore: true },
-      { label: "Import Robot Mesh Folder" },
-      { label: "Current Result…" },
-      { label: "Exit", dividerBefore: true },
-    ],
-  },
-  {
-    id: "workflows",
-    label: "Workflows",
-    commands: [
-      { label: "Video to Motion", shortcut: "Alt+7" },
-      { label: "Human to Robot", shortcut: "Alt+3" },
-      { label: "Robot to Robot", shortcut: "Alt+4" },
-      { label: "Batch", shortcut: "Alt+5" },
-    ],
-  },
-  {
-    id: "analysis",
-    label: "Analysis",
-    commands: [{ label: "Data Analysis", shortcut: "Alt+6" }],
-  },
-  {
-    id: "settings",
-    label: "Settings",
-    commands: [{ label: "Settings" }, { label: "Dark Mode" }],
-  },
-  {
-    id: "help",
-    label: "Help",
-    commands: [
-      { label: "Tutorial" },
-      { label: "About hhtools", dividerBefore: true },
-    ],
-  },
-];
-
-export function Navbar() {
-  const [openMenu, setOpenMenu] = useState<MenuId | null>(null);
+/** The menubar renders application commands; App retains all business state. */
+export function Navbar(props: ApplicationCommandContext) {
+  const menus = createApplicationMenus(props);
+  const [openMenu, setOpenMenu] = useState<OpenMenu | null>(null);
   const root = useRef<HTMLElement>(null);
 
   useEffect(() => {
     const closeOutside = (event: PointerEvent) => {
       if (!root.current?.contains(event.target as Node)) setOpenMenu(null);
     };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpenMenu(null);
+    const handleKeydown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpenMenu(null);
+        return;
+      }
+      const view = viewForNavigationShortcut(event);
+      if (!view) return;
+      event.preventDefault();
+      setOpenMenu(null);
+      props.onNavigate(view);
     };
 
     document.addEventListener("pointerdown", closeOutside);
-    document.addEventListener("keydown", closeOnEscape);
+    window.addEventListener("keydown", handleKeydown);
     return () => {
       document.removeEventListener("pointerdown", closeOutside);
-      document.removeEventListener("keydown", closeOnEscape);
+      window.removeEventListener("keydown", handleKeydown);
     };
-  }, []);
+  }, [props.onNavigate]);
 
   return (
     <header
@@ -97,6 +60,12 @@ export function Navbar() {
         ref={root}
         className="flex min-w-0 self-stretch items-stretch gap-2 max-[600px]:overflow-x-auto"
         aria-label="Application menu"
+        role="menubar"
+        onMouseLeave={() =>
+          setOpenMenu((current) =>
+            current?.interaction === "hover" ? null : current,
+          )
+        }
       >
         {menus.map((menu) => (
           <div key={menu.id} className="relative flex items-center">
@@ -104,24 +73,42 @@ export function Navbar() {
               type="button"
               className={cn(
                 "h-7 cursor-pointer whitespace-nowrap rounded-sm border-0 bg-transparent px-2.5 text-xs font-medium tracking-normal text-muted-foreground hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring",
-                openMenu === menu.id && "bg-accent text-accent-foreground",
+                openMenu?.id === menu.id && "bg-accent text-accent-foreground",
               )}
+              role="menuitem"
               aria-haspopup="menu"
-              aria-expanded={openMenu === menu.id}
-              onMouseEnter={() => setOpenMenu(menu.id)}
-              onFocus={() => setOpenMenu(menu.id)}
-              onClick={() => setOpenMenu(menu.id)}
+              aria-expanded={openMenu?.id === menu.id}
+              onMouseEnter={() =>
+                setOpenMenu((current) => ({
+                  id: menu.id,
+                  interaction: current?.interaction ?? "hover",
+                }))
+              }
+              onFocus={() =>
+                setOpenMenu((current) =>
+                  current?.id === menu.id
+                    ? current
+                    : { id: menu.id, interaction: "hover" },
+                )
+              }
+              onClick={() =>
+                setOpenMenu((current) =>
+                  current?.id === menu.id && current.interaction === "click"
+                    ? null
+                    : { id: menu.id, interaction: "click" },
+                )
+              }
             >
               {menu.label}
             </button>
-            {openMenu === menu.id && (
+            {openMenu?.id === menu.id && (
               <div
                 className="absolute top-[calc(100%+3px)] left-0 z-[120] min-w-[286px] max-w-[340px] rounded-lg border border-border-subtle bg-surface p-[5px] shadow-[0_8px_24px_rgba(2,18,46,0.1)] max-[600px]:fixed max-[600px]:top-10 max-[600px]:right-2 max-[600px]:left-2 max-[600px]:min-w-0 max-[600px]:max-w-none"
                 role="menu"
                 aria-label={menu.label}
               >
                 {menu.commands.map((command) => (
-                  <div key={command.label}>
+                  <div key={command.id}>
                     {command.dividerBefore && (
                       <div
                         className="mx-1.5 my-1 h-px bg-border-subtle"
@@ -130,20 +117,27 @@ export function Navbar() {
                     )}
                     <button
                       type="button"
-                      className="flex min-h-9 w-full cursor-pointer items-center justify-between gap-3 rounded-sm border-0 bg-transparent px-2 py-1.5 text-left text-foreground hover:bg-accent focus-visible:bg-accent focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring"
+                      className="flex min-h-9 w-full cursor-pointer items-center justify-between gap-3 rounded-sm border-0 bg-transparent px-2 py-1.5 text-left text-foreground hover:bg-accent focus-visible:bg-accent focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring disabled:cursor-default disabled:text-muted-foreground disabled:opacity-70 disabled:hover:bg-transparent"
                       role="menuitem"
-                      onClick={() => setOpenMenu(null)}
+                      disabled={command.enabled === false}
+                      title={command.disabledReason ?? command.detail}
+                      onClick={() => {
+                        command.run();
+                        setOpenMenu(null);
+                      }}
                     >
-                      <span className="grid min-w-0 gap-0.5">
-                        <span className="truncate text-[13px] font-semibold">
-                          {command.label}
-                        </span>
+                      <span className="min-w-0 truncate text-[13px] font-semibold">
+                        {command.label}
                       </span>
-                      {command.shortcut && (
+                      {command.shortcut ? (
                         <kbd className="shrink-0 font-sans text-[10px] text-muted-foreground opacity-70">
                           {command.shortcut}
                         </kbd>
-                      )}
+                      ) : command.disabledReason ? (
+                        <small className="shrink-0 text-[9px] text-muted-foreground">
+                          {command.disabledReason}
+                        </small>
+                      ) : null}
                     </button>
                   </div>
                 ))}

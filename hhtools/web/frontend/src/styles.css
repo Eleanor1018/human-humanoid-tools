@@ -9,10 +9,14 @@
   --color-border: var(--border);
   --color-border-subtle: var(--border-subtle);
   --color-primary: var(--accent);
-  --color-primary-foreground: var(--surface);
+  --color-primary-foreground: var(--on-accent);
   --color-accent: var(--accent-soft);
   --color-accent-foreground: var(--accent-hover);
   --color-ring: var(--focus);
+  --color-danger: var(--danger-text);
+  --color-danger-muted: var(--danger-bg);
+  --color-danger-border: var(--danger-border);
+  --color-success: var(--success-text);
   --color-canvas: var(--canvas);
   --color-stage-canvas: var(--stage-canvas);
   --radius-sm: var(--radius-compact);
@@ -32,13 +36,39 @@
   --accent: #0071e3;
   --accent-hover: #005bb5;
   --accent-soft: #e8f2ff;
+  --on-accent: #ffffff;
   --focus: #218bff;
+  --danger-bg: #fff5f4;
+  --danger-border: #efcccc;
+  --danger-text: #8c2929;
+  --success-text: #16845b;
   --radius-compact: 4px;
   --radius-control: 6px;
   --radius-overlay: 8px;
   --font: Inter, "Noto Sans SC", "Microsoft YaHei", ui-sans-serif, system-ui,
     -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --canvas: #101318;
+  --stage-canvas: #171a20;
+  --surface: #1d2128;
+  --surface-subtle: #262c35;
+  --text: #f2f5f9;
+  --text-muted: #a9b2c0;
+  --border-subtle: #303844;
+  --border: #465160;
+  --accent: #4da3ff;
+  --accent-hover: #78b8ff;
+  --accent-soft: #263d59;
+  --on-accent: #07111f;
+  --focus: #6eb5ff;
+  --danger-bg: #352024;
+  --danger-border: #6b343b;
+  --danger-text: #ffaaa4;
+  --success-text: #62d6a2;
+  color-scheme: dark;
 }
 
 html,

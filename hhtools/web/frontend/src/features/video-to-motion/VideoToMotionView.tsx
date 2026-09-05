@@ -5,6 +5,7 @@ import { ImportDropzone } from "@/components/ImportDropzone";
 import { InspectorPage } from "@/components/Inspector";
 import { Button } from "@/components/ui/button";
 import { WorkflowPipeline, WorkflowStep } from "@/components/WorkflowSteps";
+import type { ApplicationImportRequest } from "@/importIntent";
 import {
   toStageMotionPayload as toStageImportedMotionPayload,
   uploadMotion,
@@ -52,8 +53,11 @@ function formatMetric(value: number | null, suffix = ""): string {
 
 export function VideoToMotionView({
   onMotionLoaded,
+  importRequest,
 }: {
   onMotionLoaded?: (motion: StageMotionPayload | null) => void;
+  /** App-owned File-menu intent; this mounted view owns its input element. */
+  importRequest?: ApplicationImportRequest | null;
 }) {
   const [runtimePhase, setRuntimePhase] = useState<RuntimePhase>("checking");
   const [runtime, setRuntime] = useState<GvhmrRuntimeStatus | null>(null);
@@ -71,6 +75,7 @@ export function VideoToMotionView({
   const [setupBusy, setSetupBusy] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const resultInput = useRef<HTMLInputElement>(null);
+  const handledImportRequest = useRef<number | null>(null);
   const previewUrl = useRef<string | null>(null);
   const runtimeRequest = useRef<AbortController | null>(null);
   const operation = useRef<AbortController | null>(null);
@@ -109,6 +114,18 @@ export function VideoToMotionView({
     },
     [],
   );
+
+  useEffect(() => {
+    if (
+      !importRequest ||
+      importRequest.target !== "video-file" ||
+      handledImportRequest.current === importRequest.id
+    ) {
+      return;
+    }
+    handledImportRequest.current = importRequest.id;
+    fileInput.current?.click();
+  }, [importRequest]);
 
   const selectVideo = (file: File | null) => {
     if (!file) return;

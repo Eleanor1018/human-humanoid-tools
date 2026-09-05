@@ -14,7 +14,7 @@ may improve spacing, rounded corners, accessibility, and narrow-screen layout.
 | Robot to Robot | Functional | Restore comparison presets and richer input validation |
 | Batch | Functional | Run full solver smoke when the licensed/runtime dependencies are available |
 | Analysis | Complete | Scatter preview, stable filtering, histogram brushing, and removable upload basket are connected |
-| Application menu | Visual shell only | Wire navigation, import commands, current export, settings, help, and desktop exit |
+| Application menu | Complete | Typed navigation, imports, current export, settings, help, theme, and desktop exit are connected |
 
 ## Order
 
@@ -33,6 +33,7 @@ may improve spacing, rounded corners, accessibility, and narrow-screen layout.
   - [x] Preview selected videos and import existing GVHMR `.pt` results.
   - [x] Restore Analysis scatter selection/preview, fixed coordinates, histogram brushing, and upload-basket removal.
   - [x] Connect the desktop Exit command through the trusted Electron IPC boundary.
+  - [x] Connect all five application menus without global DOM commands.
 - [ ] Run route-contract tests and desktop/narrow-screen browser smoke for every pipeline.
 
 ## Rules
