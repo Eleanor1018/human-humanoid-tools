@@ -281,6 +281,14 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
     await expect(inspector.getByText('1 mesh asset · choose the .urdf file')).toBeVisible()
     await expectBorderless(inspector.getByRole('button', { name: 'Refresh Robot Library' }))
     await expect(inspector.getByRole('heading', { name: 'Robot Library' })).toBeVisible()
+    const robotRows = inspector
+      .getByRole('list', { name: 'Robot models' })
+      .locator('button[aria-label^="Load robot "]')
+    expect(
+      await robotRows.evaluateAll((rows) =>
+        rows.every((row) => !/\bLoad(?:ed)?\b/.test(row.textContent ?? ''))
+      )
+    ).toBe(true)
 
     await sidebar.getByRole('button', { name: 'Video → Motion' }).click()
     await expect(inspector.getByRole('heading', { name: 'Video → Motion' })).toBeVisible()

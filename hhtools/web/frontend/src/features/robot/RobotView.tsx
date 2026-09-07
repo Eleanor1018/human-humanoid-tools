@@ -467,15 +467,11 @@ export function RobotView({
                           {unavailable ? " · URDF missing" : ""}
                         </small>
                       </span>
-                      <span className="shrink-0 text-[11px] text-muted-foreground">
-                        {busy
-                          ? "Loading..."
-                          : active
-                            ? "Loaded"
-                            : unavailable
-                              ? "Unavailable"
-                              : "Load"}
-                      </span>
+                      {(busy || unavailable) && (
+                        <span className="shrink-0 text-[11px] text-muted-foreground">
+                          {busy ? "Loading..." : "Unavailable"}
+                        </span>
+                      )}
                     </button>
                     {robot.deletable && !robot.builtin && (
                       <button
