@@ -88,11 +88,7 @@ class GvhmrConfig:
             "local" if sys.platform.startswith("linux") else "docker"
         )
         default_body_models = root / "inputs" / "checkpoints" / "body_models"
-        body_models_value = (
-            os.environ.get(GVHMR_BODY_MODELS_ENV, default_body_models)
-            if runtime == "docker"
-            else default_body_models
-        )
+        body_models_value = os.environ.get(GVHMR_BODY_MODELS_ENV, default_body_models)
         body_models = Path(body_models_value).expanduser()
         raw_timeout = os.environ.get(GVHMR_TIMEOUT_ENV, str(DEFAULT_TIMEOUT_SECONDS))
         try:
@@ -456,6 +452,8 @@ def _build_local_gvhmr_command(
         str(video),
         "--output-root",
         str(output),
+        "--body-models-root",
+        str(config.body_models_root.resolve()),
     ]
     if static_cam:
         command.append("--static-cam")

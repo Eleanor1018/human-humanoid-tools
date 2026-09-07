@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from hhtools.integrations import gvhmr
+from hhtools.integrations import gvhmr, gvhmr_worker
 
 
 def _runtime_tree(root: Path, body_models_root: Path) -> None:
@@ -151,11 +151,14 @@ def test_linux_environment_selects_the_installed_python(
     monkeypatch.setattr(gvhmr.sys, "platform", "linux")
     monkeypatch.setenv(gvhmr.GVHMR_ROOT_ENV, str(root))
     monkeypatch.setenv(gvhmr.GVHMR_PYTHON_ENV, str(python))
+    body_models = tmp_path / "bundled-body-models"
+    monkeypatch.setenv(gvhmr.GVHMR_BODY_MODELS_ENV, str(body_models))
 
     config = gvhmr.GvhmrConfig.from_environment()
 
     assert config.runtime == "local"
     assert config.python_executable == python
+    assert config.body_models_root == body_models
 
 
 def test_windows_environment_keeps_the_docker_runtime(
@@ -234,7 +237,38 @@ def test_local_command_uses_external_python_and_packaged_worker(tmp_path: Path) 
     assert command[1].endswith("hhtools/integrations/gvhmr_worker.py")
     assert command[command.index("--video") + 1] == str(video.resolve())
     assert command[command.index("--output-root") + 1] == str(job_root / "output")
+    assert command[command.index("--body-models-root") + 1] == str(body_models.resolve())
     assert command[-3:] == ["--static-cam", "--f-mm", "35"]
+
+
+def test_worker_overlays_external_body_models_without_modifying_checkout(tmp_path: Path) -> None:
+    root = tmp_path / "GVHMR"
+    body_models = tmp_path / "bundled-body-models"
+    _runtime_tree(root, body_models)
+    (root / "hmr4d").mkdir()
+    (root / "inputs" / "demo").mkdir()
+    overlay = tmp_path / "project-overlay"
+
+    project_root = gvhmr_worker._prepare_project_overlay(  # noqa: SLF001
+        root,
+        body_models,
+        overlay,
+    )
+
+    overlaid_models = project_root / "inputs" / "checkpoints" / "body_models"
+    assert overlaid_models.is_symlink()
+    assert (overlaid_models / "smplx" / "SMPLX_NEUTRAL.npz").resolve() == (
+        body_models / "smplx" / "SMPLX_NEUTRAL.npz"
+    ).resolve()
+    assert (project_root / "hmr4d").resolve() == (root / "hmr4d").resolve()
+    overlaid_checkpoint = (
+        project_root / "inputs" / "checkpoints" / "gvhmr" / "gvhmr_siga24_release.ckpt"
+    )
+    source_checkpoint = (
+        root / "inputs" / "checkpoints" / "gvhmr" / "gvhmr_siga24_release.ckpt"
+    )
+    assert overlaid_checkpoint.resolve() == source_checkpoint.resolve()
+    assert not (root / "inputs" / "checkpoints" / "body_models").exists()
 
 
 def test_local_environment_drops_the_hhtools_python_context(
