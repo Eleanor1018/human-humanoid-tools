@@ -55,6 +55,7 @@ import {
   storeComparisonPreset,
   type ComparisonPreset,
 } from "./features/result/comparison";
+import { TaskDrawer } from "./features/tasks/TaskDrawer";
 import { VideoToMotionView } from "./features/video-to-motion/VideoToMotionView";
 import type { ViewId } from "./navigation";
 import { Stage } from "./stage/Stage";
@@ -608,6 +609,7 @@ export function App() {
           />
         </div>
       </Inspector>
+      <TaskDrawer />
       <a
         ref={exportLink}
         className="hidden"

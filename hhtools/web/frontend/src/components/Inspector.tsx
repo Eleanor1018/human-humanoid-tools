@@ -12,7 +12,7 @@ export function Inspector({
   return (
     <aside
       hidden={hidden}
-      className="col-start-3 row-start-2 min-h-0 min-w-0 overflow-hidden border-l border-border-subtle bg-surface max-[780px]:col-start-2 max-[780px]:row-start-3 max-[780px]:border-t"
+      className="col-start-3 row-start-2 row-span-2 min-h-0 min-w-0 overflow-hidden border-l border-border-subtle bg-surface max-[780px]:col-start-2 max-[780px]:row-start-3 max-[780px]:row-span-1 max-[780px]:border-t"
       aria-label={text("Inspector", "检查器")}
     >
       {children}

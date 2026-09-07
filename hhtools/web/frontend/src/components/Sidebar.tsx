@@ -19,7 +19,7 @@ export function Sidebar({ activeView, locale, hidden = false, onSelect }: Sideba
     <aside
       id="sidebar"
       hidden={hidden}
-      className="col-start-1 row-start-2 min-h-0 min-w-0 overflow-hidden border-r border-border-subtle bg-surface max-[780px]:row-span-2"
+      className="col-start-1 row-start-2 row-span-2 min-h-0 min-w-0 overflow-hidden border-r border-border-subtle bg-surface max-[780px]:row-span-3"
       aria-label="Workspace navigation"
     >
       <nav className="h-full min-h-0 min-w-0 overflow-y-auto px-3 py-3.5 max-[900px]:px-2">

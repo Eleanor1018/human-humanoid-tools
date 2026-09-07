@@ -107,7 +107,7 @@ body,
 #app {
   grid-template-columns:
     var(--workspace-sidebar-wide) minmax(0, 1fr) var(--workspace-inspector);
-  grid-template-rows: 40px minmax(0, 1fr);
+  grid-template-rows: 40px minmax(0, 1fr) auto;
 }
 
 @media (max-width: 900px) {
@@ -121,15 +121,15 @@ body,
 @media (max-width: 780px) {
   #app {
     grid-template-columns: var(--workspace-sidebar-compact) minmax(0, 1fr);
-    grid-template-rows: 40px minmax(240px, 42vh) minmax(0, 1fr);
+    grid-template-rows: 40px minmax(240px, 42vh) minmax(0, 1fr) auto;
   }
 
   #app[data-inspector-hidden="true"] {
-    grid-template-rows: 40px minmax(0, 1fr);
+    grid-template-rows: 40px minmax(0, 1fr) 0 auto;
   }
 
   #app[data-inspector-hidden="true"] #sidebar {
-    grid-row: 2 / 3;
+    grid-row: 2 / 5;
   }
 }
 
