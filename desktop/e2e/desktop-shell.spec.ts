@@ -198,18 +198,19 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
     await helpMenu.getByRole('menuitem', { name: 'Tutorial' }).click()
     const reopenedTutorial = page.getByRole('dialog', { name: '1. Welcome to hhtools' })
     await expect(reopenedTutorial).toBeVisible()
+    const tutorialOverlay = page.locator('[data-tutorial-overlay]')
     await expect(page.locator('#app')).toHaveAttribute('inert', '')
     await page.keyboard.press('Shift+Tab')
-    await expect(reopenedTutorial.getByRole('button', { name: 'Next' })).toBeFocused()
+    await expect(tutorialOverlay.getByRole('button', { name: 'Next' })).toBeFocused()
     await page.keyboard.press('Tab')
-    const skipTutorial = reopenedTutorial.getByRole('button', { name: 'Skip tutorial' })
+    const skipTutorial = tutorialOverlay.getByRole('button', { name: 'Skip tutorial' })
     await expect(skipTutorial).toBeFocused()
-    const nextTutorial = reopenedTutorial.getByRole('button', { name: 'Next' })
+    const nextTutorial = tutorialOverlay.getByRole('button', { name: 'Next' })
     for (let step = 1; step < 5; step += 1) {
       await nextTutorial.click()
     }
     const calibrationStep = page.locator('[data-tutorial="h2r-calibration"]')
-    await expect(page.locator('[data-tutorial-overlay]')).toHaveAttribute(
+    await expect(tutorialOverlay).toHaveAttribute(
       'data-tutorial-step',
       'calibration'
     )
@@ -258,8 +259,12 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
     await expect(page.getByRole('menu', { name: 'Analysis' })).toBeVisible()
     await page.keyboard.press('Escape')
     await expect(page.getByRole('menu', { name: 'Analysis' })).toBeHidden()
+    const activeViewBeforeShortcut = await page.locator('#app').getAttribute('data-active-view')
     await page.keyboard.press('Alt+3')
-    await expect(page.locator('#app')).toHaveAttribute('data-active-view', 'motion')
+    await expect(page.locator('#app')).toHaveAttribute(
+      'data-active-view',
+      activeViewBeforeShortcut ?? ''
+    )
 
     const sidebar = page.getByRole('complementary', { name: 'Workspace navigation' })
     await expect(sidebar.getByRole('button')).toHaveText([
@@ -277,7 +282,9 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
         icons.every((icon) => getComputedStyle(icon).maskImage.includes('/icons/sidebar/'))
       )
     ).toBe(true)
-    await expect(sidebar.getByRole('button', { name: 'Motion', exact: true })).toHaveAttribute(
+    const motionButton = sidebar.getByRole('button', { name: 'Motion', exact: true })
+    await motionButton.click()
+    await expect(motionButton).toHaveAttribute(
       'aria-current',
       'page'
     )
