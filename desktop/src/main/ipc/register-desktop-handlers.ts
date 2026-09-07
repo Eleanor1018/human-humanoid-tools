@@ -52,6 +52,10 @@ export function registerDesktopHandlers(options: {
     }
     await shell.openExternal(url.toString())
   })
+  ipcMain.handle(DESKTOP_CHANNELS.exitApplication, async (event) => {
+    trusted(event)
+    options.mainWindow.close()
+  })
 
   return () => {
     ipcMain.removeHandler(DESKTOP_CHANNELS.getRuntimeState)
@@ -60,5 +64,6 @@ export function registerDesktopHandlers(options: {
     ipcMain.removeHandler(DESKTOP_CHANNELS.setupGvhmr)
     ipcMain.removeHandler(DESKTOP_CHANNELS.selectDirectory)
     ipcMain.removeHandler(DESKTOP_CHANNELS.openExternal)
+    ipcMain.removeHandler(DESKTOP_CHANNELS.exitApplication)
   }
 }

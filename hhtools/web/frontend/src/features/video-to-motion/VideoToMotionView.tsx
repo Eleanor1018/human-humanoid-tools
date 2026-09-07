@@ -5,12 +5,19 @@ import { ImportDropzone } from "@/components/ImportDropzone";
 import { InspectorPage } from "@/components/Inspector";
 import { Button } from "@/components/ui/button";
 import { WorkflowPipeline, WorkflowStep } from "@/components/WorkflowSteps";
+import type { ApplicationImportRequest } from "@/importIntent";
+import {
+  toStageMotionPayload as toStageImportedMotionPayload,
+  uploadMotion,
+  type MotionJob,
+} from "@/features/motion/api";
 import type { StageMotionPayload } from "@/stage/types";
 
 import {
   canSetupGvhmrInDesktop,
   formatFileSize,
   getGvhmrRuntimeStatus,
+  isGvhmrResultName,
   isSupportedVideoName,
   parseOptionalFocalLength,
   setupGvhmrInDesktop,
@@ -28,6 +35,12 @@ const pipeline = ["Select Video", "Environment", "Generate", "Motion Result"];
 type RuntimePhase = "checking" | "ready" | "unavailable" | "error";
 type WorkflowPhase = "idle" | "uploading" | "running" | "done" | "error";
 
+interface SelectedVideo {
+  readonly file: File;
+  readonly previewUrl: string;
+  readonly duration: number | null;
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -40,24 +53,34 @@ function formatMetric(value: number | null, suffix = ""): string {
 
 export function VideoToMotionView({
   onMotionLoaded,
+  importRequest,
 }: {
   onMotionLoaded?: (motion: StageMotionPayload | null) => void;
+  /** App-owned File-menu intent; this mounted view owns its input element. */
+  importRequest?: ApplicationImportRequest | null;
 }) {
   const [runtimePhase, setRuntimePhase] = useState<RuntimePhase>("checking");
   const [runtime, setRuntime] = useState<GvhmrRuntimeStatus | null>(null);
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
-  const [video, setVideo] = useState<File | null>(null);
+  const [video, setVideo] = useState<SelectedVideo | null>(null);
   const [staticCamera, setStaticCamera] = useState(true);
   const [focalLength, setFocalLength] = useState("");
   const [workflowPhase, setWorkflowPhase] = useState<WorkflowPhase>("idle");
   const [job, setJob] = useState<VideoToMotionJob | null>(null);
   const [workflowError, setWorkflowError] = useState<string | null>(null);
   const [result, setResult] = useState<MotionResultSummary | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [importJob, setImportJob] = useState<MotionJob | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
   const [setupBusy, setSetupBusy] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
+  const resultInput = useRef<HTMLInputElement>(null);
+  const handledImportRequest = useRef<number | null>(null);
+  const previewUrl = useRef<string | null>(null);
   const runtimeRequest = useRef<AbortController | null>(null);
   const operation = useRef<AbortController | null>(null);
-  const busy = workflowPhase === "uploading" || workflowPhase === "running";
+  const generating = workflowPhase === "uploading" || workflowPhase === "running";
+  const busy = importing || generating;
 
   const refreshRuntime = useCallback(() => {
     runtimeRequest.current?.abort();
@@ -84,24 +107,44 @@ export function VideoToMotionView({
     return () => runtimeRequest.current?.abort();
   }, [refreshRuntime]);
 
-  useEffect(() => () => operation.current?.abort(), []);
+  useEffect(
+    () => () => {
+      operation.current?.abort();
+      if (previewUrl.current) URL.revokeObjectURL(previewUrl.current);
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (
+      !importRequest ||
+      importRequest.target !== "video-file" ||
+      handledImportRequest.current === importRequest.id
+    ) {
+      return;
+    }
+    handledImportRequest.current = importRequest.id;
+    fileInput.current?.click();
+  }, [importRequest]);
 
   const selectVideo = (file: File | null) => {
     if (!file) return;
     if (!isSupportedVideoName(file.name)) {
-      onMotionLoaded?.(null);
-      setVideo(null);
       setWorkflowPhase("error");
       setWorkflowError("Supported formats are MP4, MOV, MKV, AVI, WebM, and M4V.");
-      setResult(null);
       return;
     }
-    setVideo(file);
+
+    const nextUrl = URL.createObjectURL(file);
+    const previousUrl = previewUrl.current;
+    previewUrl.current = nextUrl;
+    setVideo({ file, previewUrl: nextUrl, duration: null });
+    if (previousUrl) URL.revokeObjectURL(previousUrl);
     setWorkflowPhase("idle");
     setWorkflowError(null);
+    setImportError(null);
     setJob(null);
     setResult(null);
-    onMotionLoaded?.(null);
   };
 
   const configureRuntime = async () => {
@@ -134,22 +177,29 @@ export function VideoToMotionView({
     operation.current = request;
     setWorkflowPhase("uploading");
     setWorkflowError(null);
+    setImportError(null);
     setJob(null);
     setResult(null);
     try {
       const jobId = await startVideoToMotion(
-        { video, staticCamera, focalLength: parsedFocalLength },
+        { video: video.file, staticCamera, focalLength: parsedFocalLength },
         request.signal,
       );
       if (request.signal.aborted) return;
       setWorkflowPhase("running");
       const motion = await waitForVideoToMotion(jobId, {
         signal: request.signal,
-        onUpdate: (snapshot) => setJob(snapshot),
+        onUpdate: (snapshot) => {
+          if (!request.signal.aborted) setJob(snapshot);
+        },
       });
       if (request.signal.aborted) return;
-      setResult(summarizeMotionResult(motion, video.name));
-      onMotionLoaded?.(toStageMotionPayload(motion));
+      const stageMotion = toStageMotionPayload(motion);
+      if (!stageMotion) {
+        throw new Error("The generated motion has no preview data.");
+      }
+      setResult(summarizeMotionResult(motion, video.file.name));
+      onMotionLoaded?.(stageMotion);
       setWorkflowPhase("done");
     } catch (error) {
       if (request.signal.aborted) return;
@@ -157,6 +207,47 @@ export function VideoToMotionView({
       setWorkflowError(errorMessage(error));
     } finally {
       if (operation.current === request) operation.current = null;
+    }
+  };
+
+  const importResult = async (file: File | null) => {
+    if (!file || busy) return;
+    if (!isGvhmrResultName(file.name)) {
+      setImportError("A GVHMR result must be a .pt file.");
+      return;
+    }
+
+    operation.current?.abort();
+    const request = new AbortController();
+    operation.current = request;
+    setImporting(true);
+    setImportJob(null);
+    setImportError(null);
+    setWorkflowError(null);
+    try {
+      const payload = await uploadMotion([file], {
+        profile: "mimic",
+        signal: request.signal,
+        onUpdate: (snapshot) => {
+          if (!request.signal.aborted) setImportJob(snapshot);
+        },
+      });
+      if (request.signal.aborted) return;
+      const stageMotion = toStageImportedMotionPayload(payload);
+      if (!stageMotion) {
+        throw new Error("The imported motion has no preview data.");
+      }
+      setResult(summarizeMotionResult(payload, file.name));
+      onMotionLoaded?.(stageMotion);
+      setWorkflowPhase("done");
+    } catch (error) {
+      if (request.signal.aborted) return;
+      setImportError(errorMessage(error));
+    } finally {
+      if (operation.current === request) {
+        operation.current = null;
+        if (!request.signal.aborted) setImporting(false);
+      }
     }
   };
 
@@ -170,17 +261,17 @@ export function VideoToMotionView({
           : "Check failed";
   const runtimeDot =
     runtimePhase === "ready"
-      ? "bg-[#16845b]"
+      ? "bg-success"
       : runtimePhase === "checking"
-        ? "bg-[#c98413]"
-        : "bg-[#c53c3c]";
+        ? "bg-warning"
+        : "bg-danger";
   const missing = runtime?.missing ?? [];
   const progress = workflowPhase === "uploading" ? 0 : (job?.progress ?? 0);
   const canRun = Boolean(video) && runtimePhase === "ready" && !busy;
   const pipelineIndex =
-    workflowPhase === "done"
+    importing || workflowPhase === "done"
       ? 3
-      : busy || (video && runtimePhase === "ready")
+      : generating || (video && runtimePhase === "ready")
         ? 2
         : video
           ? 1
@@ -196,7 +287,7 @@ export function VideoToMotionView({
       <div className="flex shrink-0 flex-col">
         <WorkflowStep
           title="1. Select video"
-          status={video ? video.name : "Not selected"}
+          status={video ? video.file.name : "Not selected"}
           defaultOpen
         >
           <div
@@ -209,15 +300,18 @@ export function VideoToMotionView({
             <ImportDropzone
               label="Video import area"
               icon="/icons/sidebar/video-to-motion.svg"
-              title={video?.name ?? "Drop a video file here"}
-              hint={video ? formatFileSize(video.size) : "MP4, MOV, MKV, AVI, WebM or M4V"}
+              title={video?.file.name ?? "Drop a video file here"}
+              hint={video ? formatFileSize(video.file.size) : "MP4, MOV, MKV, AVI, WebM or M4V"}
             >
               <input
                 ref={fileInput}
                 className="hidden"
                 type="file"
                 accept="video/mp4,video/quicktime,video/x-matroska,video/x-msvideo,video/webm,.m4v"
-                onChange={(event) => selectVideo(event.target.files?.[0] ?? null)}
+                onChange={(event) => {
+                  selectVideo(event.currentTarget.files?.[0] ?? null);
+                  event.currentTarget.value = "";
+                }}
                 disabled={busy}
               />
               <Button size="sm" onClick={() => fileInput.current?.click()} disabled={busy}>
@@ -225,6 +319,47 @@ export function VideoToMotionView({
               </Button>
             </ImportDropzone>
           </div>
+          {video && (
+            <section className="mt-3 grid gap-2" aria-label="Selected video">
+              <video
+                key={video.previewUrl}
+                className="aspect-video w-full rounded-md bg-black object-contain"
+                src={video.previewUrl}
+                controls
+                preload="metadata"
+                aria-label="Selected video preview"
+                onLoadedMetadata={(event) => {
+                  const duration = Number.isFinite(event.currentTarget.duration)
+                    ? event.currentTarget.duration
+                    : null;
+                  setVideo((current) =>
+                    current?.previewUrl === video.previewUrl
+                      ? { ...current, duration }
+                      : current,
+                  );
+                }}
+              />
+              <div className="flex min-w-0 items-center justify-between gap-3">
+                <div className="min-w-0 text-[11px] leading-relaxed">
+                  <p className="truncate font-semibold text-foreground" title={video.file.name}>
+                    {video.file.name}
+                  </p>
+                  <p className="truncate text-muted-foreground">
+                    {[
+                      formatFileSize(video.file.size),
+                      video.file.type || "Video",
+                      video.duration === null ? null : `${video.duration.toFixed(1)} s`,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </p>
+                </div>
+                <Button size="sm" onClick={() => fileInput.current?.click()} disabled={busy}>
+                  Replace
+                </Button>
+              </div>
+            </section>
+          )}
         </WorkflowStep>
 
         <WorkflowStep title="2. Environment" status={runtimeLabel} defaultOpen>
@@ -257,7 +392,7 @@ export function VideoToMotionView({
               </select>
             </Field>
             {(runtimeError || missing.length > 0) && (
-              <div className="rounded-md border border-[#efcccc] bg-[#fff5f4] px-2.5 py-2 text-[11px] leading-relaxed text-[#8c2929] break-all" role="alert">
+              <div className="rounded-md border border-danger-border bg-danger-muted px-2.5 py-2 text-[11px] leading-relaxed text-danger break-all" role="alert">
                 <p>{runtimeError ?? missing[0]}</p>
                 {!runtimeError && missing.length > 1 && (
                   <details className="mt-1">
@@ -278,7 +413,7 @@ export function VideoToMotionView({
 
         <WorkflowStep
           title="3. Generate"
-          status={busy ? `${Math.round(progress * 100)}%` : workflowPhase === "done" ? "Done" : "Waiting"}
+          status={generating ? `${Math.round(progress * 100)}%` : workflowPhase === "done" ? "Done" : "Waiting"}
           defaultOpen
         >
           <form
@@ -318,7 +453,7 @@ export function VideoToMotionView({
                   ? "Generating…"
                   : "Start GVHMR"}
             </Button>
-            {busy && (
+            {generating && (
               <div className="grid gap-1.5 text-[11px] text-muted-foreground" role="status">
                 <div className="flex items-center justify-between gap-3">
                   <span className="min-w-0 truncate">{job?.message ?? "Sending source video"}</span>
@@ -330,30 +465,88 @@ export function VideoToMotionView({
               </div>
             )}
             {workflowPhase === "error" && workflowError && (
-              <p className="rounded-md border border-[#efcccc] bg-[#fff5f4] px-2.5 py-2 text-[11px] leading-relaxed text-[#8c2929] break-words" role="alert">
+              <p className="rounded-md border border-danger-border bg-danger-muted px-2.5 py-2 text-[11px] leading-relaxed text-danger break-words" role="alert">
                 {workflowError}
               </p>
             )}
           </form>
         </WorkflowStep>
 
-        <WorkflowStep title="4. Motion result" status={result ? "Motion Library" : "Empty"} defaultOpen>
-          {result ? (
-            <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-md bg-border-subtle text-[11px]">
-              {[
-                ["Frames", formatMetric(result.frames)],
-                ["Duration", formatMetric(result.duration, " s")],
-                ["Frame rate", formatMetric(result.framerate, " fps")],
-                ["Library", result.linkedFolder ?? "Registered"],
-              ].map(([label, value]) => (
-                <div key={label} className="min-w-0 bg-surface p-2.5">
-                  <dt className="text-muted-foreground">{label}</dt>
-                  <dd className="mt-0.5 truncate font-semibold text-foreground" title={value}>
-                    {value}
-                  </dd>
+        <WorkflowStep
+          title="4. Motion result"
+          status={
+            importing
+              ? `${Math.round((importJob?.progress ?? 0) * 100)}%`
+              : result
+                ? "Motion Library"
+                : "Empty"
+          }
+          defaultOpen
+        >
+          <input
+            ref={resultInput}
+            className="hidden"
+            type="file"
+            accept=".pt"
+            aria-label="Select an existing GVHMR result"
+            disabled={busy}
+            onChange={(event) => {
+              void importResult(event.currentTarget.files?.[0] ?? null);
+              event.currentTarget.value = "";
+            }}
+          />
+          <div className="mb-2.5 grid gap-2">
+            <Button
+              size="sm"
+              onClick={() => resultInput.current?.click()}
+              disabled={busy}
+            >
+              {importing ? "Importing…" : "Import existing GVHMR result (.pt)"}
+            </Button>
+            {importing && (
+              <div className="grid gap-1.5 text-[11px] text-muted-foreground" role="status">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="min-w-0 truncate">
+                    {importJob?.message ?? "Uploading motion result"}
+                  </span>
+                  <strong className="shrink-0 text-foreground">
+                    {Math.round((importJob?.progress ?? 0) * 100)}%
+                  </strong>
                 </div>
-              ))}
-            </dl>
+                <progress
+                  className="h-1.5 w-full accent-primary"
+                  value={importJob?.progress ?? 0}
+                  max="1"
+                />
+              </div>
+            )}
+            {importError && (
+              <p className="rounded-md border border-danger-border bg-danger-muted px-2.5 py-2 text-[11px] leading-relaxed text-danger break-words" role="alert">
+                {importError}
+              </p>
+            )}
+          </div>
+          {result ? (
+            <div className="grid gap-2">
+              <p className="truncate text-xs font-semibold text-foreground" title={result.name}>
+                {result.name}
+              </p>
+              <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-md bg-border-subtle text-[11px]">
+                {[
+                  ["Frames", formatMetric(result.frames)],
+                  ["Duration", formatMetric(result.duration, " s")],
+                  ["Frame rate", formatMetric(result.framerate, " fps")],
+                  ["Library", result.linkedFolder ?? "Registered"],
+                ].map(([label, value]) => (
+                  <div key={label} className="min-w-0 bg-surface p-2.5">
+                    <dt className="text-muted-foreground">{label}</dt>
+                    <dd className="mt-0.5 truncate font-semibold text-foreground" title={value}>
+                      {value}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            </div>
           ) : (
             <p className="text-xs text-muted-foreground">
               Completed motion will be registered in the Motion Library.

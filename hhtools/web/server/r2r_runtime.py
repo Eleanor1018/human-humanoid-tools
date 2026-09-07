@@ -41,6 +41,7 @@ def _build_r2r_calibration_session(target_model, source_model) -> dict:
         _joint_limits_payload,
         _reference_heading_rad,
         _robot_ground_offset_z,
+        joint_world_payload,
         serialize_reference_skeleton,
     )
 
@@ -81,6 +82,7 @@ def _build_r2r_calibration_session(target_model, source_model) -> dict:
     return {
         "joint_q": joint_q,
         "joint_limits": _joint_limits_payload(target_model),
+        "joint_world": joint_world_payload(target_model),
         "reference": ref_payload,
         "reference_name": ref.name,
         "ground_offset_z": ground_z,

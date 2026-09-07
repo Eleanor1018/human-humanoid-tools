@@ -1,55 +1,835 @@
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+
 import { Field, fieldClass } from "@/components/Field";
+import { CalibrationEditor } from "@/components/CalibrationEditor";
+import {
+  AssetImportButton,
+  type ImportAssetKind,
+} from "@/components/AssetImportButton";
+import {
+  normalizeCalibrationValues,
+  setCalibrationJointValue,
+  type CalibrationAngleUnit,
+} from "@/components/calibrationEditorState";
 import { InspectorPage } from "@/components/Inspector";
-import { RetargetControls } from "@/components/RetargetControls";
-import { RobotPicker } from "@/components/RobotPicker";
 import { Button } from "@/components/ui/button";
 import { WorkflowPipeline, WorkflowStep } from "@/components/WorkflowSteps";
+import {
+  getMotionLibrary,
+  loadMotionLibraryEntry,
+  type MotionLibraryEntry,
+  type MotionPayload,
+} from "@/features/motion/api";
+import {
+  getRobotLibrary,
+  loadRobot,
+  type RobotPayload,
+  type RobotSummary,
+} from "@/features/robot/api";
+import { ResultDiagnostics } from "@/features/result/ResultDiagnostics";
+import { ResultExportControls } from "@/features/result/ResultExportControls";
+import type { ComparisonPreset } from "@/features/result/comparison";
+import type { StageMotionPayload } from "@/stage/types";
+import {
+  DEFAULT_CALIBRATION_DISPLAY,
+  type CalibrationDisplayOptions,
+} from "@/stage/calibrationDisplay";
+import type { CalibrationInteractionModel } from "@/stage/calibrationInteraction";
+
+import {
+  getCalibrationReferences,
+  getCalibrationStatus,
+  loadScaledPreview,
+  previewCalibrationPose,
+  retarget,
+  retargetExportUrl,
+  saveCalibration,
+  startCalibrationSession,
+  type CalibrationSession,
+  type CalibrationPose,
+  type CalibrationStatus,
+  type RetargetResult,
+  type ScaledPreviewResult,
+} from "./api";
 
 const pipeline = ["Motion", "Robot", "Calibration", "Result"];
+type Action = "motion" | "robot" | "calibration" | "save" | "retarget";
+type Backend = "newton" | "interaction_mesh";
 
-export function HumanToRobotView() {
+export interface HumanToRobotViewProps {
+  readonly currentMotion?: StageMotionPayload | null;
+  readonly currentRobot?: RobotPayload | null;
+  readonly currentResult?: RetargetResult | null;
+  readonly onMotionLoaded?: (motion: MotionPayload) => void;
+  readonly onRobotLoaded?: (robot: RobotPayload) => void;
+  readonly onRetargetResult?: (result: RetargetResult | null) => void;
+  readonly onCalibrationReference?: (reference: StageMotionPayload | null) => void;
+  readonly onRobotPose?: (pose: CalibrationPose | null) => void;
+  readonly onScaledPreview?: (preview: ScaledPreviewResult | null) => void;
+  readonly calibrationDisplay?: CalibrationDisplayOptions;
+  readonly onCalibrationDisplayChange?: (value: CalibrationDisplayOptions) => void;
+  readonly onCalibrationInteraction?: (
+    interaction: CalibrationInteractionModel | null,
+  ) => void;
+  readonly comparisonPreset?: ComparisonPreset;
+  readonly onComparisonPresetChange?: (preset: ComparisonPreset) => void;
+  readonly onOpenMotionLibrary: () => void;
+  readonly onOpenRobotLibrary: () => void;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function motionLabel(entry: MotionLibraryEntry): string {
+  const name =
+    entry.stem || entry.sequence_id || entry.label || entry.source_path;
+  return entry.folder_label ? `${entry.folder_label} / ${name}` : name;
+}
+
+function positiveNumber(value: string): number | undefined {
+  const parsed = Number(value);
+  return value.trim() && Number.isFinite(parsed) && parsed > 0
+    ? parsed
+    : undefined;
+}
+
+function Picker({
+  label,
+  value,
+  disabled,
+  buttonLabel,
+  importKind,
+  onImport,
+  onChange,
+  onLoad,
+  children,
+}: {
+  label: string;
+  value: string;
+  disabled: boolean;
+  buttonLabel: string;
+  importKind: ImportAssetKind;
+  onImport(): void;
+  onChange(value: string): void;
+  onLoad(): void;
+  children: ReactNode;
+}) {
+  return (
+    <div className="grid gap-2">
+      <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+        <select
+          className={fieldClass}
+          aria-label={label}
+          value={value}
+          disabled={disabled}
+          onChange={(event) => onChange(event.currentTarget.value)}
+        >
+          {children}
+        </select>
+        <AssetImportButton kind={importKind} onClick={onImport} />
+      </div>
+      <Button size="sm" disabled={disabled || !value} onClick={onLoad}>
+        {buttonLabel}
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * React owns this four-step transaction; FastAPI owns heavy motion/robot data.
+ * The optional props make the same view work with App-owned or local inputs.
+ */
+export function HumanToRobotView({
+  currentMotion,
+  currentRobot,
+  currentResult,
+  onMotionLoaded,
+  onRobotLoaded,
+  onRetargetResult,
+  onCalibrationReference,
+  onRobotPose,
+  onScaledPreview,
+  calibrationDisplay: controlledCalibrationDisplay,
+  onCalibrationDisplayChange,
+  onCalibrationInteraction,
+  comparisonPreset,
+  onComparisonPresetChange,
+  onOpenMotionLibrary,
+  onOpenRobotLibrary,
+}: HumanToRobotViewProps) {
+  const [motionEntries, setMotionEntries] = useState<
+    readonly MotionLibraryEntry[]
+  >([]);
+  const [robotEntries, setRobotEntries] = useState<readonly RobotSummary[]>([]);
+  const [references, setReferences] = useState<readonly string[]>([]);
+  const [localMotion, setLocalMotion] = useState<StageMotionPayload | null>(
+    null,
+  );
+  const [localRobot, setLocalRobot] = useState<RobotPayload | null>(null);
+  const motion = currentMotion === undefined ? localMotion : currentMotion;
+  const robot = currentRobot === undefined ? localRobot : currentRobot;
+
+  const [motionPath, setMotionPath] = useState("");
+  const [robotName, setRobotName] = useState(currentRobot?.name ?? "");
+  const [reference, setReference] = useState(
+    currentMotion?.suggested_reference ?? "",
+  );
+  const [calibration, setCalibration] = useState<CalibrationStatus | null>(
+    null,
+  );
+  const [session, setSession] = useState<CalibrationSession | null>(null);
+  const [jointQ, setJointQ] = useState<Record<string, number>>({});
+  const [jointGeometry, setJointGeometry] = useState<{
+    readonly jointWorld: CalibrationSession["joint_world"];
+    readonly groundOffsetZ: number;
+  } | null>(null);
+  const [angleUnit, setAngleUnit] = useState<CalibrationAngleUnit>("rad");
+  const [selectedCalibrationJoint, setSelectedCalibrationJoint] =
+    useState<string | null>(null);
+  const [calibrationBaseline, setCalibrationBaseline] = useState<
+    Record<string, number>
+  >({});
+  const [localCalibrationDisplay, setLocalCalibrationDisplay] = useState(
+    DEFAULT_CALIBRATION_DISPLAY,
+  );
+  const calibrationDisplay =
+    controlledCalibrationDisplay ?? localCalibrationDisplay;
+  const publishCalibrationDisplay =
+    onCalibrationDisplayChange ?? setLocalCalibrationDisplay;
+  const [checking, setChecking] = useState(false);
+  const [busy, setBusy] = useState<Action | null>(null);
+  const [progress, setProgress] = useState(0);
+  const [status, setStatus] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<RetargetResult | null>(
+    currentResult ?? null,
+  );
+  const [retargetFps, setRetargetFps] = useState("");
+  const [backend, setBackend] = useState<Backend>("newton");
+  const actionRequest = useRef<AbortController | null>(null);
+  const calibrationStatusRequest = useRef<AbortController | null>(null);
+  const resultCallback = useRef(onRetargetResult);
+  resultCallback.current = onRetargetResult;
+  const referenceCallback = useRef(onCalibrationReference);
+  referenceCallback.current = onCalibrationReference;
+  const poseCallback = useRef(onRobotPose);
+  poseCallback.current = onRobotPose;
+  const scaledPreviewCallback = useRef(onScaledPreview);
+  const interactionCallback = useRef(onCalibrationInteraction);
+  scaledPreviewCallback.current = onScaledPreview;
+  interactionCallback.current = onCalibrationInteraction;
+  const inputKey = `${motion?.token ?? ""}|${robot?.name ?? ""}|${reference}`;
+  const previousInputKey = useRef(inputKey);
+
+  useEffect(() => {
+    const request = new AbortController();
+    void Promise.all([
+      getMotionLibrary({ signal: request.signal }),
+      getRobotLibrary({ signal: request.signal }),
+      getCalibrationReferences({ signal: request.signal }),
+    ])
+      .then(([motionLibrary, robotLibrary, referenceNames]) => {
+        if (request.signal.aborted) return;
+        setMotionEntries(
+          motionLibrary.entries.filter(
+            (entry) => entry.asset_kind !== "robot_trajectory",
+          ),
+        );
+        setRobotEntries(robotLibrary.robots);
+        setReferences(referenceNames);
+      })
+      .catch((reason: unknown) => {
+        if (!request.signal.aborted) setError(errorMessage(reason));
+      });
+    return () => {
+      request.abort();
+      actionRequest.current?.abort();
+      calibrationStatusRequest.current?.abort();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (currentResult !== undefined) setResult(currentResult);
+  }, [currentResult]);
+
+  useEffect(() => {
+    setRobotName(robot?.name ?? "");
+  }, [robot?.name]);
+
+  useEffect(() => {
+    const suggested = motion?.suggested_reference;
+    const next = suggested ||
+      (motion
+        ? references.includes("smpl")
+          ? "smpl"
+          : references[0] || ""
+        : "");
+    setReference(next);
+  }, [motion?.token, references]);
+
+  useEffect(() => {
+    if (
+      motion?.suggested_backend === "newton" ||
+      motion?.suggested_backend === "interaction_mesh"
+    ) {
+      setBackend(motion.suggested_backend);
+    }
+  }, [motion?.token]);
+
+  // A result belongs to one exact motion/robot/reference tuple. The key starts
+  // with the mounted tuple so returning to this view keeps an App-owned result.
+  useEffect(() => {
+    if (previousInputKey.current === inputKey) return;
+    previousInputKey.current = inputKey;
+    actionRequest.current?.abort();
+    setBusy(null);
+    setSession(null);
+    setJointQ({});
+    setJointGeometry(null);
+    setSelectedCalibrationJoint(null);
+    setCalibrationBaseline({});
+    setResult(null);
+    setProgress(0);
+    referenceCallback.current?.(null);
+    poseCallback.current?.(null);
+    resultCallback.current?.(null);
+  }, [inputKey]);
+
+  // For this Web workflow calibration/status is the lightweight preflight.
+  useEffect(() => {
+    if (!robot || !reference) {
+      calibrationStatusRequest.current?.abort();
+      setChecking(false);
+      return;
+    }
+    const request = new AbortController();
+    calibrationStatusRequest.current?.abort();
+    calibrationStatusRequest.current = request;
+    setCalibration(null);
+    setChecking(true);
+    void getCalibrationStatus(robot.name, reference, { signal: request.signal })
+      .then((value) => {
+        if (!request.signal.aborted) setCalibration(value);
+      })
+      .catch((reason: unknown) => {
+        if (!request.signal.aborted) setError(errorMessage(reason));
+      })
+      .finally(() => {
+        if (!request.signal.aborted) setChecking(false);
+      });
+    return () => request.abort();
+  }, [robot, reference]);
+
+  // A scaled preview belongs to one exact calibrated input tuple. Keep the
+  // optional visualization out of the retarget transaction and discard stale
+  // responses when any owner changes or calibration editing starts.
+  useEffect(() => {
+    scaledPreviewCallback.current?.(null);
+    if (
+      !motion?.token ||
+      !robot ||
+      !reference ||
+      checking ||
+      !calibration?.calibrated ||
+      session
+    ) {
+      return;
+    }
+
+    const request = new AbortController();
+    void loadScaledPreview(
+      {
+        robot: robot.name,
+        motion_token: motion.token,
+        reference,
+      },
+      { signal: request.signal },
+    )
+      .then((preview) => {
+        if (!request.signal.aborted) {
+          scaledPreviewCallback.current?.(preview);
+        }
+      })
+      .catch((reason: unknown) => {
+        if (!request.signal.aborted) {
+          scaledPreviewCallback.current?.(null);
+          console.warn("scaled preview", errorMessage(reason));
+        }
+      });
+
+    return () => {
+      request.abort();
+      scaledPreviewCallback.current?.(null);
+    };
+  }, [
+    calibration?.calibrated,
+    checking,
+    motion?.token,
+    reference,
+    robot?.name,
+    session,
+  ]);
+
+  useEffect(
+    () => () => {
+      referenceCallback.current?.(null);
+      poseCallback.current?.(null);
+      scaledPreviewCallback.current?.(null);
+      interactionCallback.current?.(null);
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!session || !jointGeometry) {
+      interactionCallback.current?.(null);
+      return;
+    }
+    interactionCallback.current?.({
+      jointQ,
+      jointLimits: session.joint_limits,
+      jointWorld: jointGeometry.jointWorld,
+      groundOffsetZ: jointGeometry.groundOffsetZ,
+      angleUnit,
+      selectedJoint: selectedCalibrationJoint,
+      disabled: Boolean(busy),
+      onJointChange: (name, value) => {
+        setJointQ((current) =>
+          setCalibrationJointValue(session.joint_limits, current, name, value),
+        );
+      },
+      onSelectedJointChange: setSelectedCalibrationJoint,
+      onAngleUnitChange: setAngleUnit,
+    });
+  }, [
+    angleUnit,
+    busy,
+    jointGeometry,
+    jointQ,
+    selectedCalibrationJoint,
+    session,
+  ]);
+
+  useEffect(() => {
+    if (!session || !robot) {
+      poseCallback.current?.(null);
+      return;
+    }
+    const request = new AbortController();
+    const timer = window.setTimeout(() => {
+      void previewCalibrationPose(robot.name, jointQ, {
+        signal: request.signal,
+      })
+        .then((pose) => {
+          if (!request.signal.aborted) {
+            setJointGeometry({
+              jointWorld: pose.joint_world,
+              groundOffsetZ: pose.ground_offset_z,
+            });
+            poseCallback.current?.(pose);
+          }
+        })
+        .catch((reason: unknown) => {
+          if (!request.signal.aborted) setError(errorMessage(reason));
+        });
+    }, 120);
+    return () => {
+      window.clearTimeout(timer);
+      request.abort();
+    };
+  }, [jointQ, robot, session]);
+
+  async function runAction(
+    action: Action,
+    work: (signal: AbortSignal) => Promise<void>,
+  ) {
+    actionRequest.current?.abort();
+    const request = new AbortController();
+    actionRequest.current = request;
+    setBusy(action);
+    setError(null);
+    try {
+      await work(request.signal);
+    } catch (reason) {
+      if (!request.signal.aborted) setError(errorMessage(reason));
+    } finally {
+      if (actionRequest.current === request) setBusy(null);
+    }
+  }
+
+  function clearResult() {
+    setResult(null);
+    setStatus("");
+    setError(null);
+    resultCallback.current?.(null);
+  }
+
+  function selectMotion() {
+    const entry = motionEntries.find((item) => item.source_path === motionPath);
+    if (!entry || busy || session) return;
+    void runAction("motion", async (signal) => {
+      setStatus(`Loading ${motionLabel(entry)}…`);
+      const payload = await loadMotionLibraryEntry(entry, {
+        signal,
+        usage: "human_to_robot",
+        onUpdate: (job) => {
+          setProgress(job.progress ?? 0);
+          setStatus(job.message || "Loading motion…");
+        },
+      });
+      if (signal.aborted) return;
+      setLocalMotion(payload);
+      setStatus(`Loaded ${payload.name}`);
+      onMotionLoaded?.(payload);
+    });
+  }
+
+  function selectRobot() {
+    if (!robotName || busy || session) return;
+    void runAction("robot", async (signal) => {
+      setStatus("Loading robot…");
+      const payload = await loadRobot(robotName, { signal });
+      if (signal.aborted) return;
+      setLocalRobot(payload);
+      setStatus(`Loaded ${payload.display_name}`);
+      onRobotLoaded?.(payload);
+    });
+  }
+
+  function editCalibration() {
+    if (!robot || !reference || busy || session) return;
+    void runAction("calibration", async (signal) => {
+      setStatus("Opening calibration…");
+      const value = await startCalibrationSession(
+        {
+          robot: robot.name,
+          reference,
+          ...(motion?.token ? { motion_token: motion.token } : {}),
+        },
+        { signal },
+      );
+      if (signal.aborted) return;
+      clearResult();
+      const initial = normalizeCalibrationValues(
+        value.joint_limits,
+        value.joint_q,
+      );
+      setSession(value);
+      setJointQ(initial);
+      setJointGeometry({
+        jointWorld: value.joint_world,
+        groundOffsetZ: value.ground_offset_z,
+      });
+      setCalibrationBaseline(initial);
+      referenceCallback.current?.(value.reference);
+      setStatus("Edit joint values, then save calibration.");
+    });
+  }
+
+  function closeCalibration(cancelled = false) {
+    setSession(null);
+    setJointQ({});
+    setJointGeometry(null);
+    setSelectedCalibrationJoint(null);
+    setCalibrationBaseline({});
+    referenceCallback.current?.(null);
+    poseCallback.current?.(null);
+    if (cancelled) setStatus("Calibration cancelled.");
+  }
+
+  function persistCalibration() {
+    if (!robot || !reference || !session || busy) return;
+    calibrationStatusRequest.current?.abort();
+    setChecking(false);
+    void runAction("save", async (signal) => {
+      setStatus("Saving calibration…");
+      const safeJointQ = normalizeCalibrationValues(session.joint_limits, jointQ);
+      const saved = await saveCalibration(
+        {
+          robot: robot.name,
+          reference,
+          joint_q: safeJointQ,
+          ...(motion?.token ? { motion_token: motion.token } : {}),
+        },
+        { signal },
+      );
+      if (signal.aborted) return;
+      setCalibration({ calibrated: true, path: saved.path ?? null });
+      closeCalibration();
+      setStatus("Calibration saved.");
+    });
+  }
+
+  const blockedReason = useMemo(() => {
+    if (!motion?.token) return "Select a human motion first.";
+    if (!robot) return "Select a target robot first.";
+    if (!reference) return "Select a reference pose.";
+    if (session) return "Save or cancel the open calibration before retargeting.";
+    if (checking) return "Checking calibration…";
+    if (!calibration?.calibrated) return "Save calibration before retargeting.";
+    return null;
+  }, [calibration?.calibrated, checking, motion?.token, reference, robot, session]);
+
+  function startRetarget() {
+    if (!motion?.token || !robot || !reference || blockedReason || busy) return;
+    void runAction("retarget", async (signal) => {
+      clearResult();
+      setProgress(0);
+      setStatus(
+        backend === "newton" ? "Starting Newton IK…" : "Starting Interaction-Mesh…",
+      );
+      const value = await retarget(
+        {
+          robot: robot.name,
+          motion_token: motion.token!,
+          reference,
+          backend,
+          retarget_fps: positiveNumber(retargetFps),
+        },
+        {
+          signal,
+          onUpdate: (job) => {
+            setProgress(job.progress ?? 0);
+            setStatus(job.message || "Retargeting…");
+          },
+        },
+      );
+      if (signal.aborted) return;
+      setResult(value);
+      setProgress(1);
+      setStatus(`Completed ${value.num_frames} frames.`);
+      resultCallback.current?.(value);
+    });
+  }
+
+  const calibrationLabel = session
+    ? busy === "save"
+      ? "Saving…"
+      : "Editing…"
+    : checking
+      ? "Checking…"
+      : calibration?.calibrated
+        ? calibration.bundled && !calibration.path
+          ? "Built-in"
+          : "Calibrated"
+        : "Not calibrated";
+  const activeIndex = session
+    ? 2
+    : !motion
+      ? 0
+      : !robot
+        ? 1
+        : !calibration?.calibrated
+          ? 2
+          : 3;
   return (
     <InspectorPage title="Human → Robot">
-      <WorkflowPipeline label="Human to Robot pipeline" steps={pipeline} />
+      <WorkflowPipeline
+        label="Human to Robot pipeline"
+        steps={pipeline}
+        activeIndex={activeIndex}
+      />
       <div className="flex shrink-0 flex-col">
-        <WorkflowStep title="1. Motion" status="Not loaded" defaultOpen>
-          <div className="flex items-center justify-between gap-3">
-            <span className="min-w-0 truncate text-xs text-muted-foreground">
-              Not loaded
-            </span>
-            <Button size="sm" disabled>
-              Select motion
-            </Button>
-          </div>
+        <WorkflowStep
+          title="1. Motion"
+          status={busy === "motion" ? "Loading…" : motion?.name || "Not loaded"}
+          defaultOpen
+        >
+          <Picker
+            label="Select human motion"
+            value={motionPath}
+            disabled={Boolean(busy || session)}
+            buttonLabel="Load motion"
+            importKind="motion"
+            onImport={onOpenMotionLibrary}
+            onChange={setMotionPath}
+            onLoad={selectMotion}
+          >
+            <option value="">Select from Motion Library…</option>
+            {motionEntries.map((entry) => (
+              <option key={entry.source_path} value={entry.source_path}>
+                {motionLabel(entry)}
+              </option>
+            ))}
+          </Picker>
         </WorkflowStep>
 
-        <WorkflowStep title="2. Target robot" status="Not loaded">
-          <RobotPicker label="Select target robot" status="Not loaded" />
+        <WorkflowStep
+          title="2. Target robot"
+          status={
+            busy === "robot" ? "Loading…" : robot?.display_name || "Not loaded"
+          }
+        >
+          <Picker
+            label="Select target robot"
+            value={robotName}
+            disabled={Boolean(busy || session)}
+            buttonLabel="Load robot"
+            importKind="robot"
+            onImport={onOpenRobotLibrary}
+            onChange={setRobotName}
+            onLoad={selectRobot}
+          >
+            <option value="">Select a robot…</option>
+            {robotEntries.map((entry) => (
+              <option
+                key={entry.name}
+                value={entry.name}
+                disabled={!entry.has_urdf}
+              >
+                {entry.display_name} ({entry.num_dof} DoF)
+              </option>
+            ))}
+          </Picker>
         </WorkflowStep>
 
-        <WorkflowStep title="3. Calibration" status="Not calibrated">
+        <WorkflowStep title="3. Calibration" status={calibrationLabel}>
           <div className="grid gap-2.5">
             <Field label="Reference pose">
-              <select className={fieldClass} defaultValue="" disabled>
+              <select
+                className={fieldClass}
+                value={reference}
+                disabled={!motion || Boolean(busy || session)}
+                onChange={(event) => {
+                  const value = event.currentTarget.value;
+                  setReference(value);
+                }}
+              >
                 <option value="">—</option>
+                {references.map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
               </select>
             </Field>
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-xs font-medium text-foreground">Calibration</span>
-              <Button size="sm" disabled>
-                Calibrate
-              </Button>
-            </div>
+            <Button
+              size="sm"
+              disabled={!robot || !reference || checking || Boolean(busy || session)}
+              onClick={editCalibration}
+            >
+              {session
+                ? "Editing…"
+                : calibration?.calibrated
+                  ? "Edit calibration"
+                  : "Calibrate"}
+            </Button>
+            {session && (
+              <CalibrationEditor
+                limits={session.joint_limits}
+                value={jointQ}
+                baseline={calibrationBaseline}
+                hasSavedBaseline={session.has_saved_calibration}
+                reference={session.reference}
+                robot={robot!}
+                display={calibrationDisplay}
+                angleUnit={angleUnit}
+                selectedJoint={selectedCalibrationJoint}
+                disabled={Boolean(busy)}
+                saving={busy === "save"}
+                onChange={setJointQ}
+                onDisplayChange={publishCalibrationDisplay}
+                onAngleUnitChange={setAngleUnit}
+                onJointSelected={setSelectedCalibrationJoint}
+                onCancel={() => closeCalibration(true)}
+                onSave={persistCalibration}
+              />
+            )}
           </div>
         </WorkflowStep>
 
-        <WorkflowStep title="4. Result" status="Not ready">
-          <RetargetControls
-            fpsPlaceholder="Original FPS"
-            disabledReason="Select a motion and robot first."
-          />
+        <WorkflowStep title="4. Result" status={result ? "Ready" : "Not ready"}>
+          <div className="grid gap-2.5">
+            <div className="grid grid-cols-2 gap-2">
+              <Field label="Solver">
+                <select
+                  className={fieldClass}
+                  value={backend}
+                  disabled={Boolean(busy || session)}
+                  onChange={(event) => {
+                    const value = event.currentTarget.value as Backend;
+                    setBackend(value);
+                    clearResult();
+                  }}
+                >
+                  <option value="newton">Newton IK</option>
+                  <option value="interaction_mesh">Interaction-Mesh</option>
+                </select>
+              </Field>
+              <Field label="Retarget FPS">
+                <input
+                  className={fieldClass}
+                  type="number"
+                  min="1"
+                  step="1"
+                  placeholder="Original FPS"
+                  value={retargetFps}
+                  disabled={Boolean(busy || session)}
+                  onChange={(event) => {
+                    setRetargetFps(event.currentTarget.value);
+                    clearResult();
+                  }}
+                />
+              </Field>
+            </div>
+            <Button
+              variant="primary"
+              size="sm"
+              disabled={Boolean(blockedReason) || Boolean(busy)}
+              onClick={startRetarget}
+            >
+              {busy === "retarget" ? "Retargeting…" : "Start Retarget"}
+            </Button>
+            {blockedReason && (
+              <p className="text-xs text-muted-foreground">{blockedReason}</p>
+            )}
+            {busy === "retarget" && (
+              <div
+                className="h-1.5 overflow-hidden rounded-full bg-border-subtle"
+                role="progressbar"
+                aria-valuenow={Math.round(progress * 100)}
+                aria-valuemin={0}
+                aria-valuemax={100}
+              >
+                <div
+                  className="h-full bg-primary transition-[width]"
+                  style={{ width: `${Math.max(2, progress * 100)}%` }}
+                />
+              </div>
+            )}
+            {result && (
+              <>
+                <ResultDiagnostics
+                  diagnostics={result.diagnostics}
+                  preset={comparisonPreset}
+                  onPresetChange={onComparisonPresetChange}
+                />
+                <ResultExportControls
+                  key={result.export_token}
+                  token={result.export_token}
+                  resultFps={result.retarget_fps ?? result.source_fps}
+                  hasScene={result.has_scene}
+                  buildUrl={retargetExportUrl}
+                />
+              </>
+            )}
+          </div>
         </WorkflowStep>
       </div>
+      {status && (
+        <p className="text-xs text-muted-foreground" aria-live="polite">
+          {status}
+        </p>
+      )}
+      {error && (
+        <p
+          className="rounded-md border border-danger-border bg-danger-muted px-2.5 py-2 text-[11px] text-danger break-words"
+          role="alert"
+        >
+          {error}
+        </p>
+      )}
     </InspectorPage>
   );
 }

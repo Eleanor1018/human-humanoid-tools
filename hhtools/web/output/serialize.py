@@ -43,12 +43,14 @@ _MAX_MESH_GZIP_BYTES = 0
 
 def skeleton_exclude_joint_indices(motion: Motion) -> list[int]:
     """Bone indices to skip in stick/capsule viz (matches Viser defaults)."""
-    from hhtools.viewer.anatomy import (
+    from hhtools.human.anatomy import (
         degenerate_auxiliary_bone_indices,
+        dense_rig_viz_exclude_indices,
         detect_virtual_root,
     )
 
     ex: set[int] = set(degenerate_auxiliary_bone_indices(motion))
+    ex |= dense_rig_viz_exclude_indices(motion)
     if detect_virtual_root(list(motion.hierarchy.bone_names)):
         ex.add(0)
     return sorted(ex)
@@ -216,7 +218,9 @@ def _serialize_body_mesh(
     meta = motion.meta if isinstance(motion.meta, dict) else {}
     baked = meta.get("baked_mesh")
     if not isinstance(baked, BakedMesh):
-        reason = meta.get("baked_mesh_error") or meta.get("baked_mesh_unavailable")
+        reason = meta.get("baked_mesh_error")
+        if not reason and meta.get("baked_mesh_unavailable"):
+            reason = meta.get("body_model_fallback_reason") or "body mesh unavailable"
         if reason:
             return {"available": False, "reason": str(reason)}
         return {"available": False, "reason": "no skinned mesh on this clip"}
@@ -480,7 +484,10 @@ def object_mesh_glb(obj, *, scale: float | None = None) -> bytes | None:
 
         loaded = trimesh.load(obj.mesh_path, force="mesh", process=False)
         verts = np.asarray(getattr(loaded, "vertices", np.zeros((0, 3))), dtype=np.float64)
-        faces = np.asarray(getattr(loaded, "faces", np.zeros((0, 3), dtype=np.int64)), dtype=np.int64)
+        faces = np.asarray(
+            getattr(loaded, "faces", np.zeros((0, 3), dtype=np.int64)),
+            dtype=np.int64,
+        )
         if verts.size == 0 or faces.size == 0:
             return None
         centroid = verts.mean(axis=0)

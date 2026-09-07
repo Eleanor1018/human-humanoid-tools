@@ -213,13 +213,24 @@ uv run hhtools import run --dataset omnicontact \
 **Robots**
 
 ```bash
+# Install all six curated robots into ~/.config/hhtools/robots.
+uv run python scripts/install_builtin_robots.py
+# Install one preset only (repeat --only to select several).
+uv run python scripts/install_builtin_robots.py --only g1_29dof
+
 uv run hhtools robot list
-uv run hhtools robot info unitree_g1__g1_29dof --no-mjcf
-uv run hhtools robot schema unitree_g1__g1_29dof -o /tmp/g1_header.csv
-uv run hhtools robot validate unitree_g1__g1_29dof
+uv run hhtools robot info g1_29dof --no-mjcf
+uv run hhtools robot schema g1_29dof -o /tmp/g1_header.csv
+uv run hhtools robot validate g1_29dof
 uv run hhtools robot scaffold unitree_g1          # skip existing yaml
 # uv run hhtools robot add /path/to/urdf_or_dir  # ingest into configs/robots/
 ```
+
+The installer downloads pinned official archives (about 772 MiB total) and
+keeps about 237 MiB of referenced files. Each preset retains its upstream
+license and a checksummed `SOURCE.json`. `--replace` atomically replaces local
+changes in the selected preset. Desktop bundles can point
+`HHTOOLS_BUNDLED_ROBOT_DIR` at an audited Robot Library.
 
 **Retarget (smoke with `--limit-frames`)**
 
@@ -370,4 +381,5 @@ When publishing results built on bundled adapters, also cite the **upstream data
 
 - **Code:** [Apache-2.0](LICENSE) · third-party: [NOTICE](NOTICE)
 - **SMPL / SMPL-H / SMPL-X weights:** not included; register at MPI and place under `configs/body_models/` — see [configs/body_models/README.md](configs/body_models/README.md)
+- Motion Library parameter clips still load as an animated skeleton when those weights are absent; the exact body mesh and joint regression require the locally licensed files.
 - **More docs:** [framework.md](framework.md) · [CONTRIBUTING.md](CONTRIBUTING.md)

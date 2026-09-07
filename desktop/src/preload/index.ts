@@ -11,6 +11,9 @@ const desktopApi: HHToolsDesktopApi = {
   setupGvhmr: () => ipcRenderer.invoke(DESKTOP_CHANNELS.setupGvhmr),
   selectDirectory: () => ipcRenderer.invoke(DESKTOP_CHANNELS.selectDirectory),
   openExternal: (url: string) => ipcRenderer.invoke(DESKTOP_CHANNELS.openExternal, url),
+  exitApplication: async () => {
+    await ipcRenderer.invoke(DESKTOP_CHANNELS.exitApplication)
+  },
   onRuntimeStateChanged: (listener: (state: RuntimeState) => void) => {
     const wrapped = (_event: Electron.IpcRendererEvent, state: RuntimeState): void => listener(state)
     ipcRenderer.on(DESKTOP_CHANNELS.runtimeStateChanged, wrapped)

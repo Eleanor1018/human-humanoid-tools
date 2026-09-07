@@ -31,6 +31,17 @@ from hhtools.core.grounding import (
 )
 from hhtools.core.motion import Motion
 from hhtools.core.scene import SceneObject
+from hhtools.human.anatomy import (
+    SMALL_BONE_KEYWORDS as _SMALL_BONE_KEYWORDS,
+)
+from hhtools.human.anatomy import (
+    compact_skeleton_exclude_indices,
+    degenerate_auxiliary_bone_indices,
+    dense_rig_viz_exclude_indices,
+    detect_virtual_root,
+    exclude_joint_from_compact_scaled_preview,
+    hand_foot_subtree_exclude_indices,
+)
 
 
 def _shifted_object(
@@ -81,59 +92,6 @@ def _translate_mesh_meta(
             )
     return new_meta
 
-_VIRTUAL_ROOT_NAMES: frozenset[str] = frozenset(
-    {
-        "root",
-        "reference",
-        "world",
-        "armature",
-        "origin",
-        "root_body",
-        "scene_root",
-        # Common glTF / FBX / Maya authoring wrappers that sit one level above the
-        # real pelvis.  E.g. Cranberry rig uses "body_world" as a parent of "b_root",
-        # which itself is a real joint at the hips.  Without this entry the viewer
-        # draws a tall fake capsule from the world origin up to the character's hips.
-        "body_world",
-        "worldroot",
-        "world_root",
-        "rig",
-        "skeleton",
-        "skeleton_root",
-        "body",
-        "character",
-        "main",
-        "rootnode",
-    }
-)
-
-_SMALL_BONE_KEYWORDS: tuple[str, ...] = (
-    "thumb",
-    "index",
-    "middle",
-    "ring",
-    "pinky",
-    "finger",
-    "toe",
-    "eye",
-    "jaw",
-    "eyeball",
-    "end",
-    "tip",
-    "headend",
-)
-
-_EXTRA_COMPACT_EXCLUDE: tuple[str, ...] = (
-    "phalange",
-    "metacarpal",
-    "carpal",
-    "metatarsal",
-    "tarsal",
-    "handtip",
-    "footmod",
-)
-
-
 def exclude_unmapped_head_neck_from_scaled_preview(
     name: str,
     *,
@@ -154,46 +112,6 @@ def exclude_unmapped_head_neck_from_scaled_preview(
     # naming; a single-bone tuple stays identity (``Head`` → ``Head``).  Compare
     # case-insensitively so TitleCase BVH joints still hide on headless robots.
     return str(canon).lower() in ("head", "neck")
-
-
-def exclude_joint_from_compact_scaled_preview(name: str) -> bool:
-    """True if this joint should not participate in yellow scaler skeleton segments.
-
-    Dense SMPL-H / meshmimic rigs carry full finger / toe chains; drawing every edge
-    clutters the overlay and makes limb proportions hard to read.  Uses the same
-    keyword heuristics as :func:`compute_bone_radii` plus a few anatomy tokens.
-    """
-
-    n = str(name).lower()
-    if any(kw in n for kw in _SMALL_BONE_KEYWORDS):
-        return True
-    if any(kw in n for kw in _EXTRA_COMPACT_EXCLUDE):
-        return True
-    return False
-
-
-def compact_skeleton_exclude_indices(motion: Motion) -> set[int]:
-    """Bone indices to omit from line/capsule skeleton for dense rigs (fingers, toes, …).
-
-    Mirrors :func:`exclude_joint_from_compact_scaled_preview` but returns indices for
-    :class:`~hhtools.viewer.renderers.skeleton.SkeletonRenderer` /
-    :class:`~hhtools.viewer.renderers.capsules.CapsuleMeshRenderer` ``exclude_bones``.
-    """
-
-    return {
-        i
-        for i, name in enumerate(motion.hierarchy.bone_names)
-        if exclude_joint_from_compact_scaled_preview(name)
-    }
-
-
-def _strip_bone_basename(name: str) -> str:
-    """Drop Mixamo / Blender namespace prefixes from the last path segment."""
-    t = str(name)
-    for sep in ("|", ":", "/"):
-        if sep in t:
-            t = t.split(sep)[-1]
-    return t.strip()
 
 
 _LIMB_CANONICAL_CHAINS: tuple[tuple[str, ...], ...] = (
@@ -321,44 +239,6 @@ def scaled_overlay_exclude_bone_indices(
     return exclude
 
 
-def hand_foot_subtree_exclude_indices(motion: Motion) -> set[int]:
-    """Exclude bones strictly below wrist / ankle hubs (hand and foot descendants).
-
-    Keyword heuristics from :func:`compact_skeleton_exclude_indices` miss some DCC
-    naming schemes; walking the hierarchy from each ``*Hand`` / ``*Foot`` hub catches
-    finger / toe chains regardless of child bone labels.
-    """
-
-    names = motion.hierarchy.bone_names
-    parents = np.asarray(motion.hierarchy.parent_indices, dtype=np.int64)
-    hubs: set[int] = set()
-    for i, raw in enumerate(names):
-        bn = _strip_bone_basename(raw).lower()
-        if bn.endswith("hand") and "forearm" not in bn:
-            hubs.add(i)
-        elif bn.endswith("foot") and not bn.endswith("footmod"):
-            hubs.add(i)
-        elif bn.endswith("feet"):
-            hubs.add(i)
-    out: set[int] = set()
-    n = len(names)
-    for i in range(n):
-        j = i
-        while j >= 0:
-            if j in hubs and j != i:
-                out.add(i)
-                break
-            j = int(parents[j])
-    return out
-
-
-def dense_rig_viz_exclude_indices(motion: Motion) -> set[int]:
-    """Full body-only skeleton mask: keywords + hand/foot subtree for compact viz."""
-    return compact_skeleton_exclude_indices(motion) | hand_foot_subtree_exclude_indices(
-        motion,
-    )
-
-
 def scaler_compact_bead_row_indices(
     scaler_joint_names: tuple[str, ...], motion: Motion,
 ) -> NDArray[np.int32]:
@@ -377,51 +257,6 @@ def scaler_compact_bead_row_indices(
             continue
         rows.append(i)
     return np.asarray(rows, dtype=np.int32)
-
-
-def detect_virtual_root(bone_names: list[str]) -> bool:
-    """Return True when bone 0 is a known placeholder root node (not a real pelvis/hip)."""
-    if not bone_names:
-        return False
-    token = bone_names[0].strip().lower()
-    # Strip common prefixes like "Armature|" or "Skeleton:".
-    for sep in (":", "|", "/"):
-        if sep in token:
-            token = token.split(sep)[-1]
-    return token in _VIRTUAL_ROOT_NAMES
-
-
-def degenerate_auxiliary_bone_indices(
-    motion: Motion,
-    frame: int = 0,
-    *,
-    eps: float = 2e-3,
-) -> set[int]:
-    """Return child-bone indices whose parent segment is ~zero-length (skip in line viz).
-
-    meshmimic/holosoma ``*FootMod`` markers are often stored **coincident** with the
-    parent ``*Foot`` joint in ``joint_positions.npy`` (sole triangle collapses to a
-    point in some releases).  Line renderers may turn degenerate segments into
-    spurious long strokes; excluding these indices matches the Laplacian intent
-    (auxiliary contact geometry, not an extra limb bone).
-    """
-
-    names = tuple(motion.hierarchy.bone_names)
-    parents = np.asarray(motion.hierarchy.parent_indices, dtype=np.int64)
-    f = int(np.clip(frame, 0, max(0, motion.num_frames - 1)))
-    pos = np.asarray(motion.positions[f], dtype=np.float64)
-    out: set[int] = set()
-    for i, name in enumerate(names):
-        p = int(parents[i])
-        if p < 0:
-            continue
-        n_low = name.lower()
-        if not n_low.endswith("footmod"):
-            continue
-        d = float(np.linalg.norm(pos[i] - pos[p]))
-        if d <= float(eps):
-            out.add(i)
-    return out
 
 
 def compute_bone_radii(

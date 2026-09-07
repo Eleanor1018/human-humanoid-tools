@@ -16,7 +16,7 @@ import numpy as np
 
 from hhtools.bodymodels.params import SmplMotionParams
 from hhtools.core.motion import Motion
-from hhtools.io.datasets._engine_cache import engine_for_params
+from hhtools.io.datasets._engine_cache import engine_for_params, motion_from_params
 from hhtools.io.datasets.base import DatasetAdapter, register_dataset
 
 _DEFAULT_FRAMERATE = 30.0
@@ -152,7 +152,13 @@ class _Hmr4dBase(DatasetAdapter):
                 up_axis=params.up_axis,
                 meta=params.meta,
             )
-            engine = engine_for_params(params)
+            return motion_from_params(
+                params,
+                name=Path(sequence_id).stem,
+                source_format=f"hmr4d/{params.surface_model}",
+                return_mesh=with_mesh,
+                progress_callback=progress_callback,
+            )
         return engine.to_motion(
             params,
             name=Path(sequence_id).stem,

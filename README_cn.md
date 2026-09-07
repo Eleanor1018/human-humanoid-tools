@@ -204,13 +204,23 @@ uv run hhtools import run --dataset omnicontact \
 **机器人**
 
 ```bash
+# 将六个精选机器人安装到 ~/.config/hhtools/robots。
+uv run python scripts/install_builtin_robots.py
+# 也可以只安装一个；重复 --only 可选择多个。
+uv run python scripts/install_builtin_robots.py --only g1_29dof
+
 uv run hhtools robot list
-uv run hhtools robot info unitree_g1__g1_29dof --no-mjcf
-uv run hhtools robot schema unitree_g1__g1_29dof -o /tmp/g1_header.csv
-uv run hhtools robot validate unitree_g1__g1_29dof
+uv run hhtools robot info g1_29dof --no-mjcf
+uv run hhtools robot schema g1_29dof -o /tmp/g1_header.csv
+uv run hhtools robot validate g1_29dof
 uv run hhtools robot scaffold unitree_g1          # 已有 yaml 则跳过
 # uv run hhtools robot add /path/to/urdf_or_dir  # 写入 configs/robots/
 ```
+
+安装器下载固定提交的官方归档（合计约 772 MiB），只保留约 237 MiB 的引用
+文件；每个预设都会保留上游许可证和带校验和的 `SOURCE.json`。`--replace`
+会原子替换所选预设的本地修改。桌面包可用 `HHTOOLS_BUNDLED_ROBOT_DIR`
+指向审核后的 Robot Library。
 
 **重映射（可用 `--limit-frames` 冒烟）**
 
@@ -363,4 +373,5 @@ smooth_joint_filter_masks:
 
 - **代码：** [Apache-2.0](LICENSE) · 第三方：[NOTICE](NOTICE)
 - **SMPL 系权重：** 不随仓库分发，需自行从 MPI 下载并放入 `configs/body_models/` — 见 [configs/body_models/README.md](configs/body_models/README.md)
+- 没有这些权重时，Motion Library 的参数动作仍会以 NumPy 骨架代理正常加载和播放；真实身体网格与精确关节回归仍需要本地授权权重。
 - **更多文档：** [framework.md](framework.md) · [CONTRIBUTING.md](CONTRIBUTING.md)

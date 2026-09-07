@@ -1,51 +1,573 @@
-import { useState, type ComponentType } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import {
+  PROJECT_README_URL,
+  THEME_STORAGE_KEY,
+  storedTheme,
+  viewForImport,
+  type ApplicationImportRequest,
+  type ApplicationImportTarget,
+  type ApplicationTheme,
+} from "./appCommands";
+import {
+  ApplicationDialogs,
+  type ApplicationDialog,
+} from "./components/ApplicationDialogs";
 import { Inspector } from "./components/Inspector";
 import { Navbar } from "./components/Navbar";
 import { Sidebar } from "./components/Sidebar";
 import { MotionView } from "./features/motion/MotionView";
+import type { MotionLibraryEntry } from "./features/motion/api";
 import { BatchView } from "./features/batch/BatchView";
+import {
+  appendUniqueEntries,
+  withoutManagedFolder,
+} from "./features/batch/model";
 import { AnalysisView } from "./features/analysis/AnalysisView";
+import type { AnalysisRobotPreview } from "./features/analysis/api";
 import { RobotView } from "./features/robot/RobotView";
 import { HumanToRobotView } from "./features/h2r/HumanToRobotView";
+import {
+  retargetExportUrl,
+  type CalibrationPose,
+  type RetargetResult as H2rResult,
+  type ScaledPreviewResult as H2rScaledPreview,
+} from "./features/h2r/api";
 import { RobotToRobotView } from "./features/r2r/RobotToRobotView";
+import {
+  r2rExportUrl,
+  type R2rRetargetResult,
+  type R2rScenePayload,
+  type R2rSourceResult,
+} from "./features/r2r/api";
+import {
+  comparisonLayers,
+  storedComparisonPreset,
+  storeComparisonPreset,
+  type ComparisonPreset,
+} from "./features/result/comparison";
 import { VideoToMotionView } from "./features/video-to-motion/VideoToMotionView";
 import type { ViewId } from "./navigation";
 import { Stage } from "./stage/Stage";
-import type { StageMotionPayload } from "./stage/types";
+import { DEFAULT_CALIBRATION_DISPLAY } from "./stage/calibrationDisplay";
+import type { CalibrationInteractionModel } from "./stage/calibrationInteraction";
+import type { StagePresentation } from "./stage/presentation";
+import type {
+  StageMotionPayload,
+  StageR2rPresentationPayload,
+  StageRobotPayload,
+  StageRobotTrajectoryPayload,
+} from "./stage/types";
 
-const inspectorViews: Record<ViewId, ComponentType> = {
-  motion: MotionView,
-  "robot-assets": RobotView,
-  "video-to-motion": VideoToMotionView,
-  h2r: HumanToRobotView,
-  r2r: RobotToRobotView,
-  batch: BatchView,
-  "dataset-viz": AnalysisView,
-};
+function motionWithScene(
+  motion: StageMotionPayload | null | undefined,
+  scene: R2rScenePayload | H2rResult["scaled_scene"],
+  meshSource?: StageMotionPayload["object_mesh_source"],
+): StageMotionPayload | null {
+  if (!motion && !scene) return null;
+  return {
+    ...motion,
+    positions: motion?.positions ?? [],
+    parent_indices: motion?.parent_indices ?? [],
+    terrain: scene?.terrain ?? motion?.terrain,
+    objects: scene?.objects ?? motion?.objects,
+    object_mesh_source: meshSource,
+  };
+}
+
+function calibrationTrajectory(
+  pose: CalibrationPose,
+  robot: StageRobotPayload | null,
+): StageRobotTrajectoryPayload {
+  return {
+    frames: [
+      {
+        links: pose.link_transforms,
+        mesh_z_lift: pose.ground_offset_z - (robot?.ground_offset_z ?? 0),
+      },
+    ],
+  };
+}
+
+interface ApplicationDesktopBridge {
+  readonly openExternal?: (url: string) => Promise<void>;
+  readonly exitApplication?: () => Promise<void>;
+}
+
+function desktopBridge(): ApplicationDesktopBridge | undefined {
+  return (
+    window as Window & { readonly hhtoolsDesktop?: ApplicationDesktopBridge }
+  ).hhtoolsDesktop;
+}
 
 export function App() {
   const [activeView, setActiveView] = useState<ViewId>("motion");
+  const [theme, setTheme] = useState<ApplicationTheme>(() =>
+    storedTheme(window.localStorage),
+  );
+  const [dialog, setDialog] = useState<ApplicationDialog>(null);
+  const [importRequest, setImportRequest] =
+    useState<ApplicationImportRequest | null>(null);
+  const nextImportRequestId = useRef(0);
+  const exportLink = useRef<HTMLAnchorElement>(null);
+  const [workspaceMotion, setWorkspaceMotion] =
+    useState<StageMotionPayload | null>(null);
+  const [workspaceRobot, setWorkspaceRobot] =
+    useState<StageRobotPayload | null>(null);
+  const [humanBatchEntries, setHumanBatchEntries] = useState<
+    readonly MotionLibraryEntry[]
+  >([]);
+  const [analysisMotion, setAnalysisMotion] =
+    useState<StageMotionPayload | null>(null);
+  const [analysisRobotPreview, setAnalysisRobotPreview] =
+    useState<AnalysisRobotPreview | null>(null);
   const [stageMotion, setStageMotion] = useState<StageMotionPayload | null>(null);
-  const ActiveInspector = inspectorViews[activeView];
+  const [stageRobot, setStageRobot] = useState<StageRobotPayload | null>(null);
+  const [stageRobotTrajectory, setStageRobotTrajectory] =
+    useState<StageRobotTrajectoryPayload | null>(null);
+  const [stageScaledMotion, setStageScaledMotion] =
+    useState<StageMotionPayload | null>(null);
+  const [h2rResult, setH2rResult] = useState<H2rResult | null>(null);
+  const [h2rPreview, setH2rPreview] = useState<H2rScaledPreview | null>(null);
+  const [h2rCalibrationReference, setH2rCalibrationReference] =
+    useState<StageMotionPayload | null>(null);
+  const [h2rCalibrationPose, setH2rCalibrationPose] =
+    useState<CalibrationPose | null>(null);
+  const [h2rCalibrationDisplay, setH2rCalibrationDisplay] = useState(
+    DEFAULT_CALIBRATION_DISPLAY,
+  );
+  const [h2rCalibrationInteraction, setH2rCalibrationInteraction] =
+    useState<CalibrationInteractionModel | null>(null);
+  const [h2rComparisonPreset, setH2rComparisonPreset] =
+    useState<ComparisonPreset>(() =>
+      storedComparisonPreset(window.localStorage, "h2r"),
+    );
+  const [r2rSourceRobot, setR2rSourceRobot] =
+    useState<StageRobotPayload | null>(null);
+  const [r2rTargetRobot, setR2rTargetRobot] =
+    useState<StageRobotPayload | null>(null);
+  const [r2rSourceResult, setR2rSourceResult] =
+    useState<R2rSourceResult | null>(null);
+  const [r2rResult, setR2rResult] =
+    useState<R2rRetargetResult | null>(null);
+  const [r2rCalibrationPose, setR2rCalibrationPose] =
+    useState<CalibrationPose | null>(null);
+  const [r2rCalibrationReference, setR2rCalibrationReference] =
+    useState<StageMotionPayload | null>(null);
+  const [r2rCalibrationDisplay, setR2rCalibrationDisplay] = useState(
+    DEFAULT_CALIBRATION_DISPLAY,
+  );
+  const [r2rCalibrationInteraction, setR2rCalibrationInteraction] =
+    useState<CalibrationInteractionModel | null>(null);
+  const [r2rComparisonPreset, setR2rComparisonPreset] =
+    useState<ComparisonPreset>(() =>
+      storedComparisonPreset(window.localStorage, "r2r"),
+    );
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    try {
+      window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+    } catch {
+      // Private browser contexts can reject storage; the live theme still works.
+    }
+  }, [theme]);
+
+  const requestImport = useCallback((target: ApplicationImportTarget) => {
+    setActiveView(viewForImport(target));
+    nextImportRequestId.current += 1;
+    setImportRequest({ id: nextImportRequestId.current, target });
+  }, []);
+
+  const currentExportUrl =
+    activeView === "h2r" && h2rResult
+      ? retargetExportUrl(h2rResult.export_token, {
+          format: "csv",
+          csvHeader: true,
+        })
+      : activeView === "r2r" && r2rResult
+        ? r2rExportUrl(r2rResult.export_token, {
+            format: "csv",
+            csvHeader: true,
+          })
+        : null;
+
+  const openTutorial = useCallback(() => {
+    const bridge = desktopBridge();
+    if (bridge?.openExternal) {
+      void bridge.openExternal(PROJECT_README_URL);
+      return;
+    }
+    window.open(PROJECT_README_URL, "_blank", "noopener,noreferrer");
+  }, []);
+
+  const changeComparisonPreset = useCallback(
+    (workflow: "h2r" | "r2r", preset: ComparisonPreset) => {
+      if (workflow === "h2r") setH2rComparisonPreset(preset);
+      else setR2rComparisonPreset(preset);
+      storeComparisonPreset(window.localStorage, workflow, preset);
+    },
+    [],
+  );
+
+  const stagePresentation: StagePresentation =
+    activeView === "robot-assets"
+      ? "robot"
+      : activeView === "dataset-viz"
+        ? "analysis"
+        : activeView === "batch"
+          ? "empty"
+          : activeView === "h2r"
+            ? h2rCalibrationReference
+              ? "h2r-calibration"
+              : h2rResult
+                ? "h2r-result"
+                : "h2r"
+            : activeView === "r2r"
+              ? r2rCalibrationReference
+                ? "r2r-calibration"
+                : r2rResult
+                  ? "r2r-result"
+                  : "r2r"
+              : activeView;
+  const r2rStage = useMemo<StageR2rPresentationPayload | null>(() => {
+    if (activeView !== "r2r") return null;
+    const meshSource = r2rSourceResult
+      ? { kind: "r2r" as const, token: r2rSourceResult.token }
+      : undefined;
+    return {
+      phase: r2rCalibrationReference
+        ? "calibration"
+        : r2rResult
+          ? "result"
+          : "source",
+      source: {
+        robot: r2rSourceRobot,
+        trajectory: r2rSourceResult?.trajectory ?? null,
+        skeleton: r2rSourceResult?.skeleton_preview ?? null,
+        environment: motionWithScene(
+          null,
+          r2rSourceResult?.scaled_scene,
+          meshSource,
+        ),
+      },
+      target: {
+        robot: r2rTargetRobot,
+        trajectory: r2rCalibrationPose
+          ? calibrationTrajectory(r2rCalibrationPose, r2rTargetRobot)
+          : r2rResult?.trajectory ?? null,
+        skeleton: r2rResult?.scaled_preview ?? null,
+        environment: motionWithScene(
+          null,
+          r2rResult?.scaled_scene,
+          meshSource,
+        ),
+      },
+      calibrationReference: r2rCalibrationReference,
+      sourceToken: r2rSourceResult?.token ?? null,
+      resultToken: r2rResult?.export_token ?? null,
+    };
+  }, [
+    activeView,
+    r2rCalibrationPose,
+    r2rCalibrationReference,
+    r2rResult,
+    r2rSourceResult,
+    r2rSourceRobot,
+    r2rTargetRobot,
+  ]);
+
+  const publishMotion = useCallback((motion: StageMotionPayload | null) => {
+    setWorkspaceMotion(motion);
+    setH2rResult(null);
+    setH2rPreview(null);
+    setH2rCalibrationReference(null);
+    setH2rCalibrationPose(null);
+  }, []);
+  const publishRobot = useCallback((robot: StageRobotPayload | null) => {
+    setWorkspaceRobot(robot);
+    setH2rResult(null);
+    setH2rPreview(null);
+    setH2rCalibrationReference(null);
+    setH2rCalibrationPose(null);
+  }, []);
+  const addHumanBatchEntry = useCallback((entry: MotionLibraryEntry) => {
+    setHumanBatchEntries((current) => appendUniqueEntries(current, [entry]));
+  }, []);
+  const removeHumanBatchFolder = useCallback((folderLabel: string) => {
+    setHumanBatchEntries((current) =>
+      withoutManagedFolder(current, folderLabel),
+    );
+  }, []);
+  const publishR2rSourceRobot = useCallback((robot: StageRobotPayload | null) => {
+    setR2rSourceRobot(robot);
+    setR2rCalibrationReference(null);
+    if (!robot) {
+      setR2rSourceResult(null);
+      setR2rResult(null);
+    }
+  }, []);
+  const publishR2rTargetRobot = useCallback((robot: StageRobotPayload | null) => {
+    setR2rTargetRobot(robot);
+    setR2rCalibrationPose(null);
+    setR2rCalibrationReference(null);
+    setR2rResult(null);
+  }, []);
+  const publishR2rSource = useCallback((result: R2rSourceResult | null) => {
+    setR2rSourceResult(result);
+    setR2rResult(null);
+  }, []);
+  const publishAnalysisMotion = useCallback((motion: StageMotionPayload | null) => {
+    setAnalysisMotion(motion);
+    if (motion) setAnalysisRobotPreview(null);
+  }, []);
+  const publishAnalysisRobotPreview = useCallback(
+    (preview: AnalysisRobotPreview | null) => {
+      setAnalysisRobotPreview(preview);
+      if (preview) setAnalysisMotion(null);
+    },
+    [],
+  );
+
+  // Workflow state is durable; this is the only projection into the shared Stage.
+  useEffect(() => {
+    if (activeView === "motion" || activeView === "video-to-motion") {
+      setStageMotion(workspaceMotion);
+      setStageRobot(null);
+      setStageRobotTrajectory(null);
+      setStageScaledMotion(null);
+      return;
+    }
+    if (activeView === "robot-assets") {
+      setStageMotion(null);
+      setStageRobot(workspaceRobot);
+      setStageRobotTrajectory(null);
+      setStageScaledMotion(null);
+      return;
+    }
+    if (activeView === "dataset-viz") {
+      setStageMotion(analysisMotion);
+      setStageRobot(analysisRobotPreview?.robot ?? null);
+      setStageRobotTrajectory(analysisRobotPreview?.trajectory ?? null);
+      setStageScaledMotion(
+        analysisRobotPreview
+          ? motionWithScene(
+              null,
+              analysisRobotPreview.scene,
+              {
+                kind: "dataset",
+                token: analysisRobotPreview.previewToken,
+              },
+            )
+          : null,
+      );
+      return;
+    }
+    if (activeView === "h2r") {
+      const resultOwnsScaledSkeleton = Boolean(
+        h2rResult && h2rResult.scaled_preview !== undefined,
+      );
+      const resultOwnsScaledPair = Boolean(
+        h2rResult &&
+          (resultOwnsScaledSkeleton ||
+            h2rResult.scaled_scene !== undefined),
+      );
+      setStageMotion(h2rCalibrationReference ?? workspaceMotion);
+      setStageRobot(workspaceRobot);
+      setStageRobotTrajectory(
+        h2rCalibrationPose
+          ? calibrationTrajectory(h2rCalibrationPose, workspaceRobot)
+          : h2rResult?.trajectory ?? null,
+      );
+      setStageScaledMotion(
+        h2rCalibrationReference
+          ? null
+          : motionWithScene(
+              resultOwnsScaledSkeleton
+                ? h2rResult?.scaled_preview
+                : h2rPreview?.preview,
+              resultOwnsScaledPair
+                ? h2rResult?.scaled_scene
+                : h2rPreview?.scaled_scene,
+              workspaceMotion?.token
+                ? { kind: "motion", token: workspaceMotion.token }
+                : undefined,
+            ),
+      );
+      return;
+    }
+    if (activeView !== "r2r") {
+      setStageMotion(null);
+      setStageRobot(null);
+      setStageRobotTrajectory(null);
+      setStageScaledMotion(null);
+      return;
+    }
+
+    // R2R is a symmetric two-actor presentation rendered through its own Stage
+    // contract. Clear the single-actor slots so they cannot leak into it.
+    setStageMotion(null);
+    setStageRobot(null);
+    setStageRobotTrajectory(null);
+    setStageScaledMotion(null);
+  }, [
+    activeView,
+    analysisMotion,
+    analysisRobotPreview,
+    h2rCalibrationPose,
+    h2rCalibrationReference,
+    h2rPreview,
+    h2rResult,
+    r2rCalibrationPose,
+    r2rCalibrationReference,
+    r2rResult,
+    r2rSourceResult,
+    r2rSourceRobot,
+    r2rTargetRobot,
+    workspaceMotion,
+    workspaceRobot,
+  ]);
 
   return (
     <div
       id="app"
-      className="grid h-dvh min-h-0 min-w-0 grid-cols-[208px_minmax(0,1fr)_360px] grid-rows-[40px_minmax(0,1fr)] max-[900px]:grid-cols-[64px_minmax(0,1fr)_360px] max-[780px]:grid-cols-[64px_minmax(0,1fr)]"
+      className="grid h-dvh min-h-0 min-w-0 grid-cols-[208px_minmax(0,1fr)_360px] grid-rows-[40px_minmax(0,1fr)] max-[900px]:grid-cols-[64px_minmax(0,1fr)_360px] max-[780px]:grid-cols-[64px_minmax(0,1fr)] max-[780px]:grid-rows-[40px_minmax(240px,42vh)_minmax(0,1fr)]"
       data-hhtools-ready="true"
       data-active-view={activeView}
+      data-theme={theme}
     >
-      <Navbar />
+      <Navbar
+        theme={theme}
+        canExportResult={currentExportUrl !== null}
+        canExitApplication={Boolean(desktopBridge()?.exitApplication)}
+        onNavigate={setActiveView}
+        onImport={requestImport}
+        onExportResult={() => exportLink.current?.click()}
+        onOpenSettings={() => setDialog("settings")}
+        onToggleTheme={() =>
+          setTheme((current) => (current === "light" ? "dark" : "light"))
+        }
+        onOpenTutorial={openTutorial}
+        onOpenAbout={() => setDialog("about")}
+        onExitApplication={() => void desktopBridge()?.exitApplication?.()}
+      />
       <Sidebar activeView={activeView} onSelect={setActiveView} />
-      <Stage motion={stageMotion} />
+      <Stage
+        motion={stageMotion}
+        scaledMotion={stageScaledMotion}
+        robot={stageRobot}
+        robotTrajectory={stageRobotTrajectory}
+        presentation={stagePresentation}
+        r2r={r2rStage}
+        calibrationDisplay={
+          activeView === "r2r" ? r2rCalibrationDisplay : h2rCalibrationDisplay
+        }
+        calibrationInteraction={
+          activeView === "h2r"
+            ? h2rCalibrationInteraction
+            : activeView === "r2r"
+              ? r2rCalibrationInteraction
+              : null
+        }
+        layerPreset={
+          activeView === "h2r" && h2rResult
+            ? comparisonLayers("h2r", h2rComparisonPreset)
+            : activeView === "r2r" && r2rResult
+              ? comparisonLayers("r2r", r2rComparisonPreset)
+              : null
+        }
+      />
       <Inspector>
-        {activeView === "video-to-motion" ? (
-          <VideoToMotionView onMotionLoaded={setStageMotion} />
-        ) : (
-          <ActiveInspector />
-        )}
+        <div className={activeView === "motion" ? "h-full" : "hidden"}>
+          <MotionView
+            currentMotion={workspaceMotion}
+            onMotionLoaded={publishMotion}
+            humanBatchEntries={humanBatchEntries}
+            onAddToHumanBatch={addHumanBatchEntry}
+            onRemoveHumanBatchFolder={removeHumanBatchFolder}
+            importRequest={importRequest}
+          />
+        </div>
+        <div className={activeView === "robot-assets" ? "h-full" : "hidden"}>
+          <RobotView
+            currentRobot={workspaceRobot}
+            onRobotLoaded={publishRobot}
+            importRequest={importRequest}
+          />
+        </div>
+        <div className={activeView === "video-to-motion" ? "h-full" : "hidden"}>
+          <VideoToMotionView
+            onMotionLoaded={publishMotion}
+            importRequest={importRequest}
+          />
+        </div>
+        <div className={activeView === "h2r" ? "h-full" : "hidden"}>
+          <HumanToRobotView
+            currentMotion={workspaceMotion}
+            currentRobot={workspaceRobot}
+            currentResult={h2rResult}
+            onMotionLoaded={publishMotion}
+            onRobotLoaded={publishRobot}
+            onRetargetResult={setH2rResult}
+            onCalibrationReference={setH2rCalibrationReference}
+            onRobotPose={setH2rCalibrationPose}
+            onScaledPreview={setH2rPreview}
+            calibrationDisplay={h2rCalibrationDisplay}
+            onCalibrationDisplayChange={setH2rCalibrationDisplay}
+            onCalibrationInteraction={setH2rCalibrationInteraction}
+            comparisonPreset={h2rComparisonPreset}
+            onComparisonPresetChange={(preset) =>
+              changeComparisonPreset("h2r", preset)
+            }
+            onOpenMotionLibrary={() => setActiveView("motion")}
+            onOpenRobotLibrary={() => setActiveView("robot-assets")}
+          />
+        </div>
+        <div className={activeView === "r2r" ? "h-full" : "hidden"}>
+          <RobotToRobotView
+            active={activeView === "r2r"}
+            currentSourceRobot={r2rSourceRobot}
+            currentTargetRobot={r2rTargetRobot}
+            currentSourceResult={r2rSourceResult}
+            currentResult={r2rResult}
+            onSourceRobotLoaded={publishR2rSourceRobot}
+            onTargetRobotLoaded={publishR2rTargetRobot}
+            onSourceLoaded={publishR2rSource}
+            onResultLoaded={setR2rResult}
+            onCalibrationReference={setR2rCalibrationReference}
+            onTargetPose={setR2rCalibrationPose}
+            calibrationDisplay={r2rCalibrationDisplay}
+            onCalibrationDisplayChange={setR2rCalibrationDisplay}
+            onCalibrationInteraction={setR2rCalibrationInteraction}
+            comparisonPreset={r2rComparisonPreset}
+            onComparisonPresetChange={(preset) =>
+              changeComparisonPreset("r2r", preset)
+            }
+            onOpenRobotLibrary={() => setActiveView("robot-assets")}
+          />
+        </div>
+        <div className={activeView === "batch" ? "h-full" : "hidden"}>
+          <BatchView
+            active={activeView === "batch"}
+            humanEntries={humanBatchEntries}
+            onHumanEntriesChange={setHumanBatchEntries}
+          />
+        </div>
+        <div className={activeView === "dataset-viz" ? "h-full" : "hidden"}>
+          <AnalysisView
+            onMotionLoaded={publishAnalysisMotion}
+            onRobotPreviewLoaded={publishAnalysisRobotPreview}
+          />
+        </div>
       </Inspector>
+      <a
+        ref={exportLink}
+        className="hidden"
+        href={currentExportUrl ?? undefined}
+        download
+        aria-hidden="true"
+      />
+      <ApplicationDialogs dialog={dialog} onClose={() => setDialog(null)} />
     </div>
   );
 }

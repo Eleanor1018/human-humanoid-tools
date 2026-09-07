@@ -7,6 +7,7 @@ export const DESKTOP_CHANNELS = {
   setupGvhmr: 'hhtools:setup-gvhmr',
   selectDirectory: 'hhtools:select-directory',
   openExternal: 'hhtools:open-external',
+  exitApplication: 'hhtools:exit-application',
   runtimeStateChanged: 'hhtools:runtime-state-changed'
 } as const
 
@@ -36,6 +37,7 @@ export interface HHToolsDesktopApi {
   setupGvhmr(): Promise<GvhmrSetupResult>
   selectDirectory(): Promise<string | null>
   openExternal(url: string): Promise<void>
+  exitApplication(): Promise<void>
   onRuntimeStateChanged(listener: (state: RuntimeState) => void): () => void
 }
 

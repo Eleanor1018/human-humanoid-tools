@@ -18,6 +18,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from fastapi.routing import APIRoute
 
+from hhtools.agent.artifact_response import verified_artifact_response
 from hhtools.contracts import (
     AgentJobView,
     ApiError,
@@ -43,6 +44,9 @@ from hhtools.contracts import (
     RetargetPreflightRequest,
 )
 from hhtools.contracts.portability import (
+    MAX_PORTABLE_DEPTH,
+)
+from hhtools.contracts.portability import (
     PortableJsonError as ContractPortableJsonError,
 )
 from hhtools.contracts.portability import (
@@ -55,7 +59,6 @@ from hhtools.services.artifacts import StoredArtifact
 from hhtools.services.assets import AssetServiceError
 from hhtools.services.jobs import JobManagerError
 from hhtools.services.legacy_job_upgrade import LegacyJobUpgradeError
-from hhtools.agent.artifact_response import verified_artifact_response
 
 _log = logging.getLogger(__name__)
 
@@ -125,15 +128,31 @@ def _strict_json_float(value: str) -> float:
     return result
 
 
+def _reject_excessive_json_depth(value: Any) -> None:
+    """Reject documents deeper than the shared public-contract limit."""
+
+    pending: list[tuple[Any, int]] = [(value, 0)]
+    while pending:
+        current, depth = pending.pop()
+        if depth > MAX_PORTABLE_DEPTH:
+            raise _InvalidAgentJsonError("document nesting too deep")
+        if isinstance(current, dict):
+            pending.extend((item, depth + 1) for item in current.values())
+        elif isinstance(current, list):
+            pending.extend((item, depth + 1) for item in current)
+
+
 def _strict_json_loads(payload: bytes) -> Any:
     try:
-        return json.loads(
+        value = json.loads(
             payload.decode("utf-8"),
             object_pairs_hook=_strict_object,
             parse_float=_strict_json_float,
             parse_int=_strict_json_int,
             parse_constant=_reject_nonfinite_constant,
         )
+        _reject_excessive_json_depth(value)
+        return value
     except (
         UnicodeDecodeError,
         json.JSONDecodeError,
