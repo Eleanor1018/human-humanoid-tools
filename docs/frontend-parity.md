@@ -46,6 +46,8 @@ may improve spacing, rounded corners, accessibility, and narrow-screen layout.
   - [x] Restore language, panel layout, Motion Library, GVHMR, and job settings.
   - [x] Localize every Inspector workflow and shared workflow control in English and Chinese.
   - [x] Keep Batch ownership inside Batch; Motion no longer exposes an add-to-Batch action.
+  - [x] Persist Force re-analysis in Workspace Settings; Analysis only consumes the policy.
+  - [x] Expose cached analysis as the read-only Load existing result action.
   - [x] Restore About metadata, source, license, and contact information.
   - [x] Use shared refresh icons and semantic destructive-action colors.
   - [x] Keep feature refresh icons borderless in Motion, Robot, V2M, and Batch.
@@ -63,7 +65,7 @@ may improve spacing, rounded corners, accessibility, and narrow-screen layout.
 
 ## Verification
 
-- Frontend: 96 tests passed; production build passed.
+- Frontend: 99 tests passed; production build passed.
 - Web backend: 277 tests passed; 2 dependency-gated tests skipped.
 - Desktop: 38 tests and the Electron window E2E passed.
 - Browser: desktop and 390 x 844 layouts have no overflow or panel overlap;

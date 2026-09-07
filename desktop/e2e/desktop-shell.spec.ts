@@ -143,6 +143,13 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
     await expect(settingsDialog.getByRole('button', { name: 'Refresh settings' })).toBeEnabled()
     await expect(settingsDialog.getByLabel('Maximum running jobs')).toBeEnabled()
     await expect(settingsDialog.getByLabel('Maximum queued jobs')).toBeEnabled()
+    const forceReanalysis = settingsDialog.getByLabel('Force re-analysis')
+    await expect(forceReanalysis).not.toBeChecked()
+    await forceReanalysis.check()
+    await expect(forceReanalysis).toBeChecked()
+    await expect.poll(() =>
+      page.evaluate(() => localStorage.getItem('hhtools.analysis.force-reanalysis'))
+    ).toBe('true')
     await expect(settingsDialog.getByRole('button', { name: 'Save' })).toBeEnabled()
     await expect(settingsDialog).not.toContainText(
       'Language, layout, libraries, and background jobs'
@@ -154,11 +161,20 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
     await expect(settingsDialog).not.toContainText(/Running:\s*0.*Queued:\s*0/)
     await settingsDialog.getByRole('button', { name: 'Close' }).click()
     await expect(settingsDialog).toBeHidden()
-
     await settingsTrigger.hover()
+    await settingsMenu.getByRole('menuitem', { name: 'Settings', exact: true }).click()
+    settingsDialog = page.getByRole('dialog', { name: 'Workspace Settings' })
+    await expect(settingsDialog.getByLabel('Force re-analysis')).toBeChecked()
+    await settingsDialog.getByLabel('Force re-analysis').uncheck()
+    await expect.poll(() =>
+      page.evaluate(() => localStorage.getItem('hhtools.analysis.force-reanalysis'))
+    ).toBe('false')
+    await settingsDialog.getByRole('button', { name: 'Close' }).click()
+
+    await settingsTrigger.click()
     await settingsMenu.getByRole('menuitem', { name: 'Dark Mode', exact: true }).click()
     await expect(page.locator('#app')).toHaveAttribute('data-theme', 'dark')
-    await settingsTrigger.hover()
+    await settingsTrigger.click()
     await settingsMenu.getByRole('menuitem', { name: 'Light Mode', exact: true }).click()
     await expect(page.locator('#app')).toHaveAttribute('data-theme', 'light')
 
@@ -383,6 +399,11 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
     await expect(analysisPage.getByText('Original source path')).toHaveCount(0)
     await expect(analysisPage.getByRole('button', { name: 'Choose folder' })).toBeEnabled()
     await expect(analysisPage.getByRole('button', { name: 'Built-in library' })).toBeEnabled()
+    await expect(analysisPage.getByLabel('Ignore cache')).toHaveCount(0)
+    await analysisPage.locator('details').nth(1).locator('summary').click()
+    const loadExistingResult = analysisPage.getByRole('button', { name: 'Load existing result' })
+    await expect(loadExistingResult).toBeEnabled()
+    await expect(analysisPage.getByRole('button', { name: 'Load cached' })).toHaveCount(0)
     await expect(analysisPipeline.locator('li').nth(0)).toHaveAttribute('data-state', 'active')
     await analysisPage.getByRole('button', { name: 'Built-in library' }).click()
     await expect(analysisPipeline.locator('li').nth(0)).toHaveAttribute('data-state', 'complete')

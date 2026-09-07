@@ -34,6 +34,10 @@ import type { MotionLibraryEntry } from "./features/motion/api";
 import { BatchView } from "./features/batch/BatchView";
 import { AnalysisView } from "./features/analysis/AnalysisView";
 import type { AnalysisRobotPreview } from "./features/analysis/api";
+import {
+  storedForceReanalysis,
+  storeForceReanalysis,
+} from "./features/analysis/preferences";
 import { RobotView } from "./features/robot/RobotView";
 import { HumanToRobotView } from "./features/h2r/HumanToRobotView";
 import {
@@ -130,6 +134,9 @@ export function App() {
   const [layout, setLayout] = useState(() =>
     storedWorkspaceLayout(window.localStorage),
   );
+  const [forceAnalysis, setForceAnalysis] = useState(() =>
+    storedForceReanalysis(window.localStorage),
+  );
   const [dialog, setDialog] = useState<ApplicationDialog>(null);
   const [importRequest, setImportRequest] =
     useState<ApplicationImportRequest | null>(null);
@@ -208,6 +215,10 @@ export function App() {
   useEffect(() => {
     storeWorkspaceLayout(window.localStorage, layout);
   }, [layout]);
+
+  useEffect(() => {
+    storeForceReanalysis(window.localStorage, forceAnalysis);
+  }, [forceAnalysis]);
 
   const requestImport = useCallback((target: ApplicationImportTarget) => {
     setActiveView(viewForImport(target));
@@ -604,6 +615,7 @@ export function App() {
         </div>
         <div className={activeView === "dataset-viz" ? "h-full" : "hidden"}>
           <AnalysisView
+            forceAnalysis={forceAnalysis}
             onMotionLoaded={publishAnalysisMotion}
             onRobotPreviewLoaded={publishAnalysisRobotPreview}
           />
@@ -625,6 +637,7 @@ export function App() {
         locale={locale}
         sidebarHidden={layout.sidebarHidden}
         inspectorHidden={layout.inspectorHidden}
+        forceAnalysis={forceAnalysis}
         onLocaleChange={setLocale}
         onSidebarHiddenChange={(hidden) =>
           setLayout((current) => ({ ...current, sidebarHidden: hidden }))
@@ -632,6 +645,7 @@ export function App() {
         onInspectorHiddenChange={(hidden) =>
           setLayout((current) => ({ ...current, inspectorHidden: hidden }))
         }
+        onForceAnalysisChange={setForceAnalysis}
         onResetLayout={() => setLayout(DEFAULT_WORKSPACE_LAYOUT)}
         onMotionLibraryChange={() =>
           setMotionLibraryRevision((revision) => revision + 1)
