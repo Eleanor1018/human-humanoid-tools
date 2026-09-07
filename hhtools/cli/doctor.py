@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-import importlib
 import importlib.util
-import io
 import json
+import os
+import shutil
 import sys
-from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import asdict, dataclass
 from enum import StrEnum
+from pathlib import Path
 from typing import Any, Literal
 
 import typer
@@ -109,14 +109,13 @@ def _check_base() -> DoctorCheck:
 
 
 def _check_web() -> DoctorCheck:
-    from hhtools.web.dependencies import missing_web_runtime_dependencies
-
-    missing = list(missing_web_runtime_dependencies())
+    modules = _availability(("fastapi", "uvicorn", "multipart"))
+    missing = [module for module, available in modules.items() if not available]
     return DoctorCheck(
         "web",
         not missing,
         "Web runtime imports are available" if not missing else "Web runtime imports are missing",
-        {"missing": missing},
+        {"modules": modules, "missing": missing},
     )
 
 
@@ -153,14 +152,7 @@ def _check_retarget() -> DoctorCheck:
 
 def _check_mcp() -> DoctorCheck:
     modules = _availability(_MCP_RUNTIME_MODULES)
-    entries: dict[str, bool] = {}
-    for module in ("hhtools.mcp.runtime", "hhtools.mcp.server"):
-        try:
-            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-                importlib.import_module(module)
-            entries[module] = True
-        except Exception:  # noqa: BLE001 - report availability without leaking internals
-            entries[module] = False
+    entries = _availability(("hhtools.mcp.runtime", "hhtools.mcp.server"))
     ready = all(modules.values()) and all(entries.values())
     return DoctorCheck(
         "mcp",
@@ -186,19 +178,64 @@ def _check_bodymodels() -> DoctorCheck:
 
 
 def _check_gvhmr() -> DoctorCheck:
-    from hhtools.integrations.gvhmr import gvhmr_status
-
-    status = gvhmr_status(probe_runtime=False)
-    ready = bool(status["ready"])
+    root = Path(os.environ.get("HHTOOLS_GVHMR_ROOT", Path.home() / "GVHMR")).expanduser()
+    body_models = Path(
+        os.environ.get(
+            "HHTOOLS_GVHMR_BODY_MODELS",
+            root / "inputs" / "checkpoints" / "body_models",
+        )
+    ).expanduser()
+    checkpoint_root = root / "inputs" / "checkpoints"
+    checks = {
+        "official_repo": (root / "tools" / "demo" / "demo.py").is_file(),
+        "checkpoint_gvhmr": (checkpoint_root / "gvhmr/gvhmr_siga24_release.ckpt").is_file(),
+        "checkpoint_hmr2": (checkpoint_root / "hmr2/epoch=10-step=25000.ckpt").is_file(),
+        "checkpoint_vitpose": (checkpoint_root / "vitpose/vitpose-h-multi-coco.pth").is_file(),
+        "checkpoint_yolov8": (checkpoint_root / "yolo/yolov8x.pt").is_file(),
+        "smplx_neutral": (body_models / "smplx" / "SMPLX_NEUTRAL.npz").is_file(),
+    }
+    runtime = "local" if sys.platform.startswith("linux") else "docker"
+    if runtime == "local":
+        configured_python = os.environ.get("HHTOOLS_GVHMR_PYTHON")
+        python_candidates = (
+            Path(configured_python).expanduser() if configured_python else None,
+            root / ".venv" / "bin" / "python",
+            root / "venv" / "bin" / "python",
+            Path.home() / ".conda" / "envs" / "gvhmr" / "bin" / "python",
+            Path.home() / "anaconda3" / "envs" / "gvhmr" / "bin" / "python",
+            Path.home() / "miniconda3" / "envs" / "gvhmr" / "bin" / "python",
+        )
+        python = next(
+            (
+                candidate
+                for candidate in python_candidates
+                if candidate is not None and candidate.is_file()
+            ),
+            None,
+        )
+        checks["python_executable"] = python is not None
+        runtime_path = os.pathsep.join(
+            part
+            for part in (
+                str(python.parent) if python is not None else "",
+                os.environ.get("PATH", ""),
+            )
+            if part
+        )
+        checks["ffmpeg"] = shutil.which("ffmpeg", path=runtime_path) is not None
+    else:
+        checks["docker_cli"] = shutil.which("docker") is not None
+    missing = [name for name, available in checks.items() if not available]
+    ready = not missing
     return DoctorCheck(
         "gvhmr",
         ready,
         "GVHMR configuration is ready" if ready else "GVHMR configuration is incomplete",
         {
             "probe_scope": "configuration_only",
-            "runtime": status["runtime"],
-            "checks": status["checks"],
-            "missing": status["missing"],
+            "runtime": runtime,
+            "checks": checks,
+            "missing": missing,
         },
     )
 
