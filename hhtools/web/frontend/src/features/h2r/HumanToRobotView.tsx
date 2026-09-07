@@ -142,7 +142,12 @@ function Picker({
         </select>
         <AssetImportButton kind={importKind} onClick={onImport} />
       </div>
-      <Button size="sm" disabled={disabled || !value} onClick={onLoad}>
+      <Button
+        size="sm"
+        variant="primary"
+        disabled={disabled || !value}
+        onClick={onLoad}
+      >
         {buttonLabel}
       </Button>
     </div>
@@ -804,6 +809,7 @@ export function HumanToRobotView({
             </Field>
             <Button
               size="sm"
+              variant="primary"
               disabled={!robot || !reference || checking || Boolean(busy || session)}
               onClick={editCalibration}
             >
