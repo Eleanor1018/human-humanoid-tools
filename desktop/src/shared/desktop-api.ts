@@ -8,6 +8,8 @@ export const DESKTOP_CHANNELS = {
   selectDirectory: 'hhtools:select-directory',
   openExternal: 'hhtools:open-external',
   exitApplication: 'hhtools:exit-application',
+  hasSeenTutorial: 'hhtools:has-seen-tutorial',
+  markTutorialSeen: 'hhtools:mark-tutorial-seen',
   runtimeStateChanged: 'hhtools:runtime-state-changed'
 } as const
 
@@ -38,6 +40,8 @@ export interface HHToolsDesktopApi {
   selectDirectory(): Promise<string | null>
   openExternal(url: string): Promise<void>
   exitApplication(): Promise<void>
+  hasSeenTutorial(): Promise<boolean>
+  markTutorialSeen(): Promise<void>
   onRuntimeStateChanged(listener: (state: RuntimeState) => void): () => void
 }
 
