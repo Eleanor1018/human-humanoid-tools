@@ -116,7 +116,13 @@ function formatDuration(
 }
 
 /** Compact task history dock shared by the browser and Electron renderer. */
-export function TaskDrawer() {
+export function TaskDrawer({
+  canExportResult,
+  onExportResult,
+}: {
+  readonly canExportResult: boolean;
+  readonly onExportResult: () => void;
+}) {
   const locale = useLocale();
   const text = useLocaleText();
   const [open, setOpen] = useState(false);
@@ -165,14 +171,6 @@ export function TaskDrawer() {
     return () => window.removeEventListener("keydown", toggle);
   }, []);
 
-  const activeCount = useMemo(
-    () =>
-      tasks.filter(
-        (task) => task.status === "pending" || task.status === "running",
-      ).length,
-    [tasks],
-  );
-
   const localized = (
     labels: readonly [string, string] | undefined,
     fallback: string,
@@ -196,7 +194,7 @@ export function TaskDrawer() {
           ? "h-[min(42vh,360px)] max-[780px]:h-[min(30vh,240px)]"
           : "h-[34px]",
       )}
-      aria-label={text("Task history", "任务历史")}
+      aria-label={text("Tasks", "任务")}
     >
       {!open ? (
         <button
@@ -207,16 +205,6 @@ export function TaskDrawer() {
         >
           <span>{text("Tasks", "任务")}</span>
           <span
-            className={cn(
-              "font-normal text-muted-foreground",
-              activeCount > 0 && "text-primary",
-            )}
-          >
-            {activeCount > 0
-              ? text(`${activeCount} active`, `${activeCount} 个进行中`)
-              : text(`${tasks.length} saved`, `已保存 ${tasks.length} 个`)}
-          </span>
-          <span
             className="ml-auto size-4 rotate-180 bg-current text-muted-foreground [mask:url(/icons/common/chevron-down.svg)_center/contain_no-repeat] [-webkit-mask:url(/icons/common/chevron-down.svg)_center/contain_no-repeat]"
             aria-hidden="true"
           />
@@ -225,12 +213,17 @@ export function TaskDrawer() {
         <div className="flex h-full min-h-0 flex-col overflow-hidden border-x-0 border-t border-b-0 border-border-subtle bg-surface">
           <header className="flex min-h-11 items-center gap-3 border-b border-border-subtle px-3.5">
             <strong className="text-[13px] text-foreground">
-              {text("Task History", "任务历史")}
+              {text("Tasks", "任务")}
             </strong>
-            <span className="text-[11px] text-muted-foreground">
-              {text(`${tasks.length} saved locally`, `本机已保存 ${tasks.length} 个`)}
-            </span>
             <div className="ml-auto flex items-center gap-1">
+              <button
+                type="button"
+                className="mr-1 h-7 rounded-md bg-primary px-2.5 text-[11px] font-semibold text-primary-foreground hover:brightness-95 focus-visible:outline-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-40"
+                disabled={!canExportResult}
+                onClick={onExportResult}
+              >
+                {text("Export Result", "导出结果")}
+              </button>
               <button
                 type="button"
                 className="grid size-8 place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"

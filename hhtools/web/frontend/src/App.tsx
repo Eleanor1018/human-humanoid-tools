@@ -609,7 +609,10 @@ export function App() {
           />
         </div>
       </Inspector>
-      <TaskDrawer />
+      <TaskDrawer
+        canExportResult={currentExportUrl !== null}
+        onExportResult={() => exportLink.current?.click()}
+      />
       <a
         ref={exportLink}
         className="hidden"
