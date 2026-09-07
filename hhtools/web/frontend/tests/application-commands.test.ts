@@ -13,28 +13,12 @@ registerHooks({
 const {
   PROJECT_README_URL,
   createApplicationMenus,
-  isEditingTarget,
   storedTheme,
   viewForImport,
-  viewForNavigationShortcut,
 } = await import("../src/appCommands.ts");
 const { getJobAdmissionSettings, updateJobAdmissionSettings } = await import(
   "../src/features/settings/api.ts"
 );
-
-function keyboardEvent(
-  key: string,
-  target: EventTarget | null = null,
-): Parameters<typeof viewForNavigationShortcut>[0] {
-  return {
-    altKey: true,
-    ctrlKey: false,
-    metaKey: false,
-    shiftKey: false,
-    key,
-    target,
-  };
-}
 
 test("application menu descriptors retain the five-menu contract", () => {
   const navigation: string[] = [];
@@ -79,32 +63,11 @@ test("application menu descriptors retain the five-menu contract", () => {
     commands.find((command) => command.id === "toggle-theme")?.label,
     "Dark Mode",
   );
-});
-
-test("Alt+1 through Alt+7 navigate unless a form control is active", () => {
-  assert.equal(viewForNavigationShortcut(keyboardEvent("1")), "motion");
-  assert.equal(viewForNavigationShortcut(keyboardEvent("2")), "robot-assets");
-  assert.equal(viewForNavigationShortcut(keyboardEvent("3")), "h2r");
-  assert.equal(viewForNavigationShortcut(keyboardEvent("4")), "r2r");
-  assert.equal(viewForNavigationShortcut(keyboardEvent("5")), "batch");
-  assert.equal(viewForNavigationShortcut(keyboardEvent("6")), "dataset-viz");
-  assert.equal(viewForNavigationShortcut(keyboardEvent("7")), "video-to-motion");
-  assert.equal(
-    viewForNavigationShortcut(
-      keyboardEvent("3", { tagName: "INPUT" } as unknown as EventTarget),
-    ),
-    null,
+  assert.equal(commands.some((command) => "shortcut" in command), false);
+  assert.deepEqual(
+    menus.find((menu) => menu.id === "settings")?.commands.map(({ id }) => id),
+    ["open-settings", "toggle-theme"],
   );
-  assert.equal(
-    viewForNavigationShortcut(
-      keyboardEvent(
-        "4",
-        { tagName: "DIV", isContentEditable: true } as unknown as EventTarget,
-      ),
-    ),
-    null,
-  );
-  assert.equal(isEditingTarget({ tagName: "textarea" } as unknown as EventTarget), true);
 });
 
 test("import intents select the owning persistent workspace", () => {

@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 
 import {
   createApplicationMenus,
-  viewForNavigationShortcut,
   type ApplicationCommandContext,
   type ApplicationMenuId,
 } from "@/appCommands";
@@ -23,25 +22,17 @@ export function Navbar(props: ApplicationCommandContext) {
     const closeOutside = (event: PointerEvent) => {
       if (!root.current?.contains(event.target as Node)) setOpenMenu(null);
     };
-    const handleKeydown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setOpenMenu(null);
-        return;
-      }
-      const view = viewForNavigationShortcut(event);
-      if (!view) return;
-      event.preventDefault();
-      setOpenMenu(null);
-      props.onNavigate(view);
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpenMenu(null);
     };
 
     document.addEventListener("pointerdown", closeOutside);
-    window.addEventListener("keydown", handleKeydown);
+    window.addEventListener("keydown", closeOnEscape);
     return () => {
       document.removeEventListener("pointerdown", closeOutside);
-      window.removeEventListener("keydown", handleKeydown);
+      window.removeEventListener("keydown", closeOnEscape);
     };
-  }, [props.onNavigate]);
+  }, []);
 
   return (
     <header
@@ -129,11 +120,7 @@ export function Navbar(props: ApplicationCommandContext) {
                       <span className="min-w-0 truncate text-[13px] font-semibold">
                         {command.label}
                       </span>
-                      {command.shortcut ? (
-                        <kbd className="shrink-0 font-sans text-[10px] text-muted-foreground opacity-70">
-                          {command.shortcut}
-                        </kbd>
-                      ) : command.disabledReason ? (
+                      {command.disabledReason ? (
                         <small className="shrink-0 text-[9px] text-muted-foreground">
                           {command.disabledReason}
                         </small>

@@ -35,7 +35,6 @@ export interface ApplicationCommand {
   readonly id: ApplicationCommandId;
   readonly label: string;
   readonly detail: string;
-  readonly shortcut?: string;
   readonly dividerBefore?: boolean;
   readonly enabled?: boolean;
   readonly disabledReason?: string;
@@ -61,16 +60,6 @@ export interface ApplicationCommandContext {
   readonly onOpenAbout: () => void;
   readonly onExitApplication: () => void;
 }
-
-const SHORTCUT_VIEWS: Readonly<Record<string, ViewId>> = {
-  "1": "motion",
-  "2": "robot-assets",
-  "3": "h2r",
-  "4": "r2r",
-  "5": "batch",
-  "6": "dataset-viz",
-  "7": "video-to-motion",
-};
 
 const IMPORT_VIEWS: Readonly<Record<ApplicationImportTarget, ViewId>> = {
   "motion-file": "motion",
@@ -98,47 +87,10 @@ export function storedTheme(
   }
 }
 
-export function isEditingTarget(target: EventTarget | null): boolean {
-  if (!target || typeof target !== "object") return false;
-  const candidate = target as {
-    readonly tagName?: unknown;
-    readonly isContentEditable?: unknown;
-  };
-  const tagName =
-    typeof candidate.tagName === "string"
-      ? candidate.tagName.toLowerCase()
-      : "";
-  return (
-    candidate.isContentEditable === true ||
-    tagName === "input" ||
-    tagName === "textarea" ||
-    tagName === "select"
-  );
-}
-
-export function viewForNavigationShortcut(
-  event: Pick<
-    KeyboardEvent,
-    "altKey" | "ctrlKey" | "metaKey" | "shiftKey" | "key" | "target"
-  >,
-): ViewId | null {
-  if (
-    !event.altKey ||
-    event.ctrlKey ||
-    event.metaKey ||
-    event.shiftKey ||
-    isEditingTarget(event.target)
-  ) {
-    return null;
-  }
-  return SHORTCUT_VIEWS[event.key] ?? null;
-}
-
 function navigationCommand(
   id: ApplicationCommandId,
   label: string,
   detail: string,
-  shortcut: string,
   view: ViewId,
   onNavigate: (view: ViewId) => void,
 ): ApplicationCommand {
@@ -146,7 +98,6 @@ function navigationCommand(
     id,
     label,
     detail,
-    shortcut,
     run: () => onNavigate(view),
   };
 }
@@ -245,7 +196,6 @@ export function createApplicationMenus(
           "navigate-video-to-motion",
           "Video to Motion",
           "Generate motion from video with GVHMR",
-          "Alt+7",
           "video-to-motion",
           context.onNavigate,
         ),
@@ -253,7 +203,6 @@ export function createApplicationMenus(
           "navigate-h2r",
           "Human to Robot",
           "Retarget human motion to a robot",
-          "Alt+3",
           "h2r",
           context.onNavigate,
         ),
@@ -261,7 +210,6 @@ export function createApplicationMenus(
           "navigate-r2r",
           "Robot to Robot",
           "Retarget a trajectory across robot embodiments",
-          "Alt+4",
           "r2r",
           context.onNavigate,
         ),
@@ -269,7 +217,6 @@ export function createApplicationMenus(
           "navigate-batch",
           "Batch",
           "Run batch workflows",
-          "Alt+5",
           "batch",
           context.onNavigate,
         ),
@@ -283,7 +230,6 @@ export function createApplicationMenus(
           "navigate-analysis",
           "Data Analysis",
           "Inspect motion and trajectory datasets",
-          "Alt+6",
           "dataset-viz",
           context.onNavigate,
         ),

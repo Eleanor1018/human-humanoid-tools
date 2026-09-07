@@ -128,10 +128,10 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
     await menu.getByRole('menuitem', { name: 'Workflows', exact: true }).hover()
     await expect(workflowsMenu).toBeVisible()
     await expect(workflowsMenu.getByRole('menuitem')).toHaveText([
-      'Video to MotionAlt+7',
-      'Human to RobotAlt+3',
-      'Robot to RobotAlt+4',
-      'BatchAlt+5'
+      'Video to Motion',
+      'Human to Robot',
+      'Robot to Robot',
+      'Batch'
     ])
     await menu.getByRole('menuitem', { name: 'Analysis', exact: true }).hover()
     await expect(workflowsMenu).toBeHidden()
