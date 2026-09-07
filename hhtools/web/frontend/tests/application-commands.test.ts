@@ -13,7 +13,9 @@ registerHooks({
 const {
   PROJECT_README_URL,
   createApplicationMenus,
+  storeTheme,
   storedTheme,
+  storedThemeOverride,
   viewForImport,
 } = await import("../src/appCommands.ts");
 const { getJobAdmissionSettings, updateJobAdmissionSettings } = await import(
@@ -108,17 +110,35 @@ test("import intents select the owning persistent workspace", () => {
   assert.equal(viewForImport("video-file"), "video-to-motion");
 });
 
-test("theme persistence accepts only the dark opt-in", () => {
-  assert.equal(storedTheme({ getItem: () => "dark" }), "dark");
-  assert.equal(storedTheme({ getItem: () => "unknown" }), "light");
+test("theme follows the system until a valid manual preference is stored", () => {
+  assert.equal(storedThemeOverride({ getItem: () => "dark" }), "dark");
+  assert.equal(storedThemeOverride({ getItem: () => "unknown" }), null);
+  assert.equal(storedTheme({ getItem: () => "dark" }, "light"), "dark");
+  assert.equal(storedTheme({ getItem: () => "light" }, "dark"), "light");
+  assert.equal(storedTheme({ getItem: () => null }, "dark"), "dark");
+  assert.equal(storedTheme({ getItem: () => "unknown" }, "dark"), "dark");
   assert.equal(
-    storedTheme({
-      getItem: () => {
-        throw new Error("storage unavailable");
+    storedTheme(
+      {
+        getItem: () => {
+          throw new Error("storage unavailable");
+        },
       },
-    }),
+      "dark",
+    ),
+    "dark",
+  );
+
+  let stored = "";
+  storeTheme(
+    {
+      setItem: (_key, value) => {
+        stored = value;
+      },
+    },
     "light",
   );
+  assert.equal(stored, "light");
   assert.equal(
     PROJECT_README_URL,
     "https://github.com/Eleanor1018/human-humanoid-tools#readme",

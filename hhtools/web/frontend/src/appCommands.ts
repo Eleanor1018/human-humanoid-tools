@@ -75,17 +75,41 @@ export const THEME_STORAGE_KEY = "hhtools.theme";
 export const PROJECT_README_URL =
   "https://github.com/Eleanor1018/human-humanoid-tools#readme";
 
+interface ThemeStorage {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+}
+
 export function viewForImport(target: ApplicationImportTarget): ViewId {
   return IMPORT_VIEWS[target];
 }
 
-export function storedTheme(
-  storage: Pick<Storage, "getItem"> | undefined,
-): ApplicationTheme {
+export function storedThemeOverride(
+  storage: Pick<ThemeStorage, "getItem"> | undefined,
+): ApplicationTheme | null {
   try {
-    return storage?.getItem(THEME_STORAGE_KEY) === "dark" ? "dark" : "light";
+    const stored = storage?.getItem(THEME_STORAGE_KEY);
+    return stored === "light" || stored === "dark" ? stored : null;
   } catch {
-    return "light";
+    return null;
+  }
+}
+
+export function storedTheme(
+  storage: Pick<ThemeStorage, "getItem"> | undefined,
+  systemTheme: ApplicationTheme = "light",
+): ApplicationTheme {
+  return storedThemeOverride(storage) ?? systemTheme;
+}
+
+export function storeTheme(
+  storage: Pick<ThemeStorage, "setItem"> | undefined,
+  theme: ApplicationTheme,
+): void {
+  try {
+    storage?.setItem(THEME_STORAGE_KEY, theme);
+  } catch {
+    // Restricted browser contexts can reject persistence; live state remains valid.
   }
 }
 

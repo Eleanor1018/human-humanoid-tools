@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -9,8 +10,8 @@ import {
 
 import {
   PROJECT_README_URL,
-  THEME_STORAGE_KEY,
-  storedTheme,
+  storeTheme,
+  storedThemeOverride,
   viewForImport,
   type ApplicationImportRequest,
   type ApplicationImportTarget,
@@ -25,8 +26,9 @@ import { Navbar } from "./components/Navbar";
 import { Sidebar } from "./components/Sidebar";
 import { LocaleProvider } from "./LocaleProvider";
 import {
-  storedLocale,
   storeLocale,
+  storedLocaleOverride,
+  systemLocale,
   type WorkspaceLocale,
 } from "./localization";
 import { MotionView } from "./features/motion/MotionView";
@@ -120,16 +122,36 @@ function desktopBridge(): ApplicationDesktopBridge | undefined {
   ).hhtoolsDesktop;
 }
 
+function preferredSystemTheme(): ApplicationTheme {
+  return typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-color-scheme: dark)").matches
+    ? "dark"
+    : "light";
+}
+
+function preferredSystemLocale(): WorkspaceLocale {
+  return systemLocale([
+    ...window.navigator.languages,
+    window.navigator.language,
+  ]);
+}
+
 export function App() {
+  const themeOverride = useRef<ApplicationTheme | null | undefined>(undefined);
+  const localeOverride = useRef<WorkspaceLocale | null | undefined>(undefined);
+  if (themeOverride.current === undefined) {
+    themeOverride.current = storedThemeOverride(window.localStorage);
+  }
+  if (localeOverride.current === undefined) {
+    localeOverride.current = storedLocaleOverride(window.localStorage);
+  }
+
   const [activeView, setActiveView] = useState<ViewId>("motion");
   const [theme, setTheme] = useState<ApplicationTheme>(() =>
-    storedTheme(window.localStorage),
+    themeOverride.current ?? preferredSystemTheme(),
   );
   const [locale, setLocale] = useState<WorkspaceLocale>(() =>
-    storedLocale(window.localStorage, [
-      ...window.navigator.languages,
-      window.navigator.language,
-    ]),
+    localeOverride.current ?? preferredSystemLocale(),
   );
   const [layout, setLayout] = useState(() =>
     storedWorkspaceLayout(window.localStorage),
@@ -198,19 +220,48 @@ export function App() {
       storedComparisonPreset(window.localStorage, "r2r"),
     );
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     document.documentElement.dataset.theme = theme;
-    try {
-      window.localStorage.setItem(THEME_STORAGE_KEY, theme);
-    } catch {
-      // Private browser contexts can reject storage; the live theme still works.
-    }
   }, [theme]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     document.documentElement.lang = locale;
-    storeLocale(window.localStorage, locale);
   }, [locale]);
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return undefined;
+    const preference = window.matchMedia("(prefers-color-scheme: dark)");
+    const syncSystemTheme = (event: MediaQueryListEvent) => {
+      if (themeOverride.current === null) {
+        setTheme(event.matches ? "dark" : "light");
+      }
+    };
+    preference.addEventListener("change", syncSystemTheme);
+    return () => preference.removeEventListener("change", syncSystemTheme);
+  }, []);
+
+  useEffect(() => {
+    const syncSystemLocale = () => {
+      if (localeOverride.current === null) {
+        setLocale(preferredSystemLocale());
+      }
+    };
+    window.addEventListener("languagechange", syncSystemLocale);
+    return () => window.removeEventListener("languagechange", syncSystemLocale);
+  }, []);
+
+  const toggleTheme = useCallback(() => {
+    const next = theme === "light" ? "dark" : "light";
+    themeOverride.current = next;
+    setTheme(next);
+    storeTheme(window.localStorage, next);
+  }, [theme]);
+
+  const changeLocale = useCallback((next: WorkspaceLocale) => {
+    localeOverride.current = next;
+    setLocale(next);
+    storeLocale(window.localStorage, next);
+  }, []);
 
   useEffect(() => {
     storeWorkspaceLayout(window.localStorage, layout);
@@ -494,9 +545,7 @@ export function App() {
         onImport={requestImport}
         onExportResult={() => exportLink.current?.click()}
         onOpenSettings={() => setDialog("settings")}
-        onToggleTheme={() =>
-          setTheme((current) => (current === "light" ? "dark" : "light"))
-        }
+        onToggleTheme={toggleTheme}
         onOpenTutorial={openTutorial}
         onOpenAbout={() => setDialog("about")}
         onExitApplication={() => void desktopBridge()?.exitApplication?.()}
@@ -635,7 +684,7 @@ export function App() {
         sidebarHidden={layout.sidebarHidden}
         inspectorHidden={layout.inspectorHidden}
         forceAnalysis={forceAnalysis}
-        onLocaleChange={setLocale}
+        onLocaleChange={changeLocale}
         onSidebarHiddenChange={(hidden) =>
           setLayout((current) => ({ ...current, sidebarHidden: hidden }))
         }

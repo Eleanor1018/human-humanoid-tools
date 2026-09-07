@@ -8,12 +8,13 @@ interface LocaleStorage {
   setItem(key: string, value: string): void;
 }
 
-function localeFromLanguageTags(tags: readonly string[]): WorkspaceLocale {
-  return tags.some(
-    (tag) => tag.trim().toLowerCase().split(/[-_]/, 1)[0] === "zh",
-  )
-    ? "zh-CN"
-    : "en";
+export function systemLocale(tags: readonly string[]): WorkspaceLocale {
+  for (const tag of tags) {
+    const language = tag.trim().toLowerCase().split(/[-_]/, 1)[0];
+    if (language === "zh") return "zh-CN";
+    if (language === "en") return "en";
+  }
+  return "en";
 }
 
 export function localize(
@@ -24,10 +25,9 @@ export function localize(
   return locale === "zh-CN" ? chinese : english;
 }
 
-export function storedLocale(
+export function storedLocaleOverride(
   storage: Pick<LocaleStorage, "getItem"> | undefined,
-  languageTags: readonly string[] = [],
-): WorkspaceLocale {
+): WorkspaceLocale | null {
   try {
     const value = JSON.parse(
       storage?.getItem(WORKSPACE_LOCALE_STORAGE_KEY) ?? "{}",
@@ -38,7 +38,14 @@ export function storedLocale(
   } catch {
     // A malformed legacy preference must not block the workbench.
   }
-  return localeFromLanguageTags(languageTags);
+  return null;
+}
+
+export function storedLocale(
+  storage: Pick<LocaleStorage, "getItem"> | undefined,
+  languageTags: readonly string[] = [],
+): WorkspaceLocale {
+  return storedLocaleOverride(storage) ?? systemLocale(languageTags);
 }
 
 export function storeLocale(
