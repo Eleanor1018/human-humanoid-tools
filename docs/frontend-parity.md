@@ -50,7 +50,7 @@ may improve spacing, rounded corners, accessibility, and narrow-screen layout.
 
 ## Verification
 
-- Frontend: 87 tests passed; production build passed.
+- Frontend: 86 tests passed; production build passed.
 - Web backend: 277 tests passed; 2 dependency-gated tests skipped.
 - Desktop: 38 tests and the Electron window E2E passed.
 - Browser: desktop and 390 x 844 layouts have no overflow or panel overlap;
