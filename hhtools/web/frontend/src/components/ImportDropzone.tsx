@@ -49,7 +49,7 @@ export function ImportDropzone({
   return (
     <div
       className={cn(
-        "flex min-h-[134px] flex-col items-center justify-center gap-2 rounded-lg border-[1.5px] border-dashed border-border bg-[#f4f8ff] px-9 py-[22px] text-center text-muted-foreground transition-colors data-[dragging=true]:border-primary data-[dragging=true]:bg-accent [html[data-theme=dark]_&]:bg-background",
+        "flex min-h-[134px] flex-col items-center justify-center gap-2 rounded-lg border-[1.5px] border-dashed border-border bg-[#f4f8ff] px-9 py-[22px] text-center text-muted-foreground transition-colors data-[dragging=true]:border-primary data-[dragging=true]:!bg-accent [html[data-theme=dark]_&]:bg-background",
         className,
       )}
       data-dragging={dragging}
