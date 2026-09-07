@@ -13,7 +13,11 @@ import {
 } from "@/components/calibrationEditorState";
 import { InspectorPage } from "@/components/Inspector";
 import { Button } from "@/components/ui/button";
-import { WorkflowPipeline, WorkflowStep } from "@/components/WorkflowSteps";
+import {
+  WorkflowPipeline,
+  WorkflowStep,
+  type WorkflowStatusTone,
+} from "@/components/WorkflowSteps";
 import { useLocaleText } from "@/LocaleProvider";
 import { displayFileName } from "@/lib/api";
 import {
@@ -56,6 +60,11 @@ import {
 
 type Action = "motion" | "robot" | "calibration" | "save" | "retarget";
 type Backend = "newton" | "interaction_mesh";
+
+interface StepStatus {
+  readonly label: string;
+  readonly tone: WorkflowStatusTone;
+}
 
 export interface HumanToRobotViewProps {
   readonly currentMotion?: StageMotionPayload | null;
@@ -213,6 +222,7 @@ export function HumanToRobotView({
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [errorOwner, setErrorOwner] = useState<Action | null>(null);
   const [result, setResult] = useState<RetargetResult | null>(
     currentResult ?? null,
   );
@@ -251,7 +261,10 @@ export function HumanToRobotView({
         setReferences(referenceNames);
       })
       .catch((reason: unknown) => {
-        if (!request.signal.aborted) setError(errorMessage(reason));
+        if (!request.signal.aborted) {
+          setError(errorMessage(reason));
+          setErrorOwner(null);
+        }
       });
     return () => {
       request.abort();
@@ -261,7 +274,10 @@ export function HumanToRobotView({
   }, []);
 
   useEffect(() => {
-    if (currentResult !== undefined) setResult(currentResult);
+    if (currentResult === undefined) return;
+    setError(null);
+    setErrorOwner(null);
+    setResult(currentResult);
   }, [currentResult]);
 
   useEffect(() => {
@@ -302,6 +318,8 @@ export function HumanToRobotView({
     setCalibrationBaseline({});
     setResult(null);
     setProgress(0);
+    setError(null);
+    setErrorOwner(null);
     referenceCallback.current?.(null);
     poseCallback.current?.(null);
     resultCallback.current?.(null);
@@ -324,7 +342,10 @@ export function HumanToRobotView({
         if (!request.signal.aborted) setCalibration(value);
       })
       .catch((reason: unknown) => {
-        if (!request.signal.aborted) setError(errorMessage(reason));
+        if (!request.signal.aborted) {
+          setError(errorMessage(reason));
+          setErrorOwner("calibration");
+        }
       })
       .finally(() => {
         if (!request.signal.aborted) setChecking(false);
@@ -442,7 +463,10 @@ export function HumanToRobotView({
           }
         })
         .catch((reason: unknown) => {
-          if (!request.signal.aborted) setError(errorMessage(reason));
+          if (!request.signal.aborted) {
+            setError(errorMessage(reason));
+            setErrorOwner("calibration");
+          }
         });
     }, 120);
     return () => {
@@ -460,10 +484,14 @@ export function HumanToRobotView({
     actionRequest.current = request;
     setBusy(action);
     setError(null);
+    setErrorOwner(null);
     try {
       await work(request.signal);
     } catch (reason) {
-      if (!request.signal.aborted) setError(errorMessage(reason));
+      if (!request.signal.aborted) {
+        setError(errorMessage(reason));
+        setErrorOwner(action);
+      }
     } finally {
       if (actionRequest.current === request) setBusy(null);
     }
@@ -473,6 +501,7 @@ export function HumanToRobotView({
     setResult(null);
     setStatus("");
     setError(null);
+    setErrorOwner(null);
     resultCallback.current?.(null);
   }
 
@@ -634,17 +663,48 @@ export function HumanToRobotView({
     });
   }
 
-  const calibrationLabel = session
-    ? busy === "save"
-      ? text("Saving…", "保存中…")
-      : text("Editing…", "编辑中…")
-    : checking
-      ? text("Checking…", "检查中…")
-      : calibration?.calibrated
-        ? calibration.bundled && !calibration.path
-          ? text("Built-in", "内置")
-          : text("Calibrated", "已标定")
-        : text("Not calibrated", "未标定");
+  const motionStep: StepStatus = busy === "motion"
+    ? { label: text("Loading…", "加载中…"), tone: "info" }
+    : errorOwner === "motion"
+      ? { label: text("Load failed", "加载失败"), tone: "danger" }
+      : motion
+        ? { label: motion.name || text("Loaded", "已加载"), tone: "success" }
+        : { label: text("Not loaded", "未加载"), tone: "neutral" };
+  const robotStep: StepStatus = busy === "robot"
+    ? { label: text("Loading…", "加载中…"), tone: "info" }
+    : errorOwner === "robot"
+      ? { label: text("Load failed", "加载失败"), tone: "danger" }
+      : robot
+        ? { label: robot.display_name, tone: "success" }
+        : { label: text("Not loaded", "未加载"), tone: "neutral" };
+  const calibrationStep: StepStatus = busy === "calibration"
+    ? { label: text("Opening…", "打开中…"), tone: "info" }
+    : busy === "save"
+      ? { label: text("Saving…", "保存中…"), tone: "info" }
+      : errorOwner === "calibration" || errorOwner === "save"
+        ? { label: text("Calibration failed", "标定失败"), tone: "danger" }
+        : session
+          ? { label: text("Editing…", "编辑中…"), tone: "info" }
+          : checking
+            ? { label: text("Checking…", "检查中…"), tone: "info" }
+            : calibration?.calibrated
+              ? {
+                  label: calibration.bundled && !calibration.path
+                    ? text("Built-in", "内置")
+                    : text("Calibrated", "已标定"),
+                  tone: "success",
+                }
+              : {
+                  label: text("Not calibrated", "未标定"),
+                  tone: motion && robot && reference ? "warning" : "neutral",
+                };
+  const resultStep: StepStatus = busy === "retarget"
+    ? { label: text("Retargeting…", "重定向中…"), tone: "info" }
+    : errorOwner === "retarget"
+      ? { label: text("Retarget failed", "重定向失败"), tone: "danger" }
+      : result
+        ? { label: text("Ready", "已就绪"), tone: "success" }
+        : { label: text("Not ready", "未就绪"), tone: "neutral" };
   const activeIndex = session
     ? 2
     : !motion
@@ -665,11 +725,8 @@ export function HumanToRobotView({
       <div className="flex shrink-0 flex-col">
         <WorkflowStep
           title={text("1. Motion", "1. 动作")}
-          status={
-            busy === "motion"
-              ? text("Loading…", "加载中…")
-              : motion?.name || text("Not loaded", "未加载")
-          }
+          status={motionStep.label}
+          statusTone={motionStep.tone}
           defaultOpen
         >
           <Picker
@@ -695,11 +752,8 @@ export function HumanToRobotView({
 
         <WorkflowStep
           title={text("2. Target robot", "2. 目标机器人")}
-          status={
-            busy === "robot"
-              ? text("Loading…", "加载中…")
-              : robot?.display_name || text("Not loaded", "未加载")
-          }
+          status={robotStep.label}
+          statusTone={robotStep.tone}
         >
           <Picker
             label={text("Select target robot", "选择目标机器人")}
@@ -724,7 +778,11 @@ export function HumanToRobotView({
           </Picker>
         </WorkflowStep>
 
-        <WorkflowStep title={text("3. Calibration", "3. 标定")} status={calibrationLabel}>
+        <WorkflowStep
+          title={text("3. Calibration", "3. 标定")}
+          status={calibrationStep.label}
+          statusTone={calibrationStep.tone}
+        >
           <div className="grid gap-2.5">
             <Field label={text("Reference pose", "参考姿势")}>
               <select
@@ -781,7 +839,8 @@ export function HumanToRobotView({
 
         <WorkflowStep
           title={text("4. Result", "4. 结果")}
-          status={result ? text("Ready", "已就绪") : text("Not ready", "未就绪")}
+          status={resultStep.label}
+          statusTone={resultStep.tone}
         >
           <div className="grid gap-2.5">
             <div className="grid grid-cols-2 gap-2">

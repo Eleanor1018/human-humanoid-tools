@@ -10,7 +10,11 @@ import {
 } from "@/components/calibrationEditorState";
 import { InspectorPage } from "@/components/Inspector";
 import { Button } from "@/components/ui/button";
-import { WorkflowPipeline, WorkflowStep } from "@/components/WorkflowSteps";
+import {
+  WorkflowPipeline,
+  WorkflowStep,
+  type WorkflowStatusTone,
+} from "@/components/WorkflowSteps";
 import { useLocaleText } from "@/LocaleProvider";
 import { displayFileName } from "@/lib/api";
 import { ResultDiagnostics } from "@/features/result/ResultDiagnostics";
@@ -52,6 +56,11 @@ type BusyAction =
   | "calibration-open"
   | "calibration-save"
   | "retarget";
+
+interface StepStatus {
+  readonly label: string;
+  readonly tone: WorkflowStatusTone;
+}
 
 export interface RobotToRobotViewProps {
   active: boolean;
@@ -230,6 +239,7 @@ export function RobotToRobotView({
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [errorOwner, setErrorOwner] = useState<BusyAction | null>(null);
   const fileInput = useRef<HTMLInputElement | null>(null);
   const folderInput = useRef<HTMLInputElement | null>(null);
   const actionRequest = useRef<AbortController | null>(null);
@@ -264,7 +274,10 @@ export function RobotToRobotView({
         setTargetChoice((current) => current || available[1]?.name || first);
       })
       .catch((reason: unknown) => {
-        if (!request.signal.aborted) setError(errorMessage(reason));
+        if (!request.signal.aborted) {
+          setError(errorMessage(reason));
+          setErrorOwner(null);
+        }
       });
     void getR2rLibrary({ signal: request.signal })
       .then((libraryEntries) => {
@@ -273,7 +286,10 @@ export function RobotToRobotView({
         setTrajectoryChoice((current) => current || libraryEntries[0]?.source_path || "");
       })
       .catch((reason: unknown) => {
-        if (!request.signal.aborted) setError(errorMessage(reason));
+        if (!request.signal.aborted) {
+          setError(errorMessage(reason));
+          setErrorOwner(null);
+        }
       });
     return () => request.abort();
   }, [active]);
@@ -281,24 +297,33 @@ export function RobotToRobotView({
   useEffect(() => {
     calibrationStatusRequest.current?.abort();
     if (currentSourceRobot === undefined) return;
+    setError(null);
+    setErrorOwner(null);
     setSourceRobot(currentSourceRobot);
     setSourceChoice(currentSourceRobot?.name ?? "");
   }, [currentSourceRobot]);
 
   useEffect(() => {
     if (currentTargetRobot === undefined) return;
+    setError(null);
+    setErrorOwner(null);
     setTargetRobot(currentTargetRobot);
     setTargetChoice(currentTargetRobot?.name ?? "");
   }, [currentTargetRobot]);
 
   useEffect(() => {
     if (currentSourceResult === undefined) return;
+    setError(null);
+    setErrorOwner(null);
     setSourceResult(currentSourceResult);
     setBackend(suggestedBackend(currentSourceResult));
   }, [currentSourceResult]);
 
   useEffect(() => {
-    if (currentResult !== undefined) setRetargetResult(currentResult);
+    if (currentResult === undefined) return;
+    setError(null);
+    setErrorOwner(null);
+    setRetargetResult(currentResult);
   }, [currentResult]);
 
   // Calibration is stored for one exact source/target pair. Recheck it whenever
@@ -324,7 +349,10 @@ export function RobotToRobotView({
         if (!request.signal.aborted) setCalibrated(Boolean(response.calibrated));
       })
       .catch((reason: unknown) => {
-        if (!request.signal.aborted) setError(errorMessage(reason));
+        if (!request.signal.aborted) {
+          setError(errorMessage(reason));
+          setErrorOwner("calibration-open");
+        }
       })
       .finally(() => {
         if (!request.signal.aborted) setCheckingCalibration(false);
@@ -356,7 +384,10 @@ export function RobotToRobotView({
           }
         })
         .catch((reason: unknown) => {
-          if (!request.signal.aborted) setError(errorMessage(reason));
+          if (!request.signal.aborted) {
+            setError(errorMessage(reason));
+            setErrorOwner("calibration-open");
+          }
         });
     }, 120);
     return () => {
@@ -451,6 +482,7 @@ export function RobotToRobotView({
     setBusy(action);
     setProgress(0);
     setError(null);
+    setErrorOwner(null);
     return request;
   }
 
@@ -463,6 +495,10 @@ export function RobotToRobotView({
   function clearRetargetResult(): void {
     setRetargetResult(null);
     onResultLoaded?.(null);
+    if (errorOwner === "retarget") {
+      setError(null);
+      setErrorOwner(null);
+    }
   }
 
   async function loadSourceRobot(): Promise<void> {
@@ -489,7 +525,10 @@ export function RobotToRobotView({
         ),
       );
     } catch (reason) {
-      if (!request.signal.aborted) setError(errorMessage(reason));
+      if (!request.signal.aborted) {
+        setError(errorMessage(reason));
+        setErrorOwner("source-robot");
+      }
     } finally {
       finishAction(request);
     }
@@ -517,7 +556,10 @@ export function RobotToRobotView({
         ),
       );
     } catch (reason) {
-      if (!request.signal.aborted) setError(errorMessage(reason));
+      if (!request.signal.aborted) {
+        setError(errorMessage(reason));
+        setErrorOwner("target-robot");
+      }
     } finally {
       finishAction(request);
     }
@@ -548,7 +590,10 @@ export function RobotToRobotView({
         ),
       );
     } catch (reason) {
-      if (!request.signal.aborted) setError(errorMessage(reason));
+      if (!request.signal.aborted) {
+        setError(errorMessage(reason));
+        setErrorOwner("source-trajectory");
+      }
     } finally {
       finishAction(request);
     }
@@ -630,7 +675,10 @@ export function RobotToRobotView({
         ),
       );
     } catch (reason) {
-      if (!request.signal.aborted) setError(errorMessage(reason));
+      if (!request.signal.aborted) {
+        setError(errorMessage(reason));
+        setErrorOwner("calibration-open");
+      }
     } finally {
       finishAction(request);
     }
@@ -660,7 +708,10 @@ export function RobotToRobotView({
       clearRetargetResult();
       setStatus(text("Calibration saved.", "标定已保存。"));
     } catch (reason) {
-      if (!request.signal.aborted) setError(errorMessage(reason));
+      if (!request.signal.aborted) {
+        setError(errorMessage(reason));
+        setErrorOwner("calibration-save");
+      }
     } finally {
       finishAction(request);
     }
@@ -675,6 +726,13 @@ export function RobotToRobotView({
     referenceCallback.current?.(null);
     poseCallback.current?.(null);
     poseWasActive.current = false;
+    if (
+      errorOwner === "calibration-open" ||
+      errorOwner === "calibration-save"
+    ) {
+      setError(null);
+      setErrorOwner(null);
+    }
     if (cancelled) setStatus(text("Calibration cancelled.", "标定已取消。"));
   }
 
@@ -718,11 +776,63 @@ export function RobotToRobotView({
         ),
       );
     } catch (reason) {
-      if (!request.signal.aborted) setError(errorMessage(reason));
+      if (!request.signal.aborted) {
+        setError(errorMessage(reason));
+        setErrorOwner("retarget");
+      }
     } finally {
       finishAction(request);
     }
   }
+
+  const sourceRobotStep: StepStatus = busy === "source-robot"
+    ? { label: text("Loading…", "加载中…"), tone: "info" }
+    : errorOwner === "source-robot"
+      ? { label: text("Load failed", "加载失败"), tone: "danger" }
+      : sourceRobot
+        ? { label: sourceRobot.display_name, tone: "success" }
+        : { label: text("Not loaded", "未加载"), tone: "neutral" };
+  const sourceTrajectoryStep: StepStatus = busy === "source-trajectory"
+    ? { label: text("Loading…", "加载中…"), tone: "info" }
+    : errorOwner === "source-trajectory"
+      ? { label: text("Load failed", "加载失败"), tone: "danger" }
+      : sourceResult
+        ? {
+            label: sourceResult.name || text("Loaded", "已加载"),
+            tone: "success",
+          }
+        : { label: text("Not loaded", "未加载"), tone: "neutral" };
+  const targetRobotStep: StepStatus = busy === "target-robot"
+    ? { label: text("Loading…", "加载中…"), tone: "info" }
+    : errorOwner === "target-robot"
+      ? { label: text("Load failed", "加载失败"), tone: "danger" }
+      : targetRobot
+        ? { label: targetRobot.display_name, tone: "success" }
+        : { label: text("Not loaded", "未加载"), tone: "neutral" };
+  const calibrationStep: StepStatus = busy === "calibration-open"
+    ? { label: text("Opening…", "打开中…"), tone: "info" }
+    : busy === "calibration-save"
+      ? { label: text("Saving…", "保存中…"), tone: "info" }
+      : errorOwner === "calibration-open" ||
+          errorOwner === "calibration-save"
+        ? { label: text("Calibration failed", "标定失败"), tone: "danger" }
+        : calibration
+          ? { label: text("Editing…", "编辑中…"), tone: "info" }
+          : checkingCalibration
+            ? { label: text("Checking…", "检查中…"), tone: "info" }
+            : calibrated
+              ? { label: text("Ready", "已就绪"), tone: "success" }
+              : {
+                  label: text("Required", "需要标定"),
+                  tone: sourceRobot && targetRobot ? "warning" : "neutral",
+                };
+  const resultStep: StepStatus = busy === "retarget"
+    ? { label: text("Running", "运行中"), tone: "info" }
+    : errorOwner === "retarget"
+      ? { label: text("Retarget failed", "重定向失败"), tone: "danger" }
+      : retargetResult
+        ? { label: text("Completed", "已完成"), tone: "success" }
+        : { label: text("Not ready", "未就绪"), tone: "neutral" };
 
   return (
     <InspectorPage title={text("Robot → Robot", "机器人 → 机器人")}>
@@ -735,7 +845,8 @@ export function RobotToRobotView({
       <div className="flex shrink-0 flex-col">
         <WorkflowStep
           title={text("1. Source robot", "1. 源机器人")}
-          status={sourceRobot?.display_name || text("Not loaded", "未加载")}
+          status={sourceRobotStep.label}
+          statusTone={sourceRobotStep.tone}
           defaultOpen
         >
           <RobotSelect
@@ -752,7 +863,8 @@ export function RobotToRobotView({
 
         <WorkflowStep
           title={text("2. Source trajectory", "2. 源轨迹")}
-          status={sourceResult?.name || text("Not loaded", "未加载")}
+          status={sourceTrajectoryStep.label}
+          statusTone={sourceTrajectoryStep.tone}
         >
           <div className="grid gap-2.5">
             <Field label={text("Robot trajectory library", "机器人轨迹资源库")}>
@@ -826,7 +938,8 @@ export function RobotToRobotView({
 
         <WorkflowStep
           title={text("3. Target robot", "3. 目标机器人")}
-          status={targetRobot?.display_name || text("Not loaded", "未加载")}
+          status={targetRobotStep.label}
+          statusTone={targetRobotStep.tone}
         >
           <RobotSelect
             label={text("Select target robot", "选择目标机器人")}
@@ -842,17 +955,8 @@ export function RobotToRobotView({
 
         <WorkflowStep
           title={text("4. Calibration", "4. 标定")}
-          status={
-            calibration
-              ? busy === "calibration-save"
-                ? text("Saving…", "保存中…")
-                : text("Editing…", "编辑中…")
-              : checkingCalibration
-                ? text("Checking…", "检查中…")
-                : calibrated
-                  ? text("Ready", "已就绪")
-                  : text("Required", "需要标定")
-          }
+          status={calibrationStep.label}
+          statusTone={calibrationStep.tone}
         >
           <div className="grid gap-2.5">
             <div className="flex items-center justify-between gap-3">
@@ -910,13 +1014,8 @@ export function RobotToRobotView({
 
         <WorkflowStep
           title={text("5. Result", "5. 结果")}
-          status={
-            retargetResult
-              ? text("Completed", "已完成")
-              : busy === "retarget"
-                ? text("Running", "运行中")
-                : text("Not ready", "未就绪")
-          }
+          status={resultStep.label}
+          statusTone={resultStep.tone}
         >
           <div className="grid gap-2.5">
             <div className="grid grid-cols-2 gap-2">
@@ -967,14 +1066,6 @@ export function RobotToRobotView({
               </div>
             )}
             <p className="min-h-4 text-xs text-muted-foreground" aria-live="polite">{status}</p>
-            {error && (
-              <p
-                className="rounded-md border border-danger-border bg-danger-muted px-2.5 py-2 text-[11px] leading-relaxed break-words text-danger"
-                role="alert"
-              >
-                {error}
-              </p>
-            )}
             {retargetResult && (
               <>
                 <ResultDiagnostics
@@ -994,6 +1085,14 @@ export function RobotToRobotView({
           </div>
         </WorkflowStep>
       </div>
+      {error && (
+        <p
+          className="rounded-md border border-danger-border bg-danger-muted px-2.5 py-2 text-[11px] leading-relaxed break-words text-danger"
+          role="alert"
+        >
+          {error}
+        </p>
+      )}
     </InspectorPage>
   );
 }

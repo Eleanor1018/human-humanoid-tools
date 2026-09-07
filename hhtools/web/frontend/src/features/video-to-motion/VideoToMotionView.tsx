@@ -5,9 +5,14 @@ import { ImportDropzone } from "@/components/ImportDropzone";
 import { InspectorPage } from "@/components/Inspector";
 import { RefreshButton } from "@/components/RefreshButton";
 import { Button } from "@/components/ui/button";
-import { WorkflowPipeline, WorkflowStep } from "@/components/WorkflowSteps";
+import {
+  WorkflowPipeline,
+  WorkflowStep,
+  type WorkflowStatusTone,
+} from "@/components/WorkflowSteps";
 import type { ApplicationImportRequest } from "@/importIntent";
 import { useLocaleText } from "@/LocaleProvider";
+import { cn } from "@/lib/utils";
 import {
   toStageMotionPayload as toStageImportedMotionPayload,
   uploadMotion,
@@ -35,6 +40,7 @@ import { SmplxModelLinks } from "./SmplxModelLinks";
 
 type RuntimePhase = "checking" | "ready" | "unavailable" | "error";
 type WorkflowPhase = "idle" | "uploading" | "running" | "done" | "error";
+type WorkflowErrorOwner = "selection" | "generation";
 
 interface SelectedVideo {
   readonly file: File;
@@ -79,6 +85,8 @@ export function VideoToMotionView({
   const [workflowPhase, setWorkflowPhase] = useState<WorkflowPhase>("idle");
   const [job, setJob] = useState<VideoToMotionJob | null>(null);
   const [workflowError, setWorkflowError] = useState<string | null>(null);
+  const [workflowErrorOwner, setWorkflowErrorOwner] =
+    useState<WorkflowErrorOwner | null>(null);
   const [result, setResult] = useState<MotionResultSummary | null>(null);
   const [importing, setImporting] = useState(false);
   const [importJob, setImportJob] = useState<MotionJob | null>(null);
@@ -142,6 +150,8 @@ export function VideoToMotionView({
     if (!file) return;
     if (!isSupportedVideoName(file.name)) {
       setWorkflowPhase("error");
+      setWorkflowErrorOwner("selection");
+      setImportError(null);
       setWorkflowError(
         text(
           "Supported formats are MP4, MOV, MKV, AVI, WebM, and M4V.",
@@ -158,6 +168,7 @@ export function VideoToMotionView({
     if (previousUrl) URL.revokeObjectURL(previousUrl);
     setWorkflowPhase("idle");
     setWorkflowError(null);
+    setWorkflowErrorOwner(null);
     setImportError(null);
     setJob(null);
     setResult(null);
@@ -184,6 +195,7 @@ export function VideoToMotionView({
       parsedFocalLength = parseOptionalFocalLength(focalLength);
     } catch (error) {
       setWorkflowPhase("error");
+      setWorkflowErrorOwner("generation");
       setWorkflowError(
         text(errorMessage(error), "焦距必须是正整数。"),
       );
@@ -195,6 +207,7 @@ export function VideoToMotionView({
     operation.current = request;
     setWorkflowPhase("uploading");
     setWorkflowError(null);
+    setWorkflowErrorOwner(null);
     setImportError(null);
     setJob(null);
     setResult(null);
@@ -222,6 +235,7 @@ export function VideoToMotionView({
     } catch (error) {
       if (request.signal.aborted) return;
       setWorkflowPhase("error");
+      setWorkflowErrorOwner("generation");
       setWorkflowError(errorMessage(error));
     } finally {
       if (operation.current === request) operation.current = null;
@@ -231,6 +245,8 @@ export function VideoToMotionView({
   const importResult = async (file: File | null) => {
     if (!file || busy) return;
     if (!isGvhmrResultName(file.name)) {
+      setWorkflowError(null);
+      setWorkflowErrorOwner(null);
       setImportError(text("A GVHMR result must be a .pt file.", "GVHMR 结果必须是 .pt 文件。"));
       return;
     }
@@ -242,6 +258,7 @@ export function VideoToMotionView({
     setImportJob(null);
     setImportError(null);
     setWorkflowError(null);
+    setWorkflowErrorOwner(null);
     try {
       const payload = await uploadMotion([file], {
         profile: "mimic",
@@ -270,30 +287,99 @@ export function VideoToMotionView({
   };
 
   const runtimeLabel =
-    runtimePhase === "checking"
-      ? text("Checking", "检查中")
-      : runtimePhase === "ready"
-        ? `${text("Ready", "就绪")} · ${runtime?.runtime === "docker" ? "Docker" : text("Local", "本地")}`
-        : runtimePhase === "unavailable"
-          ? text("Unavailable", "不可用")
-          : text("Check failed", "检查失败");
-  const runtimeDot =
-    runtimePhase === "ready"
-      ? "bg-success"
+    setupBusy
+      ? text("Setting up", "配置中")
       : runtimePhase === "checking"
-        ? "bg-warning"
-        : "bg-danger";
+        ? text("Checking", "检查中")
+        : runtimePhase === "ready"
+          ? `${text("Ready", "就绪")} · ${runtime?.runtime === "docker" ? "Docker" : text("Local", "本地")}`
+          : runtimePhase === "unavailable"
+            ? text("Unavailable", "不可用")
+            : text("Check failed", "检查失败");
+  const runtimeDot =
+    setupBusy || runtimePhase === "checking"
+      ? "bg-primary"
+      : runtimePhase === "ready"
+        ? "bg-success"
+        : runtimePhase === "unavailable"
+          ? "bg-warning"
+          : "bg-danger";
   const missing = runtime?.missing ?? [];
   const progress = workflowPhase === "uploading" ? 0 : (job?.progress ?? 0);
   const canRun = Boolean(video) && runtimePhase === "ready" && !busy;
-  const pipelineIndex =
-    importing || workflowPhase === "done"
+  const selectionFailed = workflowErrorOwner === "selection" && Boolean(workflowError);
+  const generationFailed = workflowErrorOwner === "generation" && Boolean(workflowError);
+  const generationBlocked =
+    workflowPhase === "idle" && Boolean(video) && runtimePhase === "unavailable";
+
+  const selectionStatus = selectionFailed
+    ? text("Invalid video", "视频无效")
+    : video?.file.name ?? text("Not selected", "未选择");
+  const selectionTone: WorkflowStatusTone = selectionFailed
+    ? "danger"
+    : video
+      ? "success"
+      : "neutral";
+  const runtimeTone: WorkflowStatusTone =
+    setupBusy || runtimePhase === "checking"
+      ? "info"
+      : runtimePhase === "ready"
+        ? "success"
+        : runtimePhase === "unavailable"
+          ? "warning"
+          : "danger";
+  const generationStatus = generationFailed
+    ? text("Failed", "失败")
+    : generating
+      ? `${Math.round(progress * 100)}%`
+      : workflowPhase === "done"
+        ? text("Done", "完成")
+        : generationBlocked
+          ? text("Blocked", "已阻塞")
+          : text("Waiting", "等待中");
+  const generationTone: WorkflowStatusTone = generationFailed
+    ? "danger"
+    : generating
+      ? "info"
+      : workflowPhase === "done"
+        ? "success"
+        : generationBlocked
+          ? "warning"
+          : "neutral";
+  const resultStatus = importError
+    ? text("Import failed", "导入失败")
+    : importing
+      ? `${Math.round((importJob?.progress ?? 0) * 100)}%`
+      : result
+        ? text("Motion Library", "动作资源库")
+        : text("Empty", "暂无结果");
+  const resultTone: WorkflowStatusTone = importError
+    ? "danger"
+    : importing
+      ? "info"
+      : result
+        ? "success"
+        : "neutral";
+
+  const pipelineIndex = selectionFailed
+    ? 0
+    : importing || importError || workflowPhase === "done"
       ? 3
-      : generating || (video && runtimePhase === "ready")
+      : generationFailed || generating || (video && runtimePhase === "ready")
         ? 2
         : video
           ? 1
           : 0;
+  const pipelineCompletedIndex =
+    importError || importing
+      ? 2
+      : selectionFailed
+        ? -1
+        : generationFailed
+          ? 1
+          : workflowPhase === "done"
+            ? 3
+            : pipelineIndex - 1;
 
   return (
     <InspectorPage title={text("Video → Motion", "视频 → 动作")}>
@@ -301,12 +387,13 @@ export function VideoToMotionView({
         label={text("Video to Motion pipeline", "视频转动作流程")}
         steps={pipeline}
         activeIndex={pipelineIndex}
-        completedIndex={workflowPhase === "done" ? 3 : pipelineIndex - 1}
+        completedIndex={pipelineCompletedIndex}
       />
       <div className="flex shrink-0 flex-col">
         <WorkflowStep
           title={text("1. Select video", "1. 选择视频")}
-          status={video ? video.file.name : text("Not selected", "未选择")}
+          status={selectionStatus}
+          statusTone={selectionTone}
           defaultOpen
         >
           <div
@@ -386,9 +473,19 @@ export function VideoToMotionView({
               </div>
             </section>
           )}
+          {selectionFailed && workflowError && (
+            <p className="mt-2.5 rounded-md border border-danger-border bg-danger-muted px-2.5 py-2 text-[11px] leading-relaxed text-danger break-words" role="alert">
+              {workflowError}
+            </p>
+          )}
         </WorkflowStep>
 
-        <WorkflowStep title={text("2. Environment", "2. 运行环境")} status={runtimeLabel} defaultOpen>
+        <WorkflowStep
+          title={text("2. Environment", "2. 运行环境")}
+          status={runtimeLabel}
+          statusTone={runtimeTone}
+          defaultOpen
+        >
           <div className="grid gap-2.5">
             <div className="flex items-center gap-2 text-xs" role="status" aria-live="polite">
               <span className={`size-2 shrink-0 rounded-full ${runtimeDot}`} aria-hidden="true" />
@@ -418,7 +515,15 @@ export function VideoToMotionView({
               </select>
             </Field>
             {(runtimeError || missing.length > 0) && (
-              <div className="rounded-md border border-danger-border bg-danger-muted px-2.5 py-2 text-[11px] leading-relaxed text-danger break-all" role="alert">
+              <div
+                className={cn(
+                  "rounded-md border px-2.5 py-2 text-[11px] leading-relaxed break-all",
+                  runtimeError
+                    ? "border-danger-border bg-danger-muted text-danger"
+                    : "border-warning-border bg-warning-muted text-warning",
+                )}
+                role={runtimeError ? "alert" : undefined}
+              >
                 <p>{runtimeError ?? missing[0]}</p>
                 {!runtimeError && missing.length > 1 && (
                   <details className="mt-1">
@@ -443,13 +548,8 @@ export function VideoToMotionView({
 
         <WorkflowStep
           title={text("3. Generate", "3. 生成动作")}
-          status={
-            generating
-              ? `${Math.round(progress * 100)}%`
-              : workflowPhase === "done"
-                ? text("Done", "完成")
-                : text("Waiting", "等待中")
-          }
+          status={generationStatus}
+          statusTone={generationTone}
           defaultOpen
         >
           <form
@@ -502,7 +602,7 @@ export function VideoToMotionView({
                 <progress className="h-1.5 w-full accent-primary" value={progress} max="1" />
               </div>
             )}
-            {workflowPhase === "error" && workflowError && (
+            {generationFailed && workflowError && (
               <p className="rounded-md border border-danger-border bg-danger-muted px-2.5 py-2 text-[11px] leading-relaxed text-danger break-words" role="alert">
                 {workflowError}
               </p>
@@ -512,13 +612,8 @@ export function VideoToMotionView({
 
         <WorkflowStep
           title={text("4. Motion result", "4. 动作结果")}
-          status={
-            importing
-              ? `${Math.round((importJob?.progress ?? 0) * 100)}%`
-              : result
-                ? text("Motion Library", "动作资源库")
-                : text("Empty", "暂无结果")
-          }
+          status={resultStatus}
+          statusTone={resultTone}
           defaultOpen
         >
           <input

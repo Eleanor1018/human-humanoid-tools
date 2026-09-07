@@ -53,6 +53,7 @@ may improve spacing, rounded corners, accessibility, and narrow-screen layout.
   - [x] Keep Robot mesh-folder selection available before import completion.
   - [x] Show Robot Library row status only while a model is loading.
   - [x] Give all six Stage layer types distinct semantic colors.
+  - [x] Color V2M, H2R, and R2R step status by neutral, active, success, warning, and failure semantics.
   - [x] Keep the Stage visibility menu legible in dark and narrow layouts.
   - [x] Refresh R2R robot and trajectory catalogs whenever the workspace is entered.
   - [x] Restore compact Motion, Robot, and calibration validation summaries.
@@ -62,7 +63,7 @@ may improve spacing, rounded corners, accessibility, and narrow-screen layout.
 
 ## Verification
 
-- Frontend: 95 tests passed; production build passed.
+- Frontend: 96 tests passed; production build passed.
 - Web backend: 277 tests passed; 2 dependency-gated tests skipped.
 - Desktop: 38 tests and the Electron window E2E passed.
 - Browser: desktop and 390 x 844 layouts have no overflow or panel overlap;

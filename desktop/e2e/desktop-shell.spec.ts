@@ -300,6 +300,22 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
     await expect(
       inspector.locator('section[aria-label="Video → Motion"] > div > details')
     ).toHaveCount(4)
+    const v2mPage = inspector.locator('section[aria-label="Video → Motion"]')
+    const v2mSteps = v2mPage.locator(':scope > div > details')
+    await expect(v2mSteps.nth(0).locator('[data-status-tone]')).toHaveAttribute(
+      'data-status-tone',
+      'neutral'
+    )
+    const invalidVideo = testInfo.outputPath('not-a-video.txt')
+    await writeFile(invalidVideo, 'not a video')
+    await v2mPage
+      .getByRole('group', { name: 'Video import area' })
+      .locator('input[type="file"]')
+      .setInputFiles(invalidVideo)
+    const invalidVideoStatus = v2mSteps.nth(0).locator('[data-status-tone]')
+    await expect(invalidVideoStatus).toHaveAttribute('data-status-tone', 'danger')
+    await expect(invalidVideoStatus).toHaveClass(/text-danger/)
+    await expect(invalidVideoStatus).toHaveText('Invalid video')
     await expect(inspector.getByRole('group', { name: 'Video import area' })).toBeVisible()
     await expectBorderless(inspector.getByRole('button', { name: 'Refresh GVHMR status' }))
 
@@ -313,6 +329,11 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
     await expect(page.getByRole('list', { name: 'Human to Robot pipeline' })).toBeVisible()
     const h2rPage = inspector.locator('section[aria-label="Human → Robot"]')
     await expect(h2rPage.locator('details')).toHaveCount(4)
+    expect(
+      await h2rPage.locator('[data-status-tone]').evaluateAll((statuses) =>
+        statuses.map((status) => status.getAttribute('data-status-tone'))
+      )
+    ).toEqual(['neutral', 'neutral', 'neutral', 'neutral'])
     await expect(inspector.getByLabel('Select human motion')).toBeVisible()
     await expect(inspector.getByRole('button', { name: 'Load motion' })).toBeDisabled()
     await expect(h2rPage.getByRole('button', { name: 'Import motion' })).toBeVisible()
@@ -331,6 +352,11 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
     await expect(page.getByRole('list', { name: 'Robot to Robot pipeline' })).toBeVisible()
     const r2rPage = inspector.locator('section[aria-label="Robot → Robot"]')
     await expect(r2rPage.locator('details')).toHaveCount(5)
+    expect(
+      await r2rPage.locator('[data-status-tone]').evaluateAll((statuses) =>
+        statuses.map((status) => status.getAttribute('data-status-tone'))
+      )
+    ).toEqual(['neutral', 'neutral', 'neutral', 'neutral', 'neutral'])
     const r2rSourceStep = r2rPage.locator('details').first()
     await expect(r2rSourceStep.getByLabel('Select source robot')).toHaveValue('')
     await expect(r2rSourceStep.getByRole('button', { name: 'Load' })).toBeDisabled()

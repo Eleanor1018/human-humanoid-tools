@@ -2,7 +2,13 @@ import type { CSSProperties, ReactNode } from "react";
 
 import { useLocaleText } from "@/LocaleProvider";
 import { cn } from "@/lib/utils";
-import { workflowPipelineState } from "./workflowPipeline";
+import {
+  workflowPipelineState,
+  workflowStatusToneClass,
+  type WorkflowStatusTone,
+} from "./workflowPipeline";
+
+export type { WorkflowStatusTone } from "./workflowPipeline";
 
 interface WorkflowPipelineProps {
   label: string;
@@ -78,6 +84,7 @@ export function WorkflowPipeline({
 interface WorkflowStepProps {
   title: string;
   status?: string;
+  statusTone?: WorkflowStatusTone;
   defaultOpen?: boolean;
   children: ReactNode;
 }
@@ -85,6 +92,7 @@ interface WorkflowStepProps {
 export function WorkflowStep({
   title,
   status,
+  statusTone = "neutral",
   defaultOpen = false,
   children,
 }: WorkflowStepProps) {
@@ -94,7 +102,11 @@ export function WorkflowStep({
         <span className="min-w-0 flex-1 truncate">{title}</span>
         {status && (
           <span
-            className="max-w-[50%] shrink-0 truncate text-[11px] font-normal text-muted-foreground"
+            className={cn(
+              "max-w-[50%] shrink-0 truncate text-[11px] font-normal",
+              workflowStatusToneClass(statusTone),
+            )}
+            data-status-tone={statusTone}
             title={status}
           >
             {status}
