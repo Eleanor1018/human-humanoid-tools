@@ -123,6 +123,9 @@ def configure_agent_runtime(
         PreflightService,
         RetargetService,
         RetargetServiceError,
+        classify_catalog_robot_trajectory,
+        is_catalog_motion_sidecar,
+        iter_bounded_catalog_files,
         require_bounded_catalog_root,
     )
 
@@ -135,7 +138,9 @@ def configure_agent_runtime(
     }
     workspace_robot_root = WORKSPACE_ROBOT_ROOT
     if workspace_robot_root.is_dir() and any(
-        child.is_dir() and not child.name.startswith("_")
+        not child.name.startswith(("_", "."))
+        and not child.is_symlink()
+        and child.is_dir()
         for child in workspace_robot_root.iterdir()
     ):
         agent_robot_roots["workspace-robots"] = workspace_robot_root
@@ -162,23 +167,38 @@ def configure_agent_runtime(
     ) -> AvailableAssetProvider:
         def available() -> list[AvailableAssetCandidate]:
             from hhtools.services.asset_inspection import (
+                SUPPORTED_MOTION_PRIMARY_EXTENSIONS,
                 MotionAssetDiscoveryError,
                 discover_primary,
             )
-            from hhtools.web.analysis.dataset_analysis import build_entries
 
             root = _resolved_catalog_root(provider)
-            require_bounded_catalog_root(root)
             candidates: list[AvailableAssetCandidate] = []
-            for entry in build_entries(root):
-                try:
-                    path = Path(str(entry["source_path"]))
-                    discovered = discover_primary(path)
-                except (KeyError, MotionAssetDiscoveryError, OSError, TypeError, ValueError):
+            for path in iter_bounded_catalog_files(
+                root,
+                extensions=SUPPORTED_MOTION_PRIMARY_EXTENSIONS,
+            ):
+                relative = path.relative_to(root)
+                if is_catalog_motion_sidecar(path):
                     continue
-                folder = str(entry.get("folder_label") or "").strip()
+                robot_trajectory = classify_catalog_robot_trajectory(
+                    path,
+                    relative_path=PurePosixPath(relative.as_posix()),
+                )
+                if robot_trajectory is not False:
+                    continue
+                try:
+                    discovered = discover_primary(path)
+                except (MotionAssetDiscoveryError, OSError, TypeError, ValueError):
+                    continue
+                folder = relative.parent.name if relative.parent != Path(".") else ""
                 stem = path.stem
                 display_name = f"{folder} · {stem}" if folder else stem
+                required_paths = tuple(
+                    required_path
+                    for paths in discovered.sidecars.values()
+                    for required_path in paths
+                )
                 candidates.append(
                     AvailableAssetCandidate(
                         path=path,
@@ -187,6 +207,7 @@ def configure_agent_runtime(
                         category=discovered.category,
                         dataset=discovered.dataset,
                         reference=discovered.reference,
+                        required_paths=required_paths,
                     )
                 )
                 if len(candidates) > MAX_AVAILABLE_ASSET_CANDIDATES:
@@ -214,7 +235,7 @@ def configure_agent_runtime(
                     preset_root.relative_to(root)
                     # Use the same discovery boundary as registration so every
                     # advertised directory is a complete, unambiguous bundle.
-                    discover_robot_bundle(preset_root)
+                    discovery = discover_robot_bundle(preset_root)
                 except (OSError, RobotAssetDiscoveryError, RuntimeError, ValueError):
                     continue
                 candidates.append(
@@ -223,6 +244,7 @@ def configure_agent_runtime(
                         display_name=preset.display_name or preset.name,
                         kind=AssetKind.ROBOT_BUNDLE,
                         category=AssetCategory.ROBOT_MODEL,
+                        required_paths=tuple(item.path for item in discovery.files),
                     )
                 )
                 if len(candidates) > MAX_AVAILABLE_ASSET_CANDIDATES:
@@ -244,6 +266,12 @@ def configure_agent_runtime(
     app.state.agent_available_asset_catalog_service = AvailableAssetCatalogService(
         agent_asset_registry,
         catalog_providers,
+        preferred_root_ids=(
+            "motion-library",
+            "robot-library",
+            "source",
+            "workspace-robots",
+        ),
     )
     app.state.agent_plan_store = PlanStore(agent_data_dir)
     app.state.agent_retarget_service = RetargetService(

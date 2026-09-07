@@ -402,6 +402,7 @@ class AssetRegistry:
         kind: AssetKind | None = None,
         category: AssetCategory | None = None,
         recursive: bool = True,
+        preferred_root_id: str | None = None,
     ) -> AssetRegistrationRequest:
         """Convert one trusted local path to a portable registration request.
 
@@ -443,6 +444,10 @@ class AssetRegistry:
 
         specificity = max(depth for depth, _root_id, _relative in candidates)
         selected = [candidate for candidate in candidates if candidate[0] == specificity]
+        if len(selected) != 1 and preferred_root_id is not None:
+            preferred = [item for item in selected if item[1] == preferred_root_id]
+            if len(preferred) == 1:
+                selected = preferred
         if len(selected) != 1:
             raise _asset_error(
                 "ASSET_ROOT_AMBIGUOUS",
@@ -472,6 +477,25 @@ class AssetRegistry:
                 "INVALID_PARAMETER",
                 "The trusted asset source cannot be represented by the registration contract.",
             ) from exc
+
+    def canonical_root_aliases(
+        self,
+        preferred_root_ids: tuple[str, ...] = (),
+    ) -> dict[str, str]:
+        """Collapse roots resolving to the same directory without exposing that directory."""
+
+        priority = {root_id: index for index, root_id in enumerate(preferred_root_ids)}
+        grouped: dict[Path, list[str]] = {}
+        for root_id in sorted(self._roots):
+            grouped.setdefault(self._root(root_id), []).append(root_id)
+        aliases: dict[str, str] = {}
+        for root_ids in grouped.values():
+            canonical = min(
+                root_ids,
+                key=lambda root_id: (priority.get(root_id, len(priority)), root_id),
+            )
+            aliases.update({root_id: canonical for root_id in root_ids})
+        return aliases
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self._database_path, timeout=30.0)

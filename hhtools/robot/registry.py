@@ -233,10 +233,10 @@ def _scan_root(root: Path, *, scaffold_missing: bool = True) -> list[RobotPreset
     """
     out: list[RobotPreset] = []
     for child in sorted(root.iterdir()):
-        if not child.is_dir():
+        if child.name.startswith(("_", ".")):
+            # Templates and hidden runtime folders stay invisible.
             continue
-        if child.name.startswith("_"):
-            # ``_template`` and any other private scaffolding stays invisible.
+        if child.is_symlink() or not child.is_dir():
             continue
 
         if scaffold_missing:

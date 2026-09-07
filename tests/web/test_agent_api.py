@@ -1140,6 +1140,29 @@ def test_full_web_app_registers_agent_api_before_the_static_root(
         positions=positions,
         quaternions=quaternions,
     )
+    (source_root / "robot.csv").write_text(
+        "root_x,root_y,root_z,root_qx,root_qy,root_qz,root_qw,dof_hip\n"
+        "0,0,0,0,0,0,1,0\n",
+        encoding="utf-8",
+    )
+    np.savez(source_root / "robot-trajectory.npz", joint_q=np.zeros((2, 8)))
+    escaped_clip = source_root / "parc_ms" / "escaped" / "escaped.npz"
+    escaped_clip.parent.mkdir(parents=True)
+    np.savez(
+        escaped_clip,
+        schema_version=np.array("1"),
+        name=np.array("escaped"),
+        framerate=np.array(30.0),
+        up_axis=np.array("Z"),
+        bone_names=np.array(["root"]),
+        parent_indices=np.array([-1], dtype=np.int32),
+        positions=positions,
+        quaternions=quaternions,
+    )
+    outside_terrain = tmp_path / "private-terrain.obj"
+    outside_terrain.write_text("o private\n", encoding="utf-8")
+    (escaped_clip.parent / "escaped_terrain.obj").symlink_to(outside_terrain)
+    (source_root / "malformed.npz").write_bytes(b"not a zip archive")
     app = server.create_app(
         source_root=source_root,
         save_dir=tmp_path / "save",

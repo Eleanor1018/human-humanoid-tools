@@ -20,6 +20,9 @@ from .available_assets import (
     AvailableAssetCatalogLimitError,
     AvailableAssetCatalogService,
     AvailableAssetProvider,
+    classify_catalog_robot_trajectory,
+    is_catalog_motion_sidecar,
+    iter_bounded_catalog_files,
     require_bounded_catalog_root,
 )
 from .capabilities import CapabilitiesService
@@ -86,5 +89,8 @@ __all__ = [
     "StoredJob",
     "compute_plan_id",
     "compute_request_fingerprint",
+    "classify_catalog_robot_trajectory",
+    "is_catalog_motion_sidecar",
+    "iter_bounded_catalog_files",
     "require_bounded_catalog_root",
 ]

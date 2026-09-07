@@ -668,11 +668,19 @@ def _candidate_urdfs(candidate: Path, bundle_root: Path) -> list[Path]:
             topdown=True,
             followlinks=False,
         ):
-            directory_names.sort(key=str.casefold)
+            directory_names[:] = sorted(
+                (
+                    name
+                    for name in directory_names
+                    if not name.startswith((".", "_"))
+                    and not (Path(current) / name).is_symlink()
+                ),
+                key=str.casefold,
+            )
             file_names.sort(key=str.casefold)
             directory = Path(current)
             for name in file_names:
-                if Path(name).suffix.casefold() != ".urdf":
+                if name.startswith((".", "_")) or Path(name).suffix.casefold() != ".urdf":
                     continue
                 path = directory / name
                 resolved = _contains(bundle_root, path, strict=True)
