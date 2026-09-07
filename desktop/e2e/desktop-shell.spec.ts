@@ -1,4 +1,5 @@
-import { _electron as electron, expect, test } from '@playwright/test'
+import { _electron as electron, expect, test, type Locator } from '@playwright/test'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -14,6 +15,13 @@ function processIsAlive(pid: number): boolean {
   } catch {
     return false
   }
+}
+
+async function expectBorderless(button: Locator): Promise<void> {
+  await expect(button).toBeVisible()
+  expect(
+    await button.evaluate((element) => getComputedStyle(element).borderTopColor)
+  ).toBe('rgba(0, 0, 0, 0)')
 }
 
 test('starts the shared renderer and stops its Python sidecar', async ({}, testInfo) => {
@@ -174,7 +182,8 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
     await aboutDialog.getByRole('button', { name: 'Close' }).click()
 
     const workflowsMenu = page.getByRole('menu', { name: 'Workflows' })
-    await menu.getByRole('menuitem', { name: 'Workflows', exact: true }).hover()
+    const workflowsTrigger = menu.getByRole('menuitem', { name: 'Workflows', exact: true })
+    await workflowsTrigger.hover()
     await expect(workflowsMenu).toBeVisible()
     await expect(workflowsMenu.getByRole('menuitem')).toHaveText([
       'Video to Motion',
@@ -182,6 +191,12 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
       'Robot to Robot',
       'Batch'
     ])
+    const workflowsBounds = await workflowsMenu.boundingBox()
+    if (!workflowsBounds) throw new Error('Workflows menu has no layout box')
+    await page.mouse.move(workflowsBounds.x + 12, workflowsBounds.y - 1.5)
+    await expect(workflowsMenu).toBeVisible()
+    await workflowsMenu.getByRole('menuitem', { name: 'Video to Motion' }).hover()
+    await expect(workflowsMenu).toBeVisible()
     await menu.getByRole('menuitem', { name: 'Analysis', exact: true }).hover()
     await expect(workflowsMenu).toBeHidden()
     await expect(page.getByRole('menu', { name: 'Analysis' })).toBeVisible()
@@ -226,10 +241,7 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
     await expect(inspector.getByText('Drop a motion file or folder')).toBeVisible()
     expect((await inspector.boundingBox())?.width).toBeCloseTo(360, 0)
     const motionRefresh = inspector.getByRole('button', { name: 'Refresh Motion Library' })
-    await expect(motionRefresh).toBeVisible()
-    expect(
-      await motionRefresh.evaluate((element) => getComputedStyle(element).borderTopColor)
-    ).toBe('rgba(0, 0, 0, 0)')
+    await expectBorderless(motionRefresh)
     await expect(inspector.getByRole('searchbox', { name: 'Search the Motion Library' }))
       .toBeVisible()
     await expect(inspector.getByLabel('Motion library category')).toBeVisible()
@@ -254,7 +266,20 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
     await expect(inspector.getByRole('heading', { name: 'Robot', exact: true })).toBeVisible()
     await expect(inspector.getByRole('group', { name: 'URDF import area' })).toBeVisible()
     await expect(inspector.getByRole('group', { name: 'Robot mesh import area' })).toBeVisible()
+    const chooseMeshFolder = inspector.getByRole('button', { name: 'Choose mesh folder' })
+    await expect(chooseMeshFolder).toBeEnabled()
     await expect(inspector.getByText('No URDF selected.')).toBeVisible()
+    const meshFolderInput = inspector
+      .getByRole('group', { name: 'Robot mesh import area' })
+      .locator('input[type="file"][webkitdirectory]')
+    await expect(meshFolderInput).toHaveCount(1)
+    await expect(meshFolderInput).toHaveAttribute('multiple', '')
+    const meshFolder = testInfo.outputPath('robot-meshes')
+    await mkdir(meshFolder, { recursive: true })
+    await writeFile(join(meshFolder, 'body.stl'), 'solid body\nendsolid body\n')
+    await meshFolderInput.setInputFiles(meshFolder)
+    await expect(inspector.getByText('1 mesh asset · choose the .urdf file')).toBeVisible()
+    await expectBorderless(inspector.getByRole('button', { name: 'Refresh Robot Library' }))
     await expect(inspector.getByRole('heading', { name: 'Robot Library' })).toBeVisible()
 
     await sidebar.getByRole('button', { name: 'Video → Motion' }).click()
@@ -264,6 +289,7 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
       inspector.locator('section[aria-label="Video → Motion"] > div > details')
     ).toHaveCount(4)
     await expect(inspector.getByRole('group', { name: 'Video import area' })).toBeVisible()
+    await expectBorderless(inspector.getByRole('button', { name: 'Refresh GVHMR status' }))
 
     await sidebar.getByRole('button', { name: 'Human → Robot' }).click()
     await expect(page.locator('#app')).toHaveAttribute('data-active-view', 'h2r')
@@ -303,6 +329,7 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
 
     await sidebar.getByRole('button', { name: 'Batch', exact: true }).click()
     await expect(inspector.getByRole('heading', { name: 'Batch' })).toBeVisible()
+    await expectBorderless(inspector.getByRole('button', { name: 'Refresh Batch catalogs' }))
     const batchMode = inspector.getByRole('radiogroup', { name: 'Batch workflow' })
     await expect(batchMode.getByRole('radio', { name: 'H2R' })).toBeChecked()
     await batchMode.getByRole('radio', { name: 'R2R' }).click()
@@ -352,6 +379,31 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
       'Scaled',
       'Robot'
     ])
+    expect(
+      await stageToggles.evaluateAll((toggles) =>
+        toggles.map((toggle) => toggle.getAttribute('data-family'))
+      )
+    ).toEqual([
+      'skeleton',
+      'body',
+      'scene',
+      'scaled-skeleton',
+      'scaled-scene',
+      'robot'
+    ])
+    const stageColors = await page.locator(':root').evaluate((root) => {
+      const style = getComputedStyle(root)
+      return [
+        '--stage-skeleton-accent',
+        '--stage-body-accent',
+        '--stage-scene-accent',
+        '--stage-scaled-skeleton-accent',
+        '--stage-scaled-scene-accent',
+        '--stage-robot-accent'
+      ].map((name) => style.getPropertyValue(name).trim())
+    })
+    expect(stageColors.every(Boolean)).toBe(true)
+    expect(new Set(stageColors).size).toBe(stageColors.length)
     expect(
       await stageToggles.evaluateAll((toggles) =>
         toggles.every((toggle) => (toggle as HTMLButtonElement).disabled)

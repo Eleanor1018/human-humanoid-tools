@@ -386,6 +386,7 @@ export function VideoToMotionView({
               <RefreshButton
                 label="Refresh GVHMR status"
                 busy={runtimePhase === "checking"}
+                variant="ghost"
                 onClick={refreshRuntime}
                 disabled={busy || setupBusy}
               />

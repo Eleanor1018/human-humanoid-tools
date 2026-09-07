@@ -21,7 +21,13 @@ interface StageLayer {
   readonly label: string;
   readonly accessibleLabel?: string;
   readonly title: string;
-  readonly family: "source" | "scaled" | "robot";
+  readonly family:
+    | "skeleton"
+    | "body"
+    | "scene"
+    | "scaled-skeleton"
+    | "scaled-scene"
+    | "robot";
 }
 
 interface StageLayerRow {
@@ -39,21 +45,21 @@ const layerRows: readonly StageLayerRow[] = [
         legacyId: "tg-skeleton",
         label: "Skeleton",
         title: "Skeleton",
-        family: "source",
+        family: "skeleton",
       },
       {
         id: "body",
         legacyId: "tg-mesh",
         label: "Body",
         title: "Body",
-        family: "source",
+        family: "body",
       },
       {
         id: "objects",
         legacyId: "tg-env",
         label: "Objects/Terrain",
         title: "Objects/Terrain",
-        family: "source",
+        family: "scene",
       },
     ],
   },
@@ -66,7 +72,7 @@ const layerRows: readonly StageLayerRow[] = [
         label: "Scaled",
         accessibleLabel: "Scaled Skeleton",
         title: "Scaled Skeleton",
-        family: "scaled",
+        family: "scaled-skeleton",
       },
       {
         id: "scaled-scene",
@@ -74,7 +80,7 @@ const layerRows: readonly StageLayerRow[] = [
         label: "Scaled",
         accessibleLabel: "Scaled Scene",
         title: "Scaled Scene",
-        family: "scaled",
+        family: "scaled-scene",
       },
       {
         id: "robot",
@@ -106,7 +112,7 @@ const r2rLayerRows: readonly StageLayerRow[] = [
         label: "Skeleton",
         accessibleLabel: "Source Skeleton",
         title: "Skeleton",
-        family: "source",
+        family: "skeleton",
       },
       {
         id: "r2r-source-scene",
@@ -114,7 +120,7 @@ const r2rLayerRows: readonly StageLayerRow[] = [
         label: "Objects/Terrain",
         accessibleLabel: "Source Objects/Terrain",
         title: "Objects/Terrain",
-        family: "source",
+        family: "scene",
       },
     ],
   },
@@ -136,7 +142,7 @@ const r2rLayerRows: readonly StageLayerRow[] = [
         label: "Skeleton",
         accessibleLabel: "Target Skeleton",
         title: "Skeleton",
-        family: "scaled",
+        family: "scaled-skeleton",
       },
       {
         id: "r2r-target-scene",
@@ -144,16 +150,25 @@ const r2rLayerRows: readonly StageLayerRow[] = [
         label: "Objects/Terrain",
         accessibleLabel: "Target Objects/Terrain",
         title: "Objects/Terrain",
-        family: "scaled",
+        family: "scaled-scene",
       },
     ],
   },
 ];
 
 const activeFamilyClass: Record<StageLayer["family"], string> = {
-  source: "data-[state=on]:bg-stage-source data-[state=on]:hover:bg-stage-source",
-  scaled: "data-[state=on]:bg-stage-scaled data-[state=on]:hover:bg-stage-scaled",
-  robot: "data-[state=on]:bg-stage-robot data-[state=on]:hover:bg-stage-robot",
+  skeleton:
+    "data-[state=on]:bg-stage-skeleton data-[state=on]:text-white data-[state=on]:hover:bg-stage-skeleton",
+  body:
+    "data-[state=on]:bg-stage-body data-[state=on]:text-white data-[state=on]:hover:bg-stage-body",
+  scene:
+    "data-[state=on]:bg-stage-scene data-[state=on]:text-white data-[state=on]:hover:bg-stage-scene",
+  "scaled-skeleton":
+    "data-[state=on]:bg-stage-scaled-skeleton data-[state=on]:text-[#211600] data-[state=on]:hover:bg-stage-scaled-skeleton",
+  "scaled-scene":
+    "data-[state=on]:bg-stage-scaled-scene data-[state=on]:text-white data-[state=on]:hover:bg-stage-scaled-scene",
+  robot:
+    "data-[state=on]:bg-stage-robot data-[state=on]:text-white data-[state=on]:hover:bg-stage-robot",
 };
 
 interface StageViewMenuProps {
@@ -215,7 +230,7 @@ export function StageViewMenu({
               aria-label={layer.accessibleLabel ?? layer.label}
               data-family={layer.family}
               className={cn(
-                "group h-auto w-auto cursor-pointer gap-[5px] rounded-sm border-0 bg-transparent px-3 py-1.5 text-xs leading-[normal] font-semibold text-muted-foreground transition-[background-color,color,opacity] duration-150 hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring disabled:pointer-events-auto disabled:cursor-not-allowed disabled:grayscale-[.35] disabled:data-[state=off]:opacity-55 disabled:data-[state=on]:opacity-100 data-[state=on]:text-white @max-[440px]:gap-1 @max-[440px]:px-1",
+                "group h-auto w-auto cursor-pointer gap-[5px] rounded-sm border-0 bg-transparent px-3 py-1.5 text-xs leading-[normal] font-semibold text-muted-foreground transition-[background-color,color,opacity] duration-150 hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring disabled:pointer-events-auto disabled:cursor-not-allowed disabled:grayscale-[.35] disabled:data-[state=off]:opacity-55 disabled:data-[state=on]:opacity-100 @max-[440px]:gap-1 @max-[440px]:px-1",
                 activeFamilyClass[layer.family],
               )}
             >

@@ -112,6 +112,7 @@ export function BatchView({
           <RefreshButton
             label="Refresh Batch catalogs"
             busy={catalogBusy}
+            variant="ghost"
             onClick={refreshCatalogs}
           />
         </div>

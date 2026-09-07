@@ -299,6 +299,7 @@ export function VideoBatchView({
             <RefreshButton
               label="Refresh GVHMR status"
               busy={runtimeChecking}
+              variant="ghost"
               disabled={busy}
               onClick={refreshRuntime}
             />

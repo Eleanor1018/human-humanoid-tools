@@ -46,6 +46,10 @@ may improve spacing, rounded corners, accessibility, and narrow-screen layout.
   - [x] Restore language, panel layout, Motion Library, GVHMR, and job settings.
   - [x] Restore About metadata, source, license, and contact information.
   - [x] Use shared refresh icons and semantic destructive-action colors.
+  - [x] Keep feature refresh icons borderless in Motion, Robot, V2M, and Batch.
+  - [x] Keep hover menus open across the visual trigger-to-popup gap.
+  - [x] Keep Robot mesh-folder selection available before import completion.
+  - [x] Give all six Stage layer types distinct semantic colors.
   - [x] Keep the Stage visibility menu legible in dark and narrow layouts.
   - [x] Refresh R2R robot and trajectory catalogs whenever the workspace is entered.
   - [x] Restore compact Motion, Robot, and calibration validation summaries.

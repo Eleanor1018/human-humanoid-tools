@@ -94,40 +94,44 @@ export function Navbar(props: ApplicationCommandContext) {
             </button>
             {openMenu?.id === menu.id && (
               <div
-                className="absolute top-[calc(100%+3px)] left-0 z-[120] min-w-[286px] max-w-[340px] rounded-lg border border-border-subtle bg-surface p-[5px] shadow-[0_8px_24px_rgba(2,18,46,0.1)] max-[600px]:fixed max-[600px]:top-10 max-[600px]:right-2 max-[600px]:left-2 max-[600px]:min-w-0 max-[600px]:max-w-none"
-                role="menu"
-                aria-label={menu.label}
+                className="absolute top-full left-0 z-[120] min-w-[286px] max-w-[340px] pt-[3px] max-[600px]:fixed max-[600px]:top-10 max-[600px]:right-2 max-[600px]:left-2 max-[600px]:min-w-0 max-[600px]:max-w-none max-[600px]:pt-0"
               >
-                {menu.commands.map((command) => (
-                  <div key={command.id}>
-                    {command.dividerBefore && (
-                      <div
-                        className="mx-1.5 my-1 h-px bg-border-subtle"
-                        role="separator"
-                      />
-                    )}
-                    <button
-                      type="button"
-                      className="flex min-h-9 w-full cursor-pointer items-center justify-between gap-3 rounded-sm border-0 bg-transparent px-2 py-1.5 text-left text-foreground hover:bg-accent focus-visible:bg-accent focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring disabled:cursor-default disabled:text-muted-foreground disabled:opacity-70 disabled:hover:bg-transparent"
-                      role="menuitem"
-                      disabled={command.enabled === false}
-                      title={command.disabledReason ?? command.detail}
-                      onClick={() => {
-                        command.run();
-                        setOpenMenu(null);
-                      }}
-                    >
-                      <span className="min-w-0 truncate text-[13px] font-semibold">
-                        {command.label}
-                      </span>
-                      {command.disabledReason ? (
-                        <small className="shrink-0 text-[9px] text-muted-foreground">
-                          {command.disabledReason}
-                        </small>
-                      ) : null}
-                    </button>
-                  </div>
-                ))}
+                <div
+                  className="rounded-lg border border-border-subtle bg-surface p-[5px] shadow-[0_8px_24px_rgba(2,18,46,0.1)]"
+                  role="menu"
+                  aria-label={menu.label}
+                >
+                  {menu.commands.map((command) => (
+                    <div key={command.id}>
+                      {command.dividerBefore && (
+                        <div
+                          className="mx-1.5 my-1 h-px bg-border-subtle"
+                          role="separator"
+                        />
+                      )}
+                      <button
+                        type="button"
+                        className="flex min-h-9 w-full cursor-pointer items-center justify-between gap-3 rounded-sm border-0 bg-transparent px-2 py-1.5 text-left text-foreground hover:bg-accent focus-visible:bg-accent focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring disabled:cursor-default disabled:text-muted-foreground disabled:opacity-70 disabled:hover:bg-transparent"
+                        role="menuitem"
+                        disabled={command.enabled === false}
+                        title={command.disabledReason ?? command.detail}
+                        onClick={() => {
+                          command.run();
+                          setOpenMenu(null);
+                        }}
+                      >
+                        <span className="min-w-0 truncate text-[13px] font-semibold">
+                          {command.label}
+                        </span>
+                        {command.disabledReason ? (
+                          <small className="shrink-0 text-[9px] text-muted-foreground">
+                            {command.disabledReason}
+                          </small>
+                        ) : null}
+                      </button>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
           </div>

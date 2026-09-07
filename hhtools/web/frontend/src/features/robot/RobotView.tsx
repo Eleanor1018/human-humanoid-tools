@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import { ImportDropzone } from "@/components/ImportDropzone";
 import { InspectorPage } from "@/components/Inspector";
@@ -141,10 +147,6 @@ export function RobotView({
   }, [refresh]);
 
   useEffect(() => {
-    meshInput.current?.setAttribute("webkitdirectory", "");
-  }, []);
-
-  useEffect(() => {
     if (
       !importRequest ||
       handledImportRequest.current === importRequest.id ||
@@ -209,6 +211,7 @@ export function RobotView({
     [onRobotLoaded, refresh],
   );
 
+  // Either picker may run first; upload starts only after both halves exist.
   const receiveUrdf = useCallback(
     (files: readonly UploadFile[]) => {
       if (busy) return;
@@ -223,21 +226,18 @@ export function RobotView({
         (file) =>
           file !== selectedUrdf && !file.name.toLowerCase().endsWith(".urdf"),
       );
+      const selectedMeshes = sidecars.length ? sidecars : meshes;
       setUrdf(selectedUrdf);
-      setMeshes(sidecars);
+      if (sidecars.length) setMeshes(sidecars);
       setError(null);
-      if (sidecars.length) void finishImport(selectedUrdf, sidecars);
+      if (selectedMeshes.length) void finishImport(selectedUrdf, selectedMeshes);
     },
-    [busy, finishImport],
+    [busy, finishImport, meshes],
   );
 
   const receiveMeshes = useCallback(
     (files: readonly UploadFile[]) => {
       if (busy) return;
-      if (!urdf) {
-        setError("Choose the robot URDF before selecting its mesh folder.");
-        return;
-      }
       const sidecars = files.filter(
         (file) => !file.name.toLowerCase().endsWith(".urdf"),
       );
@@ -247,7 +247,7 @@ export function RobotView({
       }
       setMeshes(sidecars);
       setError(null);
-      void finishImport(urdf, sidecars);
+      if (urdf) void finishImport(urdf, sidecars);
     },
     [busy, finishImport, urdf],
   );
@@ -338,7 +338,7 @@ export function RobotView({
         >
           <Button
             size="sm"
-            disabled={busy || !urdf}
+            disabled={busy}
             onClick={() => meshInput.current?.click()}
           >
             Choose mesh folder
@@ -348,10 +348,12 @@ export function RobotView({
             className="hidden"
             type="file"
             multiple
+            disabled={busy}
             onChange={(event) => {
               receiveMeshes(Array.from(event.currentTarget.files ?? []) as UploadFile[]);
               event.currentTarget.value = "";
             }}
+            {...{ webkitdirectory: "" }}
           />
         </ImportDropzone>
         <p className="text-xs text-muted-foreground" aria-live="polite">
@@ -359,6 +361,8 @@ export function RobotView({
             ? `Importing ${urdf?.name || "robot"}...`
             : urdf
               ? `URDF: ${urdf.name} · ${meshes.length ? `${meshes.length} assets` : "choose the mesh folder"}`
+              : meshes.length
+                ? `${meshes.length} mesh asset${meshes.length === 1 ? "" : "s"} · choose the .urdf file`
               : loadedRobot
                 ? `Loaded: ${robotLabel(loadedRobot)}`
                 : currentRobot
@@ -385,6 +389,7 @@ export function RobotView({
           <RefreshButton
             label="Refresh Robot Library"
             busy={loadingLibrary}
+            variant="ghost"
             onClick={refresh}
             disabled={Boolean(loadingName)}
           />
