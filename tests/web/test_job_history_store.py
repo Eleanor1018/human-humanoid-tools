@@ -78,3 +78,43 @@ def test_store_retention_never_prunes_accepted_active_jobs(tmp_path: Path) -> No
     records = {record["id"]: record for record in store.list_records()}
 
     assert set(records) == {"pending-job", "running-job", "latest-terminal"}
+
+
+def test_store_retention_uses_completion_time_for_long_running_job(tmp_path: Path) -> None:
+    store = JobHistoryStore(tmp_path / "history", max_records=1)
+    store.put(
+        {
+            "id": "long-running",
+            "kind": "batch",
+            "status": "running",
+            "created_at": 1.0,
+        }
+    )
+    store.put(
+        {
+            "id": "quick-job",
+            "kind": "batch",
+            "status": "done",
+            "created_at": 10.0,
+            "finished_at": 20.0,
+        }
+    )
+    generated = tmp_path / "runtime" / "long-running.zip"
+    generated.parent.mkdir()
+    generated.write_bytes(b"artifact")
+    adopted = store.adopt_artifact("long-running", generated)
+
+    store.put(
+        {
+            "id": "long-running",
+            "kind": "batch",
+            "status": "done",
+            "created_at": 1.0,
+            "finished_at": 30.0,
+            "artifact_path": str(adopted),
+        }
+    )
+
+    assert store.get("quick-job") is None
+    assert store.get("long-running") is not None
+    assert adopted.read_bytes() == b"artifact"

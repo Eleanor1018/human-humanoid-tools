@@ -72,7 +72,7 @@ class Job:
     finished_wall_time: float | None = None
     terminal_since: float | None = None
     last_accessed_at: float = field(default_factory=time.monotonic)
-    on_terminal: Callable[[Job], None] | None = field(
+    on_terminal: Callable[[Job, str], None] | None = field(
         default=None,
         repr=False,
         compare=False,
@@ -83,16 +83,20 @@ class Job:
 
         self.status = "running"
 
-    def mark_terminal(self, status: str) -> None:
-        """Publish terminal status only after the worker has populated its result."""
+    def _publish_terminal(self, status: str) -> None:
         self.terminal_since = time.monotonic()
         self.finished_wall_time = time.time()
         self.status = status
+
+    def mark_terminal(self, status: str) -> None:
+        """Let the runtime finalize durable results before publishing terminal status."""
         if self.on_terminal is not None:
             try:
-                self.on_terminal(self)
+                self.on_terminal(self, status)
             except Exception:  # noqa: BLE001 - history must not fail the actual job
                 _log.exception("failed to persist terminal Web job %s", self.id)
+        if self.status != status:
+            self._publish_terminal(status)
 
 
 def _snapshot_job_request(value: Any) -> Any:

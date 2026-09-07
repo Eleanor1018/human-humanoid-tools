@@ -158,7 +158,11 @@ class JobHistoryStore:
                 for record in self._records.values()
                 if record.get("status") not in _ACTIVE_STATUSES
             ),
-            key=lambda record: float(record.get("created_at") or 0.0),
+            key=lambda record: float(
+                record.get("finished_at")
+                if record.get("finished_at") is not None
+                else record.get("created_at") or 0.0
+            ),
             reverse=True,
         )
         for record in terminal_records[self.max_records :]:

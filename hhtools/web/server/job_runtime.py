@@ -525,8 +525,8 @@ class WebJobRuntime:
     def persist(self, job: Job) -> None:
         self.state.job_history.put(self.persistent_record(job))
 
-    def persist_terminal(self, job: Job) -> None:
-        """Persist terminal metadata and move generated ZIPs out of the temp root."""
+    def persist_terminal(self, job: Job, status: str) -> None:
+        """Retain generated output before publishing and persisting terminal status."""
         artifact = (job.result or {}).get("artifact_path")
         if isinstance(artifact, str):
             try:
@@ -539,12 +539,14 @@ class WebJobRuntime:
                 )
                 if job.result is not None:
                     job.result["artifact_path"] = str(adopted)
+                    job.result["download_name"] = adopted.name
             except (OSError, ValueError):
                 _log.warning(
                     "could not retain generated artifact for job %s",
                     job.id,
                     exc_info=True,
                 )
+        job._publish_terminal(status)
         self.persist(job)
 
     def stored_record(self, record: dict[str, Any]) -> dict[str, Any]:
