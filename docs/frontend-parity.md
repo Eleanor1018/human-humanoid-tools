@@ -60,13 +60,15 @@ may improve spacing, rounded corners, accessibility, and narrow-screen layout.
   - [x] Refresh R2R robot and trajectory catalogs whenever the workspace is entered.
   - [x] Restore compact Motion, Robot, and calibration validation summaries.
   - [x] Link H2R/R2R asset selectors back to the owning import workspaces.
+  - [x] Keep Task result export on V2M, H2R, R2R, and Batch rows; retain new artifacts across restarts.
 - [x] Simplify Motion Library to search, type filtering, loading, and a Settings link.
 - [x] Run route-contract tests and desktop/narrow-screen browser smoke for every pipeline.
 
 ## Verification
 
-- Frontend: 99 tests passed; production build passed.
+- Frontend: 100 tests passed; production build passed.
 - Web backend: 277 tests passed; 2 dependency-gated tests skipped.
+- Task artifacts: 33 focused history, lifecycle, and export-path tests passed.
 - Desktop: 38 tests and the Electron window E2E passed.
 - Browser: desktop and 390 x 844 layouts have no overflow or panel overlap;
   Motion, all six built-in robots, H2R/R2R calibration, Analysis, and menus were

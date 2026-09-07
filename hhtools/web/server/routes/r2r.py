@@ -10,7 +10,8 @@ from pathlib import Path
 from fastapi import File, HTTPException, UploadFile
 from fastapi.responses import Response
 
-from hhtools.web.server.export_runtime import _parse_optional_fps
+from hhtools.web.output.export_bundle import ensure_export_path, sanitize_export_stem
+from hhtools.web.server.export_runtime import _parse_optional_fps, _write_r2r_export
 from hhtools.web.server.motion_runtime import _motion_for_retarget
 from hhtools.web.server.preview_runtime import (
     _compute_r2r_scaled_preview,
@@ -298,7 +299,7 @@ def register_r2r_routes(app, *, state, jobs, uploads) -> None:
             from hhtools.web.output.r2r_scene import compute_r2r_target_scaled_scene
             from hhtools.web.output.serialize import _scaled_overlay_foot_z
 
-            stem = rec.get("stem") or "r2r"
+            stem = sanitize_export_stem(rec.get("stem") or "r2r")
             clip_dir_path = Path(rec.get("clip_dir") or Path(rec["source_path"]).parent)
             scene_prof = str(rec.get("upload_profile") or "mimic")
             src_has_scene = bool(rec.get("has_scene")) or clip_has_export_scene(
@@ -321,6 +322,14 @@ def register_r2r_routes(app, *, state, jobs, uploads) -> None:
                 )
             export_token = uuid.uuid4().hex[:10]
             has_scene = src_has_scene
+            yellow_foot_z = _scaled_overlay_foot_z(scaled, 0)
+            r2r_entry = {
+                "source_path": rec.get("source_path"),
+                "clip_dir": rec.get("clip_dir"),
+                "stem": stem,
+                "has_scene": has_scene,
+                "upload_profile": scene_prof,
+            }
             state.motions[f"export::{export_token}"] = {
                 "retargeted": ret,
                 "robot": target,
@@ -331,30 +340,55 @@ def register_r2r_routes(app, *, state, jobs, uploads) -> None:
                 "source_path": rec.get("source_path"),
                 "r2r": True,
                 "source_robot": source,
-                "yellow_foot_z": _scaled_overlay_foot_z(scaled, 0),
-                "r2r_entry": {
-                    "source_path": rec.get("source_path"),
-                    "clip_dir": rec.get("clip_dir"),
-                    "stem": stem,
-                    "has_scene": has_scene,
-                    "upload_profile": scene_prof,
-                },
+                "yellow_foot_z": yellow_foot_z,
+                "r2r_entry": r2r_entry,
             }
+            artifact_dir = ensure_export_path(
+                state.export_root,
+                state.export_root / job.id,
+            )
+            artifact_path = ensure_export_path(
+                state.export_root,
+                _write_r2r_export(
+                    ret,
+                    tgt,
+                    motion,
+                    artifact_dir,
+                    source_model=src,
+                    calibrated_joint_q=calib,
+                    entry=r2r_entry,
+                    stem=stem,
+                    fps=None,
+                    fmt="csv",
+                    csv_header=True,
+                    yellow_foot_z=yellow_foot_z,
+                ),
+            )
             job.result = {
                 "trajectory": traj,
                 "export_token": export_token,
-                "stem": rec.get("stem") or "r2r",
+                "stem": stem,
                 "num_frames": ret.num_frames,
                 "source_fps": float(ret.sample_rate),
                 "scaled_preview": scaled,
                 "scaled_scene": tgt_scene,
                 "diagnostics": diagnostics,
                 "has_scene": has_scene,
+                "format": "csv",
+                "artifact_path": str(artifact_path),
+                "download_name": (
+                    f"{stem}_export.zip" if artifact_path.suffix == ".zip" else artifact_path.name
+                ),
             }
             job.progress = 1.0
             job.message = "done"
             job.mark_terminal("done")
         except Exception as err:  # noqa: BLE001
+            artifact_dir = state.export_root / job.id
+            if artifact_dir.is_symlink() or artifact_dir.is_file():
+                artifact_dir.unlink(missing_ok=True)
+            else:
+                shutil.rmtree(artifact_dir, ignore_errors=True)
             _log.exception("r2r retarget job failed")
             job.error = str(err)
             job.mark_terminal("error")
