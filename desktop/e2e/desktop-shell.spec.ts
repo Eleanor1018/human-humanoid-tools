@@ -204,8 +204,19 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
     await page.keyboard.press('Tab')
     const skipTutorial = reopenedTutorial.getByRole('button', { name: 'Skip tutorial' })
     await expect(skipTutorial).toBeFocused()
+    const nextTutorial = reopenedTutorial.getByRole('button', { name: 'Next' })
+    for (let step = 1; step < 5; step += 1) {
+      await nextTutorial.click()
+    }
+    const calibrationStep = page.locator('[data-tutorial="h2r-calibration"]')
+    await expect(page.locator('[data-tutorial-overlay]')).toHaveAttribute(
+      'data-tutorial-step',
+      'calibration'
+    )
+    await expect(calibrationStep).toHaveAttribute('open', '')
     await skipTutorial.click()
     await expect(page.locator('#app')).not.toHaveAttribute('inert', '')
+    await expect(calibrationStep).not.toHaveAttribute('open', '')
     await expect(helpTrigger).toBeFocused()
     await helpTrigger.hover()
     await helpMenu.getByRole('menuitem', { name: 'About hhtools' }).click()
