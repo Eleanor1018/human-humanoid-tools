@@ -475,6 +475,11 @@ function AboutDialog({
       onClose={onClose}
     >
       <div className="grid gap-4 text-sm leading-relaxed text-muted-foreground">
+        <img
+          className="h-auto w-[168px] [html[data-theme=dark]_&]:brightness-0 [html[data-theme=dark]_&]:invert"
+          src="/roboparty.svg"
+          alt="ROBOPARTY"
+        />
         <p>
           {text(
             "Humanoid motion retargeting and dataset analysis",
