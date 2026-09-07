@@ -70,12 +70,10 @@ desktop/node_modules/
 desktop/out/
 desktop/release/
 desktop/.runtime/
+desktop/.models/
 desktop/.vite/
 desktop/test-results/
 desktop/playwright-report/
-!desktop/build/
-desktop/build/*
-!desktop/build/installer.nsh
 
 # Frontend dependencies (compiled assets are packaged by Python).
 hhtools/web/frontend/node_modules/

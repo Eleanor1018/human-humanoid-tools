@@ -1,4 +1,4 @@
-/** Resolve either the bundled desktop runtime or a development checkout. */
+/** Resolve the external hhtools checkout used by the thin desktop shell. */
 import { existsSync } from 'node:fs'
 import { delimiter, dirname, isAbsolute, join, resolve } from 'node:path'
 
@@ -9,7 +9,7 @@ export interface RuntimeConfig {
   saveDirectory: string
   cacheDirectory: string
   logDirectory: string
-  bundled: boolean
+  bodyModelsRoot?: string
 }
 
 export interface ResolveRuntimeOptions {
@@ -35,28 +35,6 @@ function walkForRepository(start: string): string | undefined {
     if (parent === current) return undefined
     current = parent
   }
-}
-
-function bundledRuntime(options: ResolveRuntimeOptions): {
-  repoRoot: string
-  pythonExecutable: string
-} | undefined {
-  if (!options.isPackaged || options.resourcesPath === undefined) return undefined
-
-  const runtimeRoot = join(options.resourcesPath, 'runtime')
-  const repoRoot = join(runtimeRoot, 'app')
-  const pythonExecutable =
-    (options.platform ?? process.platform) === 'win32'
-      ? join(runtimeRoot, 'python', 'python.exe')
-      : join(runtimeRoot, 'python', 'bin', 'python3')
-
-  if (!isRepositoryRoot(repoRoot)) {
-    throw new Error(`Bundled hhtools application files are missing: ${repoRoot}`)
-  }
-  if (!existsSync(pythonExecutable)) {
-    throw new Error(`Bundled Python runtime is missing: ${pythonExecutable}`)
-  }
-  return { repoRoot, pythonExecutable }
 }
 
 function resolveRepositoryRoot(options: ResolveRuntimeOptions, env: NodeJS.ProcessEnv): string {
@@ -101,10 +79,17 @@ function resolvePython(
 export function resolveRuntime(options: ResolveRuntimeOptions): RuntimeConfig {
   const env = options.env ?? process.env
   const platform = options.platform ?? process.platform
-  const packaged = env.HHTOOLS_REPO_ROOT === undefined ? bundledRuntime(options) : undefined
-  const repoRoot = packaged?.repoRoot ?? resolveRepositoryRoot(options, env)
-  const pythonExecutable =
-    env.HHTOOLS_PYTHON ?? packaged?.pythonExecutable ?? resolvePython(repoRoot, env, platform)
+  const repoRoot = resolveRepositoryRoot(options, env)
+  const pythonExecutable = resolvePython(repoRoot, env, platform)
+  const packagedBodyModels =
+    options.isPackaged && options.resourcesPath
+      ? join(options.resourcesPath, 'body_models')
+      : undefined
+  const bodyModelsRoot = packagedBodyModels && existsSync(
+    join(packagedBodyModels, 'smplx', 'SMPLX_NEUTRAL.npz')
+  )
+    ? packagedBodyModels
+    : undefined
 
   return {
     repoRoot,
@@ -114,7 +99,7 @@ export function resolveRuntime(options: ResolveRuntimeOptions): RuntimeConfig {
     // Keep Python's generated assets separate from Electron/Chromium's Cache directory.
     cacheDirectory: resolve(env.HHTOOLS_CACHE_DIR ?? join(options.userData, 'hhtools-cache')),
     logDirectory: resolve(env.HHTOOLS_LOG_DIR ?? join(options.userData, 'logs')),
-    bundled: packaged !== undefined
+    bodyModelsRoot
   }
 }
 
@@ -128,6 +113,7 @@ const ENV_ALLOWLIST = new Set([
   'HHTOOLS_MAX_RUNNING_JOBS',
   'HHTOOLS_MOTION_LIBRARY_ROOT',
   'HHTOOLS_MOTION_LIBRARY_SETTINGS_PATH',
+  'HHTOOLS_BODY_MODELS',
   'HHTOOLS_GVHMR_BODY_MODELS',
   'HHTOOLS_GVHMR_IMAGE',
   'HHTOOLS_GVHMR_PYTHON',
@@ -161,7 +147,8 @@ const ENV_ALLOWLIST = new Set([
 
 export function buildSidecarEnvironment(
   repoRoot: string,
-  source: NodeJS.ProcessEnv = process.env
+  source: NodeJS.ProcessEnv = process.env,
+  packagedBodyModels?: string
 ): NodeJS.ProcessEnv {
   const result: NodeJS.ProcessEnv = {}
 
@@ -184,5 +171,16 @@ export function buildSidecarEnvironment(
   result.PYTHONNOUSERSITE = '1'
   result.PYTHONUTF8 = '1'
   result.PYTHONUNBUFFERED = '1'
+
+  const bundledBodyModels = packagedBodyModels ?? join(repoRoot, 'configs', 'body_models')
+  const bundledSmplxNeutral = join(bundledBodyModels, 'smplx', 'SMPLX_NEUTRAL.npz')
+  if (existsSync(bundledSmplxNeutral)) {
+    if (source.HHTOOLS_BODY_MODELS === undefined) {
+      result.HHTOOLS_BODY_MODELS = bundledBodyModels
+    }
+    if (source.HHTOOLS_GVHMR_BODY_MODELS === undefined) {
+      result.HHTOOLS_GVHMR_BODY_MODELS = bundledBodyModels
+    }
+  }
   return result
 }

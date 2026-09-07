@@ -19,34 +19,33 @@ describe('resolveRuntime', () => {
     expect(runtime.repoRoot).toBe(resolve(root))
     expect(runtime.sourceRoot).toBe(join(root, 'assets', 'motions'))
     expect(runtime.cacheDirectory).toBe(join(root, '.test-user-data', 'hhtools-cache'))
-    expect(runtime.bundled).toBe(false)
   })
 
-  it.each([
-    ['win32', ['python', 'python.exe']],
-    ['linux', ['python', 'bin', 'python3']]
-  ] as const)('uses the bundled application and Python runtime on %s', (platform, pythonParts) => {
+  it('keeps a packaged shell on the external checkout while exposing its model resource', () => {
     const resourcesPath = mkdtempSync(join(tmpdir(), 'hhtools-packaged-runtime-test-'))
-    const repoRoot = join(resourcesPath, 'runtime', 'app')
-    const pythonExecutable = join(resourcesPath, 'runtime', ...pythonParts)
+    const repoRoot = mkdtempSync(join(tmpdir(), 'hhtools-packaged-checkout-test-'))
+    const pythonExecutable = join(repoRoot, '.venv', 'bin', 'python')
+    const bodyModels = join(resourcesPath, 'body_models')
     mkdirSync(join(repoRoot, 'hhtools'), { recursive: true })
     mkdirSync(dirname(pythonExecutable), { recursive: true })
+    mkdirSync(join(bodyModels, 'smplx'), { recursive: true })
     writeFileSync(join(repoRoot, 'pyproject.toml'), '', 'utf8')
     writeFileSync(pythonExecutable, '', 'utf8')
+    writeFileSync(join(bodyModels, 'smplx', 'SMPLX_NEUTRAL.npz'), 'model', 'utf8')
 
     const runtime = resolveRuntime({
-      appPath: 'C:\\Program Files\\hhtools',
-      cwd: 'C:\\Program Files\\hhtools',
+      appPath: '/opt/hhtools',
+      cwd: '/opt/hhtools',
       userData: join(resourcesPath, 'user-data'),
       isPackaged: true,
       resourcesPath,
-      env: {},
-      platform
+      env: { HHTOOLS_REPO_ROOT: repoRoot },
+      platform: 'linux'
     })
 
     expect(runtime.repoRoot).toBe(repoRoot)
     expect(runtime.pythonExecutable).toBe(pythonExecutable)
-    expect(runtime.bundled).toBe(true)
+    expect(runtime.bodyModelsRoot).toBe(bodyModels)
   })
 
   it('finds a checkout-local Linux virtual environment', () => {
@@ -66,7 +65,6 @@ describe('resolveRuntime', () => {
     })
 
     expect(runtime.pythonExecutable).toBe(pythonExecutable)
-    expect(runtime.bundled).toBe(false)
   })
 
   it('honors an explicit checkout and Python runtime', () => {
@@ -130,5 +128,33 @@ describe('resolveRuntime', () => {
     expect(environment.PYTHONDONTWRITEBYTECODE).toBe('1')
     expect(environment.PYTHONNOUSERSITE).toBe('1')
     expect(environment.PYTHONUTF8).toBe('1')
+  })
+
+  it('points both body-model consumers at a bundled neutral SMPL-X model', () => {
+    const root = mkdtempSync(join(tmpdir(), 'hhtools-runtime-body-models-'))
+    const bodyModels = join(root, 'configs', 'body_models')
+    const neutral = join(bodyModels, 'smplx', 'SMPLX_NEUTRAL.npz')
+    mkdirSync(dirname(neutral), { recursive: true })
+    writeFileSync(neutral, 'model', 'utf8')
+
+    const environment = buildSidecarEnvironment(root, {}, bodyModels)
+
+    expect(environment.HHTOOLS_BODY_MODELS).toBe(bodyModels)
+    expect(environment.HHTOOLS_GVHMR_BODY_MODELS).toBe(bodyModels)
+  })
+
+  it('preserves explicit body-model environment overrides', () => {
+    const root = mkdtempSync(join(tmpdir(), 'hhtools-runtime-body-model-overrides-'))
+    const neutral = join(root, 'configs', 'body_models', 'smplx', 'SMPLX_NEUTRAL.npz')
+    mkdirSync(dirname(neutral), { recursive: true })
+    writeFileSync(neutral, 'model', 'utf8')
+
+    const environment = buildSidecarEnvironment(root, {
+      HHTOOLS_BODY_MODELS: '/custom/hhtools-models',
+      HHTOOLS_GVHMR_BODY_MODELS: '/custom/gvhmr-models'
+    })
+
+    expect(environment.HHTOOLS_BODY_MODELS).toBe('/custom/hhtools-models')
+    expect(environment.HHTOOLS_GVHMR_BODY_MODELS).toBe('/custom/gvhmr-models')
   })
 })

@@ -42,7 +42,7 @@ robot, and retargeting core, but their installation and launch paths are intenti
 |------|----------|--------|
 | **Terminal (CLI/TUI workflow)** | Batch jobs, servers, SSH, and automation | `uv run hhtools ...` |
 | **WebUI** | Browser-based visualization and interactive workflows | `uv run hhtools web` |
-| **Desktop GUI (`.deb`)** | Standalone Ubuntu desktop use | Application menu or `hhtools-desktop` |
+| **Desktop GUI (`.deb`)** | Local desktop shell for an installed checkout | Application menu or `hhtools-desktop` |
 | **Agent (JSON CLI / MCP)** | Versioned local H2R automation | [`hhtools agent` / `hhtools-mcp`](docs/agent.md) |
 
 ### Source checkout: Terminal or WebUI
@@ -88,19 +88,19 @@ The current Agent interface covers safe, preflighted H2R jobs and verified artif
 not yet expose the full WebUI feature set. See [Agent interfaces](docs/agent.md) for installation,
 scope, the smoke-first workflow, runtime ownership, and the included Codex project configuration.
 
-### Standalone Ubuntu desktop GUI (`.deb`)
+### Ubuntu desktop GUI (`.deb`)
 
-The Debian package includes Electron, the WebUI, and an isolated Python runtime. End users do not
-need to install Python, uv, Node.js, or the repository source:
+The small Debian package follows the original Desktop Alpha model: it contains Electron and the
+locally supplied neutral SMPL-X model, while reusing an existing checkout and `.venv` instead of
+duplicating Python, Torch, CUDA, and Newton:
 
 ```bash
-sudo apt install ./hhtools-0.1.0-x64.deb
+sudo apt install ./hhtools-0.1.0-amd64.deb
 hhtools-desktop
 ```
 
-You can also launch **Human-Humanoid Tools** from the application menu. See the
-[`desktop/README.md` Linux package section](desktop/README.md#linux-package) to build the `.deb`;
-`npm run dev` is the development path, not the end-user installation path.
+Set `HHTOOLS_REPO_ROOT` (and optionally `HHTOOLS_PYTHON`) for an installed shell outside the
+checkout. Build details are in [`desktop/README.md`](desktop/README.md#desktop-packages).
 
 ### Frontend development
 
@@ -150,7 +150,8 @@ is admission control rather than a process-wide GPU concurrency guarantee.
 ### GVHMR video-to-motion
 
 Install [GVHMR](https://github.com/zju3dv/GVHMR) separately using its upstream instructions. hhtools
-does not bundle its source, official checkpoints, Python environment, or licensed SMPL-X assets.
+does not bundle its source, official checkpoints, or Python environment. A local desktop build can
+include `SMPLX_NEUTRAL.npz`; source and WebUI installs continue to use a local model directory.
 The **Video → Motion** view runs inference with the official released weights and publishes the
 generated `hmr4d_results.pt` to the Motion Library. Custom checkpoints and training are not exposed.
 

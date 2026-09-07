@@ -1,6 +1,6 @@
 # Human-Humanoid Tools
 
-This directory contains the standalone Electron GUI for the existing FastAPI and three.js WebUI.
+This directory contains the Electron GUI shell for the existing FastAPI and three.js WebUI.
 The desktop app keeps the current HTTP routes and Python business logic while supervising its own
 local Python sidecar.
 
@@ -76,127 +76,32 @@ npm run dist:linux
 `test:e2e` builds and launches the real Electron application, checks the existing WebUI, captures
 a screenshot, closes the app, and verifies that the supervised Python process exits.
 
-## Windows package
+## Desktop packages
 
-`npm run dist:win` performs three steps:
+The installer is intentionally a thin Electron shell, matching the original Desktop Alpha design.
+It does not duplicate Python, Torch, CUDA, Newton, or the hhtools source tree. The target computer
+uses an existing checkout and its `.venv`; set `HHTOOLS_REPO_ROOT` and, when needed,
+`HHTOOLS_PYTHON` before launching an installed build.
 
-1. Build the Electron main and preload processes.
-2. Stage an isolated CPython runtime, production Python packages, the hhtools source, tracked sample
-   motions, and any explicitly selected bundled robot assets under `desktop/.runtime`.
-3. Build an assisted NSIS installer under `desktop/release`.
-
-The staging step reads the base interpreter from `.venv/pyvenv.cfg`; run `uv sync` before packaging.
-`HHTOOLS_RUNTIME_PYTHON_HOME`, `HHTOOLS_RUNTIME_SITE_PACKAGES`, and
-`HHTOOLS_BUNDLED_ROBOT_DIR` are packaging-time overrides. Source files are selected with
-`git ls-files`, so ignored and untracked files are not included. For a verified `git archive`
-extraction without `.git`, set `HHTOOLS_TRUST_SOURCE_ARCHIVE=1`; other unversioned source trees are
-rejected rather than copied wholesale.
-
-Installed files use this shape:
-
-```text
-Human-Humanoid Tools/
-├── Human-Humanoid Tools.exe
-└── resources/
-    ├── app.asar
-    └── runtime/
-        ├── app/       # hhtools source, WebUI, configs, and bundled assets
-        └── python/    # isolated CPython and production dependencies
-```
-
-User-created motions, caches, logs, window state, and optional-component settings remain under
-Electron's per-user data directory and are not removed by an application upgrade.
-
-## Linux package
-
-Build the Linux package on the oldest supported Linux distribution rather than cross-compiling it
-from Windows. The staged Python runtime contains platform-specific native wheels, and building on
-Ubuntu 22.04 keeps the resulting glibc requirement compatible with Ubuntu 22.04 or newer. A clean
-Ubuntu 22.04 x86-64 builder can be prepared with:
+Both package commands build Electron, stage only the local neutral SMPL-X model, and then invoke
+electron-builder:
 
 ```bash
-sudo apt update
-sudo apt install -y build-essential git libarchive-tools
-
-# Install Node.js 22 and uv by the method used for the build host, then:
-uv python install 3.12
-uv sync --locked --managed-python --python 3.12 --extra all
-cd desktop
-npm ci
-npm run dist:linux
+npm run dist:linux   # release/hhtools-0.1.0-amd64.deb
+npm run dist:win     # release/hhtools-0.1.0-x64-setup.exe
 ```
 
-Allow at least 25--30 GiB of free disk space for the uv environment, staged runtime, Electron
-working files, and final package. Native Torch, CUDA, Warp, MuJoCo, and Newton files make the Linux
-runtime substantially larger than a normal Electron-only application.
+`configs/body_models/smplx/SMPLX_NEUTRAL.npz` is a required local build input. It remains ignored
+by Git and is copied to `resources/body_models` only for the installer. A missing file fails the
+build immediately. The package adds about 104 MiB for this model instead of several GiB for a
+duplicated GPU environment.
 
-`dist:linux` builds the Electron bundles, stages the uv-managed CPython 3.12 installation and the
-virtual environment's production packages, verifies imports using that staged interpreter, and
-creates `release/hhtools-0.1.0-x64.deb`. The build intentionally rejects `/usr` and `/usr/local` as
-Python homes: copying a distribution-managed Python tree is unsafe and generally not relocatable.
-Recreate `.venv` after `uv python install 3.12` if this guard is triggered.
+Install the Linux package with `sudo apt install ./release/hhtools-0.1.0-amd64.deb`, then launch
+`hhtools-desktop`. The package does not install or replace the separate `hhtools` CLI command.
 
-Install and remove the package with the system package manager so its desktop entry and runtime
-dependencies are handled normally:
-
-```bash
-sudo apt install ./release/hhtools-0.1.0-x64.deb
-sudo apt remove hhtools-desktop
-```
-
-For users who prefer `dpkg`, install the same package with:
-
-```bash
-sudo dpkg -i ./release/hhtools-0.1.0-x64.deb
-# dpkg does not download dependencies. Run this only if it reports missing packages:
-sudo apt-get -f install
-```
-
-The Debian package declares its Electron/GTK runtime libraries, so `apt` and graphical package
-installers resolve them automatically. The install-time message repeats the recovery command for
-terminal installations; no system Python, pip environment, Torch, or Newton install is required.
-
-On a full Ubuntu desktop, double-click the `.deb` and open it with App Center. Minimal GNOME
-installations need a graphical Debian-package handler such as GDebi. After installation, launch
-**Human-Humanoid Tools** from the application menu or run `hhtools-desktop`. The separate
-`hhtools` command invokes the bundled Python CLI from any working directory:
-
-```bash
-hhtools --help
-hhtools robot list
-hhtools web
-```
-
-The launcher isolates the bundled Python runtime from user site-packages and active virtualenvs.
-It also gives packaged `web`/`ui` commands read-only sample motions plus writable XDG data/cache
-defaults; explicit CLI options and `HHTOOLS_SOURCE_ROOT`, `HHTOOLS_SAVE_DIR`, or
-`HHTOOLS_CACHE_DIR` still take precedence.
-
-Robot files from `$HOME` or `$XDG_CONFIG_HOME` are never included implicitly. Set
-`HHTOOLS_BUNDLED_ROBOT_DIR=/verified/robots` to include a reviewed robot library. The source must
-contain one directory per robot and may not contain symbolic links; names that collide with tracked
-robot directories are rejected instead of merged. The repository does not track the local built-in
-robot library, so a clean builder intentionally produces a package without those extra robots.
-The installed runtime is placed below the Electron application's `resources/runtime` directory and
-uses `python/bin/python3`; no system Python is required when the application runs.
-
-### Optional GVHMR video-to-motion
-
-GVHMR remains an external optional component. The desktop package does not bundle its source,
-official checkpoints, Python environment, or licensed SMPL-X assets. **Video → Motion** supports the
-official released weights only.
-
-On Linux, the setup action asks for the official checkout and its Python executable, restarts the
-sidecar, and then runs that environment directly. The equivalent launch overrides are
-`HHTOOLS_GVHMR_ROOT` and `HHTOOLS_GVHMR_PYTHON`.
-
-On Windows, the optional integration remains Docker-backed. Configure `HHTOOLS_GVHMR_ROOT` and a
-prepared `HHTOOLS_GVHMR_IMAGE`; `HHTOOLS_GVHMR_BODY_MODELS` can point to separately stored licensed
-files. `HHTOOLS_GVHMR_TIMEOUT_SECONDS` is optional on either runtime. None of these settings install
-or download GVHMR resources.
-
-An existing `hmr4d_results.pt` can still be imported through **Motion**, added to the Motion Library,
-and used as the source of a Human → Robot workflow.
+GVHMR itself remains external. On Linux, choose its checkout and Python from the desktop setup; on
+Windows, configure the existing Docker-backed runtime. The bundled neutral model is passed to both
+hhtools and GVHMR automatically.
 
 ## Runtime model
 
@@ -206,9 +111,9 @@ and used as the source of a Human → Robot workflow.
    the existing WebUI.
 4. Closing Electron stops the full Python process tree before the app exits.
 
-Packaged builds always prefer `resources/runtime`. Development builds continue to discover the
-repository checkout and `.venv`; `HHTOOLS_REPO_ROOT` and `HHTOOLS_PYTHON` remain explicit developer
-overrides. The sidecar still receives an allowlisted environment rather than Electron's complete
-environment. Linux display/session and native-library variables such as `DISPLAY`,
+Packaged and development builds use the same external checkout and `.venv` resolution;
+`HHTOOLS_REPO_ROOT` and `HHTOOLS_PYTHON` remain explicit overrides. The sidecar receives the
+packaged model path and an allowlisted environment rather than Electron's complete environment.
+Linux display/session and native-library variables such as `DISPLAY`,
 `WAYLAND_DISPLAY`, `DBUS_SESSION_BUS_ADDRESS`, `XDG_RUNTIME_DIR`, `LD_LIBRARY_PATH`, `MUJOCO_GL`,
 and `PYOPENGL_PLATFORM` are retained so GNOME, MuJoCo, and GPU runtimes can initialize normally.

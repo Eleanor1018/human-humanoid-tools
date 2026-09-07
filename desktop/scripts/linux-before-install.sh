@@ -1,9 +1,8 @@
 #!/bin/sh
 
-# Releases before the split registered /usr/bin/hhtools as an alternative for
-# the Electron binary. Remove only that exact legacy target before dpkg unpacks
-# the new, package-owned Python CLI wrapper at the same path. Never touch a
-# normal file or an alternative supplied by another installation.
+# Early releases registered /usr/bin/hhtools as an alternative for the
+# Electron binary. Remove only that exact legacy target; the thin GUI package
+# deliberately leaves the separately installed Python CLI untouched.
 legacy_gui='/opt/Human-Humanoid Tools/hhtools'
 
 if command -v update-alternatives >/dev/null 2>&1 && \
