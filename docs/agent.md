@@ -27,6 +27,10 @@ uv sync --locked --managed-python --python 3.12 --extra web --extra retarget
 uv sync --locked --managed-python --python 3.12 --extra mcp
 ```
 
+After installation, `uv run hhtools doctor --require mcp` provides a
+side-effect-free readiness check. Add `--json` for a single machine-readable
+document; optional body-model and GVHMR checks do not fail the default command.
+
 The JSON CLI always emits one strict JSON document. Start the WebUI service,
 then query it from another terminal:
 

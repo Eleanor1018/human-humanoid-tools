@@ -182,6 +182,7 @@ hhtools import run --dataset gvhmr --root /path/to/gvhmr/output --out /path/to/m
 
 | 命令 | 作用 |
 |------|------|
+| `hhtools doctor` | 检查本机 Web、机器人、重映射、MCP、Body Model 与 GVHMR 就绪状态 |
 | `hhtools convert run` | BVH / GLB → 统一 NPZ |
 | `hhtools import list` / `import run` | 列出适配器；数据集根目录 → NPZ |
 | `hhtools bodymodel check` / `setup` | SMPL 系权重路径 / 下载说明 |

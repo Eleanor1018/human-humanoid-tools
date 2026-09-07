@@ -191,6 +191,7 @@ Entry point: `uv run hhtools` (same package as the Web UI). Use this for large d
 
 | Command | Purpose |
 |---------|---------|
+| `hhtools doctor` | Check local Web, robot, retarget, MCP, body-model, and GVHMR readiness |
 | `hhtools convert run` | BVH / GLB → unified NPZ |
 | `hhtools import list` / `import run` | List adapters; import a dataset root → NPZ |
 | `hhtools bodymodel check` / `setup` | SMPL-family weight paths / download hints |
