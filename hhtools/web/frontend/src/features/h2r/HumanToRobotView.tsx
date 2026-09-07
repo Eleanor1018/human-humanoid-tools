@@ -83,6 +83,8 @@ export interface HumanToRobotViewProps {
   ) => void;
   readonly comparisonPreset?: ComparisonPreset;
   readonly onComparisonPresetChange?: (preset: ComparisonPreset) => void;
+  readonly forceCalibrationOpen?: boolean;
+  readonly forceResultOpen?: boolean;
   readonly onOpenMotionLibrary: () => void;
   readonly onOpenRobotLibrary: () => void;
 }
@@ -173,6 +175,8 @@ export function HumanToRobotView({
   onCalibrationInteraction,
   comparisonPreset,
   onComparisonPresetChange,
+  forceCalibrationOpen = false,
+  forceResultOpen = false,
   onOpenMotionLibrary,
   onOpenRobotLibrary,
 }: HumanToRobotViewProps) {
@@ -787,6 +791,8 @@ export function HumanToRobotView({
           title={text("3. Calibration", "3. 标定")}
           status={calibrationStep.label}
           statusTone={calibrationStep.tone}
+          forceOpen={forceCalibrationOpen}
+          tutorialAnchor="h2r-calibration"
         >
           <div className="grid gap-2.5">
             <Field label={text("Reference pose", "参考姿势")}>
@@ -847,6 +853,8 @@ export function HumanToRobotView({
           title={text("4. Result", "4. 结果")}
           status={resultStep.label}
           statusTone={resultStep.tone}
+          forceOpen={forceResultOpen}
+          tutorialAnchor="h2r-result"
         >
           <div className="grid gap-2.5">
             <div className="grid grid-cols-2 gap-2">

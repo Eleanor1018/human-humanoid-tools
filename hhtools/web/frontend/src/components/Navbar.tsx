@@ -62,6 +62,7 @@ export function Navbar(props: ApplicationCommandContext) {
           <div key={menu.id} className="relative flex items-center">
             <button
               type="button"
+              data-menu-trigger={menu.id}
               className={cn(
                 "h-7 cursor-pointer whitespace-nowrap rounded-sm border-0 bg-transparent px-2.5 text-xs font-medium tracking-normal text-muted-foreground hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring",
                 openMenu?.id === menu.id && "bg-accent text-accent-foreground",

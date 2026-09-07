@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactNode } from "react";
+import { useState, type CSSProperties, type ReactNode } from "react";
 
 import { useLocaleText } from "@/LocaleProvider";
 import { cn } from "@/lib/utils";
@@ -86,6 +86,8 @@ interface WorkflowStepProps {
   status?: string;
   statusTone?: WorkflowStatusTone;
   defaultOpen?: boolean;
+  forceOpen?: boolean;
+  tutorialAnchor?: string;
   children: ReactNode;
 }
 
@@ -94,10 +96,20 @@ export function WorkflowStep({
   status,
   statusTone = "neutral",
   defaultOpen = false,
+  forceOpen = false,
+  tutorialAnchor,
   children,
 }: WorkflowStepProps) {
+  const [open, setOpen] = useState(defaultOpen);
   return (
-    <details className="group border-b border-border-subtle" open={defaultOpen || undefined}>
+    <details
+      className="group border-b border-border-subtle"
+      data-tutorial={tutorialAnchor}
+      open={forceOpen || open}
+      onToggle={(event) => {
+        if (!forceOpen) setOpen(event.currentTarget.open);
+      }}
+    >
       <summary className="flex min-h-[42px] cursor-pointer list-none items-center gap-2 text-[13px] font-semibold text-foreground focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring [&::-webkit-details-marker]:hidden">
         <span className="min-w-0 flex-1 truncate">{title}</span>
         {status && (
