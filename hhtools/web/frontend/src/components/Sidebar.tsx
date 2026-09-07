@@ -61,10 +61,10 @@ export function Sidebar({ activeView, locale, hidden = false, onSelect }: Sideba
           ))}
         </div>
       </nav>
-      <footer className="flex shrink-0 justify-center border-t border-border-subtle px-3 py-3 max-[900px]:px-0">
-        <span className="block h-[51px] w-[148px] overflow-hidden max-[900px]:h-9 max-[900px]:w-9">
+      <footer className="flex shrink-0 justify-center px-3 py-3 max-[900px]:px-0">
+        <span className="block h-[41px] w-[120px] overflow-hidden max-[900px]:h-[30px] max-[900px]:w-[30px]">
           <img
-            className="block h-auto w-[148px] max-w-none max-[900px]:h-9 max-[900px]:w-auto [html[data-theme=dark]_&]:brightness-0 [html[data-theme=dark]_&]:invert"
+            className="block h-auto w-[120px] max-w-none max-[900px]:h-[30px] max-[900px]:w-auto [html[data-theme=dark]_&]:brightness-0 [html[data-theme=dark]_&]:invert"
             src="/roboparty.svg"
             alt="ROBOPARTY"
           />
