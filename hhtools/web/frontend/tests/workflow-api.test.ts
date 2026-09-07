@@ -22,13 +22,7 @@ const {
   removeDatasetUploadFolder,
   uploadDataset,
 } = await import("../src/features/analysis/api.ts");
-const {
-  linkMotionLibraryPath,
-  managedMotionLibraryFolders,
-  removeMotionLibraryFolder,
-  setMotionLibraryRoot,
-  uploadMotion,
-} = await import("../src/features/motion/api.ts");
+const { uploadMotion } = await import("../src/features/motion/api.ts");
 
 test("Motion import uploads a GVHMR result with the mimic profile", async () => {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
@@ -441,52 +435,4 @@ test("robot import preserves bundle paths and deletion encodes its name", async 
   assert.equal(((calls[0].init?.body as FormData).get("files") as File).name, "meshes/arm.stl");
   assert.equal(calls[1].url, "/api/robot/my%20robot");
   assert.equal(calls[1].init?.method, "DELETE");
-});
-
-test("motion library management uses the existing settings and link routes", async () => {
-  const calls: Array<{ url: string; init?: RequestInit }> = [];
-  const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
-    calls.push({ url: String(input), init });
-    return calls.length === 1
-      ? Response.json({ root: "/data/library", default_root: "/default", editable: true })
-      : Response.json({
-          folder_label: "AMASS",
-          clip_count: 4,
-          path: "/data/library/AMASS",
-          motions_library_root: "/data/library",
-        });
-  };
-  await setMotionLibraryRoot("/data/library", { fetcher });
-  await linkMotionLibraryPath("/datasets/AMASS", { fetcher });
-  assert.equal(calls[0].url, "/api/settings/motion-library");
-  assert.equal(calls[0].init?.method, "PATCH");
-  assert.deepEqual(JSON.parse(String(calls[0].init?.body)), { root: "/data/library" });
-  assert.equal(calls[1].url, "/api/library/link");
-  assert.deepEqual(JSON.parse(String(calls[1].init?.body)), { path: "/datasets/AMASS" });
-});
-
-test("motion library removal targets one encoded managed folder", async () => {
-  let request: { url: string; init?: RequestInit } | undefined;
-  const result = await removeMotionLibraryFolder("My linked motions", {
-    fetcher: async (input, init) => {
-      request = { url: String(input), init };
-      return Response.json({ removed: "My linked motions" });
-    },
-  });
-  assert.equal(request?.url, "/api/library/link/My%20linked%20motions");
-  assert.equal(request?.init?.method, "DELETE");
-  assert.equal(result.removed, "My linked motions");
-  assert.throws(() => removeMotionLibraryFolder("   "), /Select a managed/);
-});
-
-test("motion library removal choices never include bundled asset folders", () => {
-  assert.deepEqual(
-    managedMotionLibraryFolders([
-      { source_path: "/assets/AMASS/walk.npz", folder_label: "AMASS", origin: "assets" },
-      { source_path: "/library/custom/a.bvh", folder_label: "custom", origin: "link" },
-      { source_path: "/library/custom/b.bvh", folder_label: "custom", origin: "link" },
-      { source_path: "/library/z/a.bvh", folder_label: "z-folder", origin: "link" },
-    ]),
-    ["custom", "z-folder"],
-  );
 });

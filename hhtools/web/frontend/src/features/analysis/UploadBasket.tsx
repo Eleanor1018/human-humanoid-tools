@@ -31,7 +31,7 @@ export function UploadBasket({
         <p className="text-xs font-semibold text-foreground">
           Upload basket · {summary.clip_count} clips
         </p>
-        <Button size="sm" disabled={disabled || !folders.length} onClick={onClear}>
+        <Button variant="danger" size="sm" disabled={disabled || !folders.length} onClick={onClear}>
           Clear
         </Button>
       </div>
@@ -54,7 +54,7 @@ export function UploadBasket({
               </span>
               <button
                 type="button"
-                className="flex size-7 items-center justify-center rounded-md text-base leading-none text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-40"
+                className="flex size-7 items-center justify-center rounded-md text-base leading-none text-muted-foreground hover:bg-danger-muted hover:text-danger disabled:opacity-40"
                 disabled={disabled}
                 aria-label={`Remove ${folder}`}
                 title="Remove folder"

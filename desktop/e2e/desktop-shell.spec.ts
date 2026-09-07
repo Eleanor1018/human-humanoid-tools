@@ -24,6 +24,7 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
       : { executablePath: packagedExecutable }),
     args: [
       `--user-data-dir=${testInfo.outputPath('user-data')}`,
+      '--lang=en-US',
       ...(packagedExecutable === undefined
         ? [join(desktopRoot, 'out', 'main', 'index.js')]
         : [])
@@ -73,7 +74,7 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
 
     const fileTrigger = menu.getByRole('menuitem', { name: 'File', exact: true })
     const fileMenu = page.getByRole('menu', { name: 'File' })
-    await fileTrigger.hover()
+    await fileTrigger.click()
     await expect(fileMenu).toBeVisible()
     await expect(fileMenu.getByRole('menuitem')).toHaveCount(7)
     for (const command of [
@@ -94,11 +95,51 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
     await expect(fileMenu).toBeHidden()
     await expect(settingsMenu.getByRole('menuitem')).toHaveText(['Settings', 'Dark Mode'])
     await settingsMenu.getByRole('menuitem', { name: 'Settings', exact: true }).click()
-    const settingsDialog = page.getByRole('dialog', { name: 'Settings' })
+    let settingsDialog = page.getByRole('dialog', { name: 'Workspace Settings' })
     await expect(settingsDialog).toBeVisible()
-    await expect(settingsDialog.getByLabel('Concurrent jobs')).toBeEnabled()
-    await expect(settingsDialog.getByLabel('Queued jobs')).toBeEnabled()
+    const language = settingsDialog.getByLabel('Workspace language')
+    await expect(language).toHaveValue('en')
+    await language.selectOption('zh-CN')
+    await expect(menu.getByRole('menuitem')).toHaveText([
+      '文件',
+      '工作流',
+      '分析',
+      '设置',
+      '帮助'
+    ])
+    settingsDialog = page.getByRole('dialog', { name: '工作区设置' })
+    for (const removedCopy of [
+      '语言、布局、资源库与后台任务',
+      '设置菜单和导航语言',
+      '修改立即生效，原目录内容不会移动。',
+      '· 运行中: 0 · 等待中: 0'
+    ]) {
+      await expect(settingsDialog).not.toContainText(removedCopy)
+    }
+    await settingsDialog.getByLabel('工作区语言').selectOption('en')
+    settingsDialog = page.getByRole('dialog', { name: 'Workspace Settings' })
+    const leftNavigation = settingsDialog.getByLabel('Show left navigation')
+    const rightInspector = settingsDialog.getByLabel('Show right inspector')
+    await leftNavigation.uncheck()
+    await expect(page.locator('#sidebar')).toBeHidden()
+    await rightInspector.uncheck()
+    await expect(page.getByRole('complementary', { name: 'Inspector' })).toBeHidden()
+    await settingsDialog.getByRole('button', { name: 'Reset layout' }).click()
+    await expect(page.locator('#sidebar')).toBeVisible()
+    await expect(page.getByRole('complementary', { name: 'Inspector' })).toBeVisible()
+    await expect(settingsDialog.getByRole('button', { name: 'Choose directory' })).toBeEnabled()
+    await expect(settingsDialog.getByRole('button', { name: 'Refresh settings' })).toBeEnabled()
+    await expect(settingsDialog.getByLabel('Maximum running jobs')).toBeEnabled()
+    await expect(settingsDialog.getByLabel('Maximum queued jobs')).toBeEnabled()
     await expect(settingsDialog.getByRole('button', { name: 'Save' })).toBeEnabled()
+    await expect(settingsDialog).not.toContainText(
+      'Language, layout, libraries, and background jobs'
+    )
+    await expect(settingsDialog).not.toContainText('Menus and navigation language')
+    await expect(settingsDialog).not.toContainText(
+      'Changes apply immediately; existing files are not moved.'
+    )
+    await expect(settingsDialog).not.toContainText(/Running:\s*0.*Queued:\s*0/)
     await settingsDialog.getByRole('button', { name: 'Close' }).click()
     await expect(settingsDialog).toBeHidden()
 
@@ -115,13 +156,21 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
     await expect(helpMenu.getByRole('menuitem')).toHaveText(['Tutorial', 'About hhtools'])
     await expect(helpMenu.getByRole('menuitem', { name: 'Tutorial' })).toBeEnabled()
     await helpMenu.getByRole('menuitem', { name: 'About hhtools' }).click()
-    const aboutDialog = page.getByRole('dialog', { name: 'About hhtools' })
+    const aboutDialog = page.getByRole('dialog', { name: 'Human-Humanoid Tools' })
     await expect(aboutDialog).toBeVisible()
-    await expect(aboutDialog.getByRole('link', { name: 'Project source and documentation' }))
+    await expect(aboutDialog).toContainText('Humanoid motion retargeting and dataset analysis')
+    await expect(aboutDialog).toContainText('jaggerShen and hhtools contributors')
+    await expect(aboutDialog).toContainText('2026')
+    await expect(aboutDialog).toContainText('Apache-2.0')
+    await expect(aboutDialog.getByRole('link', { name: 'github.com/Roboparty/human-humanoid-tools' }))
       .toHaveAttribute(
         'href',
-        'https://github.com/Eleanor1018/human-humanoid-tools#readme'
+        'https://github.com/Roboparty/human-humanoid-tools'
       )
+    await expect(aboutDialog.getByRole('link', { name: 'shenyaojie@roboparty.com' }))
+      .toHaveAttribute('href', 'mailto:shenyaojie@roboparty.com')
+    await expect(aboutDialog.getByRole('link', { name: 'sunlancheng@roboparty.com' }))
+      .toHaveAttribute('href', 'mailto:sunlancheng@roboparty.com')
     await aboutDialog.getByRole('button', { name: 'Close' }).click()
 
     const workflowsMenu = page.getByRole('menu', { name: 'Workflows' })
@@ -176,6 +225,25 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
     ).toBeChecked()
     await expect(inspector.getByText('Drop a motion file or folder')).toBeVisible()
     expect((await inspector.boundingBox())?.width).toBeCloseTo(360, 0)
+    const motionRefresh = inspector.getByRole('button', { name: 'Refresh Motion Library' })
+    await expect(motionRefresh).toBeVisible()
+    expect(
+      await motionRefresh.evaluate((element) => getComputedStyle(element).borderTopColor)
+    ).toBe('rgba(0, 0, 0, 0)')
+    await expect(inspector.getByRole('searchbox', { name: 'Search the Motion Library' }))
+      .toBeVisible()
+    await expect(inspector.getByLabel('Motion library category')).toBeVisible()
+    const setDirectory = inspector.getByRole('button', { name: 'Set directory' })
+    await expect(setDirectory).toBeEnabled()
+    await expect(inspector.getByRole('button', { name: 'Choose library directory' }))
+      .toHaveCount(0)
+    await expect(inspector.getByRole('button', { name: 'Remove folder' })).toHaveCount(0)
+    await expect(inspector.getByLabel('Managed Motion Library folder')).toHaveCount(0)
+    await expect(inspector.locator('button[aria-label$="to H2R Batch"]')).toHaveCount(0)
+    await setDirectory.click()
+    settingsDialog = page.getByRole('dialog', { name: 'Workspace Settings' })
+    await expect(settingsDialog).toBeVisible()
+    await settingsDialog.getByRole('button', { name: 'Close' }).click()
     await profilePicker.getByRole('radio', { name: 'intermimic', exact: true }).click()
     await expect(
       inspector.getByText('Drop an object-interaction motion folder')

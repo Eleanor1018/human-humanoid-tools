@@ -5,9 +5,12 @@ import {
   boundedProgress,
   canSetupGvhmrInDesktop,
   getGvhmrRuntimeStatus,
+  isSmplxNeutralMissing,
   isGvhmrResultName,
   isSupportedVideoName,
   parseOptionalFocalLength,
+  SMPLX_DOWNLOAD_URL,
+  SMPLX_LICENSE_URL,
   setupGvhmrInDesktop,
   startVideoToMotion,
   summarizeMotionResult,
@@ -43,10 +46,50 @@ test("validates video names and optional focal length", () => {
 test("normalizes runtime status responses", async () => {
   const status = await getGvhmrRuntimeStatus(
     new AbortController().signal,
-    async () => Response.json({ ready: true, missing: ["valid", 42] }),
+    async () =>
+      Response.json({
+        ready: false,
+        checks: { smplx_neutral: false },
+        missing: ["valid", 42],
+        body_models_root: "/models",
+      }),
   );
   assert.deepEqual(status.missing, ["valid"]);
-  assert.equal(status.ready, true);
+  assert.equal(status.ready, false);
+  assert.equal(status.checks?.smplx_neutral, false);
+  assert.equal(status.body_models_root, "/models");
+});
+
+test("links licensed SMPL-X resources only to structured model absence", () => {
+  assert.equal(SMPLX_DOWNLOAD_URL, "https://smpl-x.is.tue.mpg.de/download.php");
+  assert.equal(
+    SMPLX_LICENSE_URL,
+    "https://smpl-x.is.tue.mpg.de/modellicense.html",
+  );
+  assert.equal(
+    isSmplxNeutralMissing({
+      ready: false,
+      checks: { smplx_neutral: false },
+      missing: ["localized or server-defined message"],
+      body_models_root: "/models",
+    }),
+    true,
+  );
+  assert.equal(
+    isSmplxNeutralMissing({
+      ready: false,
+      checks: { smplx_neutral: true },
+      missing: ["licensed SMPL-X neutral model"],
+    }),
+    false,
+  );
+  assert.equal(
+    isSmplxNeutralMissing({
+      ready: false,
+      missing: ["licensed SMPL-X neutral model"],
+    }),
+    false,
+  );
 });
 
 test("starts the official-weight upload contract", async () => {

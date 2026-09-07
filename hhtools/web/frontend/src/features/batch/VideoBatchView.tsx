@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Field, fieldClass } from "@/components/Field";
+import { RefreshButton } from "@/components/RefreshButton";
 import { Button } from "@/components/ui/button";
 import { WorkflowStep } from "@/components/WorkflowSteps";
 import {
@@ -16,6 +17,7 @@ import {
   type GvhmrRuntimeStatus,
   type MotionResultSummary,
 } from "@/features/video-to-motion/api";
+import { SmplxModelLinks } from "@/features/video-to-motion/SmplxModelLinks";
 import type { MotionLibraryEntry } from "@/features/motion/api";
 import type { UploadFile } from "@/lib/api";
 
@@ -47,8 +49,10 @@ function statusLabel(status: VideoStatus): string {
 
 export function VideoBatchView({
   onMotionPublished,
+  runtimeRevision = 0,
 }: {
   onMotionPublished(entry: MotionLibraryEntry): void;
+  runtimeRevision?: number;
 }) {
   const [videos, setVideos] = useState<readonly VideoItem[]>([]);
   const [runtime, setRuntime] = useState<GvhmrRuntimeStatus | null>(null);
@@ -91,7 +95,7 @@ export function VideoBatchView({
       runtimeRequest.current?.abort();
       runRequest.current?.abort();
     };
-  }, [refreshRuntime]);
+  }, [refreshRuntime, runtimeRevision]);
 
   function addVideos(files: readonly UploadFile[]): void {
     let rejected = 0;
@@ -259,7 +263,7 @@ export function VideoBatchView({
                 </div>
                 <button
                   type="button"
-                  className="size-7 rounded-md text-lg leading-none text-muted-foreground hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                  className="size-7 rounded-md text-lg leading-none text-muted-foreground hover:bg-danger-muted hover:text-danger disabled:cursor-not-allowed disabled:opacity-50"
                   aria-label={`Remove ${item.file.name}`}
                   title="Remove"
                   disabled={busy}
@@ -274,7 +278,7 @@ export function VideoBatchView({
           </div>
           <div className="flex items-center justify-between gap-3 text-[11px] text-muted-foreground">
             <span>{completedCount} ready · {failedCount} failed</span>
-            <Button size="sm" variant="ghost" disabled={busy || !videos.length} onClick={() => { setVideos([]); setNotice(""); }}>
+            <Button size="sm" variant="danger" disabled={busy || !videos.length} onClick={() => { setVideos([]); setNotice(""); }}>
               Clear all
             </Button>
           </div>
@@ -288,13 +292,16 @@ export function VideoBatchView({
               <option value="official">GVHMR Official</option>
             </select>
           </Field>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-[minmax(0,1fr)_30px] gap-2">
             <Button size="sm" disabled={runtimeChecking || busy || runtime?.ready !== true || confirmed} onClick={() => setConfirmed(true)}>
               {confirmed ? "Confirmed" : "Confirm"}
             </Button>
-            <Button size="sm" disabled={runtimeChecking || busy} onClick={refreshRuntime}>
-              Refresh
-            </Button>
+            <RefreshButton
+              label="Refresh GVHMR status"
+              busy={runtimeChecking}
+              disabled={busy}
+              onClick={refreshRuntime}
+            />
           </div>
           {canSetupGvhmrInDesktop() && runtime?.ready !== true && (
             <Button size="sm" disabled={setupBusy || busy} onClick={() => void configureRuntime()}>
@@ -312,6 +319,7 @@ export function VideoBatchView({
               </ul>
             </details>
           )}
+          <SmplxModelLinks runtime={runtime} />
         </div>
       </WorkflowStep>
 

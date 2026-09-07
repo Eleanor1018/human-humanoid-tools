@@ -27,7 +27,6 @@ const {
   suggestedBackend,
   timeRangeError,
   uploadFileKey,
-  withoutManagedFolder,
 } = await import("../src/features/batch/model.ts");
 
 test("Batch draft helpers preserve intrinsic references and deduplicate inputs", () => {
@@ -59,18 +58,6 @@ test("published V2M motions retain their complete Library row for H2R", () => {
   assert.equal(publishedMotionEntry({ dataset: "gvhmr" }), null);
   assert.equal(publishedMotionEntry({ source_path: "  " }), null);
   assert.deepEqual(appendUniqueEntries([entry], [entry]), [entry]);
-});
-
-test("managed folder removal prunes dangling Batch entries but keeps assets", () => {
-  const entries = [
-    { source_path: "/library/custom/walk.bvh", folder_label: "custom", origin: "link" },
-    { source_path: "/assets/custom/walk.bvh", folder_label: "custom", origin: "assets" },
-    { source_path: "/library/other/walk.bvh", folder_label: "other", origin: "link" },
-  ];
-  assert.deepEqual(
-    withoutManagedFolder(entries, "custom").map((entry) => entry.source_path),
-    ["/assets/custom/walk.bvh", "/library/other/walk.bvh"],
-  );
 });
 
 test("Batch settings helpers validate optional FPS and time ranges", () => {

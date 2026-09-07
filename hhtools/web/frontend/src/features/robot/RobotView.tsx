@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ImportDropzone } from "@/components/ImportDropzone";
 import { InspectorPage } from "@/components/Inspector";
+import { RefreshButton } from "@/components/RefreshButton";
 import { SearchField } from "@/components/SearchField";
 import { ValidationSummary } from "@/components/ValidationSummary";
 import { robotValidationFacts } from "@/components/validationFacts";
@@ -381,9 +382,12 @@ export function RobotView({
           >
             Robot Library
           </h2>
-          <Button size="sm" onClick={refresh} disabled={loadingLibrary || Boolean(loadingName)}>
-            {loadingLibrary ? "Loading..." : "Refresh"}
-          </Button>
+          <RefreshButton
+            label="Refresh Robot Library"
+            busy={loadingLibrary}
+            onClick={refresh}
+            disabled={Boolean(loadingName)}
+          />
         </div>
         <SearchField
           label="Search the Robot Library"

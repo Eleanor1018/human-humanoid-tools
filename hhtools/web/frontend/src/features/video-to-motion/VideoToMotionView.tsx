@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Field, fieldClass } from "@/components/Field";
 import { ImportDropzone } from "@/components/ImportDropzone";
 import { InspectorPage } from "@/components/Inspector";
+import { RefreshButton } from "@/components/RefreshButton";
 import { Button } from "@/components/ui/button";
 import { WorkflowPipeline, WorkflowStep } from "@/components/WorkflowSteps";
 import type { ApplicationImportRequest } from "@/importIntent";
@@ -29,6 +30,7 @@ import {
   type MotionResultSummary,
   type VideoToMotionJob,
 } from "./api";
+import { SmplxModelLinks } from "./SmplxModelLinks";
 
 const pipeline = ["Select Video", "Environment", "Generate", "Motion Result"];
 
@@ -54,10 +56,13 @@ function formatMetric(value: number | null, suffix = ""): string {
 export function VideoToMotionView({
   onMotionLoaded,
   importRequest,
+  runtimeRevision = 0,
 }: {
   onMotionLoaded?: (motion: StageMotionPayload | null) => void;
   /** App-owned File-menu intent; this mounted view owns its input element. */
   importRequest?: ApplicationImportRequest | null;
+  /** Settings increments this after configuring the shared GVHMR runtime. */
+  runtimeRevision?: number;
 }) {
   const [runtimePhase, setRuntimePhase] = useState<RuntimePhase>("checking");
   const [runtime, setRuntime] = useState<GvhmrRuntimeStatus | null>(null);
@@ -105,7 +110,7 @@ export function VideoToMotionView({
   useEffect(() => {
     refreshRuntime();
     return () => runtimeRequest.current?.abort();
-  }, [refreshRuntime]);
+  }, [refreshRuntime, runtimeRevision]);
 
   useEffect(
     () => () => {
@@ -378,13 +383,12 @@ export function VideoToMotionView({
                   {setupBusy ? "Setting up…" : "Set up"}
                 </Button>
               )}
-              <Button
-                size="sm"
+              <RefreshButton
+                label="Refresh GVHMR status"
+                busy={runtimePhase === "checking"}
                 onClick={refreshRuntime}
-                disabled={runtimePhase === "checking" || busy || setupBusy}
-              >
-                Refresh
-              </Button>
+                disabled={busy || setupBusy}
+              />
             </div>
             <Field label="Weights">
               <select className={fieldClass} defaultValue="official" disabled>
@@ -408,6 +412,7 @@ export function VideoToMotionView({
                 )}
               </div>
             )}
+            <SmplxModelLinks runtime={runtime} />
           </div>
         </WorkflowStep>
 

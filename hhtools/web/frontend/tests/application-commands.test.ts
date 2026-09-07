@@ -25,6 +25,7 @@ test("application menu descriptors retain the five-menu contract", () => {
   const imports: string[] = [];
   let toggledTheme = false;
   const menus = createApplicationMenus({
+    locale: "en",
     theme: "light",
     canExportResult: false,
     canExitApplication: false,
@@ -67,6 +68,37 @@ test("application menu descriptors retain the five-menu contract", () => {
   assert.deepEqual(
     menus.find((menu) => menu.id === "settings")?.commands.map(({ id }) => id),
     ["open-settings", "toggle-theme"],
+  );
+});
+
+test("application menus localize without changing command identity", () => {
+  const menus = createApplicationMenus({
+    locale: "zh-CN",
+    theme: "dark",
+    canExportResult: false,
+    canExitApplication: false,
+    onNavigate: () => undefined,
+    onImport: () => undefined,
+    onExportResult: () => undefined,
+    onOpenSettings: () => undefined,
+    onToggleTheme: () => undefined,
+    onOpenTutorial: () => undefined,
+    onOpenAbout: () => undefined,
+    onExitApplication: () => undefined,
+  });
+  assert.deepEqual(
+    menus.map((menu) => menu.label),
+    ["文件", "工作流", "分析", "设置", "帮助"],
+  );
+  assert.deepEqual(
+    menus.find((menu) => menu.id === "settings")?.commands.map((command) => [
+      command.id,
+      command.label,
+    ]),
+    [
+      ["open-settings", "设置"],
+      ["toggle-theme", "浅色模式"],
+    ],
   );
 });
 

@@ -72,17 +72,6 @@ export function publishedMotionEntry(value: unknown): MotionLibraryEntry | null 
     : null;
 }
 
-/** Remove entries invalidated with a managed folder while preserving bundled assets. */
-export function withoutManagedFolder(
-  entries: readonly MotionLibraryEntry[],
-  folderLabel: string,
-): readonly MotionLibraryEntry[] {
-  return entries.filter(
-    (entry) =>
-      entry.folder_label !== folderLabel || entry.origin === "assets",
-  );
-}
-
 export function suggestedBackend(
   entries: readonly MotionLibraryEntry[],
 ): BatchBackend | undefined {

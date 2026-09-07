@@ -1,8 +1,15 @@
 import type { ReactNode } from "react";
 
-export function Inspector({ children }: { children: ReactNode }) {
+export function Inspector({
+  children,
+  hidden = false,
+}: {
+  children: ReactNode;
+  hidden?: boolean;
+}) {
   return (
     <aside
+      hidden={hidden}
       className="col-start-3 row-start-2 min-h-0 min-w-0 overflow-hidden border-l border-border-subtle bg-surface max-[780px]:col-start-2 max-[780px]:row-start-3 max-[780px]:border-t"
       aria-label="Inspector"
     >

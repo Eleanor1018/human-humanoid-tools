@@ -6,8 +6,8 @@ import {
 } from "react";
 
 import { InspectorPage } from "@/components/Inspector";
+import { RefreshButton } from "@/components/RefreshButton";
 import { SegmentedControl } from "@/components/SegmentedControl";
-import { Button } from "@/components/ui/button";
 import {
   getMotionLibrary,
   type MotionLibraryEntry,
@@ -39,10 +39,12 @@ function errorMessage(error: unknown): string {
  */
 export function BatchView({
   active = true,
+  runtimeRevision = 0,
   humanEntries,
   onHumanEntriesChange,
 }: {
   active?: boolean;
+  runtimeRevision?: number;
   humanEntries: readonly MotionLibraryEntry[];
   onHumanEntriesChange(entries: readonly MotionLibraryEntry[]): void;
 }) {
@@ -107,14 +109,19 @@ export function BatchView({
               ? "Refreshing catalogs…"
               : `${motions.length} library items · ${robots.length} robots`}
           </span>
-          <Button size="sm" variant="ghost" disabled={catalogBusy} onClick={refreshCatalogs}>
-            Refresh
-          </Button>
+          <RefreshButton
+            label="Refresh Batch catalogs"
+            busy={catalogBusy}
+            onClick={refreshCatalogs}
+          />
         </div>
       </div>
 
       <div hidden={mode !== "v2m"}>
-        <VideoBatchView onMotionPublished={addPublishedMotion} />
+        <VideoBatchView
+          onMotionPublished={addPublishedMotion}
+          runtimeRevision={runtimeRevision}
+        />
       </div>
       <div hidden={mode !== "h2r"}>
         <HumanBatchView

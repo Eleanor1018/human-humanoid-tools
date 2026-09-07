@@ -151,9 +151,9 @@ const r2rLayerRows: readonly StageLayerRow[] = [
 ];
 
 const activeFamilyClass: Record<StageLayer["family"], string> = {
-  source: "data-[state=on]:bg-[#0071e3] data-[state=on]:hover:bg-[#0071e3]",
-  scaled: "data-[state=on]:bg-[#007c83] data-[state=on]:hover:bg-[#007c83]",
-  robot: "data-[state=on]:bg-[#8e44ad] data-[state=on]:hover:bg-[#8e44ad]",
+  source: "data-[state=on]:bg-stage-source data-[state=on]:hover:bg-stage-source",
+  scaled: "data-[state=on]:bg-stage-scaled data-[state=on]:hover:bg-stage-scaled",
+  robot: "data-[state=on]:bg-stage-robot data-[state=on]:hover:bg-stage-robot",
 };
 
 interface StageViewMenuProps {
@@ -215,12 +215,12 @@ export function StageViewMenu({
               aria-label={layer.accessibleLabel ?? layer.label}
               data-family={layer.family}
               className={cn(
-                "group h-auto w-auto cursor-pointer gap-[5px] rounded-sm border-0 bg-transparent px-3 py-1.5 text-xs leading-[normal] font-semibold text-muted-foreground transition-[background-color,color,opacity] duration-150 hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring disabled:pointer-events-auto disabled:cursor-not-allowed disabled:opacity-35 disabled:grayscale-[.35] data-[state=on]:text-white",
+                "group h-auto w-auto cursor-pointer gap-[5px] rounded-sm border-0 bg-transparent px-3 py-1.5 text-xs leading-[normal] font-semibold text-muted-foreground transition-[background-color,color,opacity] duration-150 hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring disabled:pointer-events-auto disabled:cursor-not-allowed disabled:grayscale-[.35] disabled:data-[state=off]:opacity-55 disabled:data-[state=on]:opacity-100 data-[state=on]:text-white @max-[440px]:gap-1 @max-[440px]:px-1",
                 activeFamilyClass[layer.family],
               )}
             >
               <span
-                className="stage-layer-eye size-[13px] shrink-0 bg-current opacity-45 grayscale-[.6] [mask:url(/icons/stage/eye.svg)_center/contain_no-repeat] [-webkit-mask:url(/icons/stage/eye.svg)_center/contain_no-repeat] group-hover:opacity-75 group-data-[state=on]:opacity-100 group-data-[state=on]:grayscale-0"
+                className="stage-layer-eye size-[13px] shrink-0 bg-current opacity-55 grayscale-[.6] [mask:url(/icons/stage/eye.svg)_center/contain_no-repeat] [-webkit-mask:url(/icons/stage/eye.svg)_center/contain_no-repeat] group-hover:opacity-80 group-data-[state=on]:opacity-100 group-data-[state=on]:grayscale-0"
                 aria-hidden="true"
               />
               <span>{layer.label}</span>

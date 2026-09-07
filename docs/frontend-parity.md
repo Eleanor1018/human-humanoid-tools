@@ -34,7 +34,7 @@ may improve spacing, rounded corners, accessibility, and narrow-screen layout.
   - [x] Show shared diagnostics and complete FPS/time/header export controls for H2R/R2R.
   - [x] Restore persisted Source, Target, Result, and Overlay Stage presets.
 - [x] Restore remaining Motion, Robot, V2M, Analysis, and application-menu actions.
-  - [x] Share one persistent H2R Batch draft with Motion and remove managed folders safely.
+  - [x] Share one persistent H2R Batch draft with Motion.
   - [x] Preserve the complete registered V2M Motion payload for Stage and H2R.
   - [x] Preserve the last successful Motion while a replacement video is pending or invalid.
   - [x] Keep V2M and Batch mounted while their jobs or drafts are inactive.
@@ -43,14 +43,19 @@ may improve spacing, rounded corners, accessibility, and narrow-screen layout.
   - [x] Connect the desktop Exit command through the trusted Electron IPC boundary.
   - [x] Connect all five application menus without global DOM commands.
   - [x] Keep workflow navigation explicit and remove application-level shortcuts.
+  - [x] Restore language, panel layout, Motion Library, GVHMR, and job settings.
+  - [x] Restore About metadata, source, license, and contact information.
+  - [x] Use shared refresh icons and semantic destructive-action colors.
+  - [x] Keep the Stage visibility menu legible in dark and narrow layouts.
   - [x] Refresh R2R robot and trajectory catalogs whenever the workspace is entered.
   - [x] Restore compact Motion, Robot, and calibration validation summaries.
   - [x] Link H2R/R2R asset selectors back to the owning import workspaces.
+- [x] Simplify Motion Library to search, type filtering, loading, and a Settings link.
 - [x] Run route-contract tests and desktop/narrow-screen browser smoke for every pipeline.
 
 ## Verification
 
-- Frontend: 86 tests passed; production build passed.
+- Frontend: 90 tests passed; production build passed.
 - Web backend: 277 tests passed; 2 dependency-gated tests skipped.
 - Desktop: 38 tests and the Electron window E2E passed.
 - Browser: desktop and 390 x 844 layouts have no overflow or panel overlap;
@@ -62,6 +67,8 @@ may improve spacing, rounded corners, accessibility, and narrow-screen layout.
 GVHMR is installed with its public checkpoints and CUDA runtime. A real V2M run
 still requires the licensed file at
 `/home/nora/GVHMR/inputs/checkpoints/body_models/smplx/SMPLX_NEUTRAL.npz`.
+Workspace Settings links to the official SMPL-X download and model-license pages;
+licensed model files remain outside this repository.
 True server-side cancellation remains a future job-protocol enhancement; the UI
 does not present a client-only abort as cancellation.
 

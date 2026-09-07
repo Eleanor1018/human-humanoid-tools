@@ -1,5 +1,10 @@
 import type { StageMotionPayload } from "@/stage/types";
 
+export const SMPLX_DOWNLOAD_URL =
+  "https://smpl-x.is.tue.mpg.de/download.php";
+export const SMPLX_LICENSE_URL =
+  "https://smpl-x.is.tue.mpg.de/modellicense.html";
+
 export const SUPPORTED_VIDEO_EXTENSIONS = [
   "mp4",
   "mov",
@@ -11,11 +16,22 @@ export const SUPPORTED_VIDEO_EXTENSIONS = [
 
 export interface GvhmrRuntimeStatus {
   readonly ready: boolean;
+  readonly checks?: Readonly<Record<string, boolean | undefined>> & {
+    readonly smplx_neutral?: boolean;
+  };
   readonly missing: readonly string[];
   readonly runtime?: "local" | "docker" | string;
   readonly root?: string | null;
+  readonly body_models_root?: string | null;
   readonly python?: string | null;
   readonly uses_official_weights?: boolean;
+}
+
+/** Use the structured readiness contract instead of matching localized errors. */
+export function isSmplxNeutralMissing(
+  status: GvhmrRuntimeStatus | null | undefined,
+): boolean {
+  return status?.checks?.smplx_neutral === false;
 }
 
 export interface MotionResult extends Partial<StageMotionPayload> {

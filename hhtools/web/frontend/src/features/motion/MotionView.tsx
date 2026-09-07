@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ImportDropzone } from "@/components/ImportDropzone";
 import { InspectorPage } from "@/components/Inspector";
+import { RefreshButton } from "@/components/RefreshButton";
 import { SearchField } from "@/components/SearchField";
 import { ValidationSummary } from "@/components/ValidationSummary";
 import { motionValidationFacts } from "@/components/validationFacts";
@@ -12,11 +13,7 @@ import type { StageMotionPayload } from "@/stage/types";
 
 import {
   getMotionLibrary,
-  linkMotionLibraryPath,
   loadMotionLibraryEntry,
-  managedMotionLibraryFolders,
-  removeMotionLibraryFolder,
-  setMotionLibraryRoot,
   toStageMotionPayload,
   uploadMotion,
   type MotionCategory,
@@ -100,24 +97,14 @@ function uploadFolderLabel(files: readonly File[]): string | undefined {
   return label || undefined;
 }
 
-interface DesktopDirectoryBridge {
-  selectDirectory?: () => Promise<string | null>;
-}
-
-async function chooseServerDirectory(message: string, current = ""): Promise<string | null> {
-  const desktop = (window as Window & { hhtoolsDesktop?: DesktopDirectoryBridge })
-    .hhtoolsDesktop;
-  if (desktop?.selectDirectory) return desktop.selectDirectory();
-  return window.prompt(message, current);
-}
-
 export function MotionView({
   currentMotion,
   onMotionLoaded,
   humanBatchEntries = [],
   onAddToHumanBatch,
-  onRemoveHumanBatchFolder,
+  onOpenSettings,
   importRequest,
+  libraryRevision = 0,
 }: {
   /** App-owned stable input; failed replacements leave it untouched. */
   currentMotion?: StageMotionPayload | null;
@@ -126,24 +113,22 @@ export function MotionView({
   /** App-owned H2R Batch draft; Motion only requests additions. */
   humanBatchEntries?: readonly MotionLibraryEntry[];
   onAddToHumanBatch?: (entry: MotionLibraryEntry) => void;
-  onRemoveHumanBatchFolder?: (folderLabel: string) => void;
+  /** Directory ownership stays in Workspace Settings. */
+  onOpenSettings: () => void;
   /** App-owned File-menu intent; this mounted view owns its input elements. */
   importRequest?: ApplicationImportRequest | null;
+  /** Settings increments this after changing the process-wide library root. */
+  libraryRevision?: number;
 }) {
   const [profile, setProfile] = useState<MotionProfile>("mimic");
   const [entries, setEntries] = useState<readonly MotionLibraryEntry[]>([]);
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState<"all" | MotionCategory>("all");
   const [loadingLibrary, setLoadingLibrary] = useState(true);
-  const [libraryAction, setLibraryAction] = useState<"root" | "link" | "remove" | null>(null);
-  const [managedFolder, setManagedFolder] = useState("");
-  const [pendingFolderRemoval, setPendingFolderRemoval] = useState<string | null>(null);
-  const [libraryRoot, setLibraryRoot] = useState("");
   const [loadingKey, setLoadingKey] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const libraryRequest = useRef<AbortController | null>(null);
-  const libraryActionRequest = useRef<AbortController | null>(null);
   const motionRequest = useRef<AbortController | null>(null);
   const fileInput = useRef<HTMLInputElement | null>(null);
   const folderInput = useRef<HTMLInputElement | null>(null);
@@ -154,10 +139,6 @@ export function MotionView({
   const batchPaths = useMemo(
     () => new Set(humanBatchEntries.map((entry) => entry.source_path)),
     [humanBatchEntries],
-  );
-  const managedFolders = useMemo(
-    () => managedMotionLibraryFolders(entries),
-    [entries],
   );
   const loadedBatchEntry = useMemo(() => {
     if (!selectedKey) return null;
@@ -177,7 +158,6 @@ export function MotionView({
       .then((response) => {
         if (request.signal.aborted) return;
         setEntries(response.entries);
-        setLibraryRoot(response.motions_library_root);
       })
       .catch((reason: unknown) => {
         if (request.signal.aborted) return;
@@ -190,12 +170,14 @@ export function MotionView({
 
   useEffect(() => {
     refreshLibrary();
+  }, [libraryRevision, refreshLibrary]);
+
+  useEffect(() => {
     return () => {
       libraryRequest.current?.abort();
-      libraryActionRequest.current?.abort();
       motionRequest.current?.abort();
     };
-  }, [refreshLibrary]);
+  }, []);
 
   useEffect(() => {
     folderInput.current?.setAttribute("webkitdirectory", "");
@@ -215,18 +197,6 @@ export function MotionView({
     if (importRequest.target === "motion-file") fileInput.current?.click();
     else folderInput.current?.click();
   }, [importRequest]);
-
-  useEffect(() => {
-    if (!managedFolders.includes(managedFolder)) {
-      setManagedFolder(managedFolders[0] ?? "");
-    }
-    if (
-      pendingFolderRemoval &&
-      !managedFolders.includes(pendingFolderRemoval)
-    ) {
-      setPendingFolderRemoval(null);
-    }
-  }, [managedFolder, managedFolders, pendingFolderRemoval]);
 
   const addToHumanBatch = useCallback(
     (entry: MotionLibraryEntry) => {
@@ -335,86 +305,6 @@ export function MotionView({
     [loadingKey, onMotionLoaded, profile, refreshLibrary],
   );
 
-  const manageLibrary = useCallback(
-    async (action: "root" | "link") => {
-      if (libraryAction || loadingKey) return;
-      setLibraryAction(action);
-      setError(null);
-      try {
-        const path = await chooseServerDirectory(
-          action === "root"
-            ? "Enter the Motion Library directory on the server"
-            : "Enter a motion dataset directory to link",
-          action === "root" ? libraryRoot : "",
-        );
-        if (!path?.trim()) return;
-        libraryActionRequest.current?.abort();
-        const request = new AbortController();
-        libraryActionRequest.current = request;
-        if (action === "root") {
-          const result = await setMotionLibraryRoot(path.trim(), {
-            signal: request.signal,
-          });
-          if (request.signal.aborted) return;
-          setLibraryRoot(result.root);
-          setStatus(`Motion Library: ${result.root}`);
-        } else {
-          const result = await linkMotionLibraryPath(path.trim(), {
-            signal: request.signal,
-          });
-          if (request.signal.aborted) return;
-          setStatus(`Linked ${result.folder_label}: ${result.clip_count} clips`);
-        }
-        refreshLibrary();
-      } catch (reason) {
-        setError(errorMessage(reason));
-      } finally {
-        setLibraryAction(null);
-      }
-    },
-    [libraryAction, libraryRoot, loadingKey, refreshLibrary],
-  );
-
-  const removeManagedFolder = useCallback(async () => {
-    if (
-      !managedFolder ||
-      !managedFolders.includes(managedFolder) ||
-      pendingFolderRemoval !== managedFolder ||
-      libraryAction ||
-      loadingKey
-    ) {
-      return;
-    }
-    libraryActionRequest.current?.abort();
-    const request = new AbortController();
-    libraryActionRequest.current = request;
-    setLibraryAction("remove");
-    setError(null);
-    try {
-      const result = await removeMotionLibraryFolder(managedFolder, {
-        signal: request.signal,
-      });
-      if (request.signal.aborted) return;
-      setStatus(`Removed ${result.removed} from Motion Library`);
-      onRemoveHumanBatchFolder?.(result.removed);
-      setManagedFolder("");
-      setPendingFolderRemoval(null);
-      refreshLibrary();
-    } catch (reason) {
-      if (!request.signal.aborted) setError(errorMessage(reason));
-    } finally {
-      if (!request.signal.aborted) setLibraryAction(null);
-    }
-  }, [
-    libraryAction,
-    loadingKey,
-    managedFolder,
-    managedFolders,
-    pendingFolderRemoval,
-    refreshLibrary,
-    onRemoveHumanBatchFolder,
-  ]);
-
   return (
     <InspectorPage title="Motion">
       <div className="flex shrink-0 flex-col gap-2.5">
@@ -512,23 +402,22 @@ export function MotionView({
           >
             Library
           </h2>
-          <Button
-            size="sm"
+          <RefreshButton
+            label="Refresh Motion Library"
+            busy={loadingLibrary}
+            variant="ghost"
             onClick={refreshLibrary}
-            disabled={loadingLibrary || Boolean(loadingKey)}
-          >
-            {loadingLibrary ? "Loading…" : "Refresh"}
-          </Button>
+            disabled={Boolean(loadingKey)}
+          />
         </div>
-        <div className="grid grid-cols-[minmax(0,1fr)_minmax(110px,42%)] gap-1.5">
-          <Button
-            size="sm"
-            disabled={loadingLibrary || Boolean(loadingKey) || libraryAction !== null}
-            title={libraryRoot}
-            onClick={() => void manageLibrary("root")}
-          >
-            {libraryAction === "root" ? "Choosing..." : "Choose library directory"}
-          </Button>
+        <SearchField
+          label="Search the Motion Library"
+          placeholder="Search motions..."
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          disabled={loadingLibrary}
+        />
+        <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-1.5">
           <select
             className={fieldClass}
             value={category}
@@ -552,83 +441,14 @@ export function MotionView({
               </option>
             ))}
           </select>
-        </div>
-        <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-1.5">
-          <SearchField
-            label="Search the Motion Library"
-            placeholder="Search motions..."
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            disabled={loadingLibrary}
-          />
           <Button
             size="sm"
-            disabled={loadingLibrary || Boolean(loadingKey) || libraryAction !== null}
-            title="Add a server-local directory without copying its clips"
-            onClick={() => void manageLibrary("link")}
+            variant="primary"
+            onClick={onOpenSettings}
           >
-            {libraryAction === "link" ? "Linking..." : "Link directory"}
+            Set directory
           </Button>
         </div>
-        {managedFolders.length > 0 && (
-          <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-1.5">
-            <select
-              className={fieldClass}
-              aria-label="Managed Motion Library folder"
-              value={managedFolder}
-              disabled={loadingLibrary || libraryAction !== null}
-              onChange={(event) => {
-                setManagedFolder(event.currentTarget.value);
-                setPendingFolderRemoval(null);
-              }}
-            >
-              {managedFolders.map((folder) => (
-                <option key={folder} value={folder}>
-                  {folder}
-                </option>
-              ))}
-            </select>
-            <Button
-              size="sm"
-              disabled={
-                loadingLibrary ||
-                Boolean(loadingKey) ||
-                libraryAction !== null ||
-                !managedFolder
-              }
-              title="Remove a linked or uploaded folder from this managed library"
-              onClick={() => setPendingFolderRemoval(managedFolder)}
-            >
-              Remove folder
-            </Button>
-            {pendingFolderRemoval === managedFolder && (
-              <div className="col-span-2 grid gap-2 rounded-md border border-danger-border bg-danger-muted p-2.5 text-[11px] leading-relaxed text-danger">
-                <p className="[overflow-wrap:anywhere]">
-                  Remove <strong>{managedFolder}</strong> from this managed
-                  library? External linked source data is kept; files copied
-                  into the managed folder are deleted.
-                </p>
-                <div className="grid grid-cols-2 gap-2">
-                  <Button
-                    size="sm"
-                    disabled={libraryAction !== null}
-                    onClick={() => setPendingFolderRemoval(null)}
-                  >
-                    Cancel
-                  </Button>
-                  <Button
-                    size="sm"
-                    className="border-danger-border text-danger hover:border-danger hover:bg-danger-muted"
-                    disabled={libraryAction !== null}
-                    onClick={() => void removeManagedFolder()}
-                  >
-                    {libraryAction === "remove" ? "Removing..." : "Confirm remove"}
-                  </Button>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
         {error && (
           <p
             className="rounded-md border border-danger-border bg-danger-muted px-2.5 py-2 text-[11px] leading-relaxed break-words text-danger"
@@ -659,14 +479,10 @@ export function MotionView({
                 const active = selectedKey === key;
                 const busy = loadingKey === key;
                 const motionCategory = entryCategory(entry);
-                const inBatch = batchPaths.has(entry.source_path);
-                const canAddToBatch =
-                  entry.asset_kind !== "robot_trajectory" &&
-                  Boolean(onAddToHumanBatch);
                 return (
                   <li
                     key={key}
-                    className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-1 list-none"
+                    className="min-w-0 list-none"
                   >
                     <button
                       type="button"
@@ -696,19 +512,6 @@ export function MotionView({
                         {busy ? "Loading…" : active ? "Loaded" : "Load"}
                       </span>
                     </button>
-                    {canAddToBatch && (
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className="w-[62px] px-1.5"
-                        aria-label={`Add ${entryLabel(entry)} to H2R Batch`}
-                        title={inBatch ? "Already in H2R Batch" : "Add to H2R Batch"}
-                        disabled={Boolean(loadingKey) || inBatch}
-                        onClick={() => addToHumanBatch(entry)}
-                      >
-                        {inBatch ? "Added" : "+ Batch"}
-                      </Button>
-                    )}
                   </li>
                 );
               })}

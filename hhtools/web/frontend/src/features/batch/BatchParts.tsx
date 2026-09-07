@@ -175,7 +175,7 @@ export function EntryList({
               </div>
               <button
                 type="button"
-                className="size-7 rounded-md text-lg leading-none text-muted-foreground hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                className="size-7 rounded-md text-lg leading-none text-muted-foreground hover:bg-danger-muted hover:text-danger disabled:cursor-not-allowed disabled:opacity-50"
                 aria-label={`Remove ${entryTitle(entry)}`}
                 title="Remove"
                 disabled={busy}
@@ -193,7 +193,7 @@ export function EntryList({
       </div>
       <div className="flex items-center justify-between gap-3 text-[11px] text-muted-foreground">
         <span>{entries.length} {kind === "human" ? "clips" : "trajectories"}</span>
-        <Button size="sm" variant="ghost" disabled={busy || !entries.length} onClick={onClear}>
+        <Button size="sm" variant="danger" disabled={busy || !entries.length} onClick={onClear}>
           Clear all
         </Button>
       </div>
@@ -275,7 +275,7 @@ export function LibraryPicker({
             </p>
           )}
         </div>
-        <Button size="sm" onClick={onAdd} disabled={disabled || !selection.size}>
+        <Button variant="primary" size="sm" onClick={onAdd} disabled={disabled || !selection.size}>
           Add {selection.size || "selected"}
         </Button>
       </div>

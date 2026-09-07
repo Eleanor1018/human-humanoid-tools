@@ -134,6 +134,11 @@ main -> App -> features -> components/ui
 - [x] Five-item top menu and dropdown shells
 - [x] Fixed seven-item left navigation
 - [x] Minimal shadcn foundation and floating Stage view menu
+- [x] Persistent language and panel-layout settings
+- [x] Motion Library, GVHMR, and background-job settings
+- [x] Project metadata, license, source, and contacts in About
+- [x] Shared icon-only refresh actions and semantic destructive actions
+- [x] Light/dark Stage controls with narrow-screen-safe sizing
 - [x] Motion inspector visual shell
 - [x] Robot inspector visual shell
 - [x] Video-to-Motion inspector visual shell
@@ -149,7 +154,7 @@ main -> App -> features -> components/ui
 - [x] Legacy-compatible capsule body when a baked skin is unavailable
 - [x] Original source/scaled terrain, object, skeleton, body, and robot materials
 - [x] Motion Library list, upload, job polling, and Stage handoff
-- [x] Motion Library root selection, external directory links, and recursive drops
+- [x] Motion Library search, filtering, recursive drops, and Settings-owned root selection
 - [x] Robot catalog, zero-pose selection, GLB parsing, and Stage handoff
 - [x] Persistent URDF/mesh-folder robot import and user-robot removal
 - [x] Six curated robot presets installed from pinned upstream sources
@@ -185,8 +190,8 @@ workbench so models with missing or inconsistent source materials look uniform.
 ## Motion And Robot Parity
 
 The core asset workflows now match the original frontend: library discovery,
-search and filtering, file/folder upload, recursive drop, managed Motion Library
-selection and links, six built-in robot models, custom robot import/removal, and
+search and filtering, file/folder upload, recursive drop, Settings-owned Motion
+Library selection, six built-in robot models, custom robot import/removal, and
 transactional replacement of the current Stage asset. Motion Body uses a baked
 skin when present and the original orange capsule body otherwise; robot meshes
 use the original neutral material.
