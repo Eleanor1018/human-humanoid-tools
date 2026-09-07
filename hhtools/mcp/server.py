@@ -20,9 +20,9 @@ from urllib.parse import urlsplit
 
 from mcp.server import MCPServer
 from mcp.server.mcpserver import Context
-from mcp.server.mcpserver.exceptions import ResourceError
-from mcp.types import CallToolResult, TextContent, ToolAnnotations
-from pydantic import BaseModel, ConfigDict, Field
+from mcp.server.mcpserver.exceptions import ResourceError, ToolError
+from mcp.types import CallToolResult, InputRequiredResult, TextContent, ToolAnnotations
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from hhtools._version import __version__
 from hhtools.contracts import (
@@ -158,6 +158,38 @@ def _error_result(document: dict[str, Any]) -> CallToolResult:
         structuredContent=document,
         isError=True,
     )
+
+
+def _invalid_tool_arguments_result() -> CallToolResult:
+    """Return one path-free contract for every advertised-schema violation."""
+
+    error = ApiError(
+        code="INVALID_PARAMETER",
+        message="The MCP tool arguments do not match the advertised schema.",
+        retryable=False,
+        stage=ErrorStage.REQUEST,
+    )
+    return _error_result(_model_document(error))
+
+
+class _HHToolsMCPServer(MCPServer[AgentRuntime]):
+    """Translate SDK argument validation at HHTools' composition boundary."""
+
+    async def call_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        context: Context[AgentRuntime, Any] | None = None,
+    ) -> CallToolResult | InputRequiredResult:
+        try:
+            return await super().call_tool(name, arguments, context)
+        except ToolError as exception:
+            # Tool.run wraps only its argument-model ValidationError directly.
+            # Handler failures have a different cause chain and retain the
+            # existing service-error path in MCPServer._handle_call_tool.
+            if isinstance(exception.__cause__, ValidationError):
+                return _invalid_tool_arguments_result()
+            raise
 
 
 def _tool_call[T](call: Callable[[], T]) -> T:
@@ -349,7 +381,7 @@ def create_mcp_server(
             finally:
                 runtime_slot = None
 
-    server: MCPServer[AgentRuntime] = MCPServer(
+    server: MCPServer[AgentRuntime] = _HHToolsMCPServer(
         "hhtools",
         title="HHTools Agent",
         description="Safe local human-to-humanoid retargeting services.",

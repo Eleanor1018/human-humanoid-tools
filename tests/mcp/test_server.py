@@ -379,6 +379,22 @@ def _tool_by_name(tools: list[Any], name: str) -> Any:
     return next(tool for tool in tools if tool.name == name)
 
 
+def _assert_invalid_parameter_result(result: Any, *forbidden_values: str) -> None:
+    expected = ApiError(
+        code="INVALID_PARAMETER",
+        message="The MCP tool arguments do not match the advertised schema.",
+        retryable=False,
+        stage=ErrorStage.REQUEST,
+    ).model_dump(mode="json", exclude_none=True)
+    assert result.is_error is True
+    assert result.structured_content == expected
+    assert json.loads(result.content[0].text) == expected
+    serialized = json.dumps(result.model_dump(mode="json"))
+    assert all(value not in serialized for value in forbidden_values)
+    assert "pydantic" not in serialized.casefold()
+    assert "errors.pydantic.dev" not in serialized.casefold()
+
+
 @pytest.mark.anyio
 async def test_mcp_enumerates_only_bounded_tools_and_resources() -> None:
     fixture = _Fixture()
@@ -438,14 +454,31 @@ async def test_mcp_lists_available_assets_with_closed_bounded_schema() -> None:
 
 
 @pytest.mark.anyio
-async def test_mcp_rejects_catalog_bounds_before_calling_service() -> None:
+@pytest.mark.parametrize(
+    ("tool_name", "arguments", "rejected_value"),
+    [
+        ("list_available_assets", {"limit": 501}, "501"),
+        ("list_available_assets", {"root_id": "../private"}, "../private"),
+        (
+            "get_capabilities",
+            {"unexpected": "https://private.invalid/token?secret=mcp-validation"},
+            "https://private.invalid/token?secret=mcp-validation",
+        ),
+    ],
+)
+async def test_mcp_returns_versioned_errors_for_invalid_tool_arguments(
+    tool_name: str,
+    arguments: dict[str, Any],
+    rejected_value: str,
+) -> None:
     fixture = _Fixture()
 
     async with Client(fixture.server(), raise_exceptions=True) as client:
-        result = await client.call_tool("list_available_assets", {"limit": 501})
+        result = await client.call_tool(tool_name, arguments)
 
-    assert result.is_error is True
+    _assert_invalid_parameter_result(result, rejected_value)
     assert fixture.available_assets.calls == []
+    assert fixture.capabilities.calls == 0
 
 
 @pytest.mark.anyio
@@ -628,11 +661,7 @@ async def test_mcp_rejects_unknown_arguments_without_echoing_their_values() -> N
             {"request": {"query": sensitive_value, "limit": 5}},
         )
 
-    assert result.is_error is True
-    message = result.content[0].text
-    assert "request" in message
-    assert "Extra inputs are not permitted" in message
-    assert sensitive_value not in message
+    _assert_invalid_parameter_result(result, sensitive_value)
 
 
 @pytest.mark.anyio
