@@ -11,6 +11,7 @@ import {
 import { InspectorPage } from "@/components/Inspector";
 import { Button } from "@/components/ui/button";
 import { WorkflowPipeline, WorkflowStep } from "@/components/WorkflowSteps";
+import { useLocaleText } from "@/LocaleProvider";
 import { displayFileName } from "@/lib/api";
 import { ResultDiagnostics } from "@/features/result/ResultDiagnostics";
 import { ResultExportControls } from "@/features/result/ResultExportControls";
@@ -43,14 +44,6 @@ import {
   type R2rRetargetResult,
   type R2rSourceResult,
 } from "./api";
-
-const pipeline = [
-  "Source Robot",
-  "Source Trajectory",
-  "Target Robot",
-  "Calibration",
-  "Result",
-];
 
 type BusyAction =
   | "source-robot"
@@ -91,12 +84,12 @@ function positiveNumber(value: string): number | undefined {
   return value.trim() && Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
-function entryLabel(entry: MotionLibraryEntry): string {
+function entryLabel(entry: MotionLibraryEntry, fallback = "Trajectory"): string {
   return (
     entry.stem ||
     entry.sequence_id ||
     entry.label ||
-    displayFileName(entry.source_path, "Trajectory")
+    displayFileName(entry.source_path, fallback)
   );
 }
 
@@ -125,6 +118,7 @@ function RobotSelect({
   onLoad: () => void;
   onImport: () => void;
 }) {
+  const text = useLocaleText();
   return (
     <div className="grid gap-2.5">
       <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
@@ -135,24 +129,28 @@ function RobotSelect({
           disabled={disabled || robots.length === 0}
           onChange={(event) => onChange(event.target.value)}
         >
-          {!robots.length && <option value="">No robots available</option>}
+          {!robots.length && (
+            <option value="">{text("No robots available", "没有可用机器人")}</option>
+          )}
           {robots.map((robot) => (
             <option
               key={robot.name}
               value={robot.name}
               disabled={!robot.has_urdf}
             >
-              {robot.display_name} ({robot.num_dof} DoF)
+              {robot.display_name} ({robot.num_dof} {text("DoF", "自由度")})
             </option>
           ))}
         </select>
         <AssetImportButton kind="robot" onClick={onImport} />
       </div>
       <Button size="sm" disabled={disabled || !value} onClick={onLoad}>
-        Load
+        {text("Load", "加载")}
       </Button>
       <p className="text-xs text-muted-foreground">
-        {loaded ? `${loaded.display_name} loaded` : "Not loaded"}
+        {loaded
+          ? text(`${loaded.display_name} loaded`, `${loaded.display_name} 已加载`)
+          : text("Not loaded", "未加载")}
       </p>
     </div>
   );
@@ -177,6 +175,14 @@ export function RobotToRobotView({
   onComparisonPresetChange,
   onOpenRobotLibrary,
 }: RobotToRobotViewProps) {
+  const text = useLocaleText();
+  const pipeline = [
+    text("Source Robot", "源机器人"),
+    text("Source Trajectory", "源轨迹"),
+    text("Target Robot", "目标机器人"),
+    text("Calibration", "标定"),
+    text("Result", "结果"),
+  ];
   const [robots, setRobots] = useState<readonly RobotSummary[]>([]);
   const [entries, setEntries] = useState<readonly MotionLibraryEntry[]>([]);
   const [sourceChoice, setSourceChoice] = useState(currentSourceRobot?.name ?? "");
@@ -419,12 +425,22 @@ export function RobotToRobotView({
             ? 1
             : 0;
   const blockedReason = (() => {
-    if (!sourceRobot) return "Load the source robot first.";
-    if (!sourceResult) return "Load a source trajectory first.";
-    if (!targetRobot) return "Load the target robot first.";
-    if (calibration) return "Save the open calibration before retargeting.";
-    if (checkingCalibration) return "Checking calibration…";
-    if (!calibrated) return "Save calibration for this robot pair first.";
+    if (!sourceRobot) return text("Load the source robot first.", "请先加载源机器人。");
+    if (!sourceResult) return text("Load a source trajectory first.", "请先加载源轨迹。");
+    if (!targetRobot) return text("Load the target robot first.", "请先加载目标机器人。");
+    if (calibration) {
+      return text(
+        "Save the open calibration before retargeting.",
+        "开始重定向前，请保存当前标定。",
+      );
+    }
+    if (checkingCalibration) return text("Checking calibration…", "正在检查标定…");
+    if (!calibrated) {
+      return text(
+        "Save calibration for this robot pair first.",
+        "请先保存这组机器人的标定。",
+      );
+    }
     return null;
   })();
 
@@ -452,7 +468,12 @@ export function RobotToRobotView({
   async function loadSourceRobot(): Promise<void> {
     if (!sourceChoice || calibration) return;
     const request = beginAction("source-robot");
-    setStatus(`Loading source robot ${sourceChoice}…`);
+    setStatus(
+      text(
+        `Loading source robot ${sourceChoice}…`,
+        `正在加载源机器人 ${sourceChoice}…`,
+      ),
+    );
     try {
       const payload = await loadRobot(sourceChoice, { signal: request.signal });
       if (request.signal.aborted) return;
@@ -461,7 +482,12 @@ export function RobotToRobotView({
       onSourceRobotLoaded?.(payload);
       onSourceLoaded?.(null);
       clearRetargetResult();
-      setStatus(`Source robot loaded: ${payload.display_name}`);
+      setStatus(
+        text(
+          `Source robot loaded: ${payload.display_name}`,
+          `源机器人已加载：${payload.display_name}`,
+        ),
+      );
     } catch (reason) {
       if (!request.signal.aborted) setError(errorMessage(reason));
     } finally {
@@ -472,14 +498,24 @@ export function RobotToRobotView({
   async function loadTargetRobot(): Promise<void> {
     if (!targetChoice || calibration) return;
     const request = beginAction("target-robot");
-    setStatus(`Loading target robot ${targetChoice}…`);
+    setStatus(
+      text(
+        `Loading target robot ${targetChoice}…`,
+        `正在加载目标机器人 ${targetChoice}…`,
+      ),
+    );
     try {
       const payload = await loadRobot(targetChoice, { signal: request.signal });
       if (request.signal.aborted) return;
       setTargetRobot(payload);
       onTargetRobotLoaded?.(payload);
       clearRetargetResult();
-      setStatus(`Target robot loaded: ${payload.display_name}`);
+      setStatus(
+        text(
+          `Target robot loaded: ${payload.display_name}`,
+          `目标机器人已加载：${payload.display_name}`,
+        ),
+      );
     } catch (reason) {
       if (!request.signal.aborted) setError(errorMessage(reason));
     } finally {
@@ -492,7 +528,7 @@ export function RobotToRobotView({
   ): Promise<void> {
     if (!sourceRobot || calibration) return;
     const request = beginAction("source-trajectory");
-    setStatus("Loading source trajectory…");
+    setStatus(text("Loading source trajectory…", "正在加载源轨迹…"));
     try {
       const result = await load(request);
       if (request.signal.aborted) return;
@@ -505,7 +541,12 @@ export function RobotToRobotView({
         setBackend("newton");
       }
       setProgress(1);
-      setStatus(`Trajectory loaded: ${result.num_frames} frames @ ${result.framerate.toFixed(1)} fps`);
+      setStatus(
+        text(
+          `Trajectory loaded: ${result.num_frames} frames @ ${result.framerate.toFixed(1)} fps`,
+          `轨迹已加载：${result.num_frames} 帧 @ ${result.framerate.toFixed(1)} fps`,
+        ),
+      );
     } catch (reason) {
       if (!request.signal.aborted) setError(errorMessage(reason));
     } finally {
@@ -525,7 +566,9 @@ export function RobotToRobotView({
           onUpdate: (job) => {
             if (!request.signal.aborted) {
               setProgress(job.progress ?? 0);
-              setStatus(job.message || "Loading source trajectory…");
+              setStatus(
+                job.message || text("Loading source trajectory…", "正在加载源轨迹…"),
+              );
             }
           },
         },
@@ -546,7 +589,9 @@ export function RobotToRobotView({
           onUpdate: (job) => {
             if (!request.signal.aborted) {
               setProgress(job.progress ?? 0);
-              setStatus(job.message || "Processing source trajectory…");
+              setStatus(
+                job.message || text("Processing source trajectory…", "正在处理源轨迹…"),
+              );
             }
           },
         },
@@ -557,7 +602,7 @@ export function RobotToRobotView({
   async function openCalibration(): Promise<void> {
     if (!sourceRobot || !targetRobot || calibration) return;
     const request = beginAction("calibration-open");
-    setStatus("Loading calibration…");
+    setStatus(text("Loading calibration…", "正在加载标定…"));
     try {
       const session = await getR2rCalibrationSession(
         targetRobot.name,
@@ -578,7 +623,12 @@ export function RobotToRobotView({
       setCalibrationBaseline(initial);
       clearRetargetResult();
       referenceCallback.current?.(session.reference);
-      setStatus(`Calibration ready: ${session.reference_name}`);
+      setStatus(
+        text(
+          `Calibration ready: ${session.reference_name}`,
+          `标定已就绪：${session.reference_name}`,
+        ),
+      );
     } catch (reason) {
       if (!request.signal.aborted) setError(errorMessage(reason));
     } finally {
@@ -591,7 +641,7 @@ export function RobotToRobotView({
     calibrationStatusRequest.current?.abort();
     setCheckingCalibration(false);
     const request = beginAction("calibration-save");
-    setStatus("Saving calibration…");
+    setStatus(text("Saving calibration…", "正在保存标定…"));
     try {
       const safeJointQ = normalizeCalibrationValues(
         calibration.joint_limits,
@@ -608,7 +658,7 @@ export function RobotToRobotView({
       setCalibrated(true);
       closeCalibration();
       clearRetargetResult();
-      setStatus("Calibration saved.");
+      setStatus(text("Calibration saved.", "标定已保存。"));
     } catch (reason) {
       if (!request.signal.aborted) setError(errorMessage(reason));
     } finally {
@@ -625,14 +675,19 @@ export function RobotToRobotView({
     referenceCallback.current?.(null);
     poseCallback.current?.(null);
     poseWasActive.current = false;
-    if (cancelled) setStatus("Calibration cancelled.");
+    if (cancelled) setStatus(text("Calibration cancelled.", "标定已取消。"));
   }
 
   async function retarget(): Promise<void> {
     if (!sourceRobot || !targetRobot || !sourceResult || !calibrated || calibration) return;
     const request = beginAction("retarget");
     clearRetargetResult();
-    setStatus("Retargeting… The first run for a robot can take longer.");
+    setStatus(
+      text(
+        "Retargeting… The first run for a robot can take longer.",
+        "正在重定向… 首次处理某个机器人可能需要更长时间。",
+      ),
+    );
     try {
       const result = await runR2rRetarget(
         {
@@ -647,7 +702,7 @@ export function RobotToRobotView({
           onUpdate: (job) => {
             if (!request.signal.aborted) {
               setProgress(job.progress ?? 0);
-              setStatus(job.message || "Retargeting…");
+              setStatus(job.message || text("Retargeting…", "正在重定向…"));
             }
           },
         },
@@ -656,7 +711,12 @@ export function RobotToRobotView({
       setRetargetResult(result);
       onResultLoaded?.(result);
       setProgress(1);
-      setStatus(`Completed: ${result.num_frames} frames @ ${result.source_fps.toFixed(1)} fps`);
+      setStatus(
+        text(
+          `Completed: ${result.num_frames} frames @ ${result.source_fps.toFixed(1)} fps`,
+          `已完成：${result.num_frames} 帧 @ ${result.source_fps.toFixed(1)} fps`,
+        ),
+      );
     } catch (reason) {
       if (!request.signal.aborted) setError(errorMessage(reason));
     } finally {
@@ -665,17 +725,21 @@ export function RobotToRobotView({
   }
 
   return (
-    <InspectorPage title="Robot → Robot">
+    <InspectorPage title={text("Robot → Robot", "机器人 → 机器人")}>
       <WorkflowPipeline
-        label="Robot to Robot pipeline"
+        label={text("Robot to Robot pipeline", "机器人到机器人流程")}
         steps={pipeline}
         activeIndex={activeStep}
         completedIndex={retargetResult ? 4 : activeStep - 1}
       />
       <div className="flex shrink-0 flex-col">
-        <WorkflowStep title="1. Source robot" status={sourceRobot?.display_name || "Not loaded"} defaultOpen>
+        <WorkflowStep
+          title={text("1. Source robot", "1. 源机器人")}
+          status={sourceRobot?.display_name || text("Not loaded", "未加载")}
+          defaultOpen
+        >
           <RobotSelect
-            label="Select source robot"
+            label={text("Select source robot", "选择源机器人")}
             robots={robots}
             value={sourceChoice}
             loaded={sourceRobot}
@@ -686,43 +750,49 @@ export function RobotToRobotView({
           />
         </WorkflowStep>
 
-        <WorkflowStep title="2. Source trajectory" status={sourceResult?.name || "Not loaded"}>
+        <WorkflowStep
+          title={text("2. Source trajectory", "2. 源轨迹")}
+          status={sourceResult?.name || text("Not loaded", "未加载")}
+        >
           <div className="grid gap-2.5">
-            <Field label="Robot trajectory library">
+            <Field label={text("Robot trajectory library", "机器人轨迹资源库")}>
               <select
                 className={fieldClass}
                 value={trajectoryChoice}
                 disabled={!sourceRobot || busy !== null || calibration !== null || entries.length === 0}
                 onChange={(event) => setTrajectoryChoice(event.target.value)}
               >
-                {!entries.length && <option value="">No robot trajectories available</option>}
+                {!entries.length && (
+                  <option value="">
+                    {text("No robot trajectories available", "没有可用的机器人轨迹")}
+                  </option>
+                )}
                 {entries.map((entry) => (
                   <option key={entry.source_path} value={entry.source_path}>
-                    {entryLabel(entry)}
+                    {entryLabel(entry, text("Trajectory", "轨迹"))}
                   </option>
                 ))}
               </select>
             </Field>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-3 gap-2 max-[420px]:grid-cols-2">
               <Button size="sm" disabled={!sourceRobot || !selectedEntry || busy !== null || calibration !== null} onClick={loadLibraryTrajectory}>
-                Load from library
+                {text("Load from library", "从资源库加载")}
               </Button>
               <Button size="sm" disabled={!sourceRobot || busy !== null || calibration !== null} onClick={() => fileInput.current?.click()}>
-                Upload files
+                {text("Upload files", "上传文件")}
               </Button>
               <Button
                 size="sm"
                 disabled={!sourceRobot || busy !== null || calibration !== null}
                 onClick={() => folderInput.current?.click()}
               >
-                Upload folder
+                {text("Upload folder", "上传文件夹")}
               </Button>
               <input
                 ref={fileInput}
                 className="hidden"
                 type="file"
                 multiple
-                {...({ webkitdirectory: "" } as React.InputHTMLAttributes<HTMLInputElement>)}
                 accept=".csv,.pkl,.npz"
                 onChange={(event) => {
                   uploadTrajectory(event.currentTarget.files);
@@ -734,17 +804,18 @@ export function RobotToRobotView({
                 className="hidden"
                 type="file"
                 multiple
+                {...({ webkitdirectory: "" } as React.InputHTMLAttributes<HTMLInputElement>)}
                 onChange={(event) => {
                   uploadTrajectory(event.currentTarget.files);
                   event.currentTarget.value = "";
                 }}
               />
             </div>
-            <Field label="Source trajectory FPS">
+            <Field label={text("Source trajectory FPS", "源轨迹 FPS")}>
               <input
                 className={fieldClass}
                 inputMode="decimal"
-                placeholder="Use trajectory FPS"
+                placeholder={text("Use trajectory FPS", "使用轨迹 FPS")}
                 value={sourceFps}
                 disabled={!sourceRobot || busy !== null || calibration !== null}
                 onChange={(event) => setSourceFps(event.target.value)}
@@ -753,9 +824,12 @@ export function RobotToRobotView({
           </div>
         </WorkflowStep>
 
-        <WorkflowStep title="3. Target robot" status={targetRobot?.display_name || "Not loaded"}>
+        <WorkflowStep
+          title={text("3. Target robot", "3. 目标机器人")}
+          status={targetRobot?.display_name || text("Not loaded", "未加载")}
+        >
           <RobotSelect
-            label="Select target robot"
+            label={text("Select target robot", "选择目标机器人")}
             robots={robots}
             value={targetChoice}
             loaded={targetRobot}
@@ -767,17 +841,17 @@ export function RobotToRobotView({
         </WorkflowStep>
 
         <WorkflowStep
-          title="4. Calibration"
+          title={text("4. Calibration", "4. 标定")}
           status={
             calibration
               ? busy === "calibration-save"
-                ? "Saving…"
-                : "Editing…"
+                ? text("Saving…", "保存中…")
+                : text("Editing…", "编辑中…")
               : checkingCalibration
-                ? "Checking…"
+                ? text("Checking…", "检查中…")
                 : calibrated
-                  ? "Ready"
-                  : "Required"
+                  ? text("Ready", "已就绪")
+                  : text("Required", "需要标定")
           }
         >
           <div className="grid gap-2.5">
@@ -785,7 +859,7 @@ export function RobotToRobotView({
               <span className="min-w-0 truncate text-xs text-muted-foreground">
                 {sourceRobot && targetRobot
                   ? `${sourceRobot.display_name} → ${targetRobot.display_name}`
-                  : "Load both robots first"}
+                  : text("Load both robots first", "请先加载两个机器人")}
               </span>
               <Button
                 size="sm"
@@ -798,7 +872,11 @@ export function RobotToRobotView({
                 }
                 onClick={() => void openCalibration()}
               >
-                {calibration ? "Editing…" : calibrated ? "Edit" : "Calibrate"}
+                {calibration
+                  ? text("Editing…", "编辑中…")
+                  : calibrated
+                    ? text("Edit", "编辑")
+                    : text("Calibrate", "标定")}
               </Button>
             </div>
             {calibration && (
@@ -823,18 +901,26 @@ export function RobotToRobotView({
               />
             )}
             {calibrationSaved && (
-              <p className="text-[11px] text-success">Calibration saved.</p>
+              <p className="text-[11px] text-success">
+                {text("Calibration saved.", "标定已保存。")}
+              </p>
             )}
           </div>
         </WorkflowStep>
 
         <WorkflowStep
-          title="5. Result"
-          status={retargetResult ? "Completed" : busy === "retarget" ? "Running" : "Not ready"}
+          title={text("5. Result", "5. 结果")}
+          status={
+            retargetResult
+              ? text("Completed", "已完成")
+              : busy === "retarget"
+                ? text("Running", "运行中")
+                : text("Not ready", "未就绪")
+          }
         >
           <div className="grid gap-2.5">
             <div className="grid grid-cols-2 gap-2">
-              <Field label="Solver">
+              <Field label={text("Solver", "求解器")}>
                 <select
                   className={fieldClass}
                   value={backend}
@@ -849,11 +935,11 @@ export function RobotToRobotView({
                   <option value="interaction_mesh">Interaction Mesh</option>
                 </select>
               </Field>
-              <Field label="Retarget FPS">
+              <Field label={text("Retarget FPS", "重定向 FPS")}>
                 <input
                   className={fieldClass}
                   inputMode="decimal"
-                  placeholder="Trajectory FPS"
+                  placeholder={text("Trajectory FPS", "轨迹 FPS")}
                   value={retargetFps}
                   disabled={busy !== null || calibration !== null}
                   onChange={(event) => {
@@ -864,7 +950,9 @@ export function RobotToRobotView({
               </Field>
             </div>
             <Button variant="primary" size="sm" disabled={Boolean(blockedReason) || busy !== null} onClick={() => void retarget()}>
-              {busy === "retarget" ? "Retargeting…" : "Start Retarget"}
+              {busy === "retarget"
+                ? text("Retargeting…", "重定向中…")
+                : text("Start Retarget", "开始重定向")}
             </Button>
             {blockedReason && <p className="text-xs leading-[1.4] text-muted-foreground">{blockedReason}</p>}
             {busy && progress > 0 && (

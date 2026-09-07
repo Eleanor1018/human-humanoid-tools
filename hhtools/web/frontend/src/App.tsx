@@ -32,7 +32,6 @@ import {
 import { MotionView } from "./features/motion/MotionView";
 import type { MotionLibraryEntry } from "./features/motion/api";
 import { BatchView } from "./features/batch/BatchView";
-import { appendUniqueEntries } from "./features/batch/model";
 import { AnalysisView } from "./features/analysis/AnalysisView";
 import type { AnalysisRobotPreview } from "./features/analysis/api";
 import { RobotView } from "./features/robot/RobotView";
@@ -327,9 +326,6 @@ export function App() {
     setH2rCalibrationReference(null);
     setH2rCalibrationPose(null);
   }, []);
-  const addHumanBatchEntry = useCallback((entry: MotionLibraryEntry) => {
-    setHumanBatchEntries((current) => appendUniqueEntries(current, [entry]));
-  }, []);
   const publishR2rSourceRobot = useCallback((robot: StageRobotPayload | null) => {
     setR2rSourceRobot(robot);
     setR2rCalibrationReference(null);
@@ -529,8 +525,6 @@ export function App() {
           <MotionView
             currentMotion={workspaceMotion}
             onMotionLoaded={publishMotion}
-            humanBatchEntries={humanBatchEntries}
-            onAddToHumanBatch={addHumanBatchEntry}
             onOpenSettings={
               desktopBridge()?.selectDirectory
                 ? () => setDialog("settings")

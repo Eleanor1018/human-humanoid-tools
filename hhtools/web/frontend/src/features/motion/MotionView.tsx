@@ -8,6 +8,7 @@ import { ValidationSummary } from "@/components/ValidationSummary";
 import { motionValidationFacts } from "@/components/validationFacts";
 import { Button } from "@/components/ui/button";
 import type { ApplicationImportRequest } from "@/importIntent";
+import { useLocaleText } from "@/LocaleProvider";
 import { displayFileName } from "@/lib/api";
 import { SegmentedControl } from "@/components/SegmentedControl";
 import type { StageMotionPayload } from "@/stage/types";
@@ -26,6 +27,7 @@ interface MotionProfileOption {
   id: MotionProfile;
   label: string;
   prompt: string;
+  promptZh: string;
   icon: string;
   acceptsFile: boolean;
 }
@@ -35,6 +37,7 @@ const profiles: readonly MotionProfileOption[] = [
     id: "mimic",
     label: "mimic",
     prompt: "Drop a motion file or folder",
+    promptZh: "拖入动作文件或文件夹",
     icon: "/icons/motion/film.svg",
     acceptsFile: true,
   },
@@ -42,6 +45,7 @@ const profiles: readonly MotionProfileOption[] = [
     id: "intermimic",
     label: "intermimic",
     prompt: "Drop an object-interaction motion folder",
+    promptZh: "拖入物体交互动作文件夹",
     icon: "/icons/motion/package.svg",
     acceptsFile: false,
   },
@@ -49,16 +53,21 @@ const profiles: readonly MotionProfileOption[] = [
     id: "meshmimic",
     label: "meshmimic",
     prompt: "Drop a terrain-motion folder",
+    promptZh: "拖入地形动作文件夹",
     icon: "/icons/motion/mountain.svg",
     acceptsFile: false,
   },
 ];
 
-const categories: readonly { value: "all" | MotionCategory; label: string }[] = [
-  { value: "all", label: "All" },
-  { value: "motion", label: "Motion" },
-  { value: "object", label: "Object interaction" },
-  { value: "terrain", label: "Terrain scene" },
+const categories: readonly {
+  value: "all" | MotionCategory;
+  label: string;
+  labelZh: string;
+}[] = [
+  { value: "all", label: "All", labelZh: "全部" },
+  { value: "motion", label: "Motion", labelZh: "动作" },
+  { value: "object", label: "Object interaction", labelZh: "物体交互" },
+  { value: "terrain", label: "Terrain scene", labelZh: "地形场景" },
 ];
 
 const categoryBadgeClass: Readonly<Record<MotionCategory, string>> = {
@@ -83,12 +92,12 @@ function entryCategory(entry: MotionLibraryEntry): MotionCategory {
     : "motion";
 }
 
-function entryLabel(entry: MotionLibraryEntry): string {
+function entryLabel(entry: MotionLibraryEntry, fallback = "Motion"): string {
   return (
     entry.stem ||
     entry.sequence_id ||
     entry.label ||
-    displayFileName(entry.source_path, "Motion")
+    displayFileName(entry.source_path, fallback)
   );
 }
 
@@ -106,8 +115,6 @@ function uploadFolderLabel(files: readonly File[]): string | undefined {
 export function MotionView({
   currentMotion,
   onMotionLoaded,
-  humanBatchEntries = [],
-  onAddToHumanBatch,
   onOpenSettings,
   importRequest,
   libraryRevision = 0,
@@ -116,9 +123,6 @@ export function MotionView({
   currentMotion?: StageMotionPayload | null;
   /** App publishes this payload to the shared R3F Stage. */
   onMotionLoaded?: (motion: StageMotionPayload | null) => void;
-  /** App-owned H2R Batch draft; Motion only requests additions. */
-  humanBatchEntries?: readonly MotionLibraryEntry[];
-  onAddToHumanBatch?: (entry: MotionLibraryEntry) => void;
   /** Directory ownership stays in Workspace Settings. */
   onOpenSettings?: () => void;
   /** App-owned File-menu intent; this mounted view owns its input elements. */
@@ -126,6 +130,7 @@ export function MotionView({
   /** Settings increments this after changing the process-wide library root. */
   libraryRevision?: number;
 }) {
+  const text = useLocaleText();
   const [profile, setProfile] = useState<MotionProfile>("mimic");
   const [entries, setEntries] = useState<readonly MotionLibraryEntry[]>([]);
   const [query, setQuery] = useState("");
@@ -141,18 +146,10 @@ export function MotionView({
   const handledImportRequest = useRef<number | null>(null);
   const selected = profiles.find((item) => item.id === profile) ?? profiles[0];
   const selectedKey = currentMotion?.library_entry?.source_path ?? null;
-
-  const batchPaths = useMemo(
-    () => new Set(humanBatchEntries.map((entry) => entry.source_path)),
-    [humanBatchEntries],
+  const motionLabel = useCallback(
+    (entry: MotionLibraryEntry) => entryLabel(entry, text("Motion", "动作")),
+    [text],
   );
-  const loadedBatchEntry = useMemo(() => {
-    if (!selectedKey) return null;
-    const catalogEntry = entries.find((entry) => entry.source_path === selectedKey);
-    if (catalogEntry) return catalogEntry;
-    const snapshot = currentMotion?.library_entry as MotionLibraryEntry | undefined;
-    return snapshot?.folder_label && snapshot.sequence_id ? snapshot : null;
-  }, [currentMotion?.library_entry, entries, selectedKey]);
 
   const refreshLibrary = useCallback(() => {
     libraryRequest.current?.abort();
@@ -200,15 +197,6 @@ export function MotionView({
     else folderInput.current?.click();
   }, [importRequest]);
 
-  const addToHumanBatch = useCallback(
-    (entry: MotionLibraryEntry) => {
-      if (entry.asset_kind === "robot_trajectory" || batchPaths.has(entry.source_path)) return;
-      onAddToHumanBatch?.(entry);
-      setStatus(`Added ${entryLabel(entry)} to H2R Batch`);
-    },
-    [batchPaths, onAddToHumanBatch],
-  );
-
   const visibleEntries = useMemo(() => {
     const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
     return entries.filter((entry) => {
@@ -237,21 +225,30 @@ export function MotionView({
       const key = entryKey(entry);
       setLoadingKey(key);
       setError(null);
-      setStatus(`Loading ${entryLabel(entry)}…`);
+      setStatus(`${text("Loading", "正在加载")} ${motionLabel(entry)}…`);
       void loadMotionLibraryEntry(entry, {
         signal: request.signal,
         onUpdate: (job) => {
           if (!request.signal.aborted) {
             const progress = Math.round((job.progress ?? 0) * 100);
-            setStatus(`${job.message || "Loading motion…"} ${progress}%`);
+            setStatus(
+              `${job.message || text("Loading motion…", "正在加载动作…")} ${progress}%`,
+            );
           }
         },
       })
         .then((payload) => {
           if (request.signal.aborted) return;
           const stagePayload = toStageMotionPayload(payload);
-          if (!stagePayload) throw new Error("The motion result has no preview data.");
-          setStatus(`Loaded ${entryLabel(entry)}`);
+          if (!stagePayload) {
+            throw new Error(
+              text(
+                "The motion result has no preview data.",
+                "动作结果中没有可预览的数据。",
+              ),
+            );
+          }
+          setStatus(`${text("Loaded", "已加载")} ${motionLabel(entry)}`);
           onMotionLoaded?.(stagePayload);
         })
         .catch((reason: unknown) => {
@@ -263,7 +260,7 @@ export function MotionView({
           if (!request.signal.aborted) setLoadingKey(null);
         });
     },
-    [loadingKey, onMotionLoaded],
+    [loadingKey, motionLabel, onMotionLoaded, text],
   );
 
   const importFiles = useCallback(
@@ -275,7 +272,12 @@ export function MotionView({
       motionRequest.current = request;
       setLoadingKey(`upload:${files[0].name}`);
       setError(null);
-      setStatus(`Uploading ${files.length} file${files.length === 1 ? "" : "s"}…`);
+      setStatus(
+        text(
+          `Uploading ${files.length} file${files.length === 1 ? "" : "s"}…`,
+          `正在上传 ${files.length} 个文件…`,
+        ),
+      );
       void uploadMotion(files, {
         profile,
         libraryFolderLabel: uploadFolderLabel(files),
@@ -283,15 +285,26 @@ export function MotionView({
         onUpdate: (job) => {
           if (!request.signal.aborted) {
             const progress = Math.round((job.progress ?? 0) * 100);
-            setStatus(`${job.message || "Processing motion…"} ${progress}%`);
+            setStatus(
+              `${job.message || text("Processing motion…", "正在处理动作…")} ${progress}%`,
+            );
           }
         },
       })
         .then((payload) => {
           if (request.signal.aborted) return;
           const stagePayload = toStageMotionPayload(payload);
-          if (!stagePayload) throw new Error("The motion result has no preview data.");
-          setStatus(`Loaded ${payload.name || files[0].name}`);
+          if (!stagePayload) {
+            throw new Error(
+              text(
+                "The motion result has no preview data.",
+                "动作结果中没有可预览的数据。",
+              ),
+            );
+          }
+          setStatus(
+            `${text("Loaded", "已加载")} ${payload.name || files[0].name}`,
+          );
           onMotionLoaded?.(stagePayload);
           refreshLibrary();
         })
@@ -304,23 +317,23 @@ export function MotionView({
           if (!request.signal.aborted) setLoadingKey(null);
         });
     },
-    [loadingKey, onMotionLoaded, profile, refreshLibrary],
+    [loadingKey, onMotionLoaded, profile, refreshLibrary, text],
   );
 
   return (
-    <InspectorPage title="Motion">
+    <InspectorPage title={text("Motion", "动作")}>
       <div className="flex shrink-0 flex-col gap-2.5">
         <SegmentedControl
-          label="Motion import type"
+          label={text("Motion import type", "动作导入类型")}
           items={profiles}
           value={profile}
           onValueChange={setProfile}
         />
 
         <ImportDropzone
-          label={`${profile} import area`}
+          label={text(`${profile} import area`, `${profile} 导入区`)}
           icon={selected.icon}
-          title={selected.prompt}
+          title={text(selected.prompt, selected.promptZh)}
           disabled={Boolean(loadingKey)}
           onFiles={importFiles}
         >
@@ -330,7 +343,7 @@ export function MotionView({
               disabled={Boolean(loadingKey)}
               onClick={() => fileInput.current?.click()}
             >
-              Choose file
+              {text("Choose file", "选择文件")}
             </Button>
           )}
           <Button
@@ -338,7 +351,7 @@ export function MotionView({
             disabled={Boolean(loadingKey)}
             onClick={() => folderInput.current?.click()}
           >
-            Choose folder
+            {text("Choose folder", "选择文件夹")}
           </Button>
           <input
             ref={fileInput}
@@ -370,27 +383,10 @@ export function MotionView({
           >
             {status || ""}
           </p>
-          {loadedBatchEntry &&
-            loadedBatchEntry.asset_kind !== "robot_trajectory" &&
-            onAddToHumanBatch && (
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={
-                  Boolean(loadingKey) ||
-                  batchPaths.has(loadedBatchEntry.source_path)
-                }
-                onClick={() => addToHumanBatch(loadedBatchEntry)}
-              >
-                {batchPaths.has(loadedBatchEntry.source_path)
-                  ? "In H2R Batch"
-                  : "Add loaded to Batch"}
-              </Button>
-            )}
         </div>
         <ValidationSummary
-          items={motionValidationFacts(currentMotion ?? null)}
-          label="Loaded motion validation"
+          items={motionValidationFacts(currentMotion ?? null, text)}
+          label={text("Loaded motion validation", "已加载动作校验")}
         />
       </div>
 
@@ -403,10 +399,10 @@ export function MotionView({
             id="motion-library-title"
             className="text-[19px] leading-tight font-bold tracking-normal text-foreground"
           >
-            Library
+            {text("Library", "资源库")}
           </h2>
           <RefreshButton
-            label="Refresh Motion Library"
+            label={text("Refresh Motion Library", "刷新动作资源库")}
             busy={loadingLibrary}
             variant="ghost"
             onClick={refreshLibrary}
@@ -414,8 +410,8 @@ export function MotionView({
           />
         </div>
         <SearchField
-          label="Search the Motion Library"
-          placeholder="Search motions..."
+          label={text("Search the Motion Library", "搜索动作资源库")}
+          placeholder={text("Search motions...", "搜索动作……")}
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           disabled={loadingLibrary}
@@ -435,18 +431,18 @@ export function MotionView({
                 setCategory(value);
               }
             }}
-            aria-label="Motion library category"
+            aria-label={text("Motion library category", "动作资源库类型")}
             disabled={loadingLibrary}
           >
             {categories.map((item) => (
               <option key={item.value} value={item.value}>
-                {item.label}
+                {text(item.label, item.labelZh)}
               </option>
             ))}
           </select>
           {onOpenSettings && (
             <Button size="sm" variant="primary" onClick={onOpenSettings}>
-              Set directory
+              {text("Set directory", "设置目录")}
             </Button>
           )}
         </div>
@@ -464,17 +460,25 @@ export function MotionView({
           aria-busy={loadingLibrary || Boolean(loadingKey)}
         >
           {loadingLibrary ? (
-            <p className="p-2 text-xs text-muted-foreground">Loading Motion Library…</p>
+            <p className="p-2 text-xs text-muted-foreground">
+              {text("Loading Motion Library…", "正在加载动作资源库…")}
+            </p>
           ) : !entries.length ? (
             <p className="p-2 text-xs text-muted-foreground">
-              No recognizable motions are available.
+              {text("No recognizable motions are available.", "没有可识别的动作。")}
             </p>
           ) : !visibleEntries.length ? (
             <p className="p-2 text-xs text-muted-foreground">
-              No motions match “{query}”.
+              {text(
+                `No motions match “${query}”.`,
+                `没有动作匹配“${query}”。`,
+              )}
             </p>
           ) : (
-            <ul className="grid gap-0.5" aria-label="Motion Library entries">
+            <ul
+              className="grid gap-0.5"
+              aria-label={text("Motion Library entries", "动作资源库条目")}
+            >
               {visibleEntries.slice(0, 300).map((entry) => {
                 const key = entryKey(entry);
                 const active = selectedKey === key;
@@ -490,27 +494,40 @@ export function MotionView({
                       className="grid min-h-12 w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-md border border-transparent bg-transparent px-2 py-1.5 text-left text-foreground transition-colors hover:border-border-subtle hover:bg-background focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring data-[active=true]:border-primary data-[active=true]:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
                       data-active={active}
                       aria-current={active ? "true" : undefined}
-                      aria-label={`Load motion ${entryLabel(entry)}`}
+                      aria-label={text(
+                        `Load motion ${motionLabel(entry)}`,
+                        `加载动作 ${motionLabel(entry)}`,
+                      )}
                       disabled={Boolean(loadingKey)}
                       onClick={() => loadEntry(entry)}
                     >
                       <span
                         className={`rounded-sm px-1.5 py-1 text-[10px] font-semibold uppercase ${categoryBadgeClass[motionCategory]}`}
                       >
-                        {motionCategory}
+                        {text(
+                          categories.find((item) => item.value === motionCategory)
+                            ?.label ?? motionCategory,
+                          categories.find((item) => item.value === motionCategory)
+                            ?.labelZh ?? motionCategory,
+                        )}
                       </span>
                       <span className="grid min-w-0 gap-0.5">
                         <strong className="truncate text-[13px] font-semibold">
-                          {entryLabel(entry)}
+                          {motionLabel(entry)}
                         </strong>
                         <small className="truncate text-[11px] text-muted-foreground">
                           {[entry.folder_label, entry.dataset]
                             .filter(Boolean)
-                            .join(" · ") || "Motion Library"}
+                            .join(" · ") ||
+                            text("Motion Library", "动作资源库")}
                         </small>
                       </span>
                       <span className="shrink-0 text-[11px] text-muted-foreground">
-                        {busy ? "Loading…" : active ? "Loaded" : "Load"}
+                        {busy
+                          ? text("Loading…", "加载中…")
+                          : active
+                            ? text("Loaded", "已加载")
+                            : text("Load", "加载")}
                       </span>
                     </button>
                   </li>

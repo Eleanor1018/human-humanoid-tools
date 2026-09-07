@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button";
+import { useLocaleText } from "@/LocaleProvider";
 
 import type { DatasetUploadSummary } from "./api";
 
@@ -15,6 +16,7 @@ export function UploadBasket({
   onRemove,
   onClear,
 }: UploadBasketProps) {
+  const text = useLocaleText();
   const namesByFolder = new Map<string, string[]>();
   for (const clip of summary.clips) {
     const names = namesByFolder.get(clip.folder_label) ?? [];
@@ -29,13 +31,13 @@ export function UploadBasket({
     <div className="grid gap-2 rounded-md border border-border-subtle bg-background p-2.5">
       <div className="flex items-center justify-between gap-2">
         <p className="text-xs font-semibold text-foreground">
-          Upload basket · {summary.clip_count} clips
+          {text("Upload basket", "上传篮")} · {summary.clip_count} {text("clips", "个片段")}
         </p>
         <Button variant="danger" size="sm" disabled={disabled || !folders.length} onClick={onClear}>
-          Clear
+          {text("Clear", "清空")}
         </Button>
       </div>
-      <ul className="grid gap-1" aria-label="Uploaded dataset folders">
+      <ul className="grid gap-1" aria-label={text("Uploaded dataset folders", "已上传的数据集文件夹")}>
         {folders.map(([folder, count]) => {
           const names = namesByFolder.get(folder) ?? [];
           return (
@@ -48,7 +50,7 @@ export function UploadBasket({
                   {folder}
                 </span>
                 <span className="block truncate text-[10px] text-muted-foreground">
-                  {count} clips
+                  {count} {text("clips", "个片段")}
                   {names.length ? ` · ${names.slice(0, 3).join(" · ")}${names.length > 3 ? " …" : ""}` : ""}
                 </span>
               </span>
@@ -56,8 +58,8 @@ export function UploadBasket({
                 type="button"
                 className="flex size-7 items-center justify-center rounded-md text-base leading-none text-muted-foreground hover:bg-danger-muted hover:text-danger disabled:opacity-40"
                 disabled={disabled}
-                aria-label={`Remove ${folder}`}
-                title="Remove folder"
+                aria-label={text(`Remove ${folder}`, `移除 ${folder}`)}
+                title={text("Remove folder", "移除文件夹")}
                 onClick={() => onRemove(folder)}
               >
                 ×

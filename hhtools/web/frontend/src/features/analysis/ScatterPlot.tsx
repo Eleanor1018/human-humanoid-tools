@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent, type WheelEvent } from "react";
 
+import { useLocaleText } from "@/LocaleProvider";
+
 import type { DatasetClip } from "./api";
 import { clipsWithScatter, scatterBounds } from "./model";
 
@@ -29,8 +31,8 @@ export interface ScatterPlotProps {
   readonly onActivate: (clip: DatasetClip, additive: boolean) => void;
 }
 
-function label(clip: DatasetClip): string {
-  return clip.clip_id || clip.source_path.split(/[\\/]/).pop() || "clip";
+function label(clip: DatasetClip, fallback = "clip"): string {
+  return clip.clip_id || clip.source_path.split(/[\\/]/).pop() || fallback;
 }
 
 function clusterColor(cluster: number | null): string {
@@ -53,6 +55,8 @@ export function ScatterPlot({
   subsetIds,
   onActivate,
 }: ScatterPlotProps) {
+  const text = useLocaleText();
+  const clipName = (clip: DatasetClip) => label(clip, text("clip", "片段"));
   const points = useMemo(() => clipsWithScatter(clips), [clips]);
   const bounds = useMemo(() => scatterBounds(points), [points]);
   const [view, setView] = useState<ViewTransform>({ scale: 1, panX: 0, panY: 0 });
@@ -66,7 +70,7 @@ export function ScatterPlot({
   }, [clips]);
 
   if (!bounds) {
-    return <p className="text-xs text-muted-foreground">No embedding coordinates.</p>;
+    return <p className="text-xs text-muted-foreground">{text("No embedding coordinates.", "没有嵌入坐标。")}</p>;
   }
 
   const baseX = (value: number) =>
@@ -131,12 +135,12 @@ export function ScatterPlot({
   return (
     <div className="grid gap-2">
       <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
-        <span>Embedding · {Math.round(view.scale * 100)}%</span>
+        <span>{text("Embedding", "嵌入图")} · {Math.round(view.scale * 100)}%</span>
         <button
           type="button"
           className="grid size-7 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-          aria-label="Reset embedding view"
-          title="Reset view"
+          aria-label={text("Reset embedding view", "重置嵌入图视图")}
+          title={text("Reset view", "重置视图")}
           onClick={reset}
         >
           <img className="size-4" src="/icons/stage/reset-view.svg" alt="" />
@@ -147,7 +151,7 @@ export function ScatterPlot({
           className="h-[220px] w-full touch-none overflow-hidden rounded-md border border-border-subtle bg-background"
           viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
           role="group"
-          aria-label="Embedding scatter plot"
+          aria-label={text("Embedding scatter plot", "嵌入散点图")}
           onWheel={handleWheel}
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
@@ -178,7 +182,7 @@ export function ScatterPlot({
                 className="cursor-pointer outline-none focus:stroke-[3px]"
                 role="button"
                 tabIndex={0}
-                aria-label={`Preview ${label(clip)}`}
+                aria-label={text(`Preview ${clipName(clip)}`, `预览 ${clipName(clip)}`)}
                 aria-pressed={selected}
                 onPointerEnter={() => setHoverId(clip.clip_id)}
                 onFocus={() => setHoverId(clip.clip_id)}
@@ -193,7 +197,7 @@ export function ScatterPlot({
                   onActivate(clip, event.shiftKey);
                 }}
               >
-                <title>{label(clip)}</title>
+                <title>{clipName(clip)}</title>
               </circle>
             );
           })}
@@ -207,17 +211,19 @@ export function ScatterPlot({
             }}
             role="tooltip"
           >
-            <span className="block truncate font-medium">{label(hoverClip)}</span>
+            <span className="block truncate font-medium">{clipName(hoverClip)}</span>
             <span className="opacity-80">
-              Cluster {hoverClip.cluster_id ?? "-"}
-              {!visibleIds.has(hoverClip.clip_id) ? " · outside filter" : ""}
+              {text("Cluster", "聚类")} {hoverClip.cluster_id ?? "-"}
+              {!visibleIds.has(hoverClip.clip_id)
+                ? text(" · outside filter", " · 不在筛选范围内")
+                : ""}
             </span>
           </div>
         )}
       </div>
       <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-muted-foreground">
-        <span><i className="mr-1 inline-block size-2 rounded-full bg-[#ff9f0a]" />recommended</span>
-        <span><i className="mr-1 inline-block size-2 rounded-full bg-foreground" />manual</span>
+        <span><i className="mr-1 inline-block size-2 rounded-full bg-[#ff9f0a]" />{text("recommended", "推荐")}</span>
+        <span><i className="mr-1 inline-block size-2 rounded-full bg-foreground" />{text("manual", "手动")}</span>
       </div>
     </div>
   );

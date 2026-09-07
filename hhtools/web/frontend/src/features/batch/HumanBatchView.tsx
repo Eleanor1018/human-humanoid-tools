@@ -11,6 +11,7 @@ import { getCalibrationStatus } from "@/features/h2r/api";
 import type { MotionLibraryEntry } from "@/features/motion/api";
 import { loadRobot, type RobotPayload, type RobotSummary } from "@/features/robot/api";
 import type { JobSnapshot, UploadFile } from "@/lib/api";
+import { useLocaleText } from "@/LocaleProvider";
 
 import {
   runHumanBatch,
@@ -61,9 +62,14 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function invalidPositive(label: string, value: string): string | null {
+function invalidPositive(
+  label: string,
+  chineseLabel: string,
+  value: string,
+  text: (english: string, chinese: string) => string,
+): string | null {
   return value.trim() && optionalPositiveNumber(value) === undefined
-    ? `${label} must be a positive number.`
+    ? text(`${label} must be a positive number.`, `${chineseLabel}必须是正数。`)
     : null;
 }
 
@@ -82,6 +88,7 @@ export function HumanBatchView({
   onEntriesChange(entries: readonly MotionLibraryEntry[]): void;
   catalogError?: string | null;
 }) {
+  const text = useLocaleText();
   const humanLibrary = useMemo(
     () => library.filter((entry) => entry.asset_kind !== "robot_trajectory"),
     [library],
@@ -155,7 +162,12 @@ export function HumanBatchView({
     const next = appendUniqueEntries(current, incoming);
     const added = next.length - current.length;
     onEntriesChange(next);
-    setNotice(`${added} added · ${incoming.length - added} duplicates skipped`);
+    setNotice(
+      text(
+        `${added} added · ${incoming.length - added} duplicates skipped`,
+        `已添加 ${added} 项 · 跳过 ${incoming.length - added} 个重复项`,
+      ),
+    );
     const backend = suggestedBackend(incoming);
     if (backend) setSettings((current) => ({ ...current, backend }));
     setError(null);
@@ -174,11 +186,17 @@ export function HumanBatchView({
     operation.current = request;
     setAction("import");
     setError(null);
-    setNotice(`Reading ${files.length} uploaded file${files.length === 1 ? "" : "s"}…`);
+    setNotice(
+      text(
+        `Reading ${files.length} uploaded file${files.length === 1 ? "" : "s"}…`,
+        `正在读取 ${files.length} 个上传文件…`,
+      ),
+    );
     try {
       const result = await uploadHumanBatchInputs(files, "auto", {
         signal: request.signal,
-        onUpdate: (snapshot) => setNotice(snapshot.message || "Recognizing clips…"),
+        onUpdate: (snapshot) =>
+          setNotice(snapshot.message || text("Recognizing clips…", "正在识别动作…")),
       });
       if (!request.signal.aborted) addEntries(result.entries);
     } catch (reason) {
@@ -202,7 +220,7 @@ export function HumanBatchView({
       const loaded = await loadRobot(robotChoice, { signal: request.signal });
       if (!request.signal.aborted) {
         setRobot(loaded);
-        setNotice(`Loaded ${loaded.display_name}`);
+        setNotice(text(`Loaded ${loaded.display_name}`, `已加载 ${loaded.display_name}`));
         resetRunResult();
       }
     } catch (reason) {
@@ -215,13 +233,22 @@ export function HumanBatchView({
     }
   }
 
+  const rawTimeRangeError = timeRangeError(settings.start, settings.end);
+  const localizedTimeRangeError = rawTimeRangeError
+    ? rawTimeRangeError === "Start time cannot be later than end time."
+      ? text(rawTimeRangeError, "开始时间不能晚于结束时间。")
+      : text(rawTimeRangeError, "请输入有效的非负时间范围。")
+    : null;
   const settingsError =
-    timeRangeError(settings.start, settings.end) ||
-    invalidPositive("Retarget FPS", settings.retargetFps) ||
-    invalidPositive("Export FPS", settings.exportFps) ||
+    localizedTimeRangeError ||
+    invalidPositive("Retarget FPS", "重定向帧率", settings.retargetFps, text) ||
+    invalidPositive("Export FPS", "导出帧率", settings.exportFps, text) ||
     (batchSize.trim() &&
     (!Number.isSafeInteger(Number(batchSize)) || Number(batchSize) < 1 || Number(batchSize) > 256)
-      ? "GPU batch size must be an integer from 1 to 256."
+      ? text(
+          "GPU batch size must be an integer from 1 to 256.",
+          "GPU 批大小必须是 1 到 256 之间的整数。",
+        )
       : null);
   const checkedReferenceKey = checks
     .map((check) => `${check.reference}:${check.count}`)
@@ -231,18 +258,21 @@ export function HumanBatchView({
   const missingReferences = checks.filter((check) => check.status !== "ready");
   const disabledReason = busy
     ? action === "run"
-      ? "A batch task is running."
-      : "Finish the current Batch operation first."
+      ? text("A batch task is running.", "批处理任务正在运行。")
+      : text("Finish the current Batch operation first.", "请先完成当前批处理操作。")
     : !entries.length
-      ? "Add at least one motion."
+      ? text("Add at least one motion.", "请至少添加一个动作。")
       : !robot
-        ? "Select and load a target robot."
+        ? text("Select and load a target robot.", "请选择并加载目标机器人。")
         : robotChoice !== robot.name
-          ? "Load the selected target robot."
+          ? text("Load the selected target robot.", "请加载所选目标机器人。")
           : !checksAreCurrent || checks.some((check) => check.status === "checking")
-            ? "Checking calibration compatibility…"
+            ? text("Checking calibration compatibility…", "正在检查校准兼容性…")
             : missingReferences.length
-              ? `Complete calibration for ${missingReferences.map((check) => check.reference.toUpperCase()).join(", ")}.`
+              ? text(
+                  `Complete calibration for ${missingReferences.map((check) => check.reference.toUpperCase()).join(", ")}.`,
+                  `请完成 ${missingReferences.map((check) => check.reference.toUpperCase()).join("、")} 的校准。`,
+                )
               : settingsError;
 
   async function run(): Promise<void> {
@@ -253,7 +283,7 @@ export function HumanBatchView({
     setAction("run");
     setError(null);
     setCompleted(null);
-    setJob({ id: "starting", kind: "batch", status: "running", progress: 0, clip_progress: 0, message: "Starting batch task…" });
+    setJob({ id: "starting", kind: "batch", status: "running", progress: 0, clip_progress: 0, message: text("Starting batch task…", "正在启动批处理任务…") });
     try {
       const done = await runHumanBatch(
         {
@@ -276,7 +306,12 @@ export function HumanBatchView({
       if (!request.signal.aborted) {
         setJob((current) => current ? { ...current, status: "done", progress: 1, clip_progress: 1 } : current);
         setCompleted(done);
-        setNotice(`${done.result.written.length} clips completed.`);
+        setNotice(
+          text(
+            `${done.result.written.length} clips completed.`,
+            `${done.result.written.length} 个动作已完成。`,
+          ),
+        );
       }
     } catch (reason) {
       if (!request.signal.aborted) setError(errorMessage(reason));
@@ -290,7 +325,11 @@ export function HumanBatchView({
 
   return (
     <div className="flex flex-col">
-      <WorkflowStep title="1. Inputs" status={`${entries.length} clips`} defaultOpen>
+      <WorkflowStep
+        title={text("1. Inputs", "1. 输入")}
+        status={text(`${entries.length} clips`, `${entries.length} 个动作`)}
+        defaultOpen
+      >
         <div className="grid gap-2.5">
           <LibraryPicker
             entries={humanLibrary}
@@ -302,8 +341,8 @@ export function HumanBatchView({
             onAdd={addSelectedLibraryEntries}
           />
           <FileImport
-            title="Drop motion files or a folder"
-            hint="Files are recognized and cached by FastAPI"
+            title={text("Drop motion files or a folder", "拖放动作文件或文件夹")}
+            hint={text("Files are recognized and cached by FastAPI", "文件将由 FastAPI 识别并缓存")}
             icon="/icons/sidebar/motion.svg"
             busy={busy}
             onFiles={importFiles}
@@ -326,10 +365,14 @@ export function HumanBatchView({
         </div>
       </WorkflowStep>
 
-      <WorkflowStep title="2. Target robot & calibration" status={robot?.display_name ?? "Not loaded"} defaultOpen>
+      <WorkflowStep
+        title={text("2. Target robot & calibration", "2. 目标机器人与校准")}
+        status={robot?.display_name ?? text("Not loaded", "未加载")}
+        defaultOpen
+      >
         <div className="grid gap-2.5">
           <RobotSelect
-            label="Target robot"
+            label={text("Target robot", "目标机器人")}
             robots={robots}
             value={robotChoice}
             loadedName={robot?.name}
@@ -343,9 +386,19 @@ export function HumanBatchView({
                 const status = checks.find((check) => check.reference === reference)?.status;
                 return (
                   <div key={reference} className="flex min-h-9 items-center justify-between gap-3 border-b border-border-subtle px-2.5 py-1.5 text-[11px] last:border-b-0">
-                    <span><strong className="text-foreground">{reference.toUpperCase()}</strong> · {count} clips</span>
+                    <span>
+                      <strong className="text-foreground">{reference.toUpperCase()}</strong> · {count} {text("clips", "个动作")}
+                    </span>
                     <span className={status === "ready" ? "text-success" : status === "missing" ? "text-warning" : status === "error" ? "text-danger" : "text-muted-foreground"}>
-                      {!robot ? "Load robot" : status === "checking" ? "Checking…" : status === "ready" ? "Ready" : status === "error" ? "Check failed" : "Calibration needed"}
+                      {!robot
+                        ? text("Load robot", "加载机器人")
+                        : status === "checking"
+                          ? text("Checking…", "检查中…")
+                          : status === "ready"
+                            ? text("Ready", "就绪")
+                            : status === "error"
+                              ? text("Check failed", "检查失败")
+                              : text("Calibration needed", "需要校准")}
                     </span>
                   </div>
                 );
@@ -355,7 +408,7 @@ export function HumanBatchView({
         </div>
       </WorkflowStep>
 
-      <WorkflowStep title="3. Run settings" defaultOpen>
+      <WorkflowStep title={text("3. Run settings", "3. 运行设置")} defaultOpen>
         <CommonBatchSettings
           value={settings}
           batchSize={batchSize}
@@ -365,19 +418,27 @@ export function HumanBatchView({
         />
         <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
           {settings.backend === "newton"
-            ? "Newton uses GPU chunks; leave batch size empty for automatic tuning."
-            : "Interaction-Mesh processes clips sequentially."}
+            ? text(
+                "Newton uses GPU chunks; leave batch size empty for automatic tuning.",
+                "Newton 使用 GPU 分块；批大小留空时将自动调整。",
+              )
+            : text(
+                "Interaction-Mesh processes clips sequentially.",
+                "Interaction-Mesh 将依次处理各个动作。",
+              )}
         </p>
       </WorkflowStep>
 
       <section className="grid gap-2.5 pt-4">
         <p className="text-xs text-muted-foreground">
           {entries.length
-            ? `${entries.length} clips → ${robot?.display_name ?? "no target"} → ${(settings.output || "batch_export").replace(/\.zip$/i, "")}.zip`
-            : "No inputs selected."}
+            ? `${entries.length} ${text("clips", "个动作")} → ${robot?.display_name ?? text("no target", "无目标机器人")} → ${(settings.output || "batch_export").replace(/\.zip$/i, "")}.zip`
+            : text("No inputs selected.", "尚未选择输入。")}
         </p>
         <Button variant="primary" size="sm" disabled={Boolean(disabledReason)} onClick={() => void run()}>
-          {action === "run" ? "Running batch…" : "Start H2R batch"}
+          {action === "run"
+            ? text("Running batch…", "批处理中…")
+            : text("Start H2R batch", "启动 H2R 批处理")}
         </Button>
         {disabledReason && <p className="text-[11px] text-muted-foreground">{disabledReason}</p>}
         <BatchProgress job={job} />

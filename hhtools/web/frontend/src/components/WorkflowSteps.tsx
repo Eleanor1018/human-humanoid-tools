@@ -1,5 +1,6 @@
 import type { CSSProperties, ReactNode } from "react";
 
+import { useLocaleText } from "@/LocaleProvider";
 import { cn } from "@/lib/utils";
 import { workflowPipelineState } from "./workflowPipeline";
 
@@ -16,6 +17,7 @@ export function WorkflowPipeline({
   activeIndex = 0,
   completedIndex = activeIndex - 1,
 }: WorkflowPipelineProps) {
+  const text = useLocaleText();
   return (
     <ol
       className="grid min-h-[54px] shrink-0 gap-0"
@@ -31,7 +33,13 @@ export function WorkflowPipeline({
             key={step}
             className="relative flex min-w-0 flex-col items-center gap-1.5 text-center"
             data-state={state}
-            aria-label={`${step}, ${state}`}
+            aria-label={`${step}, ${
+              state === "active"
+                ? text("active", "当前")
+                : state === "complete"
+                  ? text("complete", "已完成")
+                  : text("upcoming", "未开始")
+            }`}
             aria-current={state === "active" ? "step" : undefined}
           >
             {index > 0 && (
@@ -85,7 +93,10 @@ export function WorkflowStep({
       <summary className="flex min-h-[42px] cursor-pointer list-none items-center gap-2 text-[13px] font-semibold text-foreground focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring [&::-webkit-details-marker]:hidden">
         <span className="min-w-0 flex-1 truncate">{title}</span>
         {status && (
-          <span className="shrink-0 text-[11px] font-normal text-muted-foreground">
+          <span
+            className="max-w-[50%] shrink-0 truncate text-[11px] font-normal text-muted-foreground"
+            title={status}
+          >
             {status}
           </span>
         )}

@@ -115,6 +115,10 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
       '设置',
       '帮助'
     ])
+    const chineseInspector = page.getByRole('complementary', { name: '检查器' })
+    await expect(chineseInspector.getByRole('heading', { name: '动作' })).toBeVisible()
+    await expect(chineseInspector.getByText('拖入动作文件或文件夹')).toBeVisible()
+    await expect(chineseInspector.getByRole('heading', { name: '资源库' })).toBeVisible()
     settingsDialog = page.getByRole('dialog', { name: '工作区设置' })
     for (const removedCopy of [
       '语言、布局、资源库与后台任务',

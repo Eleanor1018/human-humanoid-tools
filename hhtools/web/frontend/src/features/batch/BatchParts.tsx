@@ -8,6 +8,7 @@ import type { MotionLibraryEntry } from "@/features/motion/api";
 import type { RobotSummary } from "@/features/robot/api";
 import type { JobSnapshot, UploadFile } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { useLocaleText } from "@/LocaleProvider";
 
 import {
   batchDownloadUrl,
@@ -58,6 +59,7 @@ export function RobotSelect({
   onChange(value: string): void;
   onLoad(): void;
 }) {
+  const text = useLocaleText();
   const loaded = Boolean(value && value === loadedName);
   return (
     <div className="grid gap-2">
@@ -68,15 +70,15 @@ export function RobotSelect({
         onChange={(event) => onChange(event.currentTarget.value)}
         disabled={busy}
       >
-        <option value="">Select a robot…</option>
+        <option value="">{text("Select a robot…", "选择机器人…")}</option>
         {robots.map((robot) => (
           <option key={robot.name} value={robot.name} disabled={!robot.has_urdf}>
-            {robot.display_name || robot.name} ({robot.num_dof} DoF)
+            {robot.display_name || robot.name} ({robot.num_dof} {text("DoF", "自由度")})
           </option>
         ))}
       </select>
       <Button size="sm" onClick={onLoad} disabled={busy || !value || loaded}>
-        {loaded ? "Robot loaded" : "Load robot"}
+        {loaded ? text("Robot loaded", "机器人已加载") : text("Load robot", "加载机器人")}
       </Button>
     </div>
   );
@@ -97,6 +99,7 @@ export function FileImport({
   busy: boolean;
   onFiles(files: readonly UploadFile[]): void | Promise<void>;
 }) {
+  const text = useLocaleText();
   const fileInput = useRef<HTMLInputElement>(null);
   const folderInput = useRef<HTMLInputElement>(null);
   const receive = (event: ChangeEvent<HTMLInputElement>) => {
@@ -132,10 +135,10 @@ export function FileImport({
         {...({ webkitdirectory: "" } as React.InputHTMLAttributes<HTMLInputElement>)}
       />
       <Button size="sm" disabled={busy} onClick={() => fileInput.current?.click()}>
-        Files
+        {text("Files", "文件")}
       </Button>
       <Button size="sm" disabled={busy} onClick={() => folderInput.current?.click()}>
-        Folder
+        {text("Folder", "文件夹")}
       </Button>
     </ImportDropzone>
   );
@@ -154,6 +157,7 @@ export function EntryList({
   onRemove(key: string): void;
   onClear(): void;
 }) {
+  const text = useLocaleText();
   return (
     <div className="grid gap-2">
       <div className="max-h-48 overflow-y-auto rounded-md border border-border-subtle bg-surface">
@@ -169,15 +173,15 @@ export function EntryList({
                 </p>
                 <p className="truncate text-[10px] text-muted-foreground">
                   {kind === "human"
-                    ? `${entry.motion_category ?? "motion"} · ${entryReference(entry).toUpperCase()}`
-                    : entry.upload_profile ?? "auto"}
+                    ? `${entry.motion_category ?? text("motion", "动作")} · ${entryReference(entry).toUpperCase()}`
+                    : entry.upload_profile ?? text("auto", "自动")}
                 </p>
               </div>
               <button
                 type="button"
                 className="size-7 rounded-md text-lg leading-none text-muted-foreground hover:bg-danger-muted hover:text-danger disabled:cursor-not-allowed disabled:opacity-50"
-                aria-label={`Remove ${entryTitle(entry)}`}
-                title="Remove"
+                aria-label={text(`Remove ${entryTitle(entry)}`, `移除 ${entryTitle(entry)}`)}
+                title={text("Remove", "移除")}
                 disabled={busy}
                 onClick={() => onRemove(entryKey(entry))}
               >
@@ -187,14 +191,16 @@ export function EntryList({
           ))
         ) : (
           <p className="px-3 py-5 text-center text-xs text-muted-foreground">
-            No inputs yet.
+            {text("No inputs yet.", "尚未添加输入。")}
           </p>
         )}
       </div>
       <div className="flex items-center justify-between gap-3 text-[11px] text-muted-foreground">
-        <span>{entries.length} {kind === "human" ? "clips" : "trajectories"}</span>
+        <span>
+          {entries.length} {kind === "human" ? text("clips", "个动作") : text("trajectories", "条轨迹")}
+        </span>
         <Button size="sm" variant="danger" disabled={busy || !entries.length} onClick={onClear}>
-          Clear all
+          {text("Clear all", "全部清除")}
         </Button>
       </div>
     </div>
@@ -218,6 +224,7 @@ export function LibraryPicker({
   onSelectionChange(value: ReadonlySet<string>): void;
   onAdd(): void;
 }) {
+  const text = useLocaleText();
   const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
   const visible = entries.filter((entry) => {
     const text = [entryTitle(entry), entry.folder_label, entry.dataset, entry.reference]
@@ -235,12 +242,12 @@ export function LibraryPicker({
   return (
     <details className="rounded-md border border-border-subtle bg-background">
       <summary className="cursor-pointer list-none px-2.5 py-2 text-xs font-semibold text-foreground [&::-webkit-details-marker]:hidden">
-        Add from Motion Library
+        {text("Add from Motion Library", "从动作资源库添加")}
       </summary>
       <div className="grid gap-2 border-t border-border-subtle p-2.5">
         <SearchField
-          label="Search Motion Library"
-          placeholder="Search motions…"
+          label={text("Search Motion Library", "搜索动作资源库")}
+          placeholder={text("Search motions…", "搜索动作…")}
           value={query}
           disabled={disabled}
           onChange={(event) => onQueryChange(event.currentTarget.value)}
@@ -271,12 +278,15 @@ export function LibraryPicker({
           })}
           {!visible.length && (
             <p className="px-3 py-4 text-center text-[11px] text-muted-foreground">
-              No matching motions.
+              {text("No matching motions.", "没有匹配的动作。")}
             </p>
           )}
         </div>
         <Button variant="primary" size="sm" onClick={onAdd} disabled={disabled || !selection.size}>
-          Add {selection.size || "selected"}
+          {text(
+            `Add ${selection.size || "selected"}`,
+            selection.size ? `添加 ${selection.size} 项` : "添加所选项",
+          )}
         </Button>
       </div>
     </details>
@@ -311,10 +321,11 @@ export function CommonBatchSettings({
   onSourceFpsChange?(value: string): void;
   onBatchSizeChange?(value: string): void;
 }) {
+  const text = useLocaleText();
   return (
     <div className="grid gap-2.5">
       <div className="grid grid-cols-2 gap-2">
-        <Field label="Solver">
+        <Field label={text("Solver", "求解器")}>
           <select
             className={fieldClass}
             value={value.backend}
@@ -325,7 +336,7 @@ export function CommonBatchSettings({
             <option value="interaction_mesh">Interaction-Mesh</option>
           </select>
         </Field>
-        <Field label="Output format">
+        <Field label={text("Output format", "输出格式")}>
           <select
             className={fieldClass}
             value={value.format}
@@ -339,17 +350,17 @@ export function CommonBatchSettings({
       </div>
       <details className="rounded-md border border-border-subtle bg-background">
         <summary className="cursor-pointer list-none px-2.5 py-2 text-xs font-semibold text-foreground [&::-webkit-details-marker]:hidden">
-          Advanced settings
+          {text("Advanced settings", "高级设置")}
         </summary>
         <div className="grid gap-2.5 border-t border-border-subtle p-2.5">
           {batchSize !== undefined && value.backend === "newton" && (
-            <Field label="GPU batch size">
+            <Field label={text("GPU batch size", "GPU 批大小")}>
               <input
                 className={fieldClass}
                 type="number"
                 min="1"
                 max="256"
-                placeholder="Auto"
+                placeholder={text("Auto", "自动")}
                 value={batchSize}
                 disabled={disabled}
                 onChange={(event) => onBatchSizeChange?.(event.currentTarget.value)}
@@ -358,7 +369,7 @@ export function CommonBatchSettings({
           )}
           <div className="grid grid-cols-2 gap-2">
             {sourceFps !== undefined && (
-              <Field label="Source FPS">
+              <Field label={text("Source FPS", "源帧率")}>
                 <input
                   className={fieldClass}
                   type="number"
@@ -369,23 +380,23 @@ export function CommonBatchSettings({
                 />
               </Field>
             )}
-            <Field label="Retarget FPS">
+            <Field label={text("Retarget FPS", "重定向帧率")}>
               <input
                 className={fieldClass}
                 type="number"
                 min="1"
-                placeholder="Source"
+                placeholder={text("Source", "跟随源帧率")}
                 value={value.retargetFps}
                 disabled={disabled}
                 onChange={(event) => onChange({ retargetFps: event.currentTarget.value })}
               />
             </Field>
-            <Field label="Export FPS">
+            <Field label={text("Export FPS", "导出帧率")}>
               <input
                 className={fieldClass}
                 type="number"
                 min="1"
-                placeholder="Retarget"
+                placeholder={text("Retarget", "跟随重定向帧率")}
                 value={value.exportFps}
                 disabled={disabled}
                 onChange={(event) => onChange({ exportFps: event.currentTarget.value })}
@@ -393,7 +404,7 @@ export function CommonBatchSettings({
             </Field>
           </div>
           <div className="grid grid-cols-2 gap-2">
-            <Field label="Start (s)">
+            <Field label={text("Start (s)", "开始时间（秒）")}>
               <input
                 className={fieldClass}
                 type="number"
@@ -403,12 +414,12 @@ export function CommonBatchSettings({
                 onChange={(event) => onChange({ start: event.currentTarget.value })}
               />
             </Field>
-            <Field label="End (s)">
+            <Field label={text("End (s)", "结束时间（秒）")}>
               <input
                 className={fieldClass}
                 type="number"
                 min="0"
-                placeholder="End"
+                placeholder={text("End", "结束")}
                 value={value.end}
                 disabled={disabled}
                 onChange={(event) => onChange({ end: event.currentTarget.value })}
@@ -417,7 +428,7 @@ export function CommonBatchSettings({
           </div>
           {value.format === "csv" && (
             <label className="flex min-h-8 items-center justify-between gap-3 text-xs font-medium text-foreground">
-              Include CSV header
+              {text("Include CSV header", "包含 CSV 表头")}
               <input
                 type="checkbox"
                 className="size-4 accent-primary"
@@ -427,7 +438,7 @@ export function CommonBatchSettings({
               />
             </label>
           )}
-          <Field label="Result name">
+          <Field label={text("Result name", "结果名称")}>
             <input
               className={fieldClass}
               value={value.output}
@@ -442,10 +453,11 @@ export function CommonBatchSettings({
 }
 
 export function BatchProgress({ job }: { job: JobSnapshot<BatchResult> | null }) {
+  const text = useLocaleText();
   if (!job) return null;
   const rows = [
-    ["Overall", job.progress ?? 0],
-    ["Current", job.clip_progress ?? 0],
+    [text("Overall", "总体"), job.progress ?? 0],
+    [text("Current", "当前"), job.clip_progress ?? 0],
   ] as const;
   return (
     <div className="grid gap-2" role="status" aria-live="polite">
@@ -462,23 +474,26 @@ export function BatchProgress({ job }: { job: JobSnapshot<BatchResult> | null })
 }
 
 function FailureList({ failures }: { failures: readonly BatchFailure[] }) {
+  const text = useLocaleText();
   if (!failures.length) return null;
   return (
     <details className="rounded-md border border-danger-border bg-danger-muted" open>
       <summary className="cursor-pointer list-none px-2.5 py-2 text-xs font-semibold text-danger [&::-webkit-details-marker]:hidden">
-        Failures ({failures.length})
+        {text("Failures", "失败项")} ({failures.length})
       </summary>
       <ul className="grid max-h-44 gap-2 overflow-y-auto border-t border-danger-border p-2.5">
         {failures.map((failure, index) => (
           <li key={`${failure.stem ?? "clip"}-${index}`} className="text-[11px] leading-relaxed text-danger">
-            <strong>{failure.stem || "Untitled clip"}</strong>
+            <strong>{failure.stem || text("Untitled clip", "未命名动作")}</strong>
             <span className="ml-1 rounded bg-surface/70 px-1 py-0.5 text-[9px] uppercase">
-              {failure.stage || "unknown"}
+              {failure.stage || text("unknown", "未知")}
             </span>
-            <p className="break-words">{failure.reason || "Unknown error"}</p>
+            <p className="break-words">{failure.reason || text("Unknown error", "未知错误")}</p>
             {failure.log_rel && <code className="break-all">{failure.log_rel}</code>}
             {!failure.log_rel && failure.stash_error && (
-              <p className="break-words">Source copy failed: {failure.stash_error}</p>
+              <p className="break-words">
+                {text("Source copy failed:", "源文件复制失败：")} {failure.stash_error}
+              </p>
             )}
           </li>
         ))}
@@ -494,18 +509,23 @@ export function BatchResultPanel({
   jobId: string;
   result: BatchResult;
 }) {
+  const text = useLocaleText();
   return (
     <div className="grid gap-2.5">
       <div className="rounded-md border border-border-subtle bg-background p-2.5 text-[11px] text-muted-foreground">
         <p className="font-semibold text-foreground">
-          {result.failures.length ? "Completed with failures" : "Batch complete"}
+          {result.failures.length
+            ? text("Completed with failures", "已完成，但存在失败项")
+            : text("Batch complete", "批处理完成")}
         </p>
         <p className="mt-1">
-          {result.written.length} succeeded · {result.failures.length} failed
+          {result.written.length} {text("succeeded", "成功")} · {result.failures.length} {text("failed", "失败")}
           {result.solver_mode ? ` · ${result.solver_mode}` : ""}
         </p>
         {result.failure_log && (
-          <p className="mt-1 break-all">Failure data: <code>{result.failure_log}</code></p>
+          <p className="mt-1 break-all">
+            {text("Failure data:", "失败数据：")} <code>{result.failure_log}</code>
+          </p>
         )}
       </div>
       {result.download_name && (
@@ -514,7 +534,7 @@ export function BatchResultPanel({
           href={batchDownloadUrl(jobId)}
           download={result.download_name}
         >
-          Download ZIP
+          {text("Download ZIP", "下载 ZIP")}
         </a>
       )}
       <FailureList failures={result.failures} />

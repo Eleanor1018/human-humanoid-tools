@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { useLocaleText } from "@/LocaleProvider";
 
 export function Inspector({
   children,
@@ -7,11 +8,12 @@ export function Inspector({
   children: ReactNode;
   hidden?: boolean;
 }) {
+  const text = useLocaleText();
   return (
     <aside
       hidden={hidden}
       className="col-start-3 row-start-2 min-h-0 min-w-0 overflow-hidden border-l border-border-subtle bg-surface max-[780px]:col-start-2 max-[780px]:row-start-3 max-[780px]:border-t"
-      aria-label="Inspector"
+      aria-label={text("Inspector", "检查器")}
     >
       {children}
     </aside>
