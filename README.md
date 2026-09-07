@@ -35,14 +35,15 @@ Video-to-motion additionally needs a separate CUDA-capable GVHMR installation.
 
 ## Install and run
 
-hhtools has three user-facing modes. They share the same motion, robot, and retargeting core, but
-their installation and launch paths are intentionally separate:
+hhtools has three interactive modes plus an Agent automation interface. They share the same motion,
+robot, and retargeting core, but their installation and launch paths are intentionally separate:
 
 | Mode | Best for | Launch |
 |------|----------|--------|
 | **Terminal (CLI/TUI workflow)** | Batch jobs, servers, SSH, and automation | `uv run hhtools ...` |
 | **WebUI** | Browser-based visualization and interactive workflows | `uv run hhtools web` |
 | **Desktop GUI (`.deb`)** | Standalone Ubuntu desktop use | Application menu or `hhtools-desktop` |
+| **Agent (JSON CLI / MCP)** | Versioned local H2R automation | [`hhtools agent` / `hhtools-mcp`](docs/agent.md) |
 
 ### Source checkout: Terminal or WebUI
 
@@ -79,6 +80,13 @@ uv run hhtools web
 Open `http://127.0.0.1:8009`. For a preview-only WebUI without Newton IK, omit `--extra retarget`.
 If a required WebUI package is absent, startup exits with the missing package names and the exact
 recovery command instead of a Python import traceback.
+
+### Agent and MCP
+
+HHTools provides a strict JSON CLI for scripts and a local stdio MCP server for compatible agents.
+The current Agent interface covers safe, preflighted H2R jobs and verified artifact export; it does
+not yet expose the full WebUI feature set. See [Agent interfaces](docs/agent.md) for installation,
+scope, the smoke-first workflow, runtime ownership, and the included Codex project configuration.
 
 ### Standalone Ubuntu desktop GUI (`.deb`)
 
