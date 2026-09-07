@@ -35,14 +35,15 @@
 
 ## 安装与启动
 
-hhtools 有三种面向用户的运行方式。它们共享同一套动作、机器人与重映射核心，但安装和启动
-入口彼此独立：
+hhtools 有三种交互式运行方式，另提供一个 Agent 自动化接口。它们共享同一套动作、机器人与
+重映射核心，但安装和启动入口彼此独立：
 
 | 方式 | 适用场景 | 启动入口 |
 |------|----------|----------|
 | **终端（CLI/TUI 工作流）** | 批处理、服务器、SSH 与自动化 | `uv run hhtools ...` |
 | **WebUI** | 浏览器中的可视化与交互工作流 | `uv run hhtools web` |
-| **桌面 GUI（`.deb`）** | Ubuntu 桌面独立使用 | 应用菜单或 `hhtools-desktop` |
+| **桌面 GUI（`.deb`）** | 复用已安装源码环境的桌面壳 | 应用菜单或 `hhtools-desktop` |
+| **Agent（JSON CLI / MCP）** | 带版本契约的本机 H2R 自动化 | [`hhtools agent` / `hhtools-mcp`](docs/agent.md) |
 
 ### 源码安装：终端或 WebUI
 
@@ -79,19 +80,25 @@ uv run hhtools web
 `--extra retarget`。缺少 WebUI 必需包时，启动程序会列出缺失包及准确的修复命令，不再直接显示
 Python import traceback。
 
-### Ubuntu 独立桌面 GUI（`.deb`）
+### Agent 与 MCP
 
-Debian 安装包已经包含 Electron、WebUI 和隔离的 Python runtime。普通用户无需安装 Python、
-uv、Node.js 或仓库源码：
+HHTools 提供供脚本使用的严格 JSON CLI，以及供兼容 Agent 使用的本机 stdio MCP server。
+当前 Agent 接口覆盖经过 preflight 的安全 H2R 任务和校验后的产物导出，尚未覆盖 WebUI 的
+全部功能。安装方式、能力边界、smoke-first 流程、运行时目录所有权和仓库自带的 Codex 项目
+配置见 [Agent interfaces](docs/agent.md)。
+
+### Ubuntu 桌面 GUI（`.deb`）
+
+Debian 包沿用最初 Desktop Alpha 的薄壳方案：只包含 Electron 和本机提供的 SMPL-X Neutral
+模型，复用已有源码 checkout 与 `.venv`，不重复打包 Python、Torch、CUDA 和 Newton：
 
 ```bash
-sudo apt install ./hhtools-0.1.0-x64.deb
+sudo apt install ./hhtools-0.1.0-amd64.deb
 hhtools-desktop
 ```
 
-也可以从应用菜单启动 **Human-Humanoid Tools**。构建 `.deb` 的步骤见
-[`desktop/README.md` 的 Linux package 章节](desktop/README.md#linux-package)；`npm run dev`
-属于开发启动方式，不是最终用户的安装方式。
+安装后的桌面壳需要设置 `HHTOOLS_REPO_ROOT`，必要时再设置 `HHTOOLS_PYTHON`。构建说明见
+[`desktop/README.md`](desktop/README.md#desktop-packages)。
 
 ### 前端开发
 
@@ -136,7 +143,8 @@ Electron：降低并发不会中断正在运行的任务，提高上限会立即
 ### GVHMR 视频转动作
 
 请按照 [GVHMR 上游说明](https://github.com/zju3dv/GVHMR)单独安装。hhtools 不捆绑其源码、
-官方 checkpoint、Python 环境或需要单独授权的 SMPL-X 文件。**视频 → 动作** 只使用官方发布
+官方 checkpoint 或 Python 环境；本机 desktop 构建可以带入 `SMPLX_NEUTRAL.npz`，源码与 WebUI
+仍使用本机模型目录。**视频 → 动作** 只使用官方发布
 权重完成推理，并将生成的 `hmr4d_results.pt` 登记到 Motion Library；不提供自定义权重或训练入口。
 
 Linux 端会用独立子进程直接启动已经安装好的 GVHMR Python 环境：
@@ -174,6 +182,7 @@ hhtools import run --dataset gvhmr --root /path/to/gvhmr/output --out /path/to/m
 
 | 命令 | 作用 |
 |------|------|
+| `hhtools doctor` | 检查本机 Web、机器人、重映射、MCP、Body Model 与 GVHMR 就绪状态 |
 | `hhtools convert run` | BVH / GLB → 统一 NPZ |
 | `hhtools import list` / `import run` | 列出适配器；数据集根目录 → NPZ |
 | `hhtools bodymodel check` / `setup` | SMPL 系权重路径 / 下载说明 |

@@ -1,5 +1,8 @@
 import type { StageMotionPayload } from "@/stage/types";
 
+export const SMPLX_DOWNLOAD_URL =
+  "https://smpl-x.is.tue.mpg.de/download.php";
+
 export const SUPPORTED_VIDEO_EXTENSIONS = [
   "mp4",
   "mov",
@@ -11,11 +14,55 @@ export const SUPPORTED_VIDEO_EXTENSIONS = [
 
 export interface GvhmrRuntimeStatus {
   readonly ready: boolean;
+  readonly checks?: Readonly<Record<string, boolean | undefined>> & {
+    readonly smplx_neutral?: boolean;
+  };
   readonly missing: readonly string[];
   readonly runtime?: "local" | "docker" | string;
   readonly root?: string | null;
+  readonly body_models_root?: string | null;
   readonly python?: string | null;
   readonly uses_official_weights?: boolean;
+}
+
+/** Use the structured readiness contract instead of matching localized errors. */
+export function isSmplxNeutralMissing(
+  status: GvhmrRuntimeStatus | null | undefined,
+): boolean {
+  return status?.checks?.smplx_neutral === false;
+}
+
+/** The dedicated download link replaces the backend's path-heavy model hint. */
+export function visibleGvhmrMissing(
+  status: GvhmrRuntimeStatus | null | undefined,
+): readonly string[] {
+  const checks = status?.checks;
+  if (!checks) return status?.missing ?? [];
+  const failedChecks = Object.entries(checks)
+    .filter(([, ready]) => ready === false)
+    .map(([name]) => name);
+  const messages: string[] = [];
+  if (checks.official_repo === false) messages.push("GVHMR is not configured.");
+  if (
+    ["checkpoint_gvhmr", "checkpoint_hmr2", "checkpoint_vitpose", "checkpoint_yolov8"]
+      .some((name) => checks[name] === false)
+  ) {
+    messages.push("GVHMR checkpoints are incomplete.");
+  }
+  if (checks.python_executable === false || checks.python_environment === false) {
+    messages.push("GVHMR Python environment is unavailable.");
+  }
+  if (checks.ffmpeg === false) messages.push("FFmpeg is unavailable.");
+  if (checks.cuda === false) messages.push("CUDA is unavailable.");
+  if (checks.docker_cli === false || checks.docker_engine === false) {
+    messages.push("Docker is unavailable.");
+  } else if (checks.runtime_image === false) {
+    messages.push("GVHMR runtime image is unavailable.");
+  }
+  if (messages.length) return messages;
+  if (failedChecks.length === 1 && failedChecks[0] === "smplx_neutral") return [];
+  if (failedChecks.length) return ["GVHMR runtime is unavailable."];
+  return status?.missing ?? [];
 }
 
 export interface MotionResult extends Partial<StageMotionPayload> {
@@ -210,13 +257,14 @@ export async function getGvhmrRuntimeStatus(
     { signal },
     fetcher,
   );
-  return {
+  const normalized = {
     ...status,
     ready: status.ready === true,
     missing: Array.isArray(status.missing)
       ? status.missing.filter((item): item is string => typeof item === "string")
       : [],
   };
+  return { ...normalized, missing: visibleGvhmrMissing(normalized) };
 }
 
 export async function startVideoToMotion(

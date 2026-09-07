@@ -94,19 +94,26 @@ def configure_agent_runtime(
     )
     from hhtools.contracts import (
         ApiError,
+        AssetCategory,
         AssetFileRole,
         AssetInspectionRequest,
+        AssetKind,
         ErrorStage,
         InspectionStatus,
         JobSpecV2,
         NextAction,
     )
     from hhtools.services import (
+        MAX_AVAILABLE_ASSET_CANDIDATES,
         AgentAssetService,
         ArtifactExportService,
         ArtifactStore,
         AssetRegistry,
         AssetServiceError,
+        AvailableAssetCandidate,
+        AvailableAssetCatalogLimitError,
+        AvailableAssetCatalogService,
+        AvailableAssetProvider,
         CapabilitiesService,
         DynamicRootLocator,
         JobManager,
@@ -116,6 +123,10 @@ def configure_agent_runtime(
         PreflightService,
         RetargetService,
         RetargetServiceError,
+        classify_catalog_robot_trajectory,
+        is_catalog_motion_sidecar,
+        iter_bounded_catalog_files,
+        require_bounded_catalog_root,
     )
 
     agent_motion_roots: dict[str, Path | Callable[[], Path]] = {
@@ -127,7 +138,9 @@ def configure_agent_runtime(
     }
     workspace_robot_root = WORKSPACE_ROBOT_ROOT
     if workspace_robot_root.is_dir() and any(
-        child.is_dir() and not child.name.startswith("_")
+        not child.name.startswith(("_", "."))
+        and not child.is_symlink()
+        and child.is_dir()
         for child in workspace_robot_root.iterdir()
     ):
         agent_robot_roots["workspace-robots"] = workspace_robot_root
@@ -136,11 +149,129 @@ def configure_agent_runtime(
         robot_roots=agent_robot_roots,
     )
     agent_data_dir = state.save_dir / ".hhtools-agent"
-    app.state.agent_asset_service = AgentAssetService(
-        AssetRegistry(
-            agent_data_dir,
-            app.state.agent_legacy_root_locator.registry_root_providers(),
-        )
+    agent_asset_registry = AssetRegistry(
+        agent_data_dir,
+        app.state.agent_legacy_root_locator.registry_root_providers(),
+    )
+    app.state.agent_asset_service = AgentAssetService(agent_asset_registry)
+
+    def _resolved_catalog_root(provider: Path | Callable[[], Path]) -> Path:
+        value = provider() if callable(provider) else provider
+        root = Path(value).resolve(strict=True)
+        if not root.is_dir():
+            raise NotADirectoryError("configured catalog root is not a directory")
+        return root
+
+    def _motion_catalog_provider(
+        provider: Path | Callable[[], Path],
+    ) -> AvailableAssetProvider:
+        def available() -> list[AvailableAssetCandidate]:
+            from hhtools.services.asset_inspection import (
+                SUPPORTED_MOTION_PRIMARY_EXTENSIONS,
+                MotionAssetDiscoveryError,
+                discover_primary,
+            )
+
+            root = _resolved_catalog_root(provider)
+            candidates: list[AvailableAssetCandidate] = []
+            for path in iter_bounded_catalog_files(
+                root,
+                extensions=SUPPORTED_MOTION_PRIMARY_EXTENSIONS,
+            ):
+                relative = path.relative_to(root)
+                if is_catalog_motion_sidecar(path):
+                    continue
+                robot_trajectory = classify_catalog_robot_trajectory(
+                    path,
+                    relative_path=PurePosixPath(relative.as_posix()),
+                )
+                if robot_trajectory is not False:
+                    continue
+                try:
+                    discovered = discover_primary(path)
+                except (MotionAssetDiscoveryError, OSError, TypeError, ValueError):
+                    continue
+                folder = relative.parent.name if relative.parent != Path(".") else ""
+                stem = path.stem
+                display_name = f"{folder} · {stem}" if folder else stem
+                required_paths = tuple(
+                    required_path
+                    for paths in discovered.sidecars.values()
+                    for required_path in paths
+                )
+                candidates.append(
+                    AvailableAssetCandidate(
+                        path=path,
+                        display_name=display_name,
+                        kind=AssetKind.MOTION_BUNDLE,
+                        category=discovered.category,
+                        dataset=discovered.dataset,
+                        reference=discovered.reference,
+                        required_paths=required_paths,
+                    )
+                )
+                if len(candidates) > MAX_AVAILABLE_ASSET_CANDIDATES:
+                    raise AvailableAssetCatalogLimitError
+            return candidates
+
+        return available
+
+    def _robot_catalog_provider(
+        provider: Path | Callable[[], Path],
+    ) -> AvailableAssetProvider:
+        def available() -> list[AvailableAssetCandidate]:
+            from hhtools.robot.registry import list_presets_in_root_readonly
+            from hhtools.services.robot_asset_inspection import (
+                RobotAssetDiscoveryError,
+                discover_robot_bundle,
+            )
+
+            root = _resolved_catalog_root(provider)
+            require_bounded_catalog_root(root)
+            candidates: list[AvailableAssetCandidate] = []
+            for preset in list_presets_in_root_readonly(root):
+                try:
+                    preset_root = preset.root_dir.resolve(strict=True)
+                    preset_root.relative_to(root)
+                    # Use the same discovery boundary as registration so every
+                    # advertised directory is a complete, unambiguous bundle.
+                    discovery = discover_robot_bundle(preset_root)
+                except (OSError, RobotAssetDiscoveryError, RuntimeError, ValueError):
+                    continue
+                candidates.append(
+                    AvailableAssetCandidate(
+                        path=preset_root,
+                        display_name=preset.display_name or preset.name,
+                        kind=AssetKind.ROBOT_BUNDLE,
+                        category=AssetCategory.ROBOT_MODEL,
+                        required_paths=tuple(item.path for item in discovery.files),
+                    )
+                )
+                if len(candidates) > MAX_AVAILABLE_ASSET_CANDIDATES:
+                    raise AvailableAssetCatalogLimitError
+            return candidates
+
+        return available
+
+    catalog_providers: dict[str, AvailableAssetProvider] = {
+        root_id: _motion_catalog_provider(provider)
+        for root_id, provider in agent_motion_roots.items()
+    }
+    catalog_providers.update(
+        {
+            root_id: _robot_catalog_provider(provider)
+            for root_id, provider in agent_robot_roots.items()
+        }
+    )
+    app.state.agent_available_asset_catalog_service = AvailableAssetCatalogService(
+        agent_asset_registry,
+        catalog_providers,
+        preferred_root_ids=(
+            "motion-library",
+            "robot-library",
+            "source",
+            "workspace-robots",
+        ),
     )
     app.state.agent_plan_store = PlanStore(agent_data_dir)
     app.state.agent_retarget_service = RetargetService(
@@ -484,6 +615,7 @@ def configure_agent_runtime(
     app.state.agent_capabilities_service = CapabilitiesService(
         scheduler_snapshot=scheduler.snapshot,
         asset_root_provider=lambda: app.state.agent_asset_service.allowed_root_ids,
+        available_asset_catalog_available=True,
         preflight_available=True,
         artifact_store_available=True,
         job_manager_available=True,

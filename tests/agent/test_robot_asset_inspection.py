@@ -376,6 +376,19 @@ def test_mujoco_compiler_directories_must_remain_inside_snapshot(
     _assert_no_host_path(inspection.model_dump(mode="json"), tmp_path)
 
 
+def test_directory_discovery_ignores_urdfs_in_hidden_subtrees(tmp_path: Path) -> None:
+    bundle_root = tmp_path / "robot"
+    primary = _write_valid_robot(bundle_root)
+    hidden = bundle_root / ".private"
+    hidden.mkdir()
+    (hidden / "other.urdf").write_text(primary.read_text(encoding="utf-8"), encoding="utf-8")
+
+    discovery = discover_robot_bundle(bundle_root)
+
+    assert discovery.primary_urdf == primary.resolve()
+    assert all(".private" not in item.path.parts for item in discovery.files)
+
+
 def test_mesh_symlink_cannot_escape_candidate_bundle(tmp_path: Path) -> None:
     outside = tmp_path / "outside.stl"
     outside.write_text("solid outside\nendsolid outside\n", encoding="utf-8")

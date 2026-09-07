@@ -17,6 +17,8 @@ from .assets import (
     AssetInspection,
     AssetRegistrationRequest,
     AssetSearchResponse,
+    AvailableAssetCatalogRequest,
+    AvailableAssetCatalogResponse,
 )
 from .capabilities import CapabilityResponse, RobotListResponse
 from .common import ApiError
@@ -47,6 +49,8 @@ PUBLIC_AGENT_SCHEMAS: MappingProxyType[str, type[BaseModel]] = MappingProxyType(
         "asset-inspection": AssetInspection,
         "asset-registration-request": AssetRegistrationRequest,
         "asset-search-response": AssetSearchResponse,
+        "available-asset-catalog-request": AvailableAssetCatalogRequest,
+        "available-asset-catalog-response": AvailableAssetCatalogResponse,
         "capabilities": CapabilityResponse,
         "evaluation-report": EvaluationReport,
         "failure-report": FailureReport,

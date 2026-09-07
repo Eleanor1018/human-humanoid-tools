@@ -45,6 +45,7 @@ def _create_app(**_kwargs: Any) -> Any:
     state = SimpleNamespace(
         agent_capabilities_service=_Capabilities(),
         agent_asset_service=_UNUSED,
+        agent_available_asset_catalog_service=_UNUSED,
         agent_preflight_service=_UNUSED,
         agent_plan_store=_UNUSED,
         agent_job_manager=_UNUSED,

@@ -5,10 +5,13 @@ import { describe, expect, it } from 'vitest'
 
 interface DesktopPackage {
   desktopName: string
+  scripts: Record<string, string>
   build: {
     productName: string
+    extraResources: Array<{ from: string; to: string }>
     linux: { executableName: string }
     deb: { fpm: string[]; afterInstall?: string; afterRemove?: string }
+    nsis: { include?: string }
   }
 }
 
@@ -23,30 +26,21 @@ describe('Linux package entry points', () => {
     expect(packageMetadata.build.productName).toBe('Human-Humanoid Tools')
     expect(packageMetadata.build.linux.executableName).toBe('hhtools-desktop')
 
-    // The CLI is a real dpkg-owned file. The GUI keeps electron-builder's
-    // default post-install/remove hooks, including sandbox and AppArmor setup.
-    expect(packageMetadata.build.deb.fpm).toContain(
-      '.runtime/cli/hhtools=/usr/bin/hhtools'
+    // The thin GUI package does not install or shadow the Python CLI.
+    expect(packageMetadata.build.deb.fpm).not.toContain(
+      expect.stringContaining('/usr/bin/hhtools')
     )
     expect(packageMetadata.build.deb.afterInstall).toBeUndefined()
     expect(packageMetadata.build.deb.afterRemove).toBeUndefined()
   })
 
-  it('launches the bundled Python CLI without changing the caller environment', () => {
-    const launcher = readFileSync(
-      join(desktopRoot, 'scripts', 'hhtools-cli-launcher.sh'),
-      'utf8'
-    )
-
-    expect(launcher).toContain(
-      `runtime_root='/opt/${packageMetadata.build.productName}/resources/runtime'`
-    )
-    expect(launcher).toContain('export PYTHONPATH="$application_root"')
-    expect(launcher).toContain('unset PYTHONHOME VIRTUAL_ENV')
-    expect(launcher).toContain(
-      `'from hhtools.cli.main import app; app(prog_name="hhtools")' "$@"`
-    )
-    expect(launcher).not.toMatch(/\n\s*cd\s/)
+  it('packages only the staged neutral model instead of a Python runtime', () => {
+    expect(packageMetadata.scripts['dist:linux']).toContain('npm run prepare:models')
+    expect(packageMetadata.scripts['dist:linux']).not.toContain('prepare:runtime')
+    expect(packageMetadata.build.extraResources).toEqual([
+      { from: '.models', to: 'body_models', filter: ['**/*'] }
+    ])
+    expect(packageMetadata.build.nsis.include).toBeUndefined()
   })
 
   it('migrates only the exact legacy GUI alternative and explains dpkg recovery', () => {

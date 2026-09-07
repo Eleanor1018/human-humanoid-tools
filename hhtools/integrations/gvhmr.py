@@ -88,11 +88,7 @@ class GvhmrConfig:
             "local" if sys.platform.startswith("linux") else "docker"
         )
         default_body_models = root / "inputs" / "checkpoints" / "body_models"
-        body_models_value = (
-            os.environ.get(GVHMR_BODY_MODELS_ENV, default_body_models)
-            if runtime == "docker"
-            else default_body_models
-        )
+        body_models_value = os.environ.get(GVHMR_BODY_MODELS_ENV, default_body_models)
         body_models = Path(body_models_value).expanduser()
         raw_timeout = os.environ.get(GVHMR_TIMEOUT_ENV, str(DEFAULT_TIMEOUT_SECONDS))
         try:
@@ -180,8 +176,16 @@ def _run_probe(
     return completed.returncode == 0, output
 
 
-def gvhmr_status(config: GvhmrConfig | None = None) -> dict[str, Any]:
-    """Return actionable readiness checks without importing GVHMR or CUDA."""
+def gvhmr_status(
+    config: GvhmrConfig | None = None,
+    *,
+    probe_runtime: bool = True,
+) -> dict[str, Any]:
+    """Return actionable readiness without importing GVHMR in this process.
+
+    ``probe_runtime=False`` limits the check to configuration and filesystem
+    facts, avoiding external Python, CUDA, and Docker subprocesses.
+    """
 
     cfg = config or GvhmrConfig.from_environment()
     checkpoint_root = cfg.root / "inputs" / "checkpoints"
@@ -221,7 +225,7 @@ def gvhmr_status(config: GvhmrConfig | None = None) -> dict[str, Any]:
             )
         environment_ready = False
         cuda_ready = False
-        if checks["python_executable"] and checks["official_repo"]:
+        if probe_runtime and checks["python_executable"] and checks["official_repo"]:
             probe = (
                 "import json, cv2, hydra, hmr4d, pytorch3d, torch; "
                 "print('HHTOOLS_GVHMR_PROBE ' + "
@@ -243,30 +247,34 @@ def gvhmr_status(config: GvhmrConfig | None = None) -> dict[str, Any]:
                     cuda_ready = bool(json.loads(payload)["cuda"])
                 except (KeyError, StopIteration, TypeError, ValueError):
                     environment_ready = False
-        checks["python_environment"] = environment_ready
-        checks["cuda"] = cuda_ready
-        if checks["python_executable"] and not environment_ready:
-            missing.append("GVHMR Python cannot import the installed inference dependencies")
-        if environment_ready and not cuda_ready:
-            missing.append("CUDA is not available in the GVHMR Python environment")
+        if probe_runtime:
+            checks["python_environment"] = environment_ready
+            checks["cuda"] = cuda_ready
+            if checks["python_executable"] and not environment_ready:
+                missing.append("GVHMR Python cannot import the installed inference dependencies")
+            if environment_ready and not cuda_ready:
+                missing.append("CUDA is not available in the GVHMR Python environment")
     else:
         checks["docker_cli"] = shutil.which(cfg.docker) is not None or Path(cfg.docker).is_file()
-        docker_ready = False
-        image_ready = False
-        if checks["docker_cli"]:
-            docker_ready, _ = _run_probe(
-                [cfg.docker, "version", "--format", "{{.Server.Version}}"],
-            )
-            if docker_ready:
-                image_ready, _ = _run_probe(
-                    [cfg.docker, "image", "inspect", cfg.image, "--format", "{{.Id}}"],
+        if not probe_runtime and not checks["docker_cli"]:
+            missing.append("Docker executable for the GVHMR runtime")
+        if probe_runtime:
+            docker_ready = False
+            image_ready = False
+            if checks["docker_cli"]:
+                docker_ready, _ = _run_probe(
+                    [cfg.docker, "version", "--format", "{{.Server.Version}}"],
                 )
-        checks["docker_engine"] = docker_ready
-        checks["runtime_image"] = image_ready
-        if not docker_ready:
-            missing.append("running Docker engine")
-        elif not image_ready:
-            missing.append(f"GVHMR runtime image: {cfg.image}")
+                if docker_ready:
+                    image_ready, _ = _run_probe(
+                        [cfg.docker, "image", "inspect", cfg.image, "--format", "{{.Id}}"],
+                    )
+            checks["docker_engine"] = docker_ready
+            checks["runtime_image"] = image_ready
+            if not docker_ready:
+                missing.append("running Docker engine")
+            elif not image_ready:
+                missing.append(f"GVHMR runtime image: {cfg.image}")
 
     return {
         "ready": all(checks.values()),
@@ -444,6 +452,8 @@ def _build_local_gvhmr_command(
         str(video),
         "--output-root",
         str(output),
+        "--body-models-root",
+        str(config.body_models_root.resolve()),
     ]
     if static_cam:
         command.append("--static-cam")

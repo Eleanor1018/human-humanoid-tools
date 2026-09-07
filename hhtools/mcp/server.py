@@ -15,14 +15,14 @@ import sys
 from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from pathlib import Path
-from typing import Any, cast
+from typing import Annotated, Any, cast
 from urllib.parse import urlsplit
 
 from mcp.server import MCPServer
 from mcp.server.mcpserver import Context
-from mcp.server.mcpserver.exceptions import ResourceError
-from mcp.types import CallToolResult, TextContent, ToolAnnotations
-from pydantic import BaseModel, ConfigDict
+from mcp.server.mcpserver.exceptions import ResourceError, ToolError
+from mcp.types import CallToolResult, InputRequiredResult, TextContent, ToolAnnotations
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from hhtools._version import __version__
 from hhtools.contracts import (
@@ -38,6 +38,8 @@ from hhtools.contracts import (
     AssetKind,
     AssetRegistrationRequest,
     AssetSearchResponse,
+    AvailableAssetCatalogRequest,
+    AvailableAssetCatalogResponse,
     CapabilityResponse,
     ErrorStage,
     EvaluationReport,
@@ -156,6 +158,38 @@ def _error_result(document: dict[str, Any]) -> CallToolResult:
         structuredContent=document,
         isError=True,
     )
+
+
+def _invalid_tool_arguments_result() -> CallToolResult:
+    """Return one path-free contract for every advertised-schema violation."""
+
+    error = ApiError(
+        code="INVALID_PARAMETER",
+        message="The MCP tool arguments do not match the advertised schema.",
+        retryable=False,
+        stage=ErrorStage.REQUEST,
+    )
+    return _error_result(_model_document(error))
+
+
+class _HHToolsMCPServer(MCPServer[AgentRuntime]):
+    """Translate SDK argument validation at HHTools' composition boundary."""
+
+    async def call_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        context: Context[AgentRuntime, Any] | None = None,
+    ) -> CallToolResult | InputRequiredResult:
+        try:
+            return await super().call_tool(name, arguments, context)
+        except ToolError as exception:
+            # Tool.run wraps only its argument-model ValidationError directly.
+            # Handler failures have a different cause chain and retain the
+            # existing service-error path in MCPServer._handle_call_tool.
+            if isinstance(exception.__cause__, ValidationError):
+                return _invalid_tool_arguments_result()
+            raise
 
 
 def _tool_call[T](call: Callable[[], T]) -> T:
@@ -347,7 +381,7 @@ def create_mcp_server(
             finally:
                 runtime_slot = None
 
-    server: MCPServer[AgentRuntime] = MCPServer(
+    server: MCPServer[AgentRuntime] = _HHToolsMCPServer(
         "hhtools",
         title="HHTools Agent",
         description="Safe local human-to-humanoid retargeting services.",
@@ -397,6 +431,35 @@ def create_mcp_server(
                 limit=limit,
                 offset=offset,
             )
+        )
+
+    @server.tool(annotations=_READ_ONLY)
+    def list_available_assets(
+        context: Context[AgentRuntime, Any],
+        root_id: Annotated[
+            str | None,
+            Field(
+                min_length=1,
+                max_length=128,
+                pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$",
+            ),
+        ] = None,
+        query: Annotated[str | None, Field(min_length=1, max_length=256)] = None,
+        kind: AssetKind | None = None,
+        limit: Annotated[int, Field(ge=1, le=500)] = 100,
+        offset: Annotated[int, Field(ge=0)] = 0,
+    ) -> AvailableAssetCatalogResponse:
+        """List registerable assets below configured allowlisted roots."""
+
+        request = AvailableAssetCatalogRequest(
+            root_id=root_id,
+            query=query,
+            kind=kind,
+            limit=limit,
+            offset=offset,
+        )
+        return _tool_call(
+            lambda: _runtime(context).available_assets.list_available(request)
         )
 
     @server.tool(annotations=_READ_ONLY)

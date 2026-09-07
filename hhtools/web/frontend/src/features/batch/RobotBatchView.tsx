@@ -6,6 +6,7 @@ import { getR2rCalibrationStatus } from "@/features/r2r/api";
 import type { MotionLibraryEntry } from "@/features/motion/api";
 import { loadRobot, type RobotPayload, type RobotSummary } from "@/features/robot/api";
 import type { JobSnapshot, UploadFile } from "@/lib/api";
+import { useLocaleText } from "@/LocaleProvider";
 
 import {
   runR2rBatch,
@@ -48,9 +49,14 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function invalidPositive(label: string, value: string): string | null {
+function invalidPositive(
+  label: string,
+  chineseLabel: string,
+  value: string,
+  text: (english: string, chinese: string) => string,
+): string | null {
   return value.trim() && optionalPositiveNumber(value) === undefined
-    ? `${label} must be a positive number.`
+    ? text(`${label} must be a positive number.`, `${chineseLabel}必须是正数。`)
     : null;
 }
 
@@ -63,6 +69,7 @@ export function RobotBatchView({
   robots: readonly RobotSummary[];
   catalogError?: string | null;
 }) {
+  const text = useLocaleText();
   const [entries, setEntries] = useState<readonly MotionLibraryEntry[]>([]);
   const [sourceChoice, setSourceChoice] = useState("");
   const [targetChoice, setTargetChoice] = useState("");
@@ -116,7 +123,12 @@ export function RobotBatchView({
     const next = appendUniqueEntries(entries, incoming);
     const added = next.length - entries.length;
     setEntries(next);
-    setNotice(`${added} added · ${incoming.length - added} duplicates skipped`);
+    setNotice(
+      text(
+        `${added} added · ${incoming.length - added} duplicates skipped`,
+        `已添加 ${added} 项 · 跳过 ${incoming.length - added} 个重复项`,
+      ),
+    );
     const backend = suggestedBackend(incoming);
     if (backend) setSettings((current) => ({ ...current, backend }));
     setError(null);
@@ -130,11 +142,17 @@ export function RobotBatchView({
     operation.current = request;
     setAction("import");
     setError(null);
-    setNotice(`Reading ${files.length} uploaded file${files.length === 1 ? "" : "s"}…`);
+    setNotice(
+      text(
+        `Reading ${files.length} uploaded file${files.length === 1 ? "" : "s"}…`,
+        `正在读取 ${files.length} 个上传文件…`,
+      ),
+    );
     try {
       const result = await uploadR2rBatchInputs(files, "auto", {
         signal: request.signal,
-        onUpdate: (snapshot) => setNotice(snapshot.message || "Recognizing trajectories…"),
+        onUpdate: (snapshot) =>
+          setNotice(snapshot.message || text("Recognizing trajectories…", "正在识别轨迹…")),
       });
       if (!request.signal.aborted) addEntries(result.entries);
     } catch (reason) {
@@ -161,7 +179,7 @@ export function RobotBatchView({
       if (request.signal.aborted) return;
       if (kind === "source") setSourceRobot(loaded);
       else setTargetRobot(loaded);
-      setNotice(`Loaded ${loaded.display_name}`);
+      setNotice(text(`Loaded ${loaded.display_name}`, `已加载 ${loaded.display_name}`));
       resetRunResult();
     } catch (reason) {
       if (!request.signal.aborted) setError(errorMessage(reason));
@@ -173,29 +191,38 @@ export function RobotBatchView({
     }
   }
 
+  const rawTimeRangeError = timeRangeError(settings.start, settings.end);
+  const localizedTimeRangeError = rawTimeRangeError
+    ? rawTimeRangeError === "Start time cannot be later than end time."
+      ? text(rawTimeRangeError, "开始时间不能晚于结束时间。")
+      : text(rawTimeRangeError, "请输入有效的非负时间范围。")
+    : null;
   const settingsError =
-    timeRangeError(settings.start, settings.end) ||
-    invalidPositive("Source FPS", sourceFps) ||
-    invalidPositive("Retarget FPS", settings.retargetFps) ||
-    invalidPositive("Export FPS", settings.exportFps);
+    localizedTimeRangeError ||
+    invalidPositive("Source FPS", "源帧率", sourceFps, text) ||
+    invalidPositive("Retarget FPS", "重定向帧率", settings.retargetFps, text) ||
+    invalidPositive("Export FPS", "导出帧率", settings.exportFps, text);
   const disabledReason = busy
     ? action === "run"
-      ? "An R2R batch task is running."
-      : "Finish the current Batch operation first."
+      ? text("An R2R batch task is running.", "R2R 批处理任务正在运行。")
+      : text("Finish the current Batch operation first.", "请先完成当前批处理操作。")
     : !entries.length
-      ? "Add at least one source trajectory."
+      ? text("Add at least one source trajectory.", "请至少添加一条源轨迹。")
       : !sourceRobot
-        ? "Load the source robot."
+        ? text("Load the source robot.", "请加载源机器人。")
         : sourceChoice !== sourceRobot.name
-          ? "Load the selected source robot."
+          ? text("Load the selected source robot.", "请加载所选源机器人。")
           : !targetRobot
-            ? "Load the target robot."
+            ? text("Load the target robot.", "请加载目标机器人。")
             : targetChoice !== targetRobot.name
-              ? "Load the selected target robot."
+              ? text("Load the selected target robot.", "请加载所选目标机器人。")
               : calibration === "checking"
-                ? "Checking robot-pair calibration…"
+                ? text("Checking robot-pair calibration…", "正在检查机器人配对校准…")
                 : calibration !== "ready"
-                  ? "Calibrate this robot pair in Robot → Robot first."
+                  ? text(
+                      "Calibrate this robot pair in Robot → Robot first.",
+                      "请先在机器人 → 机器人中校准这一机器人组合。",
+                    )
                   : settingsError;
 
   async function run(): Promise<void> {
@@ -206,7 +233,7 @@ export function RobotBatchView({
     setAction("run");
     setError(null);
     setCompleted(null);
-    setJob({ id: "starting", kind: "r2r_batch", status: "running", progress: 0, clip_progress: 0, message: "Starting R2R batch…" });
+    setJob({ id: "starting", kind: "r2r_batch", status: "running", progress: 0, clip_progress: 0, message: text("Starting R2R batch…", "正在启动 R2R 批处理…") });
     try {
       const done = await runR2rBatch(
         {
@@ -228,7 +255,12 @@ export function RobotBatchView({
       if (!request.signal.aborted) {
         setJob((current) => current ? { ...current, status: "done", progress: 1, clip_progress: 1 } : current);
         setCompleted(done);
-        setNotice(`${done.result.written.length} trajectories completed.`);
+        setNotice(
+          text(
+            `${done.result.written.length} trajectories completed.`,
+            `${done.result.written.length} 条轨迹已完成。`,
+          ),
+        );
       }
     } catch (reason) {
       if (!request.signal.aborted) setError(errorMessage(reason));
@@ -241,24 +273,28 @@ export function RobotBatchView({
   }
 
   const calibrationLabel = !loadedPair
-    ? "Load both robots"
+    ? text("Load both robots", "加载两个机器人")
     : calibration === "checking"
-      ? "Checking…"
+      ? text("Checking…", "检查中…")
       : calibration === "ready"
-        ? "Pair ready"
+        ? text("Pair ready", "组合已就绪")
         : calibration === "missing"
-          ? "Calibration needed"
+          ? text("Calibration needed", "需要校准")
           : calibration === "error"
-            ? "Check failed"
-            : "Not checked";
+            ? text("Check failed", "检查失败")
+            : text("Not checked", "未检查");
 
   return (
     <div className="flex flex-col">
-      <WorkflowStep title="1. Source trajectories" status={`${entries.length} trajectories`} defaultOpen>
+      <WorkflowStep
+        title={text("1. Source trajectories", "1. 源轨迹")}
+        status={text(`${entries.length} trajectories`, `${entries.length} 条轨迹`)}
+        defaultOpen
+      >
         <div className="grid gap-2.5">
           <FileImport
-            title="Drop trajectory files or a folder"
-            hint="CSV, PKL, NPZ and dataset folders"
+            title={text("Drop trajectory files or a folder", "拖放轨迹文件或文件夹")}
+            hint={text("CSV, PKL, NPZ and dataset folders", "CSV、PKL、NPZ 和数据集文件夹")}
             icon="/icons/sidebar/r2r.svg"
             accept=".csv,.pkl,.npz"
             busy={busy}
@@ -280,9 +316,13 @@ export function RobotBatchView({
         </div>
       </WorkflowStep>
 
-      <WorkflowStep title="2. Source robot" status={sourceRobot?.display_name ?? "Not loaded"} defaultOpen>
+      <WorkflowStep
+        title={text("2. Source robot", "2. 源机器人")}
+        status={sourceRobot?.display_name ?? text("Not loaded", "未加载")}
+        defaultOpen
+      >
         <RobotSelect
-          label="Source robot"
+          label={text("Source robot", "源机器人")}
           robots={robots}
           value={sourceChoice}
           loadedName={sourceRobot?.name}
@@ -292,10 +332,14 @@ export function RobotBatchView({
         />
       </WorkflowStep>
 
-      <WorkflowStep title="3. Target robot" status={targetRobot?.display_name ?? "Not loaded"} defaultOpen>
+      <WorkflowStep
+        title={text("3. Target robot", "3. 目标机器人")}
+        status={targetRobot?.display_name ?? text("Not loaded", "未加载")}
+        defaultOpen
+      >
         <div className="grid gap-2.5">
           <RobotSelect
-            label="Target robot"
+            label={text("Target robot", "目标机器人")}
             robots={robots}
             value={targetChoice}
             loadedName={targetRobot?.name}
@@ -311,7 +355,7 @@ export function RobotBatchView({
         </div>
       </WorkflowStep>
 
-      <WorkflowStep title="4. Run settings" defaultOpen>
+      <WorkflowStep title={text("4. Run settings", "4. 运行设置")} defaultOpen>
         <CommonBatchSettings
           value={settings}
           sourceFps={sourceFps}
@@ -324,11 +368,13 @@ export function RobotBatchView({
       <section className="grid gap-2.5 pt-4">
         <p className="text-xs text-muted-foreground">
           {entries.length
-            ? `${entries.length} trajectories · ${sourceRobot?.display_name ?? "no source"} → ${targetRobot?.display_name ?? "no target"}`
-            : "No source trajectories selected."}
+            ? `${entries.length} ${text("trajectories", "条轨迹")} · ${sourceRobot?.display_name ?? text("no source", "无源机器人")} → ${targetRobot?.display_name ?? text("no target", "无目标机器人")}`
+            : text("No source trajectories selected.", "尚未选择源轨迹。")}
         </p>
         <Button variant="primary" size="sm" disabled={Boolean(disabledReason)} onClick={() => void run()}>
-          {action === "run" ? "Running R2R batch…" : "Start R2R batch"}
+          {action === "run"
+            ? text("Running R2R batch…", "R2R 批处理中…")
+            : text("Start R2R batch", "启动 R2R 批处理")}
         </Button>
         {disabledReason && <p className="text-[11px] text-muted-foreground">{disabledReason}</p>}
         <BatchProgress job={job} />

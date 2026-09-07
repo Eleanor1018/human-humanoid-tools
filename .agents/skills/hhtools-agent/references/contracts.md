@@ -4,8 +4,8 @@ Use the live MCP tool input/output schema as the runtime authority. These reposi
 explain the stable Agent v1 documents and are useful when a field, state, or resource is
 unfamiliar. Load only the contracts needed for the current step.
 
-The architectural workflow and supported boundaries are documented in the
-[Agent integration plan](../../../../docs/agent-integration-plan.md).
+Installation and supported boundaries are documented in the public
+[Agent guide](../../../../docs/agent.md).
 
 ## Tool and schema routing
 
@@ -15,6 +15,7 @@ The architectural workflow and supported boundaries are documented in the
 | `list_robots` | No request document | [robot list](../../../../docs/schemas/agent/v1/robot-list-response.schema.json) |
 | `register_asset_bundle` | [asset registration request](../../../../docs/schemas/agent/v1/asset-registration-request.schema.json) | [asset bundle](../../../../docs/schemas/agent/v1/asset-bundle.schema.json) |
 | `search_assets` | Bounded scalar filters from the live tool schema | [asset search response](../../../../docs/schemas/agent/v1/asset-search-response.schema.json) |
+| `list_available_assets` | [available catalog request](../../../../docs/schemas/agent/v1/available-asset-catalog-request.schema.json) | [available catalog response](../../../../docs/schemas/agent/v1/available-asset-catalog-response.schema.json) |
 | `inspect_asset_bundle` | `asset_id`, `verify_hashes`, and `parse_content` from the live tool schema | [asset inspection](../../../../docs/schemas/agent/v1/asset-inspection.schema.json) |
 | `preflight_retarget` | [retarget preflight request](../../../../docs/schemas/agent/v1/retarget-preflight-request.schema.json) | [preflight response](../../../../docs/schemas/agent/v1/preflight-response.schema.json) |
 | `start_retarget` | [job start request](../../../../docs/schemas/agent/v1/job-start-request.schema.json) | [agent job view](../../../../docs/schemas/agent/v1/agent-job-view.schema.json) |
@@ -77,6 +78,9 @@ binary content.
 - `register_asset_bundle` identifies a deployment-owned source with `root_id + relative_path`.
   Backslashes, absolute paths, drive paths, `.` segments, and `..` traversal are not portable
   registration inputs.
+- `list_available_assets` is the only root browsing boundary. It returns a bounded page of
+  registerable metadata, never host paths or file bytes. Use its returned fields unchanged when
+  constructing an `AssetRegistrationRequest`; do not infer another path from display text.
 - `asset_id`, `plan_id`, `job_id`, and `artifact_id` are distinct identities. Never derive one
   from a display name or host path.
 - `run_mode` is `RetargetPreflightRequest.parameters.run_mode`. It is frozen in the returned

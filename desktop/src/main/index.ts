@@ -187,7 +187,7 @@ async function startDesktop(): Promise<void> {
     resourcesPath: process.resourcesPath,
   })
   logger = new DesktopLogger(runtime.logDirectory)
-  logger.info('Desktop startup began', { repoRoot: runtime.repoRoot, bundled: runtime.bundled })
+  logger.info('Desktop startup began', { repoRoot: runtime.repoRoot, packaged: app.isPackaged })
   logger.info('Graphics preflight passed', {
     renderer: graphicsProbe?.renderer,
     softwareRendering
@@ -195,7 +195,7 @@ async function startDesktop(): Promise<void> {
 
   const sidecarEnvironment = (): NodeJS.ProcessEnv => ({
     ...optionalComponents?.sidecarEnvironment(),
-    ...buildSidecarEnvironment(runtime!.repoRoot),
+    ...buildSidecarEnvironment(runtime!.repoRoot, process.env, runtime!.bodyModelsRoot),
   })
 
   const port = await findAvailablePort()

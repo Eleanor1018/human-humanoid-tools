@@ -4,8 +4,11 @@ import { Field, fieldClass } from "@/components/Field";
 import { InspectorPage } from "@/components/Inspector";
 import { Button } from "@/components/ui/button";
 import { WorkflowPipeline, WorkflowStep } from "@/components/WorkflowSteps";
+import { useLocaleText } from "@/LocaleProvider";
 import { getMotionLibrary, loadMotionLibraryEntry } from "@/features/motion/api";
 import { getRobotLibrary, loadRobot, type RobotSummary } from "@/features/robot/api";
+import { desktopSettingsBridge } from "@/features/settings/api";
+import { displayFileName } from "@/lib/api";
 import type { StageMotionPayload } from "@/stage/types";
 
 import {
@@ -34,7 +37,6 @@ import { clipMatchesFilters, selectScatterClip } from "./model";
 import { ScatterPlot } from "./ScatterPlot";
 import { UploadBasket } from "./UploadBasket";
 
-const pipeline = ["Select Data", "Configure", "Analyze", "Results"];
 type BusyAction = "scan" | "upload" | "remove" | "analyze" | "subset" | "preview" | null;
 
 export interface AnalysisViewProps {
@@ -61,8 +63,8 @@ function formatNumber(value: unknown): string {
   return parsed.toFixed(3);
 }
 
-function clipLabel(clip: DatasetClip): string {
-  return clip.clip_id || clip.source_path.split(/[\\/]/).pop() || "clip";
+function clipLabel(clip: DatasetClip, fallback = "Clip"): string {
+  return clip.clip_id || displayFileName(clip.source_path, fallback);
 }
 
 function validClips(result: DatasetAnalysisResult | null): DatasetClip[] {
@@ -80,9 +82,10 @@ function HistogramChart({
   range: readonly [number, number] | null;
   onRangeChange: (range: readonly [number, number] | null) => void;
 }) {
+  const text = useLocaleText();
   const drag = useRef<{ pointerId: number; start: number } | null>(null);
   if (!histogram) {
-    return <p className="text-xs text-muted-foreground">No values for this metric.</p>;
+    return <p className="text-xs text-muted-foreground">{text("No values for this metric.", "此指标没有可用数值。")}</p>;
   }
   const max = Math.max(...histogram.counts, 1);
   const width = 420;
@@ -110,7 +113,7 @@ function HistogramChart({
         className="h-[116px] w-full touch-none overflow-visible"
         viewBox={`0 0 ${width} ${height}`}
         role="group"
-        aria-label="Metric histogram"
+        aria-label={text("Metric histogram", "指标直方图")}
         onPointerDown={(event) => {
           if (event.button !== 0 || !histogram.counts.length) return;
           const start = binAt(event);
@@ -153,7 +156,7 @@ function HistogramChart({
               strokeWidth={selected ? 1 : 0}
               role="button"
               tabIndex={0}
-              aria-label={`${formatNumber(histogram.edges[index])} to ${formatNumber(histogram.edges[index + 1])}: ${count} clips`}
+              aria-label={`${formatNumber(histogram.edges[index])} ${text("to", "至")} ${formatNumber(histogram.edges[index + 1])}: ${count} ${text("clips", "个片段")}`}
               aria-pressed={selected}
               onKeyDown={(event) => {
                 if (event.key !== "Enter" && event.key !== " ") return;
@@ -169,10 +172,10 @@ function HistogramChart({
         <span>{formatNumber(histogram.min)}</span>
         {range ? (
           <button type="button" className="rounded-sm px-1 text-primary hover:bg-accent" onClick={() => onRangeChange(null)}>
-            {formatNumber(range[0])}–{formatNumber(range[1])} · Clear
+            {formatNumber(range[0])}–{formatNumber(range[1])} · {text("Clear", "清除")}
           </button>
         ) : (
-          <span>mean {formatNumber(histogram.mean)}</span>
+          <span>{text("mean", "均值")} {formatNumber(histogram.mean)}</span>
         )}
         <span>{formatNumber(histogram.max)}</span>
       </div>
@@ -181,11 +184,12 @@ function HistogramChart({
 }
 
 function SummaryCards({ summary }: { summary: DatasetSummary }) {
+  const text = useLocaleText();
   const cards = [
-    ["Clips", summary.num_clips],
-    ["Analyzed", summary.num_ok],
-    ["Failed", summary.num_error],
-    ["Clusters", Object.keys(summary.cluster_counts).length],
+    [text("Clips", "片段"), summary.num_clips],
+    [text("Analyzed", "已分析"), summary.num_ok],
+    [text("Failed", "失败"), summary.num_error],
+    [text("Clusters", "聚类"), Object.keys(summary.cluster_counts).length],
   ] as const;
   return (
     <div className="grid grid-cols-4 gap-1.5">
@@ -203,13 +207,21 @@ export function AnalysisView({
   onMotionLoaded,
   onRobotPreviewLoaded,
 }: AnalysisViewProps) {
+  const text = useLocaleText();
+  const pipeline = [
+    text("Select Data", "选择数据"),
+    text("Configure", "配置"),
+    text("Analyze", "分析"),
+    text("Results", "结果"),
+  ];
+  const analysisClipLabel = (clip: DatasetClip) =>
+    clipLabel(clip, text("Clip", "片段"));
   const [catalog, setCatalog] = useState<DatasetCatalog>({});
   const [robots, setRobots] = useState<readonly RobotSummary[]>([]);
   const [source, setSource] = useState("");
   const [defaultSource, setDefaultSource] = useState("");
   const [sourceSummary, setSourceSummary] = useState<DatasetUploadSummary | null>(null);
   const [uploadSource, setUploadSource] = useState<string | null>(null);
-  const [userSourceRoot, setUserSourceRoot] = useState("");
   const [embedding, setEmbedding] = useState<AnalysisEmbedding>("handcrafted");
   const [force, setForce] = useState(false);
   const [result, setResult] = useState<DatasetAnalysisResult | null>(null);
@@ -232,7 +244,6 @@ export function AnalysisView({
   const requestRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    folderInput.current?.setAttribute("webkitdirectory", "");
     const request = new AbortController();
     requestRef.current = request;
     void Promise.all([
@@ -346,7 +357,7 @@ export function AnalysisView({
     if (!path.trim()) return;
     const request = begin("scan");
     setSource(path.trim());
-    setStatus("Scanning dataset...");
+    setStatus(text("Scanning dataset...", "正在扫描数据集……"));
     try {
       const value = await scanDataset(path.trim(), { signal: request.signal });
       if (request.signal.aborted) return;
@@ -354,7 +365,7 @@ export function AnalysisView({
       setSourceSummary(value);
       setUploadSource(null);
       clearAnalysisOutput();
-      setStatus(`${value.clip_count} clips found.`);
+      setStatus(text(`${value.clip_count} clips found.`, `找到 ${value.clip_count} 个片段。`));
     } catch (reason) {
       if (!request.signal.aborted) setError(errorMessage(reason));
     } finally {
@@ -362,24 +373,33 @@ export function AnalysisView({
     }
   }
 
-  function scanCurrentSource(): void {
-    void scanPath(source);
+  async function chooseFolder(): Promise<void> {
+    const desktop = desktopSettingsBridge();
+    if (!desktop) {
+      folderInput.current?.click();
+      return;
+    }
+    try {
+      const selected = await desktop.selectDirectory();
+      if (selected) await scanPath(selected);
+    } catch (reason) {
+      setError(errorMessage(reason));
+    }
   }
 
   function uploadFolder(files: FileList | null): void {
     const selected = files ? Array.from(files) : [];
     if (!selected.length) return;
     const request = begin("upload");
-    setStatus(`Uploading ${selected.length} files...`);
+    setStatus(text(`Uploading ${selected.length} files...`, `正在上传 ${selected.length} 个文件……`));
     void uploadDataset(selected, {
       appendTo: uploadSource ?? undefined,
-      userSourceRoot: userSourceRoot.trim() || undefined,
       signal: request.signal,
     })
       .then((value) => {
         if (request.signal.aborted) return;
         applyUploadSummary(value);
-        setStatus(`${value.clip_count} clips ready for analysis.`);
+        setStatus(text(`${value.clip_count} clips ready for analysis.`, `${value.clip_count} 个片段可供分析。`));
       })
       .catch((reason: unknown) => {
         if (!request.signal.aborted) setError(errorMessage(reason));
@@ -390,7 +410,7 @@ export function AnalysisView({
   async function removeUploadedFolder(folder: string): Promise<void> {
     if (!uploadSource) return;
     const request = begin("remove");
-    setStatus(`Removing ${folder}...`);
+    setStatus(text(`Removing ${folder}...`, `正在移除 ${folder}……`));
     try {
       const value = await removeDatasetUploadFolder(uploadSource, folder, {
         signal: request.signal,
@@ -399,8 +419,14 @@ export function AnalysisView({
       applyUploadSummary(value);
       setStatus(
         value.clip_count
-          ? `Removed ${folder}. ${value.clip_count} clips remain.`
-          : `Removed ${folder}. Upload basket is empty.`,
+          ? text(
+              `Removed ${folder}. ${value.clip_count} clips remain.`,
+              `已移除 ${folder}，剩余 ${value.clip_count} 个片段。`,
+            )
+          : text(
+              `Removed ${folder}. Upload basket is empty.`,
+              `已移除 ${folder}，上传篮已清空。`,
+            ),
       );
     } catch (reason) {
       if (!request.signal.aborted) setError(errorMessage(reason));
@@ -414,7 +440,7 @@ export function AnalysisView({
     const request = begin("remove");
     const folders = Object.keys(sourceSummary.folders);
     let currentSource = uploadSource;
-    setStatus("Clearing upload basket...");
+    setStatus(text("Clearing upload basket...", "正在清空上传篮……"));
     try {
       for (const folder of folders) {
         const value = await removeDatasetUploadFolder(currentSource, folder, {
@@ -424,7 +450,7 @@ export function AnalysisView({
         applyUploadSummary(value);
         if (value.source) currentSource = value.source;
       }
-      setStatus("Upload basket cleared.");
+      setStatus(text("Upload basket cleared.", "上传篮已清空。"));
     } catch (reason) {
       if (!request.signal.aborted) setError(errorMessage(reason));
     } finally {
@@ -434,7 +460,7 @@ export function AnalysisView({
 
   function runAnalysis(): void {
     const request = begin("analyze");
-    setStatus("Analyzing dataset...");
+    setStatus(text("Analyzing dataset...", "正在分析数据集……"));
     void analyzeDataset(
       {
         ...(source.trim() ? { source: source.trim() } : {}),
@@ -446,7 +472,7 @@ export function AnalysisView({
         onUpdate: (job) => {
           if (!request.signal.aborted) {
             setProgress(job.progress ?? 0);
-            setStatus(job.message || "Analyzing dataset...");
+            setStatus(job.message || text("Analyzing dataset...", "正在分析数据集……"));
           }
         },
       },
@@ -455,7 +481,10 @@ export function AnalysisView({
         if (request.signal.aborted) return;
         setResult(value);
         setProgress(1);
-        setStatus(`Analysis complete: ${value.summary.num_ok} clips.`);
+        setStatus(text(
+          `Analysis complete: ${value.summary.num_ok} clips.`,
+          `分析完成：${value.summary.num_ok} 个片段。`,
+        ));
       })
       .catch((reason: unknown) => {
         if (!request.signal.aborted) setError(errorMessage(reason));
@@ -466,18 +495,18 @@ export function AnalysisView({
   async function loadCached(): Promise<void> {
     if (!source.trim()) return;
     const request = begin("scan");
-    setStatus("Checking cached result...");
+    setStatus(text("Checking cached result...", "正在检查缓存结果……"));
     try {
       const cached = await getCachedDatasetResult(source.trim(), embedding, {
         signal: request.signal,
       });
       if (request.signal.aborted) return;
       if (!cached.available || !cached.clips || !cached.summary || !cached.meta) {
-        setStatus("No cached result for this source.");
+        setStatus(text("No cached result for this source.", "此数据源没有缓存结果。"));
         return;
       }
       setResult(cached as DatasetAnalysisResult);
-      setStatus("Loaded cached result.");
+      setStatus(text("Loaded cached result.", "已加载缓存结果。"));
     } catch (reason) {
       if (!request.signal.aborted) setError(errorMessage(reason));
     } finally {
@@ -499,7 +528,7 @@ export function AnalysisView({
           setSelectedIds((current) =>
             new Set([...current].filter((id) => !recommended.has(id))),
           );
-          setStatus(`Recommended ${value.count} clips.`);
+          setStatus(text(`Recommended ${value.count} clips.`, `已推荐 ${value.count} 个片段。`));
         }
       })
       .catch((reason: unknown) => {
@@ -533,11 +562,10 @@ export function AnalysisView({
         clips: result.clips,
         ids: exportIds,
         analyze_source: result.meta.source_root,
-        user_source_root: userSourceRoot.trim() || undefined,
         format,
       });
       downloadBlob(blob, `dataset_manifest.${format}`);
-      setStatus(`Exported ${exportIds.length} clips.`);
+      setStatus(text(`Exported ${exportIds.length} clips.`, `已导出 ${exportIds.length} 个片段。`));
     } catch (reason) {
       setError(errorMessage(reason));
     }
@@ -549,7 +577,10 @@ export function AnalysisView({
     try {
       const blob = await exportRobotSubset({ clips: result.clips, ids: exportIds });
       downloadBlob(blob, "robot_subset_export.zip");
-      setStatus(`Exported ${selectedRobotCount} robot clips.`);
+      setStatus(text(
+        `Exported ${selectedRobotCount} robot clips.`,
+        `已导出 ${selectedRobotCount} 个机器人片段。`,
+      ));
     } catch (reason) {
       setError(errorMessage(reason));
     }
@@ -559,7 +590,10 @@ export function AnalysisView({
     if (clip.source_kind === "robot" || clip.dataset === "robot") {
       const request = begin("preview");
       setPreviewing(clip.clip_id);
-      setStatus(`Loading robot trajectory ${clipLabel(clip)}...`);
+      setStatus(text(
+        `Loading robot trajectory ${analysisClipLabel(clip)}...`,
+        `正在加载机器人轨迹 ${analysisClipLabel(clip)}……`,
+      ));
       try {
         const inferred = typeof clip.metrics.robot_preset === "string"
           ? clip.metrics.robot_preset.trim()
@@ -573,7 +607,7 @@ export function AnalysisView({
             signal: request.signal,
             onUpdate: (job) => {
               if (!request.signal.aborted) {
-                setStatus(job.message || "Loading robot trajectory...");
+                setStatus(job.message || text("Loading robot trajectory...", "正在加载机器人轨迹……"));
               }
             },
           },
@@ -587,7 +621,7 @@ export function AnalysisView({
           scene: result.scaled_scene,
           previewToken: result.preview_token,
         });
-        setStatus(`Previewing ${result.name}.`);
+        setStatus(text(`Previewing ${result.name}.`, `正在预览 ${result.name}。`));
       } catch (reason) {
         if (!request.signal.aborted) setError(errorMessage(reason));
       } finally {
@@ -598,18 +632,24 @@ export function AnalysisView({
     }
     const request = begin("preview");
     setPreviewing(clip.clip_id);
-    setStatus(`Loading ${clipLabel(clip)}...`);
+    setStatus(text(
+      `Loading ${analysisClipLabel(clip)}...`,
+      `正在加载 ${analysisClipLabel(clip)}……`,
+    ));
     try {
       const motion = await loadMotionLibraryEntry(motionEntryForAnalysisClip(clip), {
         signal: request.signal,
         onUpdate: (job) => {
-          if (!request.signal.aborted) setStatus(job.message || "Loading clip...");
+          if (!request.signal.aborted) setStatus(job.message || text("Loading clip...", "正在加载片段……"));
         },
       });
       if (!request.signal.aborted) {
         onRobotPreviewLoaded?.(null);
         onMotionLoaded?.(motion);
-        setStatus(`Previewing ${clipLabel(clip)}.`);
+        setStatus(text(
+          `Previewing ${analysisClipLabel(clip)}.`,
+          `正在预览 ${analysisClipLabel(clip)}。`,
+        ));
       }
     } catch (reason) {
       if (!request.signal.aborted) setError(errorMessage(reason));
@@ -620,46 +660,28 @@ export function AnalysisView({
   }
 
   return (
-    <InspectorPage title="Data Analysis">
+    <InspectorPage title={text("Data Analysis", "数据分析")}>
       <WorkflowPipeline
-        label="Data Analysis pipeline"
+        label={text("Data Analysis pipeline", "数据分析流程")}
         steps={pipeline}
         activeIndex={result ? 3 : busy === "analyze" ? 2 : sourceSummary ? 1 : 0}
+        completedIndex={
+          result ? 3 : busy === "analyze" ? 1 : sourceSummary ? 0 : -1
+        }
       />
 
       <div className="flex shrink-0 flex-col">
         <WorkflowStep
-          title="1. Select data"
-          status={sourceSummary ? `${sourceSummary.clip_count} clips` : "No data"}
+          title={text("1. Select data", "1. 选择数据")}
+          status={sourceSummary
+            ? text(`${sourceSummary.clip_count} clips`, `${sourceSummary.clip_count} 个片段`)
+            : text("No data", "无数据")}
           defaultOpen
         >
           <div className="grid gap-2.5">
-            <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
-              <input
-                className={fieldClass}
-                aria-label="Dataset source path"
-                placeholder={defaultSource || "Server-local directory path"}
-                value={source}
-                disabled={busy !== null}
-                onChange={(event) => {
-                  setSource(event.target.value);
-                  setSourceSummary(null);
-                  setUploadSource(null);
-                  setResult(null);
-                  setMetricRange(null);
-                  setSelectedIds(new Set());
-                  setSubsetIds(new Set());
-                  onMotionLoaded?.(null);
-                  onRobotPreviewLoaded?.(null);
-                }}
-              />
-              <Button size="sm" disabled={!source.trim() || busy !== null} onClick={() => void scanCurrentSource()}>
-                Scan
-              </Button>
-            </div>
             <div className="grid grid-cols-2 gap-2">
-              <Button size="sm" disabled={busy !== null} onClick={() => folderInput.current?.click()}>
-                Choose folder
+              <Button size="sm" disabled={busy !== null} onClick={() => void chooseFolder()}>
+                {text("Choose folder", "选择文件夹")}
               </Button>
               <Button
                 size="sm"
@@ -668,7 +690,7 @@ export function AnalysisView({
                   void scanPath(defaultSource);
                 }}
               >
-                Built-in library
+                {text("Built-in library", "内置资源库")}
               </Button>
             </div>
             <input
@@ -676,23 +698,15 @@ export function AnalysisView({
               className="hidden"
               type="file"
               multiple
+              {...({ webkitdirectory: "" } as React.InputHTMLAttributes<HTMLInputElement>)}
               onChange={(event) => {
                 uploadFolder(event.currentTarget.files);
                 event.currentTarget.value = "";
               }}
             />
-            <Field label="Original source path (optional for manifest export)">
-              <input
-                className={fieldClass}
-                placeholder="/home/.../dataset"
-                value={userSourceRoot}
-                disabled={busy !== null}
-                onChange={(event) => setUserSourceRoot(event.target.value)}
-              />
-            </Field>
             {sourceSummary && (
               <p className="text-xs text-muted-foreground">
-                {sourceSummary.human_count} human · {sourceSummary.robot_count} robot · {Object.keys(sourceSummary.folders).length} folders
+                {sourceSummary.human_count} {text("human", "人体")} · {sourceSummary.robot_count} {text("robot", "机器人")} · {Object.keys(sourceSummary.folders).length} {text("folders", "个文件夹")}
               </p>
             )}
             {sourceSummary && uploadSource && (
@@ -707,19 +721,21 @@ export function AnalysisView({
         </WorkflowStep>
 
         <WorkflowStep
-          title="2. Configure"
-          status={embedding === "handcrafted" ? "Handcrafted" : "Reserved"}
+          title={text("2. Configure", "2. 配置")}
+          status={embedding === "handcrafted"
+            ? text("Handcrafted", "手工特征")
+            : text("Reserved", "预留")}
         >
           <div className="grid gap-2.5">
-            <Field label="Embedding">
+            <Field label={text("Embedding", "嵌入方法")}>
               <select
                 className={fieldClass}
                 value={embedding}
                 disabled={busy !== null}
                 onChange={(event) => setEmbedding(event.target.value as AnalysisEmbedding)}
               >
-                <option value="handcrafted">Handcrafted features</option>
-                <option value="pae" disabled>PAE (reserved)</option>
+                <option value="handcrafted">{text("Handcrafted features", "手工特征")}</option>
+                <option value="pae" disabled>{text("PAE (reserved)", "PAE（预留）")}</option>
               </select>
             </Field>
             <label className="flex min-h-8 items-center gap-2 text-xs font-medium text-foreground">
@@ -730,7 +746,7 @@ export function AnalysisView({
                 disabled={busy !== null}
                 onChange={(event) => setForce(event.target.checked)}
               />
-              Ignore cache
+              {text("Ignore cache", "忽略缓存")}
             </label>
             <div className="grid grid-cols-2 gap-2">
               <Button
@@ -739,10 +755,10 @@ export function AnalysisView({
                 disabled={!source.trim() || busy !== null}
                 onClick={runAnalysis}
               >
-                {busy === "analyze" ? "Analyzing..." : "Start analysis"}
+                {busy === "analyze" ? text("Analyzing...", "分析中……") : text("Start analysis", "开始分析")}
               </Button>
               <Button size="sm" disabled={!source.trim() || busy !== null} onClick={() => void loadCached()}>
-                Load cached
+                {text("Load cached", "加载缓存")}
               </Button>
             </div>
             {busy === "analyze" && (
@@ -760,12 +776,19 @@ export function AnalysisView({
         </WorkflowStep>
 
         <WorkflowStep
-          title="3. Analyze"
-          status={busy === "analyze" ? "Running" : result ? "Complete" : "Not started"}
+          title={text("3. Analyze", "3. 分析")}
+          status={busy === "analyze"
+            ? text("Running", "运行中")
+            : result
+              ? text("Complete", "已完成")
+              : text("Not started", "未开始")}
         >
           <div className="grid gap-2">
             <p className="text-xs text-muted-foreground">
-              {status || "Run analysis to calculate dynamics, quality, tags, embedding, and clusters."}
+              {status || text(
+                "Run analysis to calculate dynamics, quality, tags, embedding, and clusters.",
+                "运行分析以计算动力学、质量、标签、嵌入和聚类。",
+              )}
             </p>
             {error && (
               <p className="break-words rounded-md border border-danger-border bg-danger-muted px-2.5 py-2 text-[11px] text-danger" role="alert">
@@ -776,25 +799,27 @@ export function AnalysisView({
         </WorkflowStep>
 
         <WorkflowStep
-          title="4. Results"
-          status={summary ? `${summary.num_ok} analyzed` : "No results"}
+          title={text("4. Results", "4. 结果")}
+          status={summary
+            ? text(`${summary.num_ok} analyzed`, `已分析 ${summary.num_ok} 个`)
+            : text("No results", "无结果")}
           defaultOpen={Boolean(result)}
         >
           {!result || !summary ? (
-            <p className="text-xs leading-[1.5] text-muted-foreground">Analysis results will appear here.</p>
+            <p className="text-xs leading-[1.5] text-muted-foreground">{text("Analysis results will appear here.", "分析结果将显示在这里。")}</p>
           ) : (
             <div className="grid gap-3">
               <SummaryCards summary={summary} />
 
               {hasRobotClips && (
-                <Field label="Preview robot">
+                <Field label={text("Preview robot", "预览机器人")}>
                   <select
                     className={fieldClass}
                     value={previewRobot}
                     disabled={busy !== null}
                     onChange={(event) => setPreviewRobot(event.target.value)}
                   >
-                    <option value="">Auto-detect from trajectory</option>
+                    <option value="">{text("Auto-detect from trajectory", "从轨迹自动识别")}</option>
                     {robots.map((robot) => (
                       <option key={robot.name} value={robot.name}>
                         {robot.display_name}
@@ -807,14 +832,17 @@ export function AnalysisView({
               {summary.num_error > 0 && (
                 <details className="rounded-md border border-warning-border bg-warning-muted px-2.5 py-2">
                   <summary className="cursor-pointer list-none text-xs font-semibold text-warning [&::-webkit-details-marker]:hidden">
-                    {summary.num_error} clips could not be analyzed
+                    {text(
+                      `${summary.num_error} clips could not be analyzed`,
+                      `${summary.num_error} 个片段无法分析`,
+                    )}
                   </summary>
                   <div className="mt-2 grid gap-1.5">
                     {result.clips
                       .filter((clip) => clip.error)
                       .map((clip) => (
                         <div key={clip.clip_id} className="grid gap-0.5 text-[11px] text-warning">
-                          <span className="font-medium">{clipLabel(clip)}</span>
+                          <span className="font-medium">{analysisClipLabel(clip)}</span>
                           <span className="break-words opacity-80">{clip.error}</span>
                         </div>
                       ))}
@@ -824,8 +852,13 @@ export function AnalysisView({
 
               <div className="grid gap-2 rounded-md border border-border-subtle bg-background p-2.5">
                 <div className="flex items-center justify-between gap-2">
-                  <h2 className="text-sm font-semibold text-foreground">Embedding map</h2>
-                  <span className="text-[11px] text-muted-foreground">{Object.keys(summary.cluster_counts).length} clusters</span>
+                  <h2 className="text-sm font-semibold text-foreground">{text("Embedding map", "嵌入图")}</h2>
+                  <span className="text-[11px] text-muted-foreground">
+                    {text(
+                      `${Object.keys(summary.cluster_counts).length} clusters`,
+                      `${Object.keys(summary.cluster_counts).length} 个聚类`,
+                    )}
+                  </span>
                 </div>
                 <ScatterPlot
                   clips={availableClips}
@@ -838,16 +871,24 @@ export function AnalysisView({
 
               <div className="grid gap-2 rounded-md border border-border-subtle bg-background p-2.5">
                 <div className="grid grid-cols-3 gap-1.5">
-                  <select className={fieldClass} aria-label="Analysis tag filter" value={tagFilter} onChange={(event) => setTagFilter(event.target.value)}>
-                    <option value="all">All tags</option>
+                  <select className={fieldClass} aria-label={text("Analysis tag filter", "分析标签筛选")} value={tagFilter} onChange={(event) => setTagFilter(event.target.value)}>
+                    <option value="all">{text("All tags", "全部标签")}</option>
                     {tags.map((tag) => <option key={tag} value={tag}>{tag} ({summary.tag_counts[tag] ?? 0})</option>)}
                   </select>
-                  <select className={fieldClass} aria-label="Analysis source kind filter" value={kindFilter} onChange={(event) => setKindFilter(event.target.value)}>
-                    <option value="all">All sources</option>
-                    {kinds.map((kind) => <option key={kind} value={kind}>{kind}</option>)}
+                  <select className={fieldClass} aria-label={text("Analysis source kind filter", "分析来源筛选")} value={kindFilter} onChange={(event) => setKindFilter(event.target.value)}>
+                    <option value="all">{text("All sources", "全部来源")}</option>
+                    {kinds.map((kind) => (
+                      <option key={kind} value={kind}>
+                        {kind === "human"
+                          ? text("Human", "人体")
+                          : kind === "robot"
+                            ? text("Robot", "机器人")
+                            : kind}
+                      </option>
+                    ))}
                   </select>
-                  <select className={fieldClass} aria-label="Analysis folder filter" value={folderFilter} onChange={(event) => setFolderFilter(event.target.value)}>
-                    <option value="all">All folders</option>
+                  <select className={fieldClass} aria-label={text("Analysis folder filter", "分析文件夹筛选")} value={folderFilter} onChange={(event) => setFolderFilter(event.target.value)}>
+                    <option value="all">{text("All folders", "全部文件夹")}</option>
                     {folders.map((folder) => <option key={folder} value={folder}>{folder}</option>)}
                   </select>
                 </div>
@@ -855,7 +896,7 @@ export function AnalysisView({
                   <div>
                     <select
                       className={fieldClass}
-                      aria-label="Analysis metric"
+                      aria-label={text("Analysis metric", "分析指标")}
                       value={metric}
                       onChange={(event) => {
                         setMetric(event.target.value);
@@ -867,8 +908,8 @@ export function AnalysisView({
                     {typeof catalogMetric.desc === "string" && <p className="mt-1 text-[11px] text-muted-foreground">{catalogMetric.desc}</p>}
                   </div>
                   <div className="min-w-[120px] text-right text-[11px] text-muted-foreground">
-                    <p>median {formatNumber(summary.histograms[metric]?.median)}</p>
-                    <p>mean {formatNumber(summary.histograms[metric]?.mean)}</p>
+                    <p>{text("median", "中位数")} {formatNumber(summary.histograms[metric]?.median)}</p>
+                    <p>{text("mean", "均值")} {formatNumber(summary.histograms[metric]?.mean)}</p>
                   </div>
                 </div>
                 <HistogramChart
@@ -880,15 +921,19 @@ export function AnalysisView({
 
               <div className="grid gap-2 rounded-md border border-border-subtle bg-background p-2.5">
                 <div className="flex items-center justify-between gap-2">
-                  <h2 className="text-sm font-semibold text-foreground">Recommended subset</h2>
-                  <span className="text-[11px] text-muted-foreground">{subsetIds.size ? `${subsetIds.size} recommended` : `${exportIds.length} selected for export`}</span>
+                  <h2 className="text-sm font-semibold text-foreground">{text("Recommended subset", "推荐子集")}</h2>
+                  <span className="text-[11px] text-muted-foreground">
+                    {subsetIds.size
+                      ? text(`${subsetIds.size} recommended`, `已推荐 ${subsetIds.size} 个`)
+                      : text(`${exportIds.length} selected for export`, `已选择 ${exportIds.length} 个用于导出`)}
+                  </span>
                 </div>
                 <div className="grid grid-cols-[1fr_1fr_auto] items-end gap-2">
-                  <Field label="Ratio %"><input className={fieldClass} type="number" min="1" max="100" value={subsetRatio} onChange={(event) => setSubsetRatio(event.target.value)} /></Field>
-                  <Field label="Coverage alpha"><input className={fieldClass} type="number" min="0" max="1" step="0.01" value={subsetAlpha} onChange={(event) => setSubsetAlpha(event.target.value)} /></Field>
-                  <Button size="sm" disabled={busy !== null || !filteredClips.length} onClick={recommendSubset}>{busy === "subset" ? "Selecting..." : "Recommend"}</Button>
+                  <Field label={text("Ratio %", "比例 %")}><input className={fieldClass} type="number" min="1" max="100" value={subsetRatio} onChange={(event) => setSubsetRatio(event.target.value)} /></Field>
+                  <Field label={text("Coverage alpha", "覆盖率 alpha")}><input className={fieldClass} type="number" min="0" max="1" step="0.01" value={subsetAlpha} onChange={(event) => setSubsetAlpha(event.target.value)} /></Field>
+                  <Button size="sm" disabled={busy !== null || !filteredClips.length} onClick={recommendSubset}>{busy === "subset" ? text("Selecting...", "选择中……") : text("Recommend", "推荐")}</Button>
                 </div>
-                <div className="grid grid-cols-4 gap-1.5">
+                <div className="grid grid-cols-2 gap-1.5">
                   <Button
                     size="sm"
                     disabled={busy !== null || !filteredClips.length}
@@ -898,39 +943,39 @@ export function AnalysisView({
                         .filter((id) => !subsetIds.has(id)),
                     ))}
                   >
-                    Select visible
+                    {text("Select visible", "选择可见项")}
                   </Button>
-                  <Button size="sm" disabled={busy !== null || !selectedIds.size} onClick={() => setSelectedIds(new Set())}>Clear selection</Button>
-                  <Button size="sm" disabled={busy !== null || !exportIds.length} onClick={() => void exportManifest("json")}>Export JSON</Button>
-                  <Button size="sm" disabled={busy !== null || !exportIds.length} onClick={() => void exportManifest("csv")}>Export CSV</Button>
+                  <Button size="sm" disabled={busy !== null || !selectedIds.size} onClick={() => setSelectedIds(new Set())}>{text("Clear selection", "清除选择")}</Button>
+                  <Button size="sm" disabled={busy !== null || !exportIds.length} onClick={() => void exportManifest("json")}>{text("Export JSON", "导出 JSON")}</Button>
+                  <Button size="sm" disabled={busy !== null || !exportIds.length} onClick={() => void exportManifest("csv")}>{text("Export CSV", "导出 CSV")}</Button>
                 </div>
-                <Button size="sm" disabled={busy !== null || !selectedRobotCount} onClick={() => void exportRobots()}>Export robot ZIP ({selectedRobotCount})</Button>
+                <Button size="sm" disabled={busy !== null || !selectedRobotCount} onClick={() => void exportRobots()}>{text("Export robot ZIP", "导出机器人 ZIP")} ({selectedRobotCount})</Button>
               </div>
 
               <div className="grid gap-1.5">
                 <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-                  <span>{filteredClips.length} visible clips</span>
-                  <span>{selectedIds.size} manually selected</span>
+                  <span>{text(`${filteredClips.length} visible clips`, `${filteredClips.length} 个可见片段`)}</span>
+                  <span>{text(`${selectedIds.size} manually selected`, `手动选择 ${selectedIds.size} 个`)}</span>
                 </div>
                 <div className="grid max-h-[300px] gap-1 overflow-y-auto pr-1">
                   {filteredClips.map((clip) => {
                     const recommended = subsetIds.has(clip.clip_id);
                     return (
                       <div key={clip.clip_id} className="grid grid-cols-[auto_minmax(0,1fr)_72px_auto] items-center gap-2 rounded-md border border-border-subtle bg-surface px-2 py-1.5">
-                        <input type="checkbox" className="size-4 accent-primary" checked={selectedIds.has(clip.clip_id)} onChange={() => toggleSelected(clip.clip_id)} aria-label={`Select ${clipLabel(clip)}`} />
-                        <button type="button" className="min-w-0 truncate text-left text-xs font-medium text-foreground hover:text-primary" title={clip.source_path} onClick={() => toggleSelected(clip.clip_id)}>
-                          {clipLabel(clip)}
+                        <input type="checkbox" className="size-4 accent-primary" checked={selectedIds.has(clip.clip_id)} onChange={() => toggleSelected(clip.clip_id)} aria-label={text(`Select ${analysisClipLabel(clip)}`, `选择 ${analysisClipLabel(clip)}`)} />
+                        <button type="button" className="min-w-0 truncate text-left text-xs font-medium text-foreground hover:text-primary" title={analysisClipLabel(clip)} onClick={() => toggleSelected(clip.clip_id)}>
+                          {analysisClipLabel(clip)}
                           <span className="ml-1 text-[10px] font-normal text-muted-foreground">{clip.folder_label}</span>
                         </button>
                         <span className="text-right text-[11px] text-muted-foreground">{formatNumber(clip.metrics[metric])}</span>
                         <div className="flex items-center gap-1">
                           {recommended && <span className="text-[10px] font-semibold text-warning">FPS</span>}
-                          <Button size="sm" disabled={busy !== null} onClick={() => void previewClip(clip)}>{previewing === clip.clip_id ? "..." : "Preview"}</Button>
+                          <Button size="sm" disabled={busy !== null} onClick={() => void previewClip(clip)}>{previewing === clip.clip_id ? "..." : text("Preview", "预览")}</Button>
                         </div>
                       </div>
                     );
                   })}
-                  {!filteredClips.length && <p className="py-4 text-center text-xs text-muted-foreground">No clips match these filters.</p>}
+                  {!filteredClips.length && <p className="py-4 text-center text-xs text-muted-foreground">{text("No clips match these filters.", "没有片段符合当前筛选条件。")}</p>}
                 </div>
               </div>
             </div>

@@ -1,21 +1,25 @@
 import type { CSSProperties } from "react";
 
 import { cn } from "@/lib/utils";
+import { localize, type WorkspaceLocale } from "@/localization";
 
 import { navigationGroups, type ViewId } from "../navigation";
 
 interface SidebarProps {
   activeView: ViewId;
+  locale: WorkspaceLocale;
+  hidden?: boolean;
   onSelect(view: ViewId): void;
 }
 
 type IconStyle = CSSProperties & { "--sidebar-icon": string };
 
-export function Sidebar({ activeView, onSelect }: SidebarProps) {
+export function Sidebar({ activeView, locale, hidden = false, onSelect }: SidebarProps) {
   return (
     <aside
       id="sidebar"
-      className="col-start-1 row-start-2 min-h-0 min-w-0 overflow-hidden border-r border-border-subtle bg-surface max-[780px]:row-span-2"
+      hidden={hidden}
+      className="col-start-1 row-start-2 row-span-2 min-h-0 min-w-0 overflow-hidden border-r border-border-subtle bg-surface max-[780px]:row-span-3"
       aria-label="Workspace navigation"
     >
       <nav className="h-full min-h-0 min-w-0 overflow-y-auto px-3 py-3.5 max-[900px]:px-2">
@@ -24,7 +28,7 @@ export function Sidebar({ activeView, onSelect }: SidebarProps) {
             <section
               key={group.label}
               className="flex flex-col gap-[3px]"
-              aria-label={group.label}
+              aria-label={localize(locale, group.label, group.zhLabel)}
             >
               {group.items.map((item) => (
                 <button
@@ -36,7 +40,7 @@ export function Sidebar({ activeView, onSelect }: SidebarProps) {
                       "bg-accent text-accent-foreground",
                   )}
                   aria-current={activeView === item.id ? "page" : undefined}
-                  title={item.label}
+                  title={localize(locale, item.label, item.zhLabel)}
                   onClick={() => onSelect(item.id)}
                 >
                   <span
@@ -49,7 +53,7 @@ export function Sidebar({ activeView, onSelect }: SidebarProps) {
                     aria-hidden="true"
                   />
                   <span className="min-w-0 truncate max-[900px]:sr-only">
-                    {item.label}
+                    {localize(locale, item.label, item.zhLabel)}
                   </span>
                 </button>
               ))}

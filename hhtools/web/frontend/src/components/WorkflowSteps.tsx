@@ -1,18 +1,29 @@
 import type { CSSProperties, ReactNode } from "react";
 
+import { useLocaleText } from "@/LocaleProvider";
 import { cn } from "@/lib/utils";
+import {
+  workflowPipelineState,
+  workflowStatusToneClass,
+  type WorkflowStatusTone,
+} from "./workflowPipeline";
+
+export type { WorkflowStatusTone } from "./workflowPipeline";
 
 interface WorkflowPipelineProps {
   label: string;
   steps: readonly string[];
   activeIndex?: number;
+  completedIndex?: number;
 }
 
 export function WorkflowPipeline({
   label,
   steps,
   activeIndex = 0,
+  completedIndex = activeIndex - 1,
 }: WorkflowPipelineProps) {
+  const text = useLocaleText();
   return (
     <ol
       className="grid min-h-[54px] shrink-0 gap-0"
@@ -21,35 +32,51 @@ export function WorkflowPipeline({
       }
       aria-label={label}
     >
-      {steps.map((step, index) => (
-        <li
-          key={step}
-          className="relative flex min-w-0 flex-col items-center gap-1.5 text-center"
-          aria-current={index === activeIndex ? "step" : undefined}
-        >
-          {index > 0 && (
+      {steps.map((step, index) => {
+        const state = workflowPipelineState(index, activeIndex, completedIndex);
+        return (
+          <li
+            key={step}
+            className="relative flex min-w-0 flex-col items-center gap-1.5 text-center"
+            data-state={state}
+            aria-label={`${step}, ${
+              state === "active"
+                ? text("active", "当前")
+                : state === "complete"
+                  ? text("complete", "已完成")
+                  : text("upcoming", "未开始")
+            }`}
+            aria-current={state === "active" ? "step" : undefined}
+          >
+            {index > 0 && (
+              <span
+                className={cn(
+                  "absolute top-[5px] right-1/2 h-px w-full bg-border-subtle",
+                  index <= completedIndex + 1 && "bg-success",
+                )}
+                aria-hidden="true"
+              />
+            )}
             <span
-              className="absolute top-[5px] right-1/2 h-px w-full bg-border-subtle"
+              className={cn(
+                "relative z-[1] size-2.5 rounded-full border-2 border-surface bg-border",
+                state === "active" && "bg-primary",
+                state === "complete" && "bg-success",
+              )}
               aria-hidden="true"
             />
-          )}
-          <span
-            className={cn(
-              "relative z-[1] size-2.5 rounded-full border-2 border-surface bg-border",
-              index === activeIndex && "bg-primary",
-            )}
-            aria-hidden="true"
-          />
-          <span
-            className={cn(
-              "max-w-full px-1 text-[11px] leading-tight text-muted-foreground",
-              index === activeIndex && "font-semibold text-foreground",
-            )}
-          >
-            {step}
-          </span>
-        </li>
-      ))}
+            <span
+              className={cn(
+                "max-w-full px-1 text-[11px] leading-tight text-muted-foreground",
+                state === "active" && "font-semibold text-primary",
+                state === "complete" && "font-semibold text-success",
+              )}
+            >
+              {step}
+            </span>
+          </li>
+        );
+      })}
     </ol>
   );
 }
@@ -57,6 +84,7 @@ export function WorkflowPipeline({
 interface WorkflowStepProps {
   title: string;
   status?: string;
+  statusTone?: WorkflowStatusTone;
   defaultOpen?: boolean;
   children: ReactNode;
 }
@@ -64,6 +92,7 @@ interface WorkflowStepProps {
 export function WorkflowStep({
   title,
   status,
+  statusTone = "neutral",
   defaultOpen = false,
   children,
 }: WorkflowStepProps) {
@@ -72,7 +101,14 @@ export function WorkflowStep({
       <summary className="flex min-h-[42px] cursor-pointer list-none items-center gap-2 text-[13px] font-semibold text-foreground focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring [&::-webkit-details-marker]:hidden">
         <span className="min-w-0 flex-1 truncate">{title}</span>
         {status && (
-          <span className="shrink-0 text-[11px] font-normal text-muted-foreground">
+          <span
+            className={cn(
+              "max-w-[50%] shrink-0 truncate text-[11px] font-normal",
+              workflowStatusToneClass(statusTone),
+            )}
+            data-status-tone={statusTone}
+            title={status}
+          >
             {status}
           </span>
         )}

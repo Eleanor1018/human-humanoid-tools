@@ -1,5 +1,6 @@
 import type { ViewId } from "./navigation";
 import type { ApplicationImportTarget } from "./importIntent";
+import { localize, type WorkspaceLocale } from "./localization.ts";
 
 export type {
   ApplicationImportRequest,
@@ -48,6 +49,7 @@ export interface ApplicationMenu {
 }
 
 export interface ApplicationCommandContext {
+  readonly locale: WorkspaceLocale;
   readonly theme: ApplicationTheme;
   readonly canExportResult: boolean;
   readonly canExitApplication: boolean;
@@ -123,100 +125,108 @@ function importCommand(
 export function createApplicationMenus(
   context: ApplicationCommandContext,
 ): readonly ApplicationMenu[] {
+  const text = (english: string, chinese: string) =>
+    localize(context.locale, english, chinese);
   return [
     {
       id: "file",
-      label: "File",
+      label: text("File", "文件"),
       commands: [
         importCommand(
           "import-motion-file",
-          "Import Motion File",
-          "Import a motion asset",
+          text("Import Motion File", "导入动作文件"),
+          text("Import a motion asset", "导入一个动作资源"),
           "motion-file",
           context.onImport,
         ),
         importCommand(
           "import-motion-folder",
-          "Import Motion Folder",
-          "Import a motion dataset folder",
+          text("Import Motion Folder", "导入动作文件夹"),
+          text("Import a motion dataset folder", "导入一个动作数据集文件夹"),
           "motion-folder",
           context.onImport,
         ),
         importCommand(
           "import-video",
-          "Import Video",
-          "Select a Video to Motion source",
+          text("Import Video", "导入视频"),
+          text("Select a Video to Motion source", "选择视频转动作输入"),
           "video-file",
           context.onImport,
           true,
         ),
         importCommand(
           "import-robot-urdf",
-          "Import Robot URDF",
-          "Import a robot description",
+          text("Import Robot URDF", "导入机器人 URDF"),
+          text("Import a robot description", "导入机器人描述文件"),
           "robot-urdf",
           context.onImport,
           true,
         ),
         importCommand(
           "import-robot-mesh-folder",
-          "Import Robot Mesh Folder",
-          "Select the meshes referenced by the robot URDF",
+          text("Import Robot Mesh Folder", "导入机器人网格文件夹"),
+          text(
+            "Select the meshes referenced by the robot URDF",
+            "选择机器人 URDF 引用的网格文件",
+          ),
           "robot-mesh-folder",
           context.onImport,
         ),
         {
           id: "export-current-result",
-          label: "Current Result…",
-          detail: "Download the active retarget result as CSV",
+          label: text("Current Result…", "当前结果…"),
+          detail: text(
+            "Download the active retarget result as CSV",
+            "以 CSV 下载当前重映射结果",
+          ),
           enabled: context.canExportResult,
           disabledReason: context.canExportResult
             ? undefined
-            : "No exportable result",
+            : text("No exportable result", "没有可导出的结果"),
           run: context.onExportResult,
         },
         {
           id: "exit-application",
-          label: "Exit",
-          detail: "Close HHTOOLS",
+          label: text("Exit", "退出"),
+          detail: text("Close HHTOOLS", "关闭 HHTOOLS"),
           dividerBefore: true,
           enabled: context.canExitApplication,
           disabledReason: context.canExitApplication
             ? undefined
-            : "Desktop app only",
+            : text("Desktop app only", "仅桌面应用可用"),
           run: context.onExitApplication,
         },
       ],
     },
     {
       id: "workflows",
-      label: "Workflows",
+      label: text("Workflows", "工作流"),
       commands: [
         navigationCommand(
           "navigate-video-to-motion",
-          "Video to Motion",
-          "Generate motion from video with GVHMR",
+          text("Video to Motion", "视频转动作"),
+          text("Generate motion from video with GVHMR", "使用 GVHMR 从视频生成动作"),
           "video-to-motion",
           context.onNavigate,
         ),
         navigationCommand(
           "navigate-h2r",
-          "Human to Robot",
-          "Retarget human motion to a robot",
+          text("Human to Robot", "人体转机器人"),
+          text("Retarget human motion to a robot", "将人体动作重映射到机器人"),
           "h2r",
           context.onNavigate,
         ),
         navigationCommand(
           "navigate-r2r",
-          "Robot to Robot",
-          "Retarget a trajectory across robot embodiments",
+          text("Robot to Robot", "机器人转机器人"),
+          text("Retarget a trajectory across robot embodiments", "在不同机器人之间重映射轨迹"),
           "r2r",
           context.onNavigate,
         ),
         navigationCommand(
           "navigate-batch",
-          "Batch",
-          "Run batch workflows",
+          text("Batch", "批处理"),
+          text("Run batch workflows", "运行批处理工作流"),
           "batch",
           context.onNavigate,
         ),
@@ -224,12 +234,12 @@ export function createApplicationMenus(
     },
     {
       id: "analysis",
-      label: "Analysis",
+      label: text("Analysis", "分析"),
       commands: [
         navigationCommand(
           "navigate-analysis",
-          "Data Analysis",
-          "Inspect motion and trajectory datasets",
+          text("Data Analysis", "数据分析"),
+          text("Inspect motion and trajectory datasets", "检查动作与轨迹数据集"),
           "dataset-viz",
           context.onNavigate,
         ),
@@ -237,36 +247,45 @@ export function createApplicationMenus(
     },
     {
       id: "settings",
-      label: "Settings",
+      label: text("Settings", "设置"),
       commands: [
         {
           id: "open-settings",
-          label: "Settings",
-          detail: "Configure background-job admission",
+          label: text("Settings", "设置"),
+          detail: text(
+            "Configure workspace and background jobs",
+            "配置工作区与后台任务",
+          ),
           run: context.onOpenSettings,
         },
         {
           id: "toggle-theme",
-          label: context.theme === "dark" ? "Light Mode" : "Dark Mode",
-          detail: `Switch to ${context.theme === "dark" ? "light" : "dark"} appearance`,
+          label:
+            context.theme === "dark"
+              ? text("Light Mode", "浅色模式")
+              : text("Dark Mode", "深色模式"),
+          detail:
+            context.theme === "dark"
+              ? text("Switch to light appearance", "切换到浅色外观")
+              : text("Switch to dark appearance", "切换到深色外观"),
           run: context.onToggleTheme,
         },
       ],
     },
     {
       id: "help",
-      label: "Help",
+      label: text("Help", "帮助"),
       commands: [
         {
           id: "open-tutorial",
-          label: "Tutorial",
-          detail: "Open the project README",
+          label: text("Tutorial", "教程"),
+          detail: text("Open the project README", "打开项目说明"),
           run: context.onOpenTutorial,
         },
         {
           id: "open-about",
-          label: "About hhtools",
-          detail: "Project and source information",
+          label: text("About hhtools", "关于 hhtools"),
+          detail: text("Project and source information", "项目与源代码信息"),
           dividerBefore: true,
           run: context.onOpenAbout,
         },

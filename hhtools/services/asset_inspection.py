@@ -42,7 +42,7 @@ from .routing import (
     reference_for_dataset,
 )
 
-_SUPPORTED_PRIMARY_EXTENSIONS = frozenset(
+SUPPORTED_MOTION_PRIMARY_EXTENSIONS = frozenset(
     {
         ".bvh",
         ".csv",
@@ -69,6 +69,17 @@ _UNIFIED_NPZ_REQUIRED_KEYS = frozenset(
         "quaternions",
     }
 )
+_MAX_NPZ_METADATA_MEMBER_BYTES = 64 * 1024
+
+
+def _npz_member_within_limit(archive: Any, name: str) -> bool:
+    """Check an NPZ member's expanded size before NumPy materializes it."""
+
+    try:
+        info = archive.zip.getinfo(f"{name}.npy")
+    except (AttributeError, KeyError):
+        return False
+    return info.file_size <= _MAX_NPZ_METADATA_MEMBER_BYTES
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,7 +158,7 @@ def _safe_npz_dataset(path: Path, hint: str | None) -> str:
                     dataset = hint
                 elif (path.parent / f"{path.stem}_terrain.obj").is_file():
                     dataset = "parc_ms"
-                elif "meta_json" in keys:
+                elif "meta_json" in keys and _npz_member_within_limit(archive, "meta_json"):
                     try:
                         raw_meta = np.asarray(archive["meta_json"])
                         if raw_meta.dtype.kind in {"S", "U"}:
@@ -237,7 +248,7 @@ def _logical_primary_candidates(directory: Path) -> list[Path]:
     root = directory.resolve()
     candidates: list[Path] = []
     for path in sorted(directory.rglob("*")):
-        if path.suffix.lower() not in _SUPPORTED_PRIMARY_EXTENSIONS or not path.is_file():
+        if path.suffix.lower() not in SUPPORTED_MOTION_PRIMARY_EXTENSIONS or not path.is_file():
             continue
         try:
             resolved = path.resolve()
@@ -348,7 +359,7 @@ def discover_primary(candidate: str | Path) -> MotionAssetDiscovery:
         )
 
     suffix = primary.suffix.lower()
-    if suffix not in _SUPPORTED_PRIMARY_EXTENSIONS:
+    if suffix not in SUPPORTED_MOTION_PRIMARY_EXTENSIONS:
         raise MotionAssetDiscoveryError(
             "UNSUPPORTED_FORMAT",
             f"The motion format {suffix or '(none)'} is not supported.",
@@ -462,6 +473,8 @@ def _inspect_unified_npz(archive: Any, keys: set[str]) -> _ContentFacts:
     # load_npz accesses meta_json when it is present.  Touching it here with
     # allow_pickle=False rejects object arrays without executing them.
     if "meta_json" in keys:
+        if not _npz_member_within_limit(archive, "meta_json"):
+            raise _ContentValidationError("meta_json exceeds the supported inspection size")
         _scalar_value(archive["meta_json"], "meta_json")
     if "source_format" in keys:
         _scalar_value(archive["source_format"], "source_format")
@@ -1065,6 +1078,7 @@ __all__ = [
     "MotionAssetDiscovery",
     "MotionAssetDiscoveryError",
     "MotionAssetInspector",
+    "SUPPORTED_MOTION_PRIMARY_EXTENSIONS",
     "discover_motion_sidecars",
     "discover_primary",
 ]

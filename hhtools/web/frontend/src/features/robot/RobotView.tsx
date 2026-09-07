@@ -1,12 +1,20 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import { ImportDropzone } from "@/components/ImportDropzone";
 import { InspectorPage } from "@/components/Inspector";
+import { RefreshButton } from "@/components/RefreshButton";
 import { SearchField } from "@/components/SearchField";
 import { ValidationSummary } from "@/components/ValidationSummary";
 import { robotValidationFacts } from "@/components/validationFacts";
 import { Button } from "@/components/ui/button";
 import type { ApplicationImportRequest } from "@/importIntent";
+import { useLocaleText } from "@/LocaleProvider";
 import type { UploadFile } from "@/lib/api";
 
 import {
@@ -95,6 +103,7 @@ export function RobotView({
   /** App-owned File-menu intent; this mounted view owns its input elements. */
   importRequest?: ApplicationImportRequest | null;
 }) {
+  const text = useLocaleText();
   const [robots, setRobots] = useState<RobotSummary[]>([]);
   const [search, setSearch] = useState("");
   const [loadingName, setLoadingName] = useState<string | null>(null);
@@ -102,7 +111,6 @@ export function RobotView({
   const [importing, setImporting] = useState(false);
   const [urdf, setUrdf] = useState<UploadFile | null>(null);
   const [meshes, setMeshes] = useState<readonly UploadFile[]>([]);
-  const [libraryDir, setLibraryDir] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const libraryRequest = useRef<AbortController | null>(null);
   const robotRequest = useRef<AbortController | null>(null);
@@ -120,7 +128,6 @@ export function RobotView({
       .then((response) => {
         if (request.signal.aborted) return;
         setRobots([...response.robots]);
-        setLibraryDir(response.library_dir || null);
       })
       .catch((reason: unknown) => {
         if (request.signal.aborted) return;
@@ -138,10 +145,6 @@ export function RobotView({
       robotRequest.current?.abort();
     };
   }, [refresh]);
-
-  useEffect(() => {
-    meshInput.current?.setAttribute("webkitdirectory", "");
-  }, []);
 
   useEffect(() => {
     if (
@@ -208,6 +211,7 @@ export function RobotView({
     [onRobotLoaded, refresh],
   );
 
+  // Either picker may run first; upload starts only after both halves exist.
   const receiveUrdf = useCallback(
     (files: readonly UploadFile[]) => {
       if (busy) return;
@@ -215,47 +219,49 @@ export function RobotView({
         file.name.toLowerCase().endsWith(".urdf"),
       );
       if (!selectedUrdf) {
-        setError("No .urdf file was found.");
+        setError(
+          text("No .urdf file was found.", "没有找到 .urdf 文件。"),
+        );
         return;
       }
       const sidecars = files.filter(
         (file) =>
           file !== selectedUrdf && !file.name.toLowerCase().endsWith(".urdf"),
       );
+      const selectedMeshes = sidecars.length ? sidecars : meshes;
       setUrdf(selectedUrdf);
-      setMeshes(sidecars);
+      if (sidecars.length) setMeshes(sidecars);
       setError(null);
-      if (sidecars.length) void finishImport(selectedUrdf, sidecars);
+      if (selectedMeshes.length) void finishImport(selectedUrdf, selectedMeshes);
     },
-    [busy, finishImport],
+    [busy, finishImport, meshes, text],
   );
 
   const receiveMeshes = useCallback(
     (files: readonly UploadFile[]) => {
       if (busy) return;
-      if (!urdf) {
-        setError("Choose the robot URDF before selecting its mesh folder.");
-        return;
-      }
       const sidecars = files.filter(
         (file) => !file.name.toLowerCase().endsWith(".urdf"),
       );
       if (!sidecars.length) {
-        setError("No mesh assets were found.");
+        setError(text("No mesh assets were found.", "没有找到网格资源。"));
         return;
       }
       setMeshes(sidecars);
       setError(null);
-      void finishImport(urdf, sidecars);
+      if (urdf) void finishImport(urdf, sidecars);
     },
-    [busy, finishImport, urdf],
+    [busy, finishImport, text, urdf],
   );
 
   const remove = useCallback(
     (robot: RobotSummary) => {
       if (!robot.deletable || busy) return;
       if (!window.confirm(
-        `Remove “${robotLabel(robot)}” from the Robot Library?\nThis permanently deletes its local folder.`,
+        text(
+          `Remove “${robotLabel(robot)}” from the Robot Library?\nThis permanently deletes its local folder.`,
+          `要从机器人资源库移除“${robotLabel(robot)}”吗？\n这将永久删除其本地文件夹。`,
+        ),
       )) return;
       robotRequest.current?.abort();
       const request = new AbortController();
@@ -275,7 +281,7 @@ export function RobotView({
           if (!request.signal.aborted) setLoadingName(null);
         });
     },
-    [busy, currentRobot?.name, onRobotLoaded, refresh],
+    [busy, currentRobot?.name, onRobotLoaded, refresh, text],
   );
 
   const load = useCallback(
@@ -303,18 +309,18 @@ export function RobotView({
   );
 
   return (
-    <InspectorPage title="Robot">
+    <InspectorPage title={text("Robot", "机器人")}>
       <div className="flex shrink-0 flex-col gap-2.5">
         <ImportDropzone
-          label="URDF import area"
+          label={text("URDF import area", "URDF 导入区")}
           icon="/icons/robot/file.svg"
-          title="1 · URDF file"
+          title={text("1 · URDF file", "1 · URDF 文件")}
           className="min-h-[120px] px-9 py-3.5"
           disabled={busy}
           onFiles={receiveUrdf}
         >
           <Button size="sm" disabled={busy} onClick={() => urdfInput.current?.click()}>
-            Choose .urdf
+            {text("Choose .urdf", "选择 .urdf")}
           </Button>
           <input
             ref={urdfInput}
@@ -328,45 +334,68 @@ export function RobotView({
           />
         </ImportDropzone>
         <ImportDropzone
-          label="Robot mesh import area"
+          label={text("Robot mesh import area", "机器人网格导入区")}
           icon="/icons/robot/folder.svg"
-          title="2 · Mesh folder"
+          title={text("2 · Mesh folder", "2 · 网格文件夹")}
           className="min-h-[120px] px-9 py-3.5"
           disabled={busy}
           onFiles={receiveMeshes}
         >
           <Button
             size="sm"
-            disabled={busy || !urdf}
+            disabled={busy}
             onClick={() => meshInput.current?.click()}
           >
-            Choose mesh folder
+            {text("Choose mesh folder", "选择网格文件夹")}
           </Button>
           <input
             ref={meshInput}
             className="hidden"
             type="file"
             multiple
+            disabled={busy}
             onChange={(event) => {
               receiveMeshes(Array.from(event.currentTarget.files ?? []) as UploadFile[]);
               event.currentTarget.value = "";
             }}
+            {...{ webkitdirectory: "" }}
           />
         </ImportDropzone>
         <p className="text-xs text-muted-foreground" aria-live="polite">
           {importing
-            ? `Importing ${urdf?.name || "robot"}...`
+            ? text(
+                `Importing ${urdf?.name || "robot"}...`,
+                `正在导入 ${urdf?.name || "机器人"}……`,
+              )
             : urdf
-              ? `URDF: ${urdf.name} · ${meshes.length ? `${meshes.length} assets` : "choose the mesh folder"}`
+              ? `URDF: ${urdf.name} · ${
+                  meshes.length
+                    ? text(
+                        `${meshes.length} assets`,
+                        `${meshes.length} 个资源`,
+                      )
+                    : text("choose the mesh folder", "请选择网格文件夹")
+                }`
+              : meshes.length
+                ? text(
+                    `${meshes.length} mesh asset${meshes.length === 1 ? "" : "s"} · choose the .urdf file`,
+                    `${meshes.length} 个网格资源 · 请选择 .urdf 文件`,
+                  )
               : loadedRobot
-                ? `Loaded: ${robotLabel(loadedRobot)}`
+                ? text(
+                    `Loaded: ${robotLabel(loadedRobot)}`,
+                    `已加载：${robotLabel(loadedRobot)}`,
+                  )
                 : currentRobot
-                  ? `Loaded: ${currentRobot.display_name}`
-                  : "No URDF selected."}
+                  ? text(
+                      `Loaded: ${currentRobot.display_name}`,
+                      `已加载：${currentRobot.display_name}`,
+                    )
+                  : text("No URDF selected.", "尚未选择 URDF。")}
         </p>
         <ValidationSummary
-          items={robotValidationFacts(currentRobot ?? null)}
-          label="Loaded robot validation"
+          items={robotValidationFacts(currentRobot ?? null, text)}
+          label={text("Loaded robot validation", "已加载机器人校验")}
         />
       </div>
 
@@ -379,15 +408,19 @@ export function RobotView({
             id="robot-library-title"
             className="text-[19px] leading-tight font-bold tracking-normal text-foreground"
           >
-            Robot Library
+            {text("Robot Library", "机器人资源库")}
           </h2>
-          <Button size="sm" onClick={refresh} disabled={loadingLibrary || Boolean(loadingName)}>
-            {loadingLibrary ? "Loading..." : "Refresh"}
-          </Button>
+          <RefreshButton
+            label={text("Refresh Robot Library", "刷新机器人资源库")}
+            busy={loadingLibrary}
+            variant="ghost"
+            onClick={refresh}
+            disabled={Boolean(loadingName)}
+          />
         </div>
         <SearchField
-          label="Search the Robot Library"
-          placeholder="Search robots..."
+          label={text("Search the Robot Library", "搜索机器人资源库")}
+          placeholder={text("Search robots...", "搜索机器人……")}
           value={search}
           onChange={(event) => setSearch(event.target.value)}
           disabled={loadingLibrary}
@@ -403,23 +436,41 @@ export function RobotView({
           aria-busy={loadingLibrary || Boolean(loadingName)}
         >
           {loadingLibrary ? (
-            <p className="p-2 text-xs text-muted-foreground">Loading robots...</p>
+            <p className="p-2 text-xs text-muted-foreground">
+              {text("Loading robots...", "正在加载机器人……")}
+            </p>
           ) : !robots.length ? (
             <div className="grid gap-1 p-2 text-xs text-muted-foreground">
-              <p>No robot models are available.</p>
-              <p className="break-words text-[11px] leading-relaxed">
-                Add a URDF and its meshes to {libraryDir || "the robot library"}, then refresh.
+              <p>
+                {text(
+                  "No robot models are available.",
+                  "没有可用的机器人模型。",
+                )}
               </p>
               <p className="break-words text-[11px] leading-relaxed">
-                Curated presets: {CURATED_NAMES.map((name) => CURATED_LABELS[name]).join(", ")}.
+                {text(
+                  "Import a URDF and its mesh folder, then refresh.",
+                  "导入 URDF 及其网格文件夹，然后刷新。",
+                )}
+              </p>
+              <p className="break-words text-[11px] leading-relaxed">
+                {text("Curated presets: ", "内置模型：")}{CURATED_NAMES.map(
+                  (name) => CURATED_LABELS[name],
+                ).join(", ")}.
               </p>
             </div>
           ) : !filteredRobots.length ? (
             <p className="p-2 text-xs text-muted-foreground">
-              No robots match “{search}”.
+              {text(
+                `No robots match “${search}”.`,
+                `没有机器人匹配“${search}”。`,
+              )}
             </p>
           ) : (
-            <ul className="grid gap-0.5" aria-label="Robot models">
+            <ul
+              className="grid gap-0.5"
+              aria-label={text("Robot models", "机器人模型")}
+            >
               {filteredRobots.map((robot) => {
                 const active = loadedName === robot.name;
                 const busy = loadingName === robot.name;
@@ -434,7 +485,10 @@ export function RobotView({
                       className="grid min-h-12 w-full grid-cols-[32px_minmax(0,1fr)_auto] items-center gap-2 rounded-md border border-transparent bg-transparent px-2 py-1.5 text-left text-foreground transition-colors hover:border-border-subtle hover:bg-background focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring data-[active=true]:border-primary data-[active=true]:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
                       data-active={active}
                       aria-current={active ? "true" : undefined}
-                      aria-label={`Load robot ${robotLabel(robot)}`}
+                      aria-label={text(
+                        `Load robot ${robotLabel(robot)}`,
+                        `加载机器人 ${robotLabel(robot)}`,
+                      )}
                       disabled={unavailable || busy}
                       onClick={() => load(robot)}
                     >
@@ -454,26 +508,34 @@ export function RobotView({
                           {robotLabel(robot)}
                         </strong>
                         <small className="truncate text-[11px] text-muted-foreground">
-                          {robot.num_dof} DoF · {robot.builtin ? "Built-in" : "Imported"}
-                          {unavailable ? " · URDF missing" : ""}
+                          {robot.num_dof} DoF · {robot.builtin
+                            ? text("Built-in", "内置")
+                            : text("Imported", "已导入")}
+                          {unavailable
+                            ? text(" · URDF missing", " · 缺少 URDF")
+                            : ""}
                         </small>
                       </span>
-                      <span className="shrink-0 text-[11px] text-muted-foreground">
-                        {busy
-                          ? "Loading..."
-                          : active
-                            ? "Loaded"
-                            : unavailable
-                              ? "Unavailable"
-                              : "Load"}
-                      </span>
+                      {(busy || unavailable) && (
+                        <span className="shrink-0 text-[11px] text-muted-foreground">
+                          {busy
+                            ? text("Loading...", "加载中……")
+                            : text("Unavailable", "不可用")}
+                        </span>
+                      )}
                     </button>
                     {robot.deletable && !robot.builtin && (
                       <button
                         type="button"
                         className="size-8 rounded-md text-lg leading-none text-muted-foreground hover:bg-danger-muted hover:text-danger focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-50"
-                        title="Remove from Robot Library"
-                        aria-label={`Delete robot ${robotLabel(robot)}`}
+                        title={text(
+                          "Remove from Robot Library",
+                          "从机器人资源库移除",
+                        )}
+                        aria-label={text(
+                          `Delete robot ${robotLabel(robot)}`,
+                          `删除机器人 ${robotLabel(robot)}`,
+                        )}
                         disabled={busy}
                         onClick={() => remove(robot)}
                       >

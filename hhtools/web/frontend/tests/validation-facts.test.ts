@@ -51,6 +51,12 @@ test("reports robot mapping and renderability problems", () => {
   assert.equal(facts[3].tone, "warning");
 });
 
+test("localizes Motion and Robot validation labels on request", () => {
+  const chinese = (_english: string, translated: string) => translated;
+  assert.match(motionValidationFacts(motion, chinese)[0].label, /可播放轨迹/);
+  assert.match(robotValidationFacts(robot, chinese)[0].label, /可控自由度/);
+});
+
 test("reports changed and near-limit calibration joints", () => {
   const facts = calibrationValidationFacts(
     robot,

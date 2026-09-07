@@ -97,10 +97,37 @@ def test_skill_has_minimal_repo_scoped_structure_and_trigger_metadata() -> None:
         assert excluded_scope in description
 
     openai = yaml.safe_load(OPENAI_FILE.read_text(encoding="utf-8"))
-    assert set(openai) == {"interface"}
-    assert "dependencies" not in openai
+    assert set(openai) == {"interface", "dependencies"}
     assert "$hhtools-agent" in openai["interface"]["default_prompt"]
     assert "smoke" in openai["interface"]["default_prompt"].casefold()
+    assert openai["dependencies"] == {
+        "tools": [
+            {
+                "type": "mcp",
+                "value": "hhtools",
+                "description": "Local HHTools H2R Agent MCP server",
+                "transport": "stdio",
+                "command": "uv",
+                "args": [
+                    "run",
+                    "--frozen",
+                    "--no-sync",
+                    "hhtools-mcp",
+                    "--source",
+                    "assets/motions",
+                    "--save-dir",
+                    ".hhtools/agent/save",
+                    "--cache",
+                    ".hhtools/agent/cache",
+                    "--job-settings",
+                    ".hhtools/agent/job-settings.json",
+                    "--web-ui-url",
+                    "http://127.0.0.1:8010",
+                ],
+                "cwd": ".",
+            }
+        ]
+    }
 
 
 def test_all_skill_references_resolve_and_contract_map_covers_public_schemas() -> None:

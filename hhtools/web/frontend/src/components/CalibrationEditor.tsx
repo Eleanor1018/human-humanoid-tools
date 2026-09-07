@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { useLocaleText } from "@/LocaleProvider";
 import type { CalibrationDisplayOptions } from "@/stage/calibrationDisplay";
 import { updateCalibrationDisplay } from "@/stage/calibrationDisplay";
 import { prepareReferenceSkeleton } from "@/stage/referenceSkeleton";
@@ -52,15 +53,19 @@ const numberClass =
 type RegionFilter = CalibrationJointRegion | "all";
 type ComparisonMode = "current" | "saved" | "zero";
 
-const regions: readonly { value: RegionFilter; label: string }[] = [
-  { value: "all", label: "All" },
-  { value: "torso", label: "Torso" },
-  { value: "left-arm", label: "L arm" },
-  { value: "right-arm", label: "R arm" },
-  { value: "left-leg", label: "L leg" },
-  { value: "right-leg", label: "R leg" },
-  { value: "head", label: "Head" },
-  { value: "hands", label: "Hands" },
+const regions: readonly {
+  value: RegionFilter;
+  english: string;
+  chinese: string;
+}[] = [
+  { value: "all", english: "All", chinese: "全部" },
+  { value: "torso", english: "Torso", chinese: "躯干" },
+  { value: "left-arm", english: "L arm", chinese: "左臂" },
+  { value: "right-arm", english: "R arm", chinese: "右臂" },
+  { value: "left-leg", english: "L leg", chinese: "左腿" },
+  { value: "right-leg", english: "R leg", chinese: "右腿" },
+  { value: "head", english: "Head", chinese: "头部" },
+  { value: "hands", english: "Hands", chinese: "手部" },
 ];
 
 function CalibrationJointRow({
@@ -80,6 +85,7 @@ function CalibrationJointRow({
   readonly onSelect: () => void;
   readonly onChange: (valueRad: number) => void;
 }) {
+  const text = useLocaleText();
   const editing = useRef(false);
   const [numberValue, setNumberValue] = useState(() =>
     limit.type === "prismatic" ? value.toFixed(3) : formatCalibrationAngle(value, unit),
@@ -128,7 +134,7 @@ function CalibrationJointRow({
         disabled={disabled}
         onChange={(event) => onChange(Number(event.currentTarget.value))}
         className="h-4 min-w-0 accent-primary"
-        aria-label={`${limit.name} angle`}
+        aria-label={text(`${limit.name} angle`, `${limit.name} 角度`)}
       />
       <input
         type="number"
@@ -154,8 +160,20 @@ function CalibrationJointRow({
           if (event.key === "Enter") event.currentTarget.blur();
         }}
         className={`${numberClass} ${nearLimit ? "border-warning/55" : ""}`}
-        aria-label={`${limit.name} ${linear ? "metres" : unit === "deg" ? "degrees" : "radians"}`}
-        title={linear ? "Translation in metres" : unit === "deg" ? "Degrees; stored in radians" : "Angle in radians"}
+        aria-label={`${limit.name} ${
+          linear
+            ? text("metres", "米")
+            : unit === "deg"
+              ? text("degrees", "度")
+              : text("radians", "弧度")
+        }`}
+        title={
+          linear
+            ? text("Translation in metres", "平移量，单位为米")
+            : unit === "deg"
+              ? text("Degrees; stored in radians", "显示为度，内部以弧度存储")
+              : text("Angle in radians", "角度，单位为弧度")
+        }
       />
     </div>
   );
@@ -181,6 +199,7 @@ export function CalibrationEditor({
   onCancel,
   onSave,
 }: CalibrationEditorProps) {
+  const text = useLocaleText();
   const [query, setQuery] = useState("");
   const [region, setRegion] = useState<RegionFilter>("all");
   const [localAngleUnit, setLocalAngleUnit] = useState<CalibrationAngleUnit>("rad");
@@ -230,12 +249,12 @@ export function CalibrationEditor({
           <input
             type="search"
             value={query}
-            placeholder="Search joints"
+            placeholder={text("Search joints", "搜索关节")}
             autoComplete="off"
             disabled={disabled}
             onChange={(event) => setQuery(event.currentTarget.value)}
             className="h-7 min-w-0 rounded-md border border-border bg-surface px-2 text-[11px] text-foreground outline-none focus:border-primary"
-            aria-label="Search calibration joints"
+            aria-label={text("Search calibration joints", "搜索标定关节")}
           />
           <span className="min-w-9 text-center tabular-nums text-muted-foreground">
             {visibleLimits.length}/{resolved.length}
@@ -259,7 +278,11 @@ export function CalibrationEditor({
             ))}
           </div>
         </div>
-        <div className="flex flex-wrap gap-1" role="group" aria-label="Joint regions">
+        <div
+          className="flex flex-wrap gap-1"
+          role="group"
+          aria-label={text("Joint regions", "关节区域")}
+        >
           {regions.map((option) => (
             <button
               key={option.value}
@@ -273,7 +296,7 @@ export function CalibrationEditor({
                   : "border-border-subtle bg-surface text-muted-foreground hover:border-border"
               }`}
             >
-              {option.label}
+              {text(option.english, option.chinese)}
             </button>
           ))}
         </div>
@@ -281,12 +304,12 @@ export function CalibrationEditor({
           <div
             className="grid grid-cols-3 overflow-hidden rounded-md border border-border-subtle"
             role="group"
-            aria-label="Pose comparison"
+            aria-label={text("Pose comparison", "姿势对比")}
           >
             {([
-              ["current", "Current"],
-              ["saved", "Saved"],
-              ["zero", "URDF zero"],
+              ["current", text("Current", "当前")],
+              ["saved", text("Saved", "已保存")],
+              ["zero", text("URDF zero", "URDF 零位")],
             ] as const).map(([mode, label]) => (
               <button
                 key={mode}
@@ -312,14 +335,16 @@ export function CalibrationEditor({
               publishEdit(zeroCalibrationRegion(limits, value, region))
             }
           >
-            Zero region
+            {text("Zero region", "区域归零")}
           </Button>
         </div>
       </div>
 
       <div className="grid gap-2 border-b border-border-subtle pb-2.5 text-[11px] text-foreground">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-          <span className="font-semibold text-muted-foreground">Stage display</span>
+          <span className="font-semibold text-muted-foreground">
+            {text("Stage display", "舞台显示")}
+          </span>
           <label className="flex items-center gap-1.5">
             <input
               type="checkbox"
@@ -328,7 +353,7 @@ export function CalibrationEditor({
               onChange={(event) => updateDisplay({ mappedOnly: event.currentTarget.checked })}
               className="size-3.5 accent-primary"
             />
-            Mapped only
+            {text("Mapped only", "仅已映射")}
           </label>
           <label className="flex items-center gap-1.5">
             <input
@@ -338,7 +363,7 @@ export function CalibrationEditor({
               onChange={(event) => updateDisplay({ labels: event.currentTarget.checked })}
               className="size-3.5 accent-primary"
             />
-            Labels
+            {text("Labels", "标签")}
           </label>
           <label className="flex items-center gap-1.5">
             <input
@@ -348,16 +373,16 @@ export function CalibrationEditor({
               onChange={(event) => updateDisplay({ mappingLines: event.currentTarget.checked })}
               className="size-3.5 accent-primary"
             />
-            Link lines
+            {text("Link lines", "连接线")}
           </label>
           <span className="ml-auto text-muted-foreground">
-            {mappedLandmarks} mapped
+            {text(`${mappedLandmarks} mapped`, `已映射 ${mappedLandmarks} 个`)}
           </span>
         </div>
         <div className="grid grid-cols-2 gap-3">
           <label className="grid gap-1">
             <span className="flex justify-between gap-2">
-              Reference
+              {text("Reference", "参考姿势")}
               <span className="tabular-nums text-muted-foreground">
                 {Math.round(display.referenceOpacity * 100)}%
               </span>
@@ -377,7 +402,7 @@ export function CalibrationEditor({
           </label>
           <label className="grid gap-1">
             <span className="flex justify-between gap-2">
-              Robot
+              {text("Robot", "机器人")}
               <span className="tabular-nums text-muted-foreground">
                 {Math.round(display.robotOpacity * 100)}%
               </span>
@@ -399,8 +424,8 @@ export function CalibrationEditor({
       </div>
 
       <ValidationSummary
-        items={calibrationValidationFacts(robot, limits, value)}
-        label="Calibration validation"
+        items={calibrationValidationFacts(robot, limits, value, text)}
+        label={text("Calibration validation", "标定验证")}
       />
 
       <div className="grid max-h-64 gap-1.5 overflow-y-auto pr-1">
@@ -422,32 +447,36 @@ export function CalibrationEditor({
         ))}
         {visibleLimits.length === 0 && (
           <p className="py-2 text-center text-[11px] text-muted-foreground">
-            No matching joints
+            {text("No matching joints", "没有匹配的关节")}
           </p>
         )}
       </div>
 
-      <div className="grid grid-cols-4 gap-1.5 border-t border-border-subtle pt-2.5">
+      <div className="grid grid-cols-4 gap-1.5 border-t border-border-subtle pt-2.5 max-[420px]:grid-cols-2">
         <Button
           size="sm"
           disabled={disabled}
           onClick={() => showComparison("zero")}
         >
-          Zero
+          {text("Zero", "归零")}
         </Button>
         <Button
           size="sm"
           disabled={disabled || !hasSavedBaseline}
-          title={hasSavedBaseline ? "Restore the saved calibration" : "No saved calibration"}
+          title={
+            hasSavedBaseline
+              ? text("Restore the saved calibration", "恢复已保存的标定")
+              : text("No saved calibration", "没有已保存的标定")
+          }
           onClick={() => showComparison("saved")}
         >
-          Reset
+          {text("Reset", "重置")}
         </Button>
         <Button size="sm" disabled={disabled} onClick={onCancel}>
-          Cancel
+          {text("Cancel", "取消")}
         </Button>
         <Button variant="primary" size="sm" disabled={disabled} onClick={onSave}>
-          {saving ? "Saving…" : "Save"}
+          {saving ? text("Saving…", "保存中…") : text("Save", "保存")}
         </Button>
       </div>
     </div>

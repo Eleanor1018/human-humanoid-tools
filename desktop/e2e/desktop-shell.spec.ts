@@ -1,4 +1,5 @@
-import { _electron as electron, expect, test } from '@playwright/test'
+import { _electron as electron, expect, test, type Locator } from '@playwright/test'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -16,6 +17,13 @@ function processIsAlive(pid: number): boolean {
   }
 }
 
+async function expectBorderless(button: Locator): Promise<void> {
+  await expect(button).toBeVisible()
+  expect(
+    await button.evaluate((element) => getComputedStyle(element).borderTopColor)
+  ).toBe('rgba(0, 0, 0, 0)')
+}
+
 test('starts the shared renderer and stops its Python sidecar', async ({}, testInfo) => {
   const packagedExecutable = process.env.HHTOOLS_E2E_EXECUTABLE
   const electronApp = await electron.launch({
@@ -24,6 +32,7 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
       : { executablePath: packagedExecutable }),
     args: [
       `--user-data-dir=${testInfo.outputPath('user-data')}`,
+      '--lang=en-US',
       ...(packagedExecutable === undefined
         ? [join(desktopRoot, 'out', 'main', 'index.js')]
         : [])
@@ -73,7 +82,7 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
 
     const fileTrigger = menu.getByRole('menuitem', { name: 'File', exact: true })
     const fileMenu = page.getByRole('menu', { name: 'File' })
-    await fileTrigger.hover()
+    await fileTrigger.click()
     await expect(fileMenu).toBeVisible()
     await expect(fileMenu.getByRole('menuitem')).toHaveCount(7)
     for (const command of [
@@ -94,11 +103,55 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
     await expect(fileMenu).toBeHidden()
     await expect(settingsMenu.getByRole('menuitem')).toHaveText(['Settings', 'Dark Mode'])
     await settingsMenu.getByRole('menuitem', { name: 'Settings', exact: true }).click()
-    const settingsDialog = page.getByRole('dialog', { name: 'Settings' })
+    let settingsDialog = page.getByRole('dialog', { name: 'Workspace Settings' })
     await expect(settingsDialog).toBeVisible()
-    await expect(settingsDialog.getByLabel('Concurrent jobs')).toBeEnabled()
-    await expect(settingsDialog.getByLabel('Queued jobs')).toBeEnabled()
+    const language = settingsDialog.getByLabel('Workspace language')
+    await expect(language).toHaveValue('en')
+    await language.selectOption('zh-CN')
+    await expect(menu.getByRole('menuitem')).toHaveText([
+      '文件',
+      '工作流',
+      '分析',
+      '设置',
+      '帮助'
+    ])
+    const chineseInspector = page.getByRole('complementary', { name: '检查器' })
+    await expect(chineseInspector.getByRole('heading', { name: '动作' })).toBeVisible()
+    await expect(chineseInspector.getByText('拖入动作文件或文件夹')).toBeVisible()
+    await expect(chineseInspector.getByRole('heading', { name: '资源库' })).toBeVisible()
+    settingsDialog = page.getByRole('dialog', { name: '工作区设置' })
+    for (const removedCopy of [
+      '语言、布局、资源库与后台任务',
+      '设置菜单和导航语言',
+      '修改立即生效，原目录内容不会移动。',
+      '· 运行中: 0 · 等待中: 0'
+    ]) {
+      await expect(settingsDialog).not.toContainText(removedCopy)
+    }
+    await settingsDialog.getByLabel('工作区语言').selectOption('en')
+    settingsDialog = page.getByRole('dialog', { name: 'Workspace Settings' })
+    const leftNavigation = settingsDialog.getByLabel('Show left navigation')
+    const rightInspector = settingsDialog.getByLabel('Show right inspector')
+    await leftNavigation.uncheck()
+    await expect(page.locator('#sidebar')).toBeHidden()
+    await rightInspector.uncheck()
+    await expect(page.getByRole('complementary', { name: 'Inspector' })).toBeHidden()
+    await settingsDialog.getByRole('button', { name: 'Reset layout' }).click()
+    await expect(page.locator('#sidebar')).toBeVisible()
+    await expect(page.getByRole('complementary', { name: 'Inspector' })).toBeVisible()
+    await expect(settingsDialog.getByRole('button', { name: 'Choose directory' })).toBeEnabled()
+    await expect(settingsDialog.getByRole('button', { name: 'Refresh settings' })).toBeEnabled()
+    await expect(settingsDialog.getByLabel('Maximum running jobs')).toBeEnabled()
+    await expect(settingsDialog.getByLabel('Maximum queued jobs')).toBeEnabled()
     await expect(settingsDialog.getByRole('button', { name: 'Save' })).toBeEnabled()
+    await expect(settingsDialog).not.toContainText(
+      'Language, layout, libraries, and background jobs'
+    )
+    await expect(settingsDialog).not.toContainText('Menus and navigation language')
+    await expect(settingsDialog).not.toContainText(
+      'Changes apply immediately; existing files are not moved.'
+    )
+    await expect(settingsDialog).not.toContainText(/Running:\s*0.*Queued:\s*0/)
     await settingsDialog.getByRole('button', { name: 'Close' }).click()
     await expect(settingsDialog).toBeHidden()
 
@@ -115,17 +168,26 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
     await expect(helpMenu.getByRole('menuitem')).toHaveText(['Tutorial', 'About hhtools'])
     await expect(helpMenu.getByRole('menuitem', { name: 'Tutorial' })).toBeEnabled()
     await helpMenu.getByRole('menuitem', { name: 'About hhtools' }).click()
-    const aboutDialog = page.getByRole('dialog', { name: 'About hhtools' })
+    const aboutDialog = page.getByRole('dialog', { name: 'Human-Humanoid Tools' })
     await expect(aboutDialog).toBeVisible()
-    await expect(aboutDialog.getByRole('link', { name: 'Project source and documentation' }))
+    await expect(aboutDialog).toContainText('Humanoid motion retargeting and dataset analysis')
+    await expect(aboutDialog).toContainText('jaggerShen and hhtools contributors')
+    await expect(aboutDialog).toContainText('2026')
+    await expect(aboutDialog).toContainText('Apache-2.0')
+    await expect(aboutDialog.getByRole('link', { name: 'github.com/Roboparty/human-humanoid-tools' }))
       .toHaveAttribute(
         'href',
-        'https://github.com/Eleanor1018/human-humanoid-tools#readme'
+        'https://github.com/Roboparty/human-humanoid-tools'
       )
+    await expect(aboutDialog.getByRole('link', { name: 'shenyaojie@roboparty.com' }))
+      .toHaveAttribute('href', 'mailto:shenyaojie@roboparty.com')
+    await expect(aboutDialog.getByRole('link', { name: 'sunlancheng@roboparty.com' }))
+      .toHaveAttribute('href', 'mailto:sunlancheng@roboparty.com')
     await aboutDialog.getByRole('button', { name: 'Close' }).click()
 
     const workflowsMenu = page.getByRole('menu', { name: 'Workflows' })
-    await menu.getByRole('menuitem', { name: 'Workflows', exact: true }).hover()
+    const workflowsTrigger = menu.getByRole('menuitem', { name: 'Workflows', exact: true })
+    await workflowsTrigger.hover()
     await expect(workflowsMenu).toBeVisible()
     await expect(workflowsMenu.getByRole('menuitem')).toHaveText([
       'Video to Motion',
@@ -133,6 +195,12 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
       'Robot to Robot',
       'Batch'
     ])
+    const workflowsBounds = await workflowsMenu.boundingBox()
+    if (!workflowsBounds) throw new Error('Workflows menu has no layout box')
+    await page.mouse.move(workflowsBounds.x + 12, workflowsBounds.y - 1.5)
+    await expect(workflowsMenu).toBeVisible()
+    await workflowsMenu.getByRole('menuitem', { name: 'Video to Motion' }).hover()
+    await expect(workflowsMenu).toBeVisible()
     await menu.getByRole('menuitem', { name: 'Analysis', exact: true }).hover()
     await expect(workflowsMenu).toBeHidden()
     await expect(page.getByRole('menu', { name: 'Analysis' })).toBeVisible()
@@ -176,6 +244,22 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
     ).toBeChecked()
     await expect(inspector.getByText('Drop a motion file or folder')).toBeVisible()
     expect((await inspector.boundingBox())?.width).toBeCloseTo(360, 0)
+    const motionRefresh = inspector.getByRole('button', { name: 'Refresh Motion Library' })
+    await expectBorderless(motionRefresh)
+    await expect(inspector.getByRole('searchbox', { name: 'Search the Motion Library' }))
+      .toBeVisible()
+    await expect(inspector.getByLabel('Motion library category')).toBeVisible()
+    const setDirectory = inspector.getByRole('button', { name: 'Set directory' })
+    await expect(setDirectory).toBeEnabled()
+    await expect(inspector.getByRole('button', { name: 'Choose library directory' }))
+      .toHaveCount(0)
+    await expect(inspector.getByRole('button', { name: 'Remove folder' })).toHaveCount(0)
+    await expect(inspector.getByLabel('Managed Motion Library folder')).toHaveCount(0)
+    await expect(inspector.locator('button[aria-label$="to H2R Batch"]')).toHaveCount(0)
+    await setDirectory.click()
+    settingsDialog = page.getByRole('dialog', { name: 'Workspace Settings' })
+    await expect(settingsDialog).toBeVisible()
+    await settingsDialog.getByRole('button', { name: 'Close' }).click()
     await profilePicker.getByRole('radio', { name: 'intermimic', exact: true }).click()
     await expect(
       inspector.getByText('Drop an object-interaction motion folder')
@@ -186,8 +270,29 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
     await expect(inspector.getByRole('heading', { name: 'Robot', exact: true })).toBeVisible()
     await expect(inspector.getByRole('group', { name: 'URDF import area' })).toBeVisible()
     await expect(inspector.getByRole('group', { name: 'Robot mesh import area' })).toBeVisible()
+    const chooseMeshFolder = inspector.getByRole('button', { name: 'Choose mesh folder' })
+    await expect(chooseMeshFolder).toBeEnabled()
     await expect(inspector.getByText('No URDF selected.')).toBeVisible()
+    const meshFolderInput = inspector
+      .getByRole('group', { name: 'Robot mesh import area' })
+      .locator('input[type="file"][webkitdirectory]')
+    await expect(meshFolderInput).toHaveCount(1)
+    await expect(meshFolderInput).toHaveAttribute('multiple', '')
+    const meshFolder = testInfo.outputPath('robot-meshes')
+    await mkdir(meshFolder, { recursive: true })
+    await writeFile(join(meshFolder, 'body.stl'), 'solid body\nendsolid body\n')
+    await meshFolderInput.setInputFiles(meshFolder)
+    await expect(inspector.getByText('1 mesh asset · choose the .urdf file')).toBeVisible()
+    await expectBorderless(inspector.getByRole('button', { name: 'Refresh Robot Library' }))
     await expect(inspector.getByRole('heading', { name: 'Robot Library' })).toBeVisible()
+    const robotRows = inspector
+      .getByRole('list', { name: 'Robot models' })
+      .locator('button[aria-label^="Load robot "]')
+    expect(
+      await robotRows.evaluateAll((rows) =>
+        rows.every((row) => !/\bLoad(?:ed)?\b/.test(row.textContent ?? ''))
+      )
+    ).toBe(true)
 
     await sidebar.getByRole('button', { name: 'Video → Motion' }).click()
     await expect(inspector.getByRole('heading', { name: 'Video → Motion' })).toBeVisible()
@@ -195,7 +300,24 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
     await expect(
       inspector.locator('section[aria-label="Video → Motion"] > div > details')
     ).toHaveCount(4)
+    const v2mPage = inspector.locator('section[aria-label="Video → Motion"]')
+    const v2mSteps = v2mPage.locator(':scope > div > details')
+    await expect(v2mSteps.nth(0).locator('[data-status-tone]')).toHaveAttribute(
+      'data-status-tone',
+      'neutral'
+    )
+    const invalidVideo = testInfo.outputPath('not-a-video.txt')
+    await writeFile(invalidVideo, 'not a video')
+    await v2mPage
+      .getByRole('group', { name: 'Video import area' })
+      .locator('input[type="file"]')
+      .setInputFiles(invalidVideo)
+    const invalidVideoStatus = v2mSteps.nth(0).locator('[data-status-tone]')
+    await expect(invalidVideoStatus).toHaveAttribute('data-status-tone', 'danger')
+    await expect(invalidVideoStatus).toHaveClass(/text-danger/)
+    await expect(invalidVideoStatus).toHaveText('Invalid video')
     await expect(inspector.getByRole('group', { name: 'Video import area' })).toBeVisible()
+    await expectBorderless(inspector.getByRole('button', { name: 'Refresh GVHMR status' }))
 
     await sidebar.getByRole('button', { name: 'Human → Robot' }).click()
     await expect(page.locator('#app')).toHaveAttribute('data-active-view', 'h2r')
@@ -207,6 +329,11 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
     await expect(page.getByRole('list', { name: 'Human to Robot pipeline' })).toBeVisible()
     const h2rPage = inspector.locator('section[aria-label="Human → Robot"]')
     await expect(h2rPage.locator('details')).toHaveCount(4)
+    expect(
+      await h2rPage.locator('[data-status-tone]').evaluateAll((statuses) =>
+        statuses.map((status) => status.getAttribute('data-status-tone'))
+      )
+    ).toEqual(['neutral', 'neutral', 'neutral', 'neutral'])
     await expect(inspector.getByLabel('Select human motion')).toBeVisible()
     await expect(inspector.getByRole('button', { name: 'Load motion' })).toBeDisabled()
     await expect(h2rPage.getByRole('button', { name: 'Import motion' })).toBeVisible()
@@ -225,6 +352,11 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
     await expect(page.getByRole('list', { name: 'Robot to Robot pipeline' })).toBeVisible()
     const r2rPage = inspector.locator('section[aria-label="Robot → Robot"]')
     await expect(r2rPage.locator('details')).toHaveCount(5)
+    expect(
+      await r2rPage.locator('[data-status-tone]').evaluateAll((statuses) =>
+        statuses.map((status) => status.getAttribute('data-status-tone'))
+      )
+    ).toEqual(['neutral', 'neutral', 'neutral', 'neutral', 'neutral'])
     const r2rSourceStep = r2rPage.locator('details').first()
     await expect(r2rSourceStep.getByLabel('Select source robot')).toHaveValue('')
     await expect(r2rSourceStep.getByRole('button', { name: 'Load' })).toBeDisabled()
@@ -235,6 +367,7 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
 
     await sidebar.getByRole('button', { name: 'Batch', exact: true }).click()
     await expect(inspector.getByRole('heading', { name: 'Batch' })).toBeVisible()
+    await expectBorderless(inspector.getByRole('button', { name: 'Refresh Batch catalogs' }))
     const batchMode = inspector.getByRole('radiogroup', { name: 'Batch workflow' })
     await expect(batchMode.getByRole('radio', { name: 'H2R' })).toBeChecked()
     await batchMode.getByRole('radio', { name: 'R2R' }).click()
@@ -242,12 +375,24 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
 
     await sidebar.getByRole('button', { name: 'Data Analysis' }).click()
     await expect(inspector.getByRole('heading', { name: 'Data Analysis' })).toBeVisible()
-    await expect(page.getByRole('list', { name: 'Data Analysis pipeline' })).toBeVisible()
+    const analysisPipeline = page.getByRole('list', { name: 'Data Analysis pipeline' })
+    await expect(analysisPipeline).toBeVisible()
     const analysisPage = inspector.locator('section[aria-label="Data Analysis"]')
     await expect(analysisPage.locator('details')).toHaveCount(4)
-    await expect(analysisPage.getByLabel('Dataset source path')).toBeVisible()
+    await expect(analysisPage.getByLabel('Dataset source path')).toHaveCount(0)
+    await expect(analysisPage.getByText('Original source path')).toHaveCount(0)
     await expect(analysisPage.getByRole('button', { name: 'Choose folder' })).toBeEnabled()
     await expect(analysisPage.getByRole('button', { name: 'Built-in library' })).toBeEnabled()
+    await expect(analysisPipeline.locator('li').nth(0)).toHaveAttribute('data-state', 'active')
+    await analysisPage.getByRole('button', { name: 'Built-in library' }).click()
+    await expect(analysisPipeline.locator('li').nth(0)).toHaveAttribute('data-state', 'complete')
+    await expect(analysisPipeline.locator('li').nth(1)).toHaveAttribute('data-state', 'active')
+    await expect(analysisPipeline.locator('li').nth(0).locator('span').last()).toHaveClass(
+      /text-success/
+    )
+    await expect(analysisPipeline.locator('li').nth(1).locator('span').last()).toHaveClass(
+      /text-primary/
+    )
     await expect(page.locator('.workspace-drawer-handle, .col-resizer')).toHaveCount(0)
 
     const stage = page.getByRole('main', { name: 'Workspace content' })
@@ -284,6 +429,31 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
       'Scaled',
       'Robot'
     ])
+    expect(
+      await stageToggles.evaluateAll((toggles) =>
+        toggles.map((toggle) => toggle.getAttribute('data-family'))
+      )
+    ).toEqual([
+      'skeleton',
+      'body',
+      'scene',
+      'scaled-skeleton',
+      'scaled-scene',
+      'robot'
+    ])
+    const stageColors = await page.locator(':root').evaluate((root) => {
+      const style = getComputedStyle(root)
+      return [
+        '--stage-skeleton-accent',
+        '--stage-body-accent',
+        '--stage-scene-accent',
+        '--stage-scaled-skeleton-accent',
+        '--stage-scaled-scene-accent',
+        '--stage-robot-accent'
+      ].map((name) => style.getPropertyValue(name).trim())
+    })
+    expect(stageColors.every(Boolean)).toBe(true)
+    expect(new Set(stageColors).size).toBe(stageColors.length)
     expect(
       await stageToggles.evaluateAll((toggles) =>
         toggles.every((toggle) => (toggle as HTMLButtonElement).disabled)

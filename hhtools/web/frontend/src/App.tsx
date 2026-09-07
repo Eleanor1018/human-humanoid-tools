@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 
 import {
   PROJECT_README_URL,
@@ -16,13 +23,15 @@ import {
 import { Inspector } from "./components/Inspector";
 import { Navbar } from "./components/Navbar";
 import { Sidebar } from "./components/Sidebar";
+import { LocaleProvider } from "./LocaleProvider";
+import {
+  storedLocale,
+  storeLocale,
+  type WorkspaceLocale,
+} from "./localization";
 import { MotionView } from "./features/motion/MotionView";
 import type { MotionLibraryEntry } from "./features/motion/api";
 import { BatchView } from "./features/batch/BatchView";
-import {
-  appendUniqueEntries,
-  withoutManagedFolder,
-} from "./features/batch/model";
 import { AnalysisView } from "./features/analysis/AnalysisView";
 import type { AnalysisRobotPreview } from "./features/analysis/api";
 import { RobotView } from "./features/robot/RobotView";
@@ -46,6 +55,7 @@ import {
   storeComparisonPreset,
   type ComparisonPreset,
 } from "./features/result/comparison";
+import { TaskDrawer } from "./features/tasks/TaskDrawer";
 import { VideoToMotionView } from "./features/video-to-motion/VideoToMotionView";
 import type { ViewId } from "./navigation";
 import { Stage } from "./stage/Stage";
@@ -58,6 +68,11 @@ import type {
   StageRobotPayload,
   StageRobotTrajectoryPayload,
 } from "./stage/types";
+import {
+  DEFAULT_WORKSPACE_LAYOUT,
+  storedWorkspaceLayout,
+  storeWorkspaceLayout,
+} from "./workspaceLayout";
 
 function motionWithScene(
   motion: StageMotionPayload | null | undefined,
@@ -92,6 +107,7 @@ function calibrationTrajectory(
 interface ApplicationDesktopBridge {
   readonly openExternal?: (url: string) => Promise<void>;
   readonly exitApplication?: () => Promise<void>;
+  readonly selectDirectory?: () => Promise<string | null>;
 }
 
 function desktopBridge(): ApplicationDesktopBridge | undefined {
@@ -105,11 +121,22 @@ export function App() {
   const [theme, setTheme] = useState<ApplicationTheme>(() =>
     storedTheme(window.localStorage),
   );
+  const [locale, setLocale] = useState<WorkspaceLocale>(() =>
+    storedLocale(window.localStorage, [
+      ...window.navigator.languages,
+      window.navigator.language,
+    ]),
+  );
+  const [layout, setLayout] = useState(() =>
+    storedWorkspaceLayout(window.localStorage),
+  );
   const [dialog, setDialog] = useState<ApplicationDialog>(null);
   const [importRequest, setImportRequest] =
     useState<ApplicationImportRequest | null>(null);
   const nextImportRequestId = useRef(0);
   const exportLink = useRef<HTMLAnchorElement>(null);
+  const [motionLibraryRevision, setMotionLibraryRevision] = useState(0);
+  const [gvhmrRevision, setGvhmrRevision] = useState(0);
   const [workspaceMotion, setWorkspaceMotion] =
     useState<StageMotionPayload | null>(null);
   const [workspaceRobot, setWorkspaceRobot] =
@@ -172,6 +199,15 @@ export function App() {
       // Private browser contexts can reject storage; the live theme still works.
     }
   }, [theme]);
+
+  useEffect(() => {
+    document.documentElement.lang = locale;
+    storeLocale(window.localStorage, locale);
+  }, [locale]);
+
+  useEffect(() => {
+    storeWorkspaceLayout(window.localStorage, layout);
+  }, [layout]);
 
   const requestImport = useCallback((target: ApplicationImportTarget) => {
     setActiveView(viewForImport(target));
@@ -290,14 +326,6 @@ export function App() {
     setH2rPreview(null);
     setH2rCalibrationReference(null);
     setH2rCalibrationPose(null);
-  }, []);
-  const addHumanBatchEntry = useCallback((entry: MotionLibraryEntry) => {
-    setHumanBatchEntries((current) => appendUniqueEntries(current, [entry]));
-  }, []);
-  const removeHumanBatchFolder = useCallback((folderLabel: string) => {
-    setHumanBatchEntries((current) =>
-      withoutManagedFolder(current, folderLabel),
-    );
   }, []);
   const publishR2rSourceRobot = useCallback((robot: StageRobotPayload | null) => {
     setR2rSourceRobot(robot);
@@ -429,14 +457,25 @@ export function App() {
   ]);
 
   return (
-    <div
-      id="app"
-      className="grid h-dvh min-h-0 min-w-0 grid-cols-[208px_minmax(0,1fr)_360px] grid-rows-[40px_minmax(0,1fr)] max-[900px]:grid-cols-[64px_minmax(0,1fr)_360px] max-[780px]:grid-cols-[64px_minmax(0,1fr)] max-[780px]:grid-rows-[40px_minmax(240px,42vh)_minmax(0,1fr)]"
-      data-hhtools-ready="true"
-      data-active-view={activeView}
-      data-theme={theme}
-    >
+    <LocaleProvider locale={locale}>
+      <div
+        id="app"
+        className="grid h-dvh min-h-0 min-w-0"
+        style={
+          {
+            "--workspace-sidebar-wide": layout.sidebarHidden ? "0px" : "208px",
+            "--workspace-sidebar-compact": layout.sidebarHidden ? "0px" : "64px",
+            "--workspace-inspector": layout.inspectorHidden ? "0px" : "360px",
+          } as CSSProperties
+        }
+        data-hhtools-ready="true"
+        data-active-view={activeView}
+        data-theme={theme}
+        data-sidebar-hidden={layout.sidebarHidden}
+        data-inspector-hidden={layout.inspectorHidden}
+      >
       <Navbar
+        locale={locale}
         theme={theme}
         canExportResult={currentExportUrl !== null}
         canExitApplication={Boolean(desktopBridge()?.exitApplication)}
@@ -451,7 +490,12 @@ export function App() {
         onOpenAbout={() => setDialog("about")}
         onExitApplication={() => void desktopBridge()?.exitApplication?.()}
       />
-      <Sidebar activeView={activeView} onSelect={setActiveView} />
+      <Sidebar
+        activeView={activeView}
+        locale={locale}
+        hidden={layout.sidebarHidden}
+        onSelect={setActiveView}
+      />
       <Stage
         motion={stageMotion}
         scaledMotion={stageScaledMotion}
@@ -477,15 +521,18 @@ export function App() {
               : null
         }
       />
-      <Inspector>
+      <Inspector hidden={layout.inspectorHidden}>
         <div className={activeView === "motion" ? "h-full" : "hidden"}>
           <MotionView
             currentMotion={workspaceMotion}
             onMotionLoaded={publishMotion}
-            humanBatchEntries={humanBatchEntries}
-            onAddToHumanBatch={addHumanBatchEntry}
-            onRemoveHumanBatchFolder={removeHumanBatchFolder}
+            onOpenSettings={
+              desktopBridge()?.selectDirectory
+                ? () => setDialog("settings")
+                : undefined
+            }
             importRequest={importRequest}
+            libraryRevision={motionLibraryRevision}
           />
         </div>
         <div className={activeView === "robot-assets" ? "h-full" : "hidden"}>
@@ -499,6 +546,7 @@ export function App() {
           <VideoToMotionView
             onMotionLoaded={publishMotion}
             importRequest={importRequest}
+            runtimeRevision={gvhmrRevision}
           />
         </div>
         <div className={activeView === "h2r" ? "h-full" : "hidden"}>
@@ -549,6 +597,7 @@ export function App() {
         <div className={activeView === "batch" ? "h-full" : "hidden"}>
           <BatchView
             active={activeView === "batch"}
+            runtimeRevision={gvhmrRevision}
             humanEntries={humanBatchEntries}
             onHumanEntriesChange={setHumanBatchEntries}
           />
@@ -560,6 +609,10 @@ export function App() {
           />
         </div>
       </Inspector>
+      <TaskDrawer
+        canExportResult={currentExportUrl !== null}
+        onExportResult={() => exportLink.current?.click()}
+      />
       <a
         ref={exportLink}
         className="hidden"
@@ -567,7 +620,28 @@ export function App() {
         download
         aria-hidden="true"
       />
-      <ApplicationDialogs dialog={dialog} onClose={() => setDialog(null)} />
-    </div>
+      <ApplicationDialogs
+        dialog={dialog}
+        locale={locale}
+        sidebarHidden={layout.sidebarHidden}
+        inspectorHidden={layout.inspectorHidden}
+        onLocaleChange={setLocale}
+        onSidebarHiddenChange={(hidden) =>
+          setLayout((current) => ({ ...current, sidebarHidden: hidden }))
+        }
+        onInspectorHiddenChange={(hidden) =>
+          setLayout((current) => ({ ...current, inspectorHidden: hidden }))
+        }
+        onResetLayout={() => setLayout(DEFAULT_WORKSPACE_LAYOUT)}
+        onMotionLibraryChange={() =>
+          setMotionLibraryRevision((revision) => revision + 1)
+        }
+        onGvhmrChange={() =>
+          setGvhmrRevision((revision) => revision + 1)
+        }
+        onClose={() => setDialog(null)}
+      />
+      </div>
+    </LocaleProvider>
   );
 }

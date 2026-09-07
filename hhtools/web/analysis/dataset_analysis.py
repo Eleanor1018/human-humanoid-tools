@@ -266,7 +266,7 @@ def export_manifest(
     analyze_source: str | None = None,
     user_source_root: str | None = None,
     archive_paths: dict[str, str] | None = None,
-    path_basis: str = "user_local",
+    path_basis: str | None = None,
 ) -> str:
     """Build a training-manifest JSON string for the selected clip ids."""
     rows = _manifest_rows(
@@ -276,11 +276,11 @@ def export_manifest(
         user_source_root=user_source_root,
         archive_paths=archive_paths,
     )
-    meta: dict[str, Any] = {"path_basis": path_basis}
+    meta: dict[str, Any] = {
+        "path_basis": path_basis or ("user_local" if user_source_root else "analysis_relative")
+    }
     if user_source_root:
         meta["user_source_root"] = user_source_root
-    if analyze_source:
-        meta["analyze_source"] = analyze_source
     payload: dict[str, Any] = {"count": len(rows), "meta": meta, "clips": rows}
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
@@ -348,7 +348,7 @@ def resolve_manifest_source_path(
 
     * **archive** export — path inside the ZIP (``mimic/foo.csv``, ``clip_export/…``)
     * **JSON** export — ``user_source_root`` + relative layout from upload / labels
-    * otherwise — absolute on-disk path (library scan)
+    * otherwise — path relative to the analyzed directory
     """
     if archive_relpath:
         return archive_relpath.replace("\\", "/")
@@ -356,7 +356,15 @@ def resolve_manifest_source_path(
     disk_path = Path(disk_path).resolve()
     user_root = str(user_source_root or "").strip()
     if not user_root:
-        return str(disk_path).replace("\\", "/")
+        analyze = str(analyze_source or "").strip()
+        relative_path: str | None = None
+        if analyze:
+            try:
+                relative_path = disk_path.relative_to(Path(analyze).resolve()).as_posix()
+            except ValueError:
+                pass
+        label = str(folder_label or "").strip().replace("\\", "/")
+        return relative_path or (f"{label}/{disk_path.name}" if label else disk_path.name)
 
     user_base = Path(user_root).resolve()
     analyze = str(analyze_source or "").strip()

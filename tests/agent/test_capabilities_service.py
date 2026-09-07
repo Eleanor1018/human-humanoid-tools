@@ -60,6 +60,7 @@ def test_capabilities_report_unlimited_defaults_and_backend_specific_dependencie
         "agent_rest": True,
         "asset_inspection": False,
         "asset_registry": False,
+        "available_asset_catalog": False,
         "artifact_store": False,
         "idempotent_jobs": False,
         "job_cancellation": False,

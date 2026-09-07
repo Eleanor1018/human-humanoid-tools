@@ -22,6 +22,12 @@
   --color-warning-border: var(--warning-border);
   --color-canvas: var(--canvas);
   --color-stage-canvas: var(--stage-canvas);
+  --color-stage-skeleton: var(--stage-skeleton-accent);
+  --color-stage-body: var(--stage-body-accent);
+  --color-stage-scene: var(--stage-scene-accent);
+  --color-stage-scaled-skeleton: var(--stage-scaled-skeleton-accent);
+  --color-stage-scaled-scene: var(--stage-scaled-scene-accent);
+  --color-stage-robot: var(--stage-robot-accent);
   --radius-sm: var(--radius-compact);
   --radius-md: var(--radius-control);
   --radius-lg: var(--radius-overlay);
@@ -40,6 +46,12 @@
   --accent-hover: #005bb5;
   --accent-soft: #e8f2ff;
   --on-accent: #ffffff;
+  --stage-skeleton-accent: #0071e3;
+  --stage-body-accent: #b84c32;
+  --stage-scene-accent: #16845b;
+  --stage-scaled-skeleton-accent: #d18b00;
+  --stage-scaled-scene-accent: #007c83;
+  --stage-robot-accent: #8e44ad;
   --focus: #218bff;
   --danger-bg: #fff5f4;
   --danger-border: #efcccc;
@@ -69,6 +81,12 @@
   --accent-hover: #78b8ff;
   --accent-soft: #263d59;
   --on-accent: #07111f;
+  --stage-skeleton-accent: #0b68c9;
+  --stage-body-accent: #b74a2a;
+  --stage-scene-accent: #157a55;
+  --stage-scaled-skeleton-accent: #d59600;
+  --stage-scaled-scene-accent: #08747a;
+  --stage-robot-accent: #9140ae;
   --focus: #6eb5ff;
   --danger-bg: #352024;
   --danger-border: #6b343b;
@@ -84,6 +102,35 @@ html,
 body,
 #app-root {
   height: 100%;
+}
+
+#app {
+  grid-template-columns:
+    var(--workspace-sidebar-wide) minmax(0, 1fr) var(--workspace-inspector);
+  grid-template-rows: 40px minmax(0, 1fr) auto;
+}
+
+@media (max-width: 900px) {
+  #app {
+    grid-template-columns:
+      var(--workspace-sidebar-compact) minmax(0, 1fr)
+      var(--workspace-inspector);
+  }
+}
+
+@media (max-width: 780px) {
+  #app {
+    grid-template-columns: var(--workspace-sidebar-compact) minmax(0, 1fr);
+    grid-template-rows: 40px minmax(240px, 42vh) minmax(0, 1fr) auto;
+  }
+
+  #app[data-inspector-hidden="true"] {
+    grid-template-rows: 40px minmax(0, 1fr) 0 auto;
+  }
+
+  #app[data-inspector-hidden="true"] #sidebar {
+    grid-row: 2 / 5;
+  }
 }
 
 body {

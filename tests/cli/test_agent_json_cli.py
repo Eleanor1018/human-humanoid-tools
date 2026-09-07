@@ -13,6 +13,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
+from hhtools.agent.api import router as agent_router
 from hhtools.cli import agent as agent_cli
 from hhtools.cli import agent_transport
 from hhtools.cli.agent import (
@@ -37,13 +38,14 @@ from hhtools.contracts import (
     ApiError,
     ArtifactDescriptor,
     ArtifactListResponse,
+    AvailableAssetCatalogEntry,
+    AvailableAssetCatalogResponse,
     CapabilityResponse,
     ErrorStage,
     JobProgress,
     PreflightResponse,
     SchedulerCapability,
 )
-from hhtools.agent.api import router as agent_router
 
 _DIGEST = "a" * 64
 _ASSET_ID = f"asset:sha256:{_DIGEST}"
@@ -123,6 +125,25 @@ def _descriptor(job_id: str = "job_cli") -> ArtifactDescriptor:
     )
 
 
+def _available_catalog() -> AvailableAssetCatalogResponse:
+    return AvailableAssetCatalogResponse(
+        assets=[
+            AvailableAssetCatalogEntry(
+                root_id="source",
+                relative_path="AMASS/walk.npz",
+                display_name="Walk",
+                kind="motion_bundle",
+                category="plain_motion",
+                dataset="amass",
+                reference="smpl",
+            )
+        ],
+        total=1,
+        limit=5,
+        offset=0,
+    )
+
+
 def _invoke(arguments: list[str], transport: Any, *, stdin: str = ""):
     stdout = io.StringIO()
     stderr = io.StringIO()
@@ -188,6 +209,11 @@ def test_capabilities_is_one_contract_and_accepts_global_options_anywhere() -> N
             ["artifact", "get", "--help"],
             "hhtools agent artifact get",
             "ARTIFACT_ID",
+        ),
+        (
+            ["asset", "catalog", "--help"],
+            "hhtools agent asset catalog",
+            "--root-id",
         ),
     ],
 )
@@ -286,6 +312,66 @@ def test_request_validation_fails_before_transport_without_echoing_input() -> No
     assert document["details"]["reason_code"] == "REQUEST_CONTRACT_INVALID"
     assert document["details"]["argument"] == "--request"
     assert "do-not-echo" not in json.dumps(document)
+    assert transport.requests == []
+
+
+def test_available_asset_catalog_uses_bounded_query_and_versioned_response() -> None:
+    transport = FakeTransport([_available_catalog()])
+
+    code, document, _selected = _invoke(
+        [
+            "asset",
+            "catalog",
+            "--root-id",
+            "source",
+            "--query",
+            "walk",
+            "--kind",
+            "motion_bundle",
+            "--limit",
+            "5",
+        ],
+        transport,
+    )
+
+    assert code == EXIT_SUCCESS
+    assert document["assets"][0]["relative_path"] == "AMASS/walk.npz"
+    assert transport.requests == [
+        (
+            "GET",
+            "/assets/available",
+            {
+                "root_id": "source",
+                "query": "walk",
+                "kind": "motion_bundle",
+                "limit": 5,
+                "offset": 0,
+            },
+            None,
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    ("arguments", "argument"),
+    [
+        (["asset", "catalog", "--limit", "501"], "--limit"),
+        (["asset", "catalog", "--offset", "-1"], "--offset"),
+        (["asset", "catalog", "--root-id", "../private"], "--root-id"),
+        (["asset", "catalog", "--kind", "unknown"], "--kind"),
+    ],
+)
+def test_available_asset_catalog_rejects_invalid_filters_before_transport(
+    arguments: list[str],
+    argument: str,
+) -> None:
+    transport = FakeTransport([])
+
+    code, document, _selected = _invoke(arguments, transport)
+
+    assert code == EXIT_PARAMETER_ERROR
+    assert document["details"]["command"] == "hhtools agent asset catalog"
+    assert document["details"]["argument"] == argument
     assert transport.requests == []
 
 

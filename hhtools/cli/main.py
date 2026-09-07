@@ -38,6 +38,7 @@ _SUBCOMMANDS: list[tuple[str, str, str]] = [
         "hhtools.cli.bodymodel",
         "Manage SMPL / SMPL-H / SMPL-X body model weights.",
     ),
+    ("doctor", "hhtools.cli.doctor", "Check local runtime readiness without running jobs."),
     ("robot", "hhtools.cli.robot", "List or add humanoid robot presets."),
     ("retarget", "hhtools.cli.retarget", "Retarget an NPZ motion to a humanoid robot."),
     ("ui", "hhtools.cli.ui", "Launch the Viser-based web viewer (legacy)."),

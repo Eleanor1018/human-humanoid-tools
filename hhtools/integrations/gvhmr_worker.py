@@ -11,7 +11,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sys
+import tempfile
 import types
 from collections import namedtuple
 from pathlib import Path
@@ -25,6 +27,7 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--video", required=True)
     parser.add_argument("--output-root", required=True)
+    parser.add_argument("--body-models-root", default=None)
     parser.add_argument("--static-cam", action="store_true")
     parser.add_argument("--f-mm", type=int, default=None)
     return parser.parse_args()
@@ -45,6 +48,39 @@ def _hydra_safe_video_alias(video: Path, output_root: Path) -> Path:
         raise FileExistsError(f"refusing to replace GVHMR input alias: {alias}")
     alias.symlink_to(video.resolve())
     return alias
+
+
+def _link_directory_contents(source: Path, destination: Path, *, skip: set[str]) -> None:
+    destination.mkdir(exist_ok=True)
+    for entry in source.iterdir():
+        if entry.name in skip:
+            continue
+        target = entry.resolve(strict=True)
+        (destination / entry.name).symlink_to(target, target_is_directory=target.is_dir())
+
+
+def _prepare_project_overlay(
+    gvhmr_root: Path,
+    body_models_root: Path,
+    overlay_root: Path,
+) -> Path:
+    """Mirror GVHMR in a job-local tree while replacing only its body-model directory."""
+
+    source_root = gvhmr_root.resolve(strict=True)
+    model_root = body_models_root.resolve(strict=True)
+    neutral = model_root / "smplx" / "SMPLX_NEUTRAL.npz"
+    if not neutral.is_file():
+        raise FileNotFoundError(f"SMPL-X neutral model does not exist: {neutral}")
+
+    _link_directory_contents(source_root, overlay_root, skip={"inputs"})
+    source_inputs = source_root / "inputs"
+    overlay_inputs = overlay_root / "inputs"
+    _link_directory_contents(source_inputs, overlay_inputs, skip={"checkpoints"})
+    source_checkpoints = source_inputs / "checkpoints"
+    overlay_checkpoints = overlay_inputs / "checkpoints"
+    _link_directory_contents(source_checkpoints, overlay_checkpoints, skip={"body_models"})
+    (overlay_checkpoints / "body_models").symlink_to(model_root, target_is_directory=True)
+    return overlay_root
 
 
 def _install_inference_only_pytorch3d_stubs(torch: object) -> None:
@@ -135,7 +171,21 @@ def main() -> int:
         raise FileNotFoundError(
             f"GVHMR checkout is not mounted at the working directory: {gvhmr_root}"
         )
-    sys.path.insert(0, str(gvhmr_root))
+    default_body_models = gvhmr_root / "inputs" / "checkpoints" / "body_models"
+    body_models_root = Path(args.body_models_root or default_body_models).resolve()
+    temporary_overlay: tempfile.TemporaryDirectory[str] | None = None
+    project_root = gvhmr_root.resolve()
+    if body_models_root != default_body_models.resolve():
+        temporary_overlay = tempfile.TemporaryDirectory(
+            prefix=".hhtools-gvhmr-project-",
+            dir=output_root.parent,
+        )
+        project_root = _prepare_project_overlay(
+            gvhmr_root,
+            body_models_root,
+            Path(temporary_overlay.name),
+        )
+    sys.path.insert(0, str(project_root))
 
     # The official helper parses its own argv and creates the Hydra config.
     official_argv = [
@@ -153,43 +203,57 @@ def main() -> int:
     _progress(0.01, "initializing GVHMR")
     sys.argv = official_argv
 
-    import hydra
-    import torch
+    try:
+        # Several upstream assets use cwd-relative paths while others use PROJ_ROOT.
+        os.chdir(project_root)
+        import hmr4d
 
-    _install_inference_only_pytorch3d_stubs(torch)
+        # GVHMR resolves the neutral model through its module-level PROJ_ROOT.
+        # Point that root at the temporary overlay before importing any helpers.
+        hmr4d.PROJ_ROOT = project_root
 
-    from hmr4d.utils.net_utils import detach_to_cpu
-    from hmr4d.utils.pylogger import Log
-    from tools.demo.demo import load_data_dict, parse_args_to_cfg, run_preprocess
+        import hydra
+        import torch
 
-    cfg = parse_args_to_cfg()
-    paths = cfg.paths
-    _progress(0.08, "preprocessing video")
-    run_preprocess(cfg)
-    _progress(0.66, "loading preprocessed features")
-    data = load_data_dict(cfg)
+        _install_inference_only_pytorch3d_stubs(torch)
 
-    result_path = Path(paths.hmr4d_results)
-    if not result_path.exists():
-        _progress(0.72, "running official GVHMR checkpoint")
-        model = hydra.utils.instantiate(cfg.model, _recursive_=False)
-        model.load_pretrained_model(cfg.ckpt_path)
-        model = model.eval().cuda()
-        tic = Log.sync_time()
-        with torch.no_grad():
-            pred = model.predict(data, static_cam=cfg.static_cam)
-        pred = detach_to_cpu(pred)
-        Log.info(f"[HHTOOLS] GVHMR prediction elapsed: {Log.sync_time() - tic:.2f}s")
-        torch.save(pred, result_path)
+        from hmr4d.utils.net_utils import detach_to_cpu
+        from hmr4d.utils.pylogger import Log
+        from tools.demo.demo import load_data_dict, parse_args_to_cfg, run_preprocess
 
-    if not result_path.is_file():
-        raise RuntimeError(f"GVHMR did not create {result_path}")
-    _progress(1.0, "GVHMR motion ready")
-    print(
-        "HHTOOLS_RESULT " + json.dumps({"result_path": str(result_path)}, ensure_ascii=False),
-        flush=True,
-    )
-    return 0
+        cfg = parse_args_to_cfg()
+        paths = cfg.paths
+        _progress(0.08, "preprocessing video")
+        run_preprocess(cfg)
+        _progress(0.66, "loading preprocessed features")
+        data = load_data_dict(cfg)
+
+        result_path = Path(paths.hmr4d_results)
+        if not result_path.exists():
+            _progress(0.72, "running official GVHMR checkpoint")
+            model = hydra.utils.instantiate(cfg.model, _recursive_=False)
+            model.load_pretrained_model(cfg.ckpt_path)
+            model = model.eval().cuda()
+            tic = Log.sync_time()
+            with torch.no_grad():
+                pred = model.predict(data, static_cam=cfg.static_cam)
+            pred = detach_to_cpu(pred)
+            Log.info(f"[HHTOOLS] GVHMR prediction elapsed: {Log.sync_time() - tic:.2f}s")
+            torch.save(pred, result_path)
+
+        if not result_path.is_file():
+            raise RuntimeError(f"GVHMR did not create {result_path}")
+        _progress(1.0, "GVHMR motion ready")
+        print(
+            "HHTOOLS_RESULT "
+            + json.dumps({"result_path": str(result_path)}, ensure_ascii=False),
+            flush=True,
+        )
+        return 0
+    finally:
+        os.chdir(gvhmr_root)
+        if temporary_overlay is not None:
+            temporary_overlay.cleanup()
 
 
 if __name__ == "__main__":

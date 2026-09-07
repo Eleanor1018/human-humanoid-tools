@@ -2,21 +2,20 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ImportDropzone } from "@/components/ImportDropzone";
 import { InspectorPage } from "@/components/Inspector";
+import { RefreshButton } from "@/components/RefreshButton";
 import { SearchField } from "@/components/SearchField";
 import { ValidationSummary } from "@/components/ValidationSummary";
 import { motionValidationFacts } from "@/components/validationFacts";
 import { Button } from "@/components/ui/button";
 import type { ApplicationImportRequest } from "@/importIntent";
+import { useLocaleText } from "@/LocaleProvider";
+import { displayFileName } from "@/lib/api";
 import { SegmentedControl } from "@/components/SegmentedControl";
 import type { StageMotionPayload } from "@/stage/types";
 
 import {
   getMotionLibrary,
-  linkMotionLibraryPath,
   loadMotionLibraryEntry,
-  managedMotionLibraryFolders,
-  removeMotionLibraryFolder,
-  setMotionLibraryRoot,
   toStageMotionPayload,
   uploadMotion,
   type MotionCategory,
@@ -28,6 +27,7 @@ interface MotionProfileOption {
   id: MotionProfile;
   label: string;
   prompt: string;
+  promptZh: string;
   icon: string;
   acceptsFile: boolean;
 }
@@ -37,6 +37,7 @@ const profiles: readonly MotionProfileOption[] = [
     id: "mimic",
     label: "mimic",
     prompt: "Drop a motion file or folder",
+    promptZh: "拖入动作文件或文件夹",
     icon: "/icons/motion/film.svg",
     acceptsFile: true,
   },
@@ -44,6 +45,7 @@ const profiles: readonly MotionProfileOption[] = [
     id: "intermimic",
     label: "intermimic",
     prompt: "Drop an object-interaction motion folder",
+    promptZh: "拖入物体交互动作文件夹",
     icon: "/icons/motion/package.svg",
     acceptsFile: false,
   },
@@ -51,16 +53,21 @@ const profiles: readonly MotionProfileOption[] = [
     id: "meshmimic",
     label: "meshmimic",
     prompt: "Drop a terrain-motion folder",
+    promptZh: "拖入地形动作文件夹",
     icon: "/icons/motion/mountain.svg",
     acceptsFile: false,
   },
 ];
 
-const categories: readonly { value: "all" | MotionCategory; label: string }[] = [
-  { value: "all", label: "All" },
-  { value: "motion", label: "Motion" },
-  { value: "object", label: "Object interaction" },
-  { value: "terrain", label: "Terrain scene" },
+const categories: readonly {
+  value: "all" | MotionCategory;
+  label: string;
+  labelZh: string;
+}[] = [
+  { value: "all", label: "All", labelZh: "全部" },
+  { value: "motion", label: "Motion", labelZh: "动作" },
+  { value: "object", label: "Object interaction", labelZh: "物体交互" },
+  { value: "terrain", label: "Terrain scene", labelZh: "地形场景" },
 ];
 
 const categoryBadgeClass: Readonly<Record<MotionCategory, string>> = {
@@ -85,8 +92,13 @@ function entryCategory(entry: MotionLibraryEntry): MotionCategory {
     : "motion";
 }
 
-function entryLabel(entry: MotionLibraryEntry): string {
-  return entry.stem || entry.sequence_id || entry.label || entry.source_path;
+function entryLabel(entry: MotionLibraryEntry, fallback = "Motion"): string {
+  return (
+    entry.stem ||
+    entry.sequence_id ||
+    entry.label ||
+    displayFileName(entry.source_path, fallback)
+  );
 }
 
 function errorMessage(error: unknown): string {
@@ -100,72 +112,44 @@ function uploadFolderLabel(files: readonly File[]): string | undefined {
   return label || undefined;
 }
 
-interface DesktopDirectoryBridge {
-  selectDirectory?: () => Promise<string | null>;
-}
-
-async function chooseServerDirectory(message: string, current = ""): Promise<string | null> {
-  const desktop = (window as Window & { hhtoolsDesktop?: DesktopDirectoryBridge })
-    .hhtoolsDesktop;
-  if (desktop?.selectDirectory) return desktop.selectDirectory();
-  return window.prompt(message, current);
-}
-
 export function MotionView({
   currentMotion,
   onMotionLoaded,
-  humanBatchEntries = [],
-  onAddToHumanBatch,
-  onRemoveHumanBatchFolder,
+  onOpenSettings,
   importRequest,
+  libraryRevision = 0,
 }: {
   /** App-owned stable input; failed replacements leave it untouched. */
   currentMotion?: StageMotionPayload | null;
   /** App publishes this payload to the shared R3F Stage. */
   onMotionLoaded?: (motion: StageMotionPayload | null) => void;
-  /** App-owned H2R Batch draft; Motion only requests additions. */
-  humanBatchEntries?: readonly MotionLibraryEntry[];
-  onAddToHumanBatch?: (entry: MotionLibraryEntry) => void;
-  onRemoveHumanBatchFolder?: (folderLabel: string) => void;
+  /** Directory ownership stays in Workspace Settings. */
+  onOpenSettings?: () => void;
   /** App-owned File-menu intent; this mounted view owns its input elements. */
   importRequest?: ApplicationImportRequest | null;
+  /** Settings increments this after changing the process-wide library root. */
+  libraryRevision?: number;
 }) {
+  const text = useLocaleText();
   const [profile, setProfile] = useState<MotionProfile>("mimic");
   const [entries, setEntries] = useState<readonly MotionLibraryEntry[]>([]);
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState<"all" | MotionCategory>("all");
   const [loadingLibrary, setLoadingLibrary] = useState(true);
-  const [libraryAction, setLibraryAction] = useState<"root" | "link" | "remove" | null>(null);
-  const [managedFolder, setManagedFolder] = useState("");
-  const [pendingFolderRemoval, setPendingFolderRemoval] = useState<string | null>(null);
-  const [libraryRoot, setLibraryRoot] = useState("");
   const [loadingKey, setLoadingKey] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const libraryRequest = useRef<AbortController | null>(null);
-  const libraryActionRequest = useRef<AbortController | null>(null);
   const motionRequest = useRef<AbortController | null>(null);
   const fileInput = useRef<HTMLInputElement | null>(null);
   const folderInput = useRef<HTMLInputElement | null>(null);
   const handledImportRequest = useRef<number | null>(null);
   const selected = profiles.find((item) => item.id === profile) ?? profiles[0];
   const selectedKey = currentMotion?.library_entry?.source_path ?? null;
-
-  const batchPaths = useMemo(
-    () => new Set(humanBatchEntries.map((entry) => entry.source_path)),
-    [humanBatchEntries],
+  const motionLabel = useCallback(
+    (entry: MotionLibraryEntry) => entryLabel(entry, text("Motion", "动作")),
+    [text],
   );
-  const managedFolders = useMemo(
-    () => managedMotionLibraryFolders(entries),
-    [entries],
-  );
-  const loadedBatchEntry = useMemo(() => {
-    if (!selectedKey) return null;
-    const catalogEntry = entries.find((entry) => entry.source_path === selectedKey);
-    if (catalogEntry) return catalogEntry;
-    const snapshot = currentMotion?.library_entry as MotionLibraryEntry | undefined;
-    return snapshot?.folder_label && snapshot.sequence_id ? snapshot : null;
-  }, [currentMotion?.library_entry, entries, selectedKey]);
 
   const refreshLibrary = useCallback(() => {
     libraryRequest.current?.abort();
@@ -177,7 +161,6 @@ export function MotionView({
       .then((response) => {
         if (request.signal.aborted) return;
         setEntries(response.entries);
-        setLibraryRoot(response.motions_library_root);
       })
       .catch((reason: unknown) => {
         if (request.signal.aborted) return;
@@ -190,15 +173,13 @@ export function MotionView({
 
   useEffect(() => {
     refreshLibrary();
-    return () => {
-      libraryRequest.current?.abort();
-      libraryActionRequest.current?.abort();
-      motionRequest.current?.abort();
-    };
-  }, [refreshLibrary]);
+  }, [libraryRevision, refreshLibrary]);
 
   useEffect(() => {
-    folderInput.current?.setAttribute("webkitdirectory", "");
+    return () => {
+      libraryRequest.current?.abort();
+      motionRequest.current?.abort();
+    };
   }, []);
 
   useEffect(() => {
@@ -215,27 +196,6 @@ export function MotionView({
     if (importRequest.target === "motion-file") fileInput.current?.click();
     else folderInput.current?.click();
   }, [importRequest]);
-
-  useEffect(() => {
-    if (!managedFolders.includes(managedFolder)) {
-      setManagedFolder(managedFolders[0] ?? "");
-    }
-    if (
-      pendingFolderRemoval &&
-      !managedFolders.includes(pendingFolderRemoval)
-    ) {
-      setPendingFolderRemoval(null);
-    }
-  }, [managedFolder, managedFolders, pendingFolderRemoval]);
-
-  const addToHumanBatch = useCallback(
-    (entry: MotionLibraryEntry) => {
-      if (entry.asset_kind === "robot_trajectory" || batchPaths.has(entry.source_path)) return;
-      onAddToHumanBatch?.(entry);
-      setStatus(`Added ${entryLabel(entry)} to H2R Batch`);
-    },
-    [batchPaths, onAddToHumanBatch],
-  );
 
   const visibleEntries = useMemo(() => {
     const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
@@ -265,21 +225,30 @@ export function MotionView({
       const key = entryKey(entry);
       setLoadingKey(key);
       setError(null);
-      setStatus(`Loading ${entryLabel(entry)}…`);
+      setStatus(`${text("Loading", "正在加载")} ${motionLabel(entry)}…`);
       void loadMotionLibraryEntry(entry, {
         signal: request.signal,
         onUpdate: (job) => {
           if (!request.signal.aborted) {
             const progress = Math.round((job.progress ?? 0) * 100);
-            setStatus(`${job.message || "Loading motion…"} ${progress}%`);
+            setStatus(
+              `${job.message || text("Loading motion…", "正在加载动作…")} ${progress}%`,
+            );
           }
         },
       })
         .then((payload) => {
           if (request.signal.aborted) return;
           const stagePayload = toStageMotionPayload(payload);
-          if (!stagePayload) throw new Error("The motion result has no preview data.");
-          setStatus(`Loaded ${entryLabel(entry)}`);
+          if (!stagePayload) {
+            throw new Error(
+              text(
+                "The motion result has no preview data.",
+                "动作结果中没有可预览的数据。",
+              ),
+            );
+          }
+          setStatus(`${text("Loaded", "已加载")} ${motionLabel(entry)}`);
           onMotionLoaded?.(stagePayload);
         })
         .catch((reason: unknown) => {
@@ -291,7 +260,7 @@ export function MotionView({
           if (!request.signal.aborted) setLoadingKey(null);
         });
     },
-    [loadingKey, onMotionLoaded],
+    [loadingKey, motionLabel, onMotionLoaded, text],
   );
 
   const importFiles = useCallback(
@@ -303,7 +272,12 @@ export function MotionView({
       motionRequest.current = request;
       setLoadingKey(`upload:${files[0].name}`);
       setError(null);
-      setStatus(`Uploading ${files.length} file${files.length === 1 ? "" : "s"}…`);
+      setStatus(
+        text(
+          `Uploading ${files.length} file${files.length === 1 ? "" : "s"}…`,
+          `正在上传 ${files.length} 个文件…`,
+        ),
+      );
       void uploadMotion(files, {
         profile,
         libraryFolderLabel: uploadFolderLabel(files),
@@ -311,15 +285,26 @@ export function MotionView({
         onUpdate: (job) => {
           if (!request.signal.aborted) {
             const progress = Math.round((job.progress ?? 0) * 100);
-            setStatus(`${job.message || "Processing motion…"} ${progress}%`);
+            setStatus(
+              `${job.message || text("Processing motion…", "正在处理动作…")} ${progress}%`,
+            );
           }
         },
       })
         .then((payload) => {
           if (request.signal.aborted) return;
           const stagePayload = toStageMotionPayload(payload);
-          if (!stagePayload) throw new Error("The motion result has no preview data.");
-          setStatus(`Loaded ${payload.name || files[0].name}`);
+          if (!stagePayload) {
+            throw new Error(
+              text(
+                "The motion result has no preview data.",
+                "动作结果中没有可预览的数据。",
+              ),
+            );
+          }
+          setStatus(
+            `${text("Loaded", "已加载")} ${payload.name || files[0].name}`,
+          );
           onMotionLoaded?.(stagePayload);
           refreshLibrary();
         })
@@ -332,103 +317,23 @@ export function MotionView({
           if (!request.signal.aborted) setLoadingKey(null);
         });
     },
-    [loadingKey, onMotionLoaded, profile, refreshLibrary],
+    [loadingKey, onMotionLoaded, profile, refreshLibrary, text],
   );
-
-  const manageLibrary = useCallback(
-    async (action: "root" | "link") => {
-      if (libraryAction || loadingKey) return;
-      setLibraryAction(action);
-      setError(null);
-      try {
-        const path = await chooseServerDirectory(
-          action === "root"
-            ? "Enter the Motion Library directory on the server"
-            : "Enter a motion dataset directory to link",
-          action === "root" ? libraryRoot : "",
-        );
-        if (!path?.trim()) return;
-        libraryActionRequest.current?.abort();
-        const request = new AbortController();
-        libraryActionRequest.current = request;
-        if (action === "root") {
-          const result = await setMotionLibraryRoot(path.trim(), {
-            signal: request.signal,
-          });
-          if (request.signal.aborted) return;
-          setLibraryRoot(result.root);
-          setStatus(`Motion Library: ${result.root}`);
-        } else {
-          const result = await linkMotionLibraryPath(path.trim(), {
-            signal: request.signal,
-          });
-          if (request.signal.aborted) return;
-          setStatus(`Linked ${result.folder_label}: ${result.clip_count} clips`);
-        }
-        refreshLibrary();
-      } catch (reason) {
-        setError(errorMessage(reason));
-      } finally {
-        setLibraryAction(null);
-      }
-    },
-    [libraryAction, libraryRoot, loadingKey, refreshLibrary],
-  );
-
-  const removeManagedFolder = useCallback(async () => {
-    if (
-      !managedFolder ||
-      !managedFolders.includes(managedFolder) ||
-      pendingFolderRemoval !== managedFolder ||
-      libraryAction ||
-      loadingKey
-    ) {
-      return;
-    }
-    libraryActionRequest.current?.abort();
-    const request = new AbortController();
-    libraryActionRequest.current = request;
-    setLibraryAction("remove");
-    setError(null);
-    try {
-      const result = await removeMotionLibraryFolder(managedFolder, {
-        signal: request.signal,
-      });
-      if (request.signal.aborted) return;
-      setStatus(`Removed ${result.removed} from Motion Library`);
-      onRemoveHumanBatchFolder?.(result.removed);
-      setManagedFolder("");
-      setPendingFolderRemoval(null);
-      refreshLibrary();
-    } catch (reason) {
-      if (!request.signal.aborted) setError(errorMessage(reason));
-    } finally {
-      if (!request.signal.aborted) setLibraryAction(null);
-    }
-  }, [
-    libraryAction,
-    loadingKey,
-    managedFolder,
-    managedFolders,
-    pendingFolderRemoval,
-    refreshLibrary,
-    onRemoveHumanBatchFolder,
-  ]);
 
   return (
-    <InspectorPage title="Motion">
+    <InspectorPage title={text("Motion", "动作")}>
       <div className="flex shrink-0 flex-col gap-2.5">
         <SegmentedControl
-          label="Motion import type"
+          label={text("Motion import type", "动作导入类型")}
           items={profiles}
           value={profile}
           onValueChange={setProfile}
         />
 
         <ImportDropzone
-          label={`${profile} import area`}
+          label={text(`${profile} import area`, `${profile} 导入区`)}
           icon={selected.icon}
-          title={selected.prompt}
+          title={text(selected.prompt, selected.promptZh)}
           disabled={Boolean(loadingKey)}
           onFiles={importFiles}
         >
@@ -438,7 +343,7 @@ export function MotionView({
               disabled={Boolean(loadingKey)}
               onClick={() => fileInput.current?.click()}
             >
-              Choose file
+              {text("Choose file", "选择文件")}
             </Button>
           )}
           <Button
@@ -446,7 +351,7 @@ export function MotionView({
             disabled={Boolean(loadingKey)}
             onClick={() => folderInput.current?.click()}
           >
-            Choose folder
+            {text("Choose folder", "选择文件夹")}
           </Button>
           <input
             ref={fileInput}
@@ -463,6 +368,7 @@ export function MotionView({
             className="hidden"
             type="file"
             multiple
+            {...({ webkitdirectory: "" } as React.InputHTMLAttributes<HTMLInputElement>)}
             onChange={(event) => {
               importFiles(event.currentTarget.files);
               event.currentTarget.value = "";
@@ -477,27 +383,10 @@ export function MotionView({
           >
             {status || ""}
           </p>
-          {loadedBatchEntry &&
-            loadedBatchEntry.asset_kind !== "robot_trajectory" &&
-            onAddToHumanBatch && (
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={
-                  Boolean(loadingKey) ||
-                  batchPaths.has(loadedBatchEntry.source_path)
-                }
-                onClick={() => addToHumanBatch(loadedBatchEntry)}
-              >
-                {batchPaths.has(loadedBatchEntry.source_path)
-                  ? "In H2R Batch"
-                  : "Add loaded to Batch"}
-              </Button>
-            )}
         </div>
         <ValidationSummary
-          items={motionValidationFacts(currentMotion ?? null)}
-          label="Loaded motion validation"
+          items={motionValidationFacts(currentMotion ?? null, text)}
+          label={text("Loaded motion validation", "已加载动作校验")}
         />
       </div>
 
@@ -510,25 +399,24 @@ export function MotionView({
             id="motion-library-title"
             className="text-[19px] leading-tight font-bold tracking-normal text-foreground"
           >
-            Library
+            {text("Library", "资源库")}
           </h2>
-          <Button
-            size="sm"
+          <RefreshButton
+            label={text("Refresh Motion Library", "刷新动作资源库")}
+            busy={loadingLibrary}
+            variant="ghost"
             onClick={refreshLibrary}
-            disabled={loadingLibrary || Boolean(loadingKey)}
-          >
-            {loadingLibrary ? "Loading…" : "Refresh"}
-          </Button>
+            disabled={Boolean(loadingKey)}
+          />
         </div>
-        <div className="grid grid-cols-[minmax(0,1fr)_minmax(110px,42%)] gap-1.5">
-          <Button
-            size="sm"
-            disabled={loadingLibrary || Boolean(loadingKey) || libraryAction !== null}
-            title={libraryRoot}
-            onClick={() => void manageLibrary("root")}
-          >
-            {libraryAction === "root" ? "Choosing..." : "Choose library directory"}
-          </Button>
+        <SearchField
+          label={text("Search the Motion Library", "搜索动作资源库")}
+          placeholder={text("Search motions...", "搜索动作……")}
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          disabled={loadingLibrary}
+        />
+        <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-1.5">
           <select
             className={fieldClass}
             value={category}
@@ -543,92 +431,21 @@ export function MotionView({
                 setCategory(value);
               }
             }}
-            aria-label="Motion library category"
+            aria-label={text("Motion library category", "动作资源库类型")}
             disabled={loadingLibrary}
           >
             {categories.map((item) => (
               <option key={item.value} value={item.value}>
-                {item.label}
+                {text(item.label, item.labelZh)}
               </option>
             ))}
           </select>
-        </div>
-        <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-1.5">
-          <SearchField
-            label="Search the Motion Library"
-            placeholder="Search motions..."
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            disabled={loadingLibrary}
-          />
-          <Button
-            size="sm"
-            disabled={loadingLibrary || Boolean(loadingKey) || libraryAction !== null}
-            title="Add a server-local directory without copying its clips"
-            onClick={() => void manageLibrary("link")}
-          >
-            {libraryAction === "link" ? "Linking..." : "Link directory"}
-          </Button>
-        </div>
-        {managedFolders.length > 0 && (
-          <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-1.5">
-            <select
-              className={fieldClass}
-              aria-label="Managed Motion Library folder"
-              value={managedFolder}
-              disabled={loadingLibrary || libraryAction !== null}
-              onChange={(event) => {
-                setManagedFolder(event.currentTarget.value);
-                setPendingFolderRemoval(null);
-              }}
-            >
-              {managedFolders.map((folder) => (
-                <option key={folder} value={folder}>
-                  {folder}
-                </option>
-              ))}
-            </select>
-            <Button
-              size="sm"
-              disabled={
-                loadingLibrary ||
-                Boolean(loadingKey) ||
-                libraryAction !== null ||
-                !managedFolder
-              }
-              title="Remove a linked or uploaded folder from this managed library"
-              onClick={() => setPendingFolderRemoval(managedFolder)}
-            >
-              Remove folder
+          {onOpenSettings && (
+            <Button size="sm" variant="primary" onClick={onOpenSettings}>
+              {text("Set directory", "设置目录")}
             </Button>
-            {pendingFolderRemoval === managedFolder && (
-              <div className="col-span-2 grid gap-2 rounded-md border border-danger-border bg-danger-muted p-2.5 text-[11px] leading-relaxed text-danger">
-                <p className="[overflow-wrap:anywhere]">
-                  Remove <strong>{managedFolder}</strong> from this managed
-                  library? External linked source data is kept; files copied
-                  into the managed folder are deleted.
-                </p>
-                <div className="grid grid-cols-2 gap-2">
-                  <Button
-                    size="sm"
-                    disabled={libraryAction !== null}
-                    onClick={() => setPendingFolderRemoval(null)}
-                  >
-                    Cancel
-                  </Button>
-                  <Button
-                    size="sm"
-                    className="border-danger-border text-danger hover:border-danger hover:bg-danger-muted"
-                    disabled={libraryAction !== null}
-                    onClick={() => void removeManagedFolder()}
-                  >
-                    {libraryAction === "remove" ? "Removing..." : "Confirm remove"}
-                  </Button>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
+          )}
+        </div>
         {error && (
           <p
             className="rounded-md border border-danger-border bg-danger-muted px-2.5 py-2 text-[11px] leading-relaxed break-words text-danger"
@@ -643,72 +460,76 @@ export function MotionView({
           aria-busy={loadingLibrary || Boolean(loadingKey)}
         >
           {loadingLibrary ? (
-            <p className="p-2 text-xs text-muted-foreground">Loading Motion Library…</p>
+            <p className="p-2 text-xs text-muted-foreground">
+              {text("Loading Motion Library…", "正在加载动作资源库…")}
+            </p>
           ) : !entries.length ? (
             <p className="p-2 text-xs text-muted-foreground">
-              No recognizable motions are available.
+              {text("No recognizable motions are available.", "没有可识别的动作。")}
             </p>
           ) : !visibleEntries.length ? (
             <p className="p-2 text-xs text-muted-foreground">
-              No motions match “{query}”.
+              {text(
+                `No motions match “${query}”.`,
+                `没有动作匹配“${query}”。`,
+              )}
             </p>
           ) : (
-            <ul className="grid gap-0.5" aria-label="Motion Library entries">
+            <ul
+              className="grid gap-0.5"
+              aria-label={text("Motion Library entries", "动作资源库条目")}
+            >
               {visibleEntries.slice(0, 300).map((entry) => {
                 const key = entryKey(entry);
                 const active = selectedKey === key;
                 const busy = loadingKey === key;
                 const motionCategory = entryCategory(entry);
-                const inBatch = batchPaths.has(entry.source_path);
-                const canAddToBatch =
-                  entry.asset_kind !== "robot_trajectory" &&
-                  Boolean(onAddToHumanBatch);
                 return (
                   <li
                     key={key}
-                    className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-1 list-none"
+                    className="min-w-0 list-none"
                   >
                     <button
                       type="button"
                       className="grid min-h-12 w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-md border border-transparent bg-transparent px-2 py-1.5 text-left text-foreground transition-colors hover:border-border-subtle hover:bg-background focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring data-[active=true]:border-primary data-[active=true]:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
                       data-active={active}
                       aria-current={active ? "true" : undefined}
-                      aria-label={`Load motion ${entryLabel(entry)}`}
+                      aria-label={text(
+                        `Load motion ${motionLabel(entry)}`,
+                        `加载动作 ${motionLabel(entry)}`,
+                      )}
                       disabled={Boolean(loadingKey)}
                       onClick={() => loadEntry(entry)}
                     >
                       <span
                         className={`rounded-sm px-1.5 py-1 text-[10px] font-semibold uppercase ${categoryBadgeClass[motionCategory]}`}
                       >
-                        {motionCategory}
+                        {text(
+                          categories.find((item) => item.value === motionCategory)
+                            ?.label ?? motionCategory,
+                          categories.find((item) => item.value === motionCategory)
+                            ?.labelZh ?? motionCategory,
+                        )}
                       </span>
                       <span className="grid min-w-0 gap-0.5">
                         <strong className="truncate text-[13px] font-semibold">
-                          {entryLabel(entry)}
+                          {motionLabel(entry)}
                         </strong>
                         <small className="truncate text-[11px] text-muted-foreground">
                           {[entry.folder_label, entry.dataset]
                             .filter(Boolean)
-                            .join(" · ") || "Motion Library"}
+                            .join(" · ") ||
+                            text("Motion Library", "动作资源库")}
                         </small>
                       </span>
                       <span className="shrink-0 text-[11px] text-muted-foreground">
-                        {busy ? "Loading…" : active ? "Loaded" : "Load"}
+                        {busy
+                          ? text("Loading…", "加载中…")
+                          : active
+                            ? text("Loaded", "已加载")
+                            : text("Load", "加载")}
                       </span>
                     </button>
-                    {canAddToBatch && (
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className="w-[62px] px-1.5"
-                        aria-label={`Add ${entryLabel(entry)} to H2R Batch`}
-                        title={inBatch ? "Already in H2R Batch" : "Add to H2R Batch"}
-                        disabled={Boolean(loadingKey) || inBatch}
-                        onClick={() => addToHumanBatch(entry)}
-                      >
-                        {inBatch ? "Added" : "+ Batch"}
-                      </Button>
-                    )}
                   </li>
                 );
               })}

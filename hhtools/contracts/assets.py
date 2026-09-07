@@ -226,3 +226,57 @@ class AssetSearchResponse(ContractModel):
     total: Annotated[int, Field(ge=0)]
     limit: Annotated[int, Field(ge=1, le=500)]
     offset: Annotated[int, Field(ge=0)]
+
+
+class AvailableAssetCatalogRequest(ContractModel):
+    """Bounded filters for discovering registerable assets below configured roots."""
+
+    schema_version: SchemaVersion = SchemaVersion.V1
+    root_id: Annotated[
+        str | None,
+        Field(
+            default=None,
+            min_length=1,
+            max_length=128,
+            pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        ),
+    ]
+    query: Annotated[str | None, Field(default=None, min_length=1, max_length=256)]
+    kind: AssetKind | None = None
+    limit: Annotated[int, Field(ge=1, le=500)] = 100
+    offset: Annotated[int, Field(ge=0)] = 0
+
+
+class AvailableAssetCatalogEntry(ContractModel):
+    """Portable registration metadata for one allowlisted, available asset."""
+
+    root_id: Annotated[
+        str,
+        Field(
+            min_length=1,
+            max_length=128,
+            pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        ),
+    ]
+    relative_path: Annotated[str, Field(min_length=1, max_length=1024)]
+    display_name: Annotated[str, Field(min_length=1, max_length=256)]
+    kind: AssetKind
+    category: AssetCategory
+    recursive: bool = True
+    dataset: Annotated[str | None, Field(default=None, min_length=1, max_length=128)]
+    reference: Annotated[str | None, Field(default=None, min_length=1, max_length=128)]
+
+    @field_validator("relative_path")
+    @classmethod
+    def validate_relative_path(cls, value: str) -> str:
+        return _validate_bundle_path(value)
+
+
+class AvailableAssetCatalogResponse(ContractModel):
+    """Deterministic page of assets that can be registered without host paths."""
+
+    schema_version: SchemaVersion = SchemaVersion.V1
+    assets: list[AvailableAssetCatalogEntry] = Field(default_factory=list)
+    total: Annotated[int, Field(ge=0)]
+    limit: Annotated[int, Field(ge=1, le=500)]
+    offset: Annotated[int, Field(ge=0)]

@@ -6,8 +6,8 @@ import {
 } from "react";
 
 import { InspectorPage } from "@/components/Inspector";
+import { RefreshButton } from "@/components/RefreshButton";
 import { SegmentedControl } from "@/components/SegmentedControl";
-import { Button } from "@/components/ui/button";
 import {
   getMotionLibrary,
   type MotionLibraryEntry,
@@ -16,6 +16,7 @@ import {
   getRobotLibrary,
   type RobotSummary,
 } from "@/features/robot/api";
+import { useLocaleText } from "@/LocaleProvider";
 
 import { HumanBatchView } from "./HumanBatchView";
 import { RobotBatchView } from "./RobotBatchView";
@@ -39,13 +40,16 @@ function errorMessage(error: unknown): string {
  */
 export function BatchView({
   active = true,
+  runtimeRevision = 0,
   humanEntries,
   onHumanEntriesChange,
 }: {
   active?: boolean;
+  runtimeRevision?: number;
   humanEntries: readonly MotionLibraryEntry[];
   onHumanEntriesChange(entries: readonly MotionLibraryEntry[]): void;
 }) {
+  const text = useLocaleText();
   const [mode, setMode] = useState<BatchMode>("h2r");
   const [motions, setMotions] = useState<readonly MotionLibraryEntry[]>([]);
   const [robots, setRobots] = useState<readonly RobotSummary[]>([]);
@@ -93,10 +97,10 @@ export function BatchView({
   }
 
   return (
-    <InspectorPage title="Batch">
+    <InspectorPage title={text("Batch", "批处理")}>
       <div className="grid gap-2">
         <SegmentedControl
-          label="Batch workflow"
+          label={text("Batch workflow", "批处理流程")}
           items={modes}
           value={mode}
           onValueChange={setMode}
@@ -104,17 +108,26 @@ export function BatchView({
         <div className="flex min-h-7 items-center justify-between gap-3 text-[10px] text-muted-foreground">
           <span>
             {catalogBusy
-              ? "Refreshing catalogs…"
-              : `${motions.length} library items · ${robots.length} robots`}
+              ? text("Refreshing catalogs…", "正在刷新资源库…")
+              : text(
+                  `${motions.length} library items · ${robots.length} robots`,
+                  `${motions.length} 个动作 · ${robots.length} 个机器人`,
+                )}
           </span>
-          <Button size="sm" variant="ghost" disabled={catalogBusy} onClick={refreshCatalogs}>
-            Refresh
-          </Button>
+          <RefreshButton
+            label={text("Refresh Batch catalogs", "刷新批处理资源库")}
+            busy={catalogBusy}
+            variant="ghost"
+            onClick={refreshCatalogs}
+          />
         </div>
       </div>
 
       <div hidden={mode !== "v2m"}>
-        <VideoBatchView onMotionPublished={addPublishedMotion} />
+        <VideoBatchView
+          onMotionPublished={addPublishedMotion}
+          runtimeRevision={runtimeRevision}
+        />
       </div>
       <div hidden={mode !== "h2r"}>
         <HumanBatchView

@@ -13,7 +13,13 @@ import {
 } from "@/components/calibrationEditorState";
 import { InspectorPage } from "@/components/Inspector";
 import { Button } from "@/components/ui/button";
-import { WorkflowPipeline, WorkflowStep } from "@/components/WorkflowSteps";
+import {
+  WorkflowPipeline,
+  WorkflowStep,
+  type WorkflowStatusTone,
+} from "@/components/WorkflowSteps";
+import { useLocaleText } from "@/LocaleProvider";
+import { displayFileName } from "@/lib/api";
 import {
   getMotionLibrary,
   loadMotionLibraryEntry,
@@ -52,9 +58,13 @@ import {
   type ScaledPreviewResult,
 } from "./api";
 
-const pipeline = ["Motion", "Robot", "Calibration", "Result"];
 type Action = "motion" | "robot" | "calibration" | "save" | "retarget";
 type Backend = "newton" | "interaction_mesh";
+
+interface StepStatus {
+  readonly label: string;
+  readonly tone: WorkflowStatusTone;
+}
 
 export interface HumanToRobotViewProps {
   readonly currentMotion?: StageMotionPayload | null;
@@ -81,9 +91,12 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function motionLabel(entry: MotionLibraryEntry): string {
+function motionLabel(entry: MotionLibraryEntry, fallback = "Motion"): string {
   const name =
-    entry.stem || entry.sequence_id || entry.label || entry.source_path;
+    entry.stem ||
+    entry.sequence_id ||
+    entry.label ||
+    displayFileName(entry.source_path, fallback);
   return entry.folder_label ? `${entry.folder_label} / ${name}` : name;
 }
 
@@ -158,6 +171,13 @@ export function HumanToRobotView({
   onOpenMotionLibrary,
   onOpenRobotLibrary,
 }: HumanToRobotViewProps) {
+  const text = useLocaleText();
+  const pipeline = [
+    text("Motion", "动作"),
+    text("Robot", "机器人"),
+    text("Calibration", "标定"),
+    text("Result", "结果"),
+  ];
   const [motionEntries, setMotionEntries] = useState<
     readonly MotionLibraryEntry[]
   >([]);
@@ -202,6 +222,7 @@ export function HumanToRobotView({
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [errorOwner, setErrorOwner] = useState<Action | null>(null);
   const [result, setResult] = useState<RetargetResult | null>(
     currentResult ?? null,
   );
@@ -240,7 +261,10 @@ export function HumanToRobotView({
         setReferences(referenceNames);
       })
       .catch((reason: unknown) => {
-        if (!request.signal.aborted) setError(errorMessage(reason));
+        if (!request.signal.aborted) {
+          setError(errorMessage(reason));
+          setErrorOwner(null);
+        }
       });
     return () => {
       request.abort();
@@ -250,7 +274,10 @@ export function HumanToRobotView({
   }, []);
 
   useEffect(() => {
-    if (currentResult !== undefined) setResult(currentResult);
+    if (currentResult === undefined) return;
+    setError(null);
+    setErrorOwner(null);
+    setResult(currentResult);
   }, [currentResult]);
 
   useEffect(() => {
@@ -291,6 +318,8 @@ export function HumanToRobotView({
     setCalibrationBaseline({});
     setResult(null);
     setProgress(0);
+    setError(null);
+    setErrorOwner(null);
     referenceCallback.current?.(null);
     poseCallback.current?.(null);
     resultCallback.current?.(null);
@@ -313,7 +342,10 @@ export function HumanToRobotView({
         if (!request.signal.aborted) setCalibration(value);
       })
       .catch((reason: unknown) => {
-        if (!request.signal.aborted) setError(errorMessage(reason));
+        if (!request.signal.aborted) {
+          setError(errorMessage(reason));
+          setErrorOwner("calibration");
+        }
       })
       .finally(() => {
         if (!request.signal.aborted) setChecking(false);
@@ -431,7 +463,10 @@ export function HumanToRobotView({
           }
         })
         .catch((reason: unknown) => {
-          if (!request.signal.aborted) setError(errorMessage(reason));
+          if (!request.signal.aborted) {
+            setError(errorMessage(reason));
+            setErrorOwner("calibration");
+          }
         });
     }, 120);
     return () => {
@@ -449,10 +484,14 @@ export function HumanToRobotView({
     actionRequest.current = request;
     setBusy(action);
     setError(null);
+    setErrorOwner(null);
     try {
       await work(request.signal);
     } catch (reason) {
-      if (!request.signal.aborted) setError(errorMessage(reason));
+      if (!request.signal.aborted) {
+        setError(errorMessage(reason));
+        setErrorOwner(action);
+      }
     } finally {
       if (actionRequest.current === request) setBusy(null);
     }
@@ -462,6 +501,7 @@ export function HumanToRobotView({
     setResult(null);
     setStatus("");
     setError(null);
+    setErrorOwner(null);
     resultCallback.current?.(null);
   }
 
@@ -469,18 +509,19 @@ export function HumanToRobotView({
     const entry = motionEntries.find((item) => item.source_path === motionPath);
     if (!entry || busy || session) return;
     void runAction("motion", async (signal) => {
-      setStatus(`Loading ${motionLabel(entry)}…`);
+      const label = motionLabel(entry, text("Motion", "动作"));
+      setStatus(text(`Loading ${label}…`, `正在加载 ${label}…`));
       const payload = await loadMotionLibraryEntry(entry, {
         signal,
         usage: "human_to_robot",
         onUpdate: (job) => {
           setProgress(job.progress ?? 0);
-          setStatus(job.message || "Loading motion…");
+          setStatus(job.message || text("Loading motion…", "正在加载动作…"));
         },
       });
       if (signal.aborted) return;
       setLocalMotion(payload);
-      setStatus(`Loaded ${payload.name}`);
+      setStatus(text(`Loaded ${payload.name}`, `已加载 ${payload.name}`));
       onMotionLoaded?.(payload);
     });
   }
@@ -488,11 +529,11 @@ export function HumanToRobotView({
   function selectRobot() {
     if (!robotName || busy || session) return;
     void runAction("robot", async (signal) => {
-      setStatus("Loading robot…");
+      setStatus(text("Loading robot…", "正在加载机器人…"));
       const payload = await loadRobot(robotName, { signal });
       if (signal.aborted) return;
       setLocalRobot(payload);
-      setStatus(`Loaded ${payload.display_name}`);
+      setStatus(text(`Loaded ${payload.display_name}`, `已加载 ${payload.display_name}`));
       onRobotLoaded?.(payload);
     });
   }
@@ -500,7 +541,7 @@ export function HumanToRobotView({
   function editCalibration() {
     if (!robot || !reference || busy || session) return;
     void runAction("calibration", async (signal) => {
-      setStatus("Opening calibration…");
+      setStatus(text("Opening calibration…", "正在打开标定…"));
       const value = await startCalibrationSession(
         {
           robot: robot.name,
@@ -523,7 +564,12 @@ export function HumanToRobotView({
       });
       setCalibrationBaseline(initial);
       referenceCallback.current?.(value.reference);
-      setStatus("Edit joint values, then save calibration.");
+      setStatus(
+        text(
+          "Edit joint values, then save calibration.",
+          "编辑关节值，然后保存标定。",
+        ),
+      );
     });
   }
 
@@ -535,7 +581,7 @@ export function HumanToRobotView({
     setCalibrationBaseline({});
     referenceCallback.current?.(null);
     poseCallback.current?.(null);
-    if (cancelled) setStatus("Calibration cancelled.");
+    if (cancelled) setStatus(text("Calibration cancelled.", "标定已取消。"));
   }
 
   function persistCalibration() {
@@ -543,7 +589,7 @@ export function HumanToRobotView({
     calibrationStatusRequest.current?.abort();
     setChecking(false);
     void runAction("save", async (signal) => {
-      setStatus("Saving calibration…");
+      setStatus(text("Saving calibration…", "正在保存标定…"));
       const safeJointQ = normalizeCalibrationValues(session.joint_limits, jointQ);
       const saved = await saveCalibration(
         {
@@ -557,19 +603,26 @@ export function HumanToRobotView({
       if (signal.aborted) return;
       setCalibration({ calibrated: true, path: saved.path ?? null });
       closeCalibration();
-      setStatus("Calibration saved.");
+      setStatus(text("Calibration saved.", "标定已保存。"));
     });
   }
 
   const blockedReason = useMemo(() => {
-    if (!motion?.token) return "Select a human motion first.";
-    if (!robot) return "Select a target robot first.";
-    if (!reference) return "Select a reference pose.";
-    if (session) return "Save or cancel the open calibration before retargeting.";
-    if (checking) return "Checking calibration…";
-    if (!calibration?.calibrated) return "Save calibration before retargeting.";
+    if (!motion?.token) return text("Select a human motion first.", "请先选择人体动作。");
+    if (!robot) return text("Select a target robot first.", "请先选择目标机器人。");
+    if (!reference) return text("Select a reference pose.", "请选择参考姿势。");
+    if (session) {
+      return text(
+        "Save or cancel the open calibration before retargeting.",
+        "开始重定向前，请保存或取消当前标定。",
+      );
+    }
+    if (checking) return text("Checking calibration…", "正在检查标定…");
+    if (!calibration?.calibrated) {
+      return text("Save calibration before retargeting.", "重定向前请先保存标定。");
+    }
     return null;
-  }, [calibration?.calibrated, checking, motion?.token, reference, robot, session]);
+  }, [calibration?.calibrated, checking, motion?.token, reference, robot, session, text]);
 
   function startRetarget() {
     if (!motion?.token || !robot || !reference || blockedReason || busy) return;
@@ -577,7 +630,9 @@ export function HumanToRobotView({
       clearResult();
       setProgress(0);
       setStatus(
-        backend === "newton" ? "Starting Newton IK…" : "Starting Interaction-Mesh…",
+        backend === "newton"
+          ? text("Starting Newton IK…", "正在启动 Newton IK…")
+          : text("Starting Interaction-Mesh…", "正在启动 Interaction-Mesh…"),
       );
       const value = await retarget(
         {
@@ -591,29 +646,65 @@ export function HumanToRobotView({
           signal,
           onUpdate: (job) => {
             setProgress(job.progress ?? 0);
-            setStatus(job.message || "Retargeting…");
+            setStatus(job.message || text("Retargeting…", "正在重定向…"));
           },
         },
       );
       if (signal.aborted) return;
       setResult(value);
       setProgress(1);
-      setStatus(`Completed ${value.num_frames} frames.`);
+      setStatus(
+        text(
+          `Completed ${value.num_frames} frames.`,
+          `已完成 ${value.num_frames} 帧。`,
+        ),
+      );
       resultCallback.current?.(value);
     });
   }
 
-  const calibrationLabel = session
-    ? busy === "save"
-      ? "Saving…"
-      : "Editing…"
-    : checking
-      ? "Checking…"
-      : calibration?.calibrated
-        ? calibration.bundled && !calibration.path
-          ? "Built-in"
-          : "Calibrated"
-        : "Not calibrated";
+  const motionStep: StepStatus = busy === "motion"
+    ? { label: text("Loading…", "加载中…"), tone: "info" }
+    : errorOwner === "motion"
+      ? { label: text("Load failed", "加载失败"), tone: "danger" }
+      : motion
+        ? { label: motion.name || text("Loaded", "已加载"), tone: "success" }
+        : { label: text("Not loaded", "未加载"), tone: "neutral" };
+  const robotStep: StepStatus = busy === "robot"
+    ? { label: text("Loading…", "加载中…"), tone: "info" }
+    : errorOwner === "robot"
+      ? { label: text("Load failed", "加载失败"), tone: "danger" }
+      : robot
+        ? { label: robot.display_name, tone: "success" }
+        : { label: text("Not loaded", "未加载"), tone: "neutral" };
+  const calibrationStep: StepStatus = busy === "calibration"
+    ? { label: text("Opening…", "打开中…"), tone: "info" }
+    : busy === "save"
+      ? { label: text("Saving…", "保存中…"), tone: "info" }
+      : errorOwner === "calibration" || errorOwner === "save"
+        ? { label: text("Calibration failed", "标定失败"), tone: "danger" }
+        : session
+          ? { label: text("Editing…", "编辑中…"), tone: "info" }
+          : checking
+            ? { label: text("Checking…", "检查中…"), tone: "info" }
+            : calibration?.calibrated
+              ? {
+                  label: calibration.bundled && !calibration.path
+                    ? text("Built-in", "内置")
+                    : text("Calibrated", "已标定"),
+                  tone: "success",
+                }
+              : {
+                  label: text("Not calibrated", "未标定"),
+                  tone: motion && robot && reference ? "warning" : "neutral",
+                };
+  const resultStep: StepStatus = busy === "retarget"
+    ? { label: text("Retargeting…", "重定向中…"), tone: "info" }
+    : errorOwner === "retarget"
+      ? { label: text("Retarget failed", "重定向失败"), tone: "danger" }
+      : result
+        ? { label: text("Ready", "已就绪"), tone: "success" }
+        : { label: text("Not ready", "未就绪"), tone: "neutral" };
   const activeIndex = session
     ? 2
     : !motion
@@ -624,69 +715,76 @@ export function HumanToRobotView({
           ? 2
           : 3;
   return (
-    <InspectorPage title="Human → Robot">
+    <InspectorPage title={text("Human → Robot", "人体 → 机器人")}>
       <WorkflowPipeline
-        label="Human to Robot pipeline"
+        label={text("Human to Robot pipeline", "人体到机器人流程")}
         steps={pipeline}
         activeIndex={activeIndex}
+        completedIndex={result ? 3 : activeIndex - 1}
       />
       <div className="flex shrink-0 flex-col">
         <WorkflowStep
-          title="1. Motion"
-          status={busy === "motion" ? "Loading…" : motion?.name || "Not loaded"}
+          title={text("1. Motion", "1. 动作")}
+          status={motionStep.label}
+          statusTone={motionStep.tone}
           defaultOpen
         >
           <Picker
-            label="Select human motion"
+            label={text("Select human motion", "选择人体动作")}
             value={motionPath}
             disabled={Boolean(busy || session)}
-            buttonLabel="Load motion"
+            buttonLabel={text("Load motion", "加载动作")}
             importKind="motion"
             onImport={onOpenMotionLibrary}
             onChange={setMotionPath}
             onLoad={selectMotion}
           >
-            <option value="">Select from Motion Library…</option>
+            <option value="">
+              {text("Select from Motion Library…", "从动作资源库选择…")}
+            </option>
             {motionEntries.map((entry) => (
               <option key={entry.source_path} value={entry.source_path}>
-                {motionLabel(entry)}
+                {motionLabel(entry, text("Motion", "动作"))}
               </option>
             ))}
           </Picker>
         </WorkflowStep>
 
         <WorkflowStep
-          title="2. Target robot"
-          status={
-            busy === "robot" ? "Loading…" : robot?.display_name || "Not loaded"
-          }
+          title={text("2. Target robot", "2. 目标机器人")}
+          status={robotStep.label}
+          statusTone={robotStep.tone}
         >
           <Picker
-            label="Select target robot"
+            label={text("Select target robot", "选择目标机器人")}
             value={robotName}
             disabled={Boolean(busy || session)}
-            buttonLabel="Load robot"
+            buttonLabel={text("Load robot", "加载机器人")}
             importKind="robot"
             onImport={onOpenRobotLibrary}
             onChange={setRobotName}
             onLoad={selectRobot}
           >
-            <option value="">Select a robot…</option>
+            <option value="">{text("Select a robot…", "选择机器人…")}</option>
             {robotEntries.map((entry) => (
               <option
                 key={entry.name}
                 value={entry.name}
                 disabled={!entry.has_urdf}
               >
-                {entry.display_name} ({entry.num_dof} DoF)
+                {entry.display_name} ({entry.num_dof} {text("DoF", "自由度")})
               </option>
             ))}
           </Picker>
         </WorkflowStep>
 
-        <WorkflowStep title="3. Calibration" status={calibrationLabel}>
+        <WorkflowStep
+          title={text("3. Calibration", "3. 标定")}
+          status={calibrationStep.label}
+          statusTone={calibrationStep.tone}
+        >
           <div className="grid gap-2.5">
-            <Field label="Reference pose">
+            <Field label={text("Reference pose", "参考姿势")}>
               <select
                 className={fieldClass}
                 value={reference}
@@ -710,10 +808,10 @@ export function HumanToRobotView({
               onClick={editCalibration}
             >
               {session
-                ? "Editing…"
+                ? text("Editing…", "编辑中…")
                 : calibration?.calibrated
-                  ? "Edit calibration"
-                  : "Calibrate"}
+                  ? text("Edit calibration", "编辑标定")
+                  : text("Calibrate", "标定")}
             </Button>
             {session && (
               <CalibrationEditor
@@ -739,10 +837,14 @@ export function HumanToRobotView({
           </div>
         </WorkflowStep>
 
-        <WorkflowStep title="4. Result" status={result ? "Ready" : "Not ready"}>
+        <WorkflowStep
+          title={text("4. Result", "4. 结果")}
+          status={resultStep.label}
+          statusTone={resultStep.tone}
+        >
           <div className="grid gap-2.5">
             <div className="grid grid-cols-2 gap-2">
-              <Field label="Solver">
+              <Field label={text("Solver", "求解器")}>
                 <select
                   className={fieldClass}
                   value={backend}
@@ -757,13 +859,13 @@ export function HumanToRobotView({
                   <option value="interaction_mesh">Interaction-Mesh</option>
                 </select>
               </Field>
-              <Field label="Retarget FPS">
+              <Field label={text("Retarget FPS", "重定向 FPS")}>
                 <input
                   className={fieldClass}
                   type="number"
                   min="1"
                   step="1"
-                  placeholder="Original FPS"
+                  placeholder={text("Original FPS", "原始 FPS")}
                   value={retargetFps}
                   disabled={Boolean(busy || session)}
                   onChange={(event) => {
@@ -779,7 +881,9 @@ export function HumanToRobotView({
               disabled={Boolean(blockedReason) || Boolean(busy)}
               onClick={startRetarget}
             >
-              {busy === "retarget" ? "Retargeting…" : "Start Retarget"}
+              {busy === "retarget"
+                ? text("Retargeting…", "重定向中…")
+                : text("Start Retarget", "开始重定向")}
             </Button>
             {blockedReason && (
               <p className="text-xs text-muted-foreground">{blockedReason}</p>

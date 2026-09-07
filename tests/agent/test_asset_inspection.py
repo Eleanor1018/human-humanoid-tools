@@ -139,6 +139,32 @@ def test_plain_motion_inspection_reads_lightweight_npz_metadata(tmp_path: Path) 
     assert str(tmp_path) not in str(inspection.model_dump(mode="json"))
 
 
+def test_npz_metadata_is_bounded_before_decompression(tmp_path: Path) -> None:
+    primary = tmp_path / "unified_npz" / "oversized-meta.npz"
+    _write_unified_npz(primary)
+    with np.load(primary, allow_pickle=False) as archive:
+        values = {name: archive[name] for name in archive.files}
+    values["meta_json"] = np.array("x" * (64 * 1024 + 1))
+    np.savez_compressed(primary, **values)
+
+    discovery = discover_primary(primary)
+    bundle = _bundle(
+        tmp_path,
+        primary=primary.relative_to(tmp_path).as_posix(),
+        category=AssetCategory.PLAIN_MOTION,
+        dataset=discovery.dataset,
+        files=[(primary.relative_to(tmp_path).as_posix(), AssetFileRole.MOTION)],
+    )
+    inspection = MotionAssetInspector().inspect(bundle, tmp_path)
+
+    assert discovery.dataset == "unified_npz"
+    assert inspection.status is InspectionStatus.INVALID
+    assert any(
+        "meta_json exceeds" in str(error.details.get("reason", ""))
+        for error in inspection.errors
+    )
+
+
 def test_unified_npz_requires_the_scalar_fields_consumed_by_the_real_loader(
     tmp_path: Path,
 ) -> None:

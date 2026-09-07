@@ -2,12 +2,26 @@ import { useState } from "react";
 
 import { Field, fieldClass } from "@/components/Field";
 import { Button } from "@/components/ui/button";
+import { useLocaleText } from "@/LocaleProvider";
 
 import {
   validateExportOptions,
   type ExportFormat,
   type ExportOptions,
 } from "./model";
+
+function localizedValidationError(
+  error: string,
+  text: (english: string, chinese: string) => string,
+): string {
+  const translations: Readonly<Record<string, string>> = {
+    "Export FPS must be greater than zero.": "导出 FPS 必须大于零。",
+    "Start time must be zero or greater.": "开始时间必须大于或等于零。",
+    "End time must be zero or greater.": "结束时间必须大于或等于零。",
+    "End time must be greater than start time.": "结束时间必须晚于开始时间。",
+  };
+  return text(error, translations[error] ?? error);
+}
 
 export function ResultExportControls({
   token,
@@ -20,6 +34,7 @@ export function ResultExportControls({
   readonly hasScene?: boolean;
   readonly buildUrl: (token: string, options: ExportOptions) => string;
 }) {
+  const text = useLocaleText();
   const [format, setFormat] = useState<ExportFormat>("csv");
   const [fps, setFps] = useState("");
   const [start, setStart] = useState("");
@@ -44,17 +59,22 @@ export function ResultExportControls({
   return (
     <section
       className="grid gap-2.5 border-t border-border-subtle pt-3"
-      aria-label="Export result"
+      aria-label={text("Export result", "导出结果")}
     >
       <div className="grid grid-cols-2 gap-2">
-        <Field label="Export FPS">
+        <Field label={text("Export FPS", "导出 FPS")}>
           <input
             className={fieldClass}
             type="number"
             min="0.001"
             step="any"
             placeholder={
-              defaultFps ? `Result: ${defaultFps.toFixed(1)}` : "Result FPS"
+              defaultFps
+                ? text(
+                    `Result: ${defaultFps.toFixed(1)}`,
+                    `结果：${defaultFps.toFixed(1)}`,
+                  )
+                : text("Result FPS", "结果 FPS")
             }
             value={fps}
             aria-invalid={
@@ -63,7 +83,7 @@ export function ResultExportControls({
             onChange={(event) => setFps(event.currentTarget.value)}
           />
         </Field>
-        <Field label="Format">
+        <Field label={text("Format", "格式")}>
           <select
             className={fieldClass}
             value={format}
@@ -77,7 +97,7 @@ export function ResultExportControls({
         </Field>
       </div>
       <div className="grid grid-cols-2 gap-2">
-        <Field label="Start (s)">
+        <Field label={text("Start (s)", "开始（秒）")}>
           <input
             className={fieldClass}
             type="number"
@@ -91,13 +111,13 @@ export function ResultExportControls({
             onChange={(event) => setStart(event.currentTarget.value)}
           />
         </Field>
-        <Field label="End (s)">
+        <Field label={text("End (s)", "结束（秒）")}>
           <input
             className={fieldClass}
             type="number"
             min="0"
             step="0.01"
-            placeholder="End"
+            placeholder={text("End", "结束")}
             value={end}
             aria-invalid={
               !validation.valid && validation.error.startsWith("End")
@@ -114,15 +134,23 @@ export function ResultExportControls({
           disabled={format !== "csv"}
           onChange={(event) => setCsvHeader(event.currentTarget.checked)}
         />
-        Include CSV comments and column header
+        {text("Include CSV comments and column header", "包含 CSV 注释和列标题")}
       </label>
       <p className="text-[10px] leading-[1.45] text-muted-foreground">
-        Export FPS resamples the finished trajectory without running IK again.
-        {hasScene ? " Terrain or object results download as a ZIP bundle." : ""}
+        {text(
+          "Export FPS resamples the finished trajectory without running IK again.",
+          "导出 FPS 会对完成的轨迹重新采样，不会再次运行 IK。",
+        )}
+        {hasScene
+          ? text(
+              " Terrain or object results download as a ZIP bundle.",
+              " 含地形或物体的结果将下载为 ZIP 包。",
+            )
+          : ""}
       </p>
       {!validation.valid && (
         <p className="text-[11px] text-danger" role="alert">
-          {validation.error}
+          {localizedValidationError(validation.error, text)}
         </p>
       )}
       {exportUrl ? (
@@ -131,11 +159,11 @@ export function ResultExportControls({
           href={exportUrl}
           download
         >
-          Download result
+          {text("Download result", "下载结果")}
         </a>
       ) : (
         <Button size="sm" variant="primary" disabled>
-          Download result
+          {text("Download result", "下载结果")}
         </Button>
       )}
     </section>
