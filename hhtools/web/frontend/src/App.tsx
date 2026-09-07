@@ -107,6 +107,7 @@ function calibrationTrajectory(
 interface ApplicationDesktopBridge {
   readonly openExternal?: (url: string) => Promise<void>;
   readonly exitApplication?: () => Promise<void>;
+  readonly selectDirectory?: () => Promise<string | null>;
 }
 
 function desktopBridge(): ApplicationDesktopBridge | undefined {
@@ -530,7 +531,11 @@ export function App() {
             onMotionLoaded={publishMotion}
             humanBatchEntries={humanBatchEntries}
             onAddToHumanBatch={addHumanBatchEntry}
-            onOpenSettings={() => setDialog("settings")}
+            onOpenSettings={
+              desktopBridge()?.selectDirectory
+                ? () => setDialog("settings")
+                : undefined
+            }
             importRequest={importRequest}
             libraryRevision={motionLibraryRevision}
           />

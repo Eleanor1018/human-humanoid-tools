@@ -3,8 +3,6 @@ import type { StageMotionPayload } from "@/stage/types";
 export const SMPLX_DOWNLOAD_URL =
   "https://smpl-x.is.tue.mpg.de/download.php";
 
-const SMPLX_MISSING_PREFIX = "licensed SMPL-X neutral model:";
-
 export const SUPPORTED_VIDEO_EXTENSIONS = [
   "mp4",
   "mov",
@@ -38,9 +36,33 @@ export function isSmplxNeutralMissing(
 export function visibleGvhmrMissing(
   status: GvhmrRuntimeStatus | null | undefined,
 ): readonly string[] {
-  const missing = status?.missing ?? [];
-  if (!isSmplxNeutralMissing(status)) return missing;
-  return missing.filter((item) => !item.startsWith(SMPLX_MISSING_PREFIX));
+  const checks = status?.checks;
+  if (!checks) return status?.missing ?? [];
+  const failedChecks = Object.entries(checks)
+    .filter(([, ready]) => ready === false)
+    .map(([name]) => name);
+  const messages: string[] = [];
+  if (checks.official_repo === false) messages.push("GVHMR is not configured.");
+  if (
+    ["checkpoint_gvhmr", "checkpoint_hmr2", "checkpoint_vitpose", "checkpoint_yolov8"]
+      .some((name) => checks[name] === false)
+  ) {
+    messages.push("GVHMR checkpoints are incomplete.");
+  }
+  if (checks.python_executable === false || checks.python_environment === false) {
+    messages.push("GVHMR Python environment is unavailable.");
+  }
+  if (checks.ffmpeg === false) messages.push("FFmpeg is unavailable.");
+  if (checks.cuda === false) messages.push("CUDA is unavailable.");
+  if (checks.docker_cli === false || checks.docker_engine === false) {
+    messages.push("Docker is unavailable.");
+  } else if (checks.runtime_image === false) {
+    messages.push("GVHMR runtime image is unavailable.");
+  }
+  if (messages.length) return messages;
+  if (failedChecks.length === 1 && failedChecks[0] === "smplx_neutral") return [];
+  if (failedChecks.length) return ["GVHMR runtime is unavailable."];
+  return status?.missing ?? [];
 }
 
 export interface MotionResult extends Partial<StageMotionPayload> {

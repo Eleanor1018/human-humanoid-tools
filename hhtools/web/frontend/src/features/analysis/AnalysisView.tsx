@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button";
 import { WorkflowPipeline, WorkflowStep } from "@/components/WorkflowSteps";
 import { getMotionLibrary, loadMotionLibraryEntry } from "@/features/motion/api";
 import { getRobotLibrary, loadRobot, type RobotSummary } from "@/features/robot/api";
+import { desktopSettingsBridge } from "@/features/settings/api";
+import { displayFileName } from "@/lib/api";
 import type { StageMotionPayload } from "@/stage/types";
 
 import {
@@ -62,7 +64,7 @@ function formatNumber(value: unknown): string {
 }
 
 function clipLabel(clip: DatasetClip): string {
-  return clip.clip_id || clip.source_path.split(/[\\/]/).pop() || "clip";
+  return clip.clip_id || displayFileName(clip.source_path, "Clip");
 }
 
 function validClips(result: DatasetAnalysisResult | null): DatasetClip[] {
@@ -209,7 +211,6 @@ export function AnalysisView({
   const [defaultSource, setDefaultSource] = useState("");
   const [sourceSummary, setSourceSummary] = useState<DatasetUploadSummary | null>(null);
   const [uploadSource, setUploadSource] = useState<string | null>(null);
-  const [userSourceRoot, setUserSourceRoot] = useState("");
   const [embedding, setEmbedding] = useState<AnalysisEmbedding>("handcrafted");
   const [force, setForce] = useState(false);
   const [result, setResult] = useState<DatasetAnalysisResult | null>(null);
@@ -232,7 +233,6 @@ export function AnalysisView({
   const requestRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    folderInput.current?.setAttribute("webkitdirectory", "");
     const request = new AbortController();
     requestRef.current = request;
     void Promise.all([
@@ -362,8 +362,18 @@ export function AnalysisView({
     }
   }
 
-  function scanCurrentSource(): void {
-    void scanPath(source);
+  async function chooseFolder(): Promise<void> {
+    const desktop = desktopSettingsBridge();
+    if (!desktop) {
+      folderInput.current?.click();
+      return;
+    }
+    try {
+      const selected = await desktop.selectDirectory();
+      if (selected) await scanPath(selected);
+    } catch (reason) {
+      setError(errorMessage(reason));
+    }
   }
 
   function uploadFolder(files: FileList | null): void {
@@ -373,7 +383,6 @@ export function AnalysisView({
     setStatus(`Uploading ${selected.length} files...`);
     void uploadDataset(selected, {
       appendTo: uploadSource ?? undefined,
-      userSourceRoot: userSourceRoot.trim() || undefined,
       signal: request.signal,
     })
       .then((value) => {
@@ -533,7 +542,6 @@ export function AnalysisView({
         clips: result.clips,
         ids: exportIds,
         analyze_source: result.meta.source_root,
-        user_source_root: userSourceRoot.trim() || undefined,
         format,
       });
       downloadBlob(blob, `dataset_manifest.${format}`);
@@ -625,6 +633,9 @@ export function AnalysisView({
         label="Data Analysis pipeline"
         steps={pipeline}
         activeIndex={result ? 3 : busy === "analyze" ? 2 : sourceSummary ? 1 : 0}
+        completedIndex={
+          result ? 3 : busy === "analyze" ? 1 : sourceSummary ? 0 : -1
+        }
       />
 
       <div className="flex shrink-0 flex-col">
@@ -634,31 +645,8 @@ export function AnalysisView({
           defaultOpen
         >
           <div className="grid gap-2.5">
-            <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
-              <input
-                className={fieldClass}
-                aria-label="Dataset source path"
-                placeholder={defaultSource || "Server-local directory path"}
-                value={source}
-                disabled={busy !== null}
-                onChange={(event) => {
-                  setSource(event.target.value);
-                  setSourceSummary(null);
-                  setUploadSource(null);
-                  setResult(null);
-                  setMetricRange(null);
-                  setSelectedIds(new Set());
-                  setSubsetIds(new Set());
-                  onMotionLoaded?.(null);
-                  onRobotPreviewLoaded?.(null);
-                }}
-              />
-              <Button size="sm" disabled={!source.trim() || busy !== null} onClick={() => void scanCurrentSource()}>
-                Scan
-              </Button>
-            </div>
             <div className="grid grid-cols-2 gap-2">
-              <Button size="sm" disabled={busy !== null} onClick={() => folderInput.current?.click()}>
+              <Button size="sm" disabled={busy !== null} onClick={() => void chooseFolder()}>
                 Choose folder
               </Button>
               <Button
@@ -676,20 +664,12 @@ export function AnalysisView({
               className="hidden"
               type="file"
               multiple
+              {...({ webkitdirectory: "" } as React.InputHTMLAttributes<HTMLInputElement>)}
               onChange={(event) => {
                 uploadFolder(event.currentTarget.files);
                 event.currentTarget.value = "";
               }}
             />
-            <Field label="Original source path (optional for manifest export)">
-              <input
-                className={fieldClass}
-                placeholder="/home/.../dataset"
-                value={userSourceRoot}
-                disabled={busy !== null}
-                onChange={(event) => setUserSourceRoot(event.target.value)}
-              />
-            </Field>
             {sourceSummary && (
               <p className="text-xs text-muted-foreground">
                 {sourceSummary.human_count} human · {sourceSummary.robot_count} robot · {Object.keys(sourceSummary.folders).length} folders
@@ -918,7 +898,7 @@ export function AnalysisView({
                     return (
                       <div key={clip.clip_id} className="grid grid-cols-[auto_minmax(0,1fr)_72px_auto] items-center gap-2 rounded-md border border-border-subtle bg-surface px-2 py-1.5">
                         <input type="checkbox" className="size-4 accent-primary" checked={selectedIds.has(clip.clip_id)} onChange={() => toggleSelected(clip.clip_id)} aria-label={`Select ${clipLabel(clip)}`} />
-                        <button type="button" className="min-w-0 truncate text-left text-xs font-medium text-foreground hover:text-primary" title={clip.source_path} onClick={() => toggleSelected(clip.clip_id)}>
+                        <button type="button" className="min-w-0 truncate text-left text-xs font-medium text-foreground hover:text-primary" title={clipLabel(clip)} onClick={() => toggleSelected(clip.clip_id)}>
                           {clipLabel(clip)}
                           <span className="ml-1 text-[10px] font-normal text-muted-foreground">{clip.folder_label}</span>
                         </button>

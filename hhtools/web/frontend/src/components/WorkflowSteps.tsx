@@ -1,17 +1,20 @@
 import type { CSSProperties, ReactNode } from "react";
 
 import { cn } from "@/lib/utils";
+import { workflowPipelineState } from "./workflowPipeline";
 
 interface WorkflowPipelineProps {
   label: string;
   steps: readonly string[];
   activeIndex?: number;
+  completedIndex?: number;
 }
 
 export function WorkflowPipeline({
   label,
   steps,
   activeIndex = 0,
+  completedIndex = activeIndex - 1,
 }: WorkflowPipelineProps) {
   return (
     <ol
@@ -21,35 +24,45 @@ export function WorkflowPipeline({
       }
       aria-label={label}
     >
-      {steps.map((step, index) => (
-        <li
-          key={step}
-          className="relative flex min-w-0 flex-col items-center gap-1.5 text-center"
-          aria-current={index === activeIndex ? "step" : undefined}
-        >
-          {index > 0 && (
+      {steps.map((step, index) => {
+        const state = workflowPipelineState(index, activeIndex, completedIndex);
+        return (
+          <li
+            key={step}
+            className="relative flex min-w-0 flex-col items-center gap-1.5 text-center"
+            data-state={state}
+            aria-label={`${step}, ${state}`}
+            aria-current={state === "active" ? "step" : undefined}
+          >
+            {index > 0 && (
+              <span
+                className={cn(
+                  "absolute top-[5px] right-1/2 h-px w-full bg-border-subtle",
+                  index <= completedIndex + 1 && "bg-success",
+                )}
+                aria-hidden="true"
+              />
+            )}
             <span
-              className="absolute top-[5px] right-1/2 h-px w-full bg-border-subtle"
+              className={cn(
+                "relative z-[1] size-2.5 rounded-full border-2 border-surface bg-border",
+                state === "active" && "bg-primary",
+                state === "complete" && "bg-success",
+              )}
               aria-hidden="true"
             />
-          )}
-          <span
-            className={cn(
-              "relative z-[1] size-2.5 rounded-full border-2 border-surface bg-border",
-              index === activeIndex && "bg-primary",
-            )}
-            aria-hidden="true"
-          />
-          <span
-            className={cn(
-              "max-w-full px-1 text-[11px] leading-tight text-muted-foreground",
-              index === activeIndex && "font-semibold text-foreground",
-            )}
-          >
-            {step}
-          </span>
-        </li>
-      ))}
+            <span
+              className={cn(
+                "max-w-full px-1 text-[11px] leading-tight text-muted-foreground",
+                state === "active" && "font-semibold text-primary",
+                state === "complete" && "font-semibold text-success",
+              )}
+            >
+              {step}
+            </span>
+          </li>
+        );
+      })}
     </ol>
   );
 }

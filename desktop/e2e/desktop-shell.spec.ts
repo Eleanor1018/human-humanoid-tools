@@ -345,12 +345,24 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
 
     await sidebar.getByRole('button', { name: 'Data Analysis' }).click()
     await expect(inspector.getByRole('heading', { name: 'Data Analysis' })).toBeVisible()
-    await expect(page.getByRole('list', { name: 'Data Analysis pipeline' })).toBeVisible()
+    const analysisPipeline = page.getByRole('list', { name: 'Data Analysis pipeline' })
+    await expect(analysisPipeline).toBeVisible()
     const analysisPage = inspector.locator('section[aria-label="Data Analysis"]')
     await expect(analysisPage.locator('details')).toHaveCount(4)
-    await expect(analysisPage.getByLabel('Dataset source path')).toBeVisible()
+    await expect(analysisPage.getByLabel('Dataset source path')).toHaveCount(0)
+    await expect(analysisPage.getByText('Original source path')).toHaveCount(0)
     await expect(analysisPage.getByRole('button', { name: 'Choose folder' })).toBeEnabled()
     await expect(analysisPage.getByRole('button', { name: 'Built-in library' })).toBeEnabled()
+    await expect(analysisPipeline.locator('li').nth(0)).toHaveAttribute('data-state', 'active')
+    await analysisPage.getByRole('button', { name: 'Built-in library' }).click()
+    await expect(analysisPipeline.locator('li').nth(0)).toHaveAttribute('data-state', 'complete')
+    await expect(analysisPipeline.locator('li').nth(1)).toHaveAttribute('data-state', 'active')
+    await expect(analysisPipeline.locator('li').nth(0).locator('span').last()).toHaveClass(
+      /text-success/
+    )
+    await expect(analysisPipeline.locator('li').nth(1).locator('span').last()).toHaveClass(
+      /text-primary/
+    )
     await expect(page.locator('.workspace-drawer-handle, .col-resizer')).toHaveCount(0)
 
     const stage = page.getByRole('main', { name: 'Workspace content' })

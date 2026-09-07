@@ -109,7 +109,6 @@ export function RobotView({
   const [importing, setImporting] = useState(false);
   const [urdf, setUrdf] = useState<UploadFile | null>(null);
   const [meshes, setMeshes] = useState<readonly UploadFile[]>([]);
-  const [libraryDir, setLibraryDir] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const libraryRequest = useRef<AbortController | null>(null);
   const robotRequest = useRef<AbortController | null>(null);
@@ -127,7 +126,6 @@ export function RobotView({
       .then((response) => {
         if (request.signal.aborted) return;
         setRobots([...response.robots]);
-        setLibraryDir(response.library_dir || null);
       })
       .catch((reason: unknown) => {
         if (request.signal.aborted) return;
@@ -417,7 +415,7 @@ export function RobotView({
             <div className="grid gap-1 p-2 text-xs text-muted-foreground">
               <p>No robot models are available.</p>
               <p className="break-words text-[11px] leading-relaxed">
-                Add a URDF and its meshes to {libraryDir || "the robot library"}, then refresh.
+                Import a URDF and its mesh folder, then refresh.
               </p>
               <p className="break-words text-[11px] leading-relaxed">
                 Curated presets: {CURATED_NAMES.map((name) => CURATED_LABELS[name]).join(", ")}.

@@ -54,7 +54,7 @@ test("normalizes runtime status responses", async () => {
         body_models_root: "/models",
       }),
   );
-  assert.deepEqual(status.missing, ["valid"]);
+  assert.deepEqual(status.missing, []);
   assert.equal(status.ready, false);
   assert.equal(status.checks?.smplx_neutral, false);
   assert.equal(status.body_models_root, "/models");
@@ -98,7 +98,7 @@ test("replaces only the path-heavy SMPL-X missing detail", () => {
         "CUDA is not available",
       ],
     }),
-    ["CUDA is not available"],
+    ["CUDA is unavailable."],
   );
   assert.deepEqual(
     visibleGvhmrMissing({

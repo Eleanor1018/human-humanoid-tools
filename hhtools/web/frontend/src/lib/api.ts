@@ -34,6 +34,11 @@ export type UploadFile = File & {
   _relpath?: string;
 };
 
+/** Render only a portable leaf name when an API identity contains a host path. */
+export function displayFileName(path: string, fallback = "Untitled"): string {
+  return path.split(/[\\/]/).filter(Boolean).pop() || fallback;
+}
+
 export interface UploadOptions {
   readonly query?: Record<string, string | number | boolean | undefined>;
   readonly signal?: AbortSignal;

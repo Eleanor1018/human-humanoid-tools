@@ -8,6 +8,7 @@ import { ValidationSummary } from "@/components/ValidationSummary";
 import { motionValidationFacts } from "@/components/validationFacts";
 import { Button } from "@/components/ui/button";
 import type { ApplicationImportRequest } from "@/importIntent";
+import { displayFileName } from "@/lib/api";
 import { SegmentedControl } from "@/components/SegmentedControl";
 import type { StageMotionPayload } from "@/stage/types";
 
@@ -83,7 +84,12 @@ function entryCategory(entry: MotionLibraryEntry): MotionCategory {
 }
 
 function entryLabel(entry: MotionLibraryEntry): string {
-  return entry.stem || entry.sequence_id || entry.label || entry.source_path;
+  return (
+    entry.stem ||
+    entry.sequence_id ||
+    entry.label ||
+    displayFileName(entry.source_path, "Motion")
+  );
 }
 
 function errorMessage(error: unknown): string {
@@ -114,7 +120,7 @@ export function MotionView({
   humanBatchEntries?: readonly MotionLibraryEntry[];
   onAddToHumanBatch?: (entry: MotionLibraryEntry) => void;
   /** Directory ownership stays in Workspace Settings. */
-  onOpenSettings: () => void;
+  onOpenSettings?: () => void;
   /** App-owned File-menu intent; this mounted view owns its input elements. */
   importRequest?: ApplicationImportRequest | null;
   /** Settings increments this after changing the process-wide library root. */
@@ -177,10 +183,6 @@ export function MotionView({
       libraryRequest.current?.abort();
       motionRequest.current?.abort();
     };
-  }, []);
-
-  useEffect(() => {
-    folderInput.current?.setAttribute("webkitdirectory", "");
   }, []);
 
   useEffect(() => {
@@ -353,6 +355,7 @@ export function MotionView({
             className="hidden"
             type="file"
             multiple
+            {...({ webkitdirectory: "" } as React.InputHTMLAttributes<HTMLInputElement>)}
             onChange={(event) => {
               importFiles(event.currentTarget.files);
               event.currentTarget.value = "";
@@ -441,13 +444,11 @@ export function MotionView({
               </option>
             ))}
           </select>
-          <Button
-            size="sm"
-            variant="primary"
-            onClick={onOpenSettings}
-          >
-            Set directory
-          </Button>
+          {onOpenSettings && (
+            <Button size="sm" variant="primary" onClick={onOpenSettings}>
+              Set directory
+            </Button>
+          )}
         </div>
         {error && (
           <p

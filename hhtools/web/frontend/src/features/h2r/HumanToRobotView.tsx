@@ -14,6 +14,7 @@ import {
 import { InspectorPage } from "@/components/Inspector";
 import { Button } from "@/components/ui/button";
 import { WorkflowPipeline, WorkflowStep } from "@/components/WorkflowSteps";
+import { displayFileName } from "@/lib/api";
 import {
   getMotionLibrary,
   loadMotionLibraryEntry,
@@ -83,7 +84,10 @@ function errorMessage(error: unknown): string {
 
 function motionLabel(entry: MotionLibraryEntry): string {
   const name =
-    entry.stem || entry.sequence_id || entry.label || entry.source_path;
+    entry.stem ||
+    entry.sequence_id ||
+    entry.label ||
+    displayFileName(entry.source_path, "Motion");
   return entry.folder_label ? `${entry.folder_label} / ${name}` : name;
 }
 
@@ -629,6 +633,7 @@ export function HumanToRobotView({
         label="Human to Robot pipeline"
         steps={pipeline}
         activeIndex={activeIndex}
+        completedIndex={result ? 3 : activeIndex - 1}
       />
       <div className="flex shrink-0 flex-col">
         <WorkflowStep

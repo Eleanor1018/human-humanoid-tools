@@ -11,6 +11,7 @@ import {
 import { InspectorPage } from "@/components/Inspector";
 import { Button } from "@/components/ui/button";
 import { WorkflowPipeline, WorkflowStep } from "@/components/WorkflowSteps";
+import { displayFileName } from "@/lib/api";
 import { ResultDiagnostics } from "@/features/result/ResultDiagnostics";
 import { ResultExportControls } from "@/features/result/ResultExportControls";
 import type { ComparisonPreset } from "@/features/result/comparison";
@@ -91,7 +92,12 @@ function positiveNumber(value: string): number | undefined {
 }
 
 function entryLabel(entry: MotionLibraryEntry): string {
-  return entry.stem || entry.sequence_id || entry.label || entry.source_path;
+  return (
+    entry.stem ||
+    entry.sequence_id ||
+    entry.label ||
+    displayFileName(entry.source_path, "Trajectory")
+  );
 }
 
 function suggestedBackend(result?: R2rSourceResult | null): R2rBackend {
@@ -213,7 +219,7 @@ export function RobotToRobotView({
     controlledCalibrationDisplay ?? localCalibrationDisplay;
   const publishCalibrationDisplay =
     onCalibrationDisplayChange ?? setLocalCalibrationDisplay;
-  const [calibrationPath, setCalibrationPath] = useState<string | null>(null);
+  const [calibrationSaved, setCalibrationSaved] = useState(false);
   const [busy, setBusy] = useState<BusyAction | null>(null);
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState("");
@@ -267,10 +273,6 @@ export function RobotToRobotView({
   }, [active]);
 
   useEffect(() => {
-    folderInput.current?.setAttribute("webkitdirectory", "");
-  }, []);
-
-  useEffect(() => {
     calibrationStatusRequest.current?.abort();
     if (currentSourceRobot === undefined) return;
     setSourceRobot(currentSourceRobot);
@@ -302,7 +304,7 @@ export function RobotToRobotView({
     setJointGeometry(null);
     setSelectedCalibrationJoint(null);
     setCalibrationBaseline({});
-    setCalibrationPath(null);
+    setCalibrationSaved(false);
     setCalibrated(false);
     setCheckingCalibration(false);
     if (!sourceRobot || !targetRobot) return;
@@ -595,14 +597,14 @@ export function RobotToRobotView({
         calibration.joint_limits,
         jointQ,
       );
-      const response = await saveR2rCalibration(
+      await saveR2rCalibration(
         targetRobot.name,
         sourceRobot.name,
         safeJointQ,
         { signal: request.signal },
       );
       if (request.signal.aborted) return;
-      setCalibrationPath(response.path);
+      setCalibrationSaved(true);
       setCalibrated(true);
       closeCalibration();
       clearRetargetResult();
@@ -668,6 +670,7 @@ export function RobotToRobotView({
         label="Robot to Robot pipeline"
         steps={pipeline}
         activeIndex={activeStep}
+        completedIndex={retargetResult ? 4 : activeStep - 1}
       />
       <div className="flex shrink-0 flex-col">
         <WorkflowStep title="1. Source robot" status={sourceRobot?.display_name || "Not loaded"} defaultOpen>
@@ -719,6 +722,7 @@ export function RobotToRobotView({
                 className="hidden"
                 type="file"
                 multiple
+                {...({ webkitdirectory: "" } as React.InputHTMLAttributes<HTMLInputElement>)}
                 accept=".csv,.pkl,.npz"
                 onChange={(event) => {
                   uploadTrajectory(event.currentTarget.files);
@@ -818,10 +822,8 @@ export function RobotToRobotView({
                 onSave={() => void saveCalibration()}
               />
             )}
-            {calibrationPath && (
-              <p className="truncate text-[11px] text-muted-foreground" title={calibrationPath}>
-                Saved to {calibrationPath}
-              </p>
+            {calibrationSaved && (
+              <p className="text-[11px] text-success">Calibration saved.</p>
             )}
           </div>
         </WorkflowStep>

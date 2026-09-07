@@ -288,6 +288,7 @@ export function VideoToMotionView({
         label="Video to Motion pipeline"
         steps={pipeline}
         activeIndex={pipelineIndex}
+        completedIndex={workflowPhase === "done" ? 3 : pipelineIndex - 1}
       />
       <div className="flex shrink-0 flex-col">
         <WorkflowStep

@@ -249,15 +249,8 @@ function SettingsDialog(props: SettingsDialogProps) {
     setError(null);
     try {
       const desktop = desktopSettingsBridge();
-      const selected = desktop
-        ? await desktop.selectDirectory()
-        : window.prompt(
-            text(
-              "Enter the library directory on the server",
-              "输入服务器上的资源库目录",
-            ),
-            motionLibrary.root,
-          );
+      if (!desktop) return;
+      const selected = await desktop.selectDirectory();
       if (!selected?.trim()) return;
       const result = await updateMotionLibrarySettings(selected.trim());
       setMotionLibrary(result);
@@ -334,22 +327,22 @@ function SettingsDialog(props: SettingsDialogProps) {
           />
         </SettingRow>
 
-        <SectionTitle>{text("Motion library", "动作资源库")}</SectionTitle>
-        <SettingRow title={text("Library directory", "资源库目录")}>
-          <Button
-            size="sm"
-            disabled={busy || motionLibrary?.editable !== true}
-            title={motionLibrary?.root || undefined}
-            onClick={() => void chooseMotionLibrary()}
-          >
-            {action === "library"
-              ? text("Choosing…", "选择中……")
-              : text("Choose directory", "选择目录")}
-          </Button>
-        </SettingRow>
-        <code className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-[11px] text-muted-foreground">
-          {motionLibrary?.root || "—"}
-        </code>
+        {desktopSettingsBridge() && (
+          <>
+            <SectionTitle>{text("Motion library", "动作资源库")}</SectionTitle>
+            <SettingRow title={text("Library directory", "资源库目录")}>
+              <Button
+                size="sm"
+                disabled={busy || motionLibrary?.editable !== true}
+                onClick={() => void chooseMotionLibrary()}
+              >
+                {action === "library"
+                  ? text("Choosing…", "选择中……")
+                  : text("Choose directory", "选择目录")}
+              </Button>
+            </SettingRow>
+          </>
+        )}
 
         <SectionTitle>{text("Optional components", "可选组件")}</SectionTitle>
         <SettingRow
