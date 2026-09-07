@@ -22,7 +22,9 @@ from hhtools.web.output.export_bundle import (
     _bake_export_joint_q,
     _robot_pkl_blob,
     _save_object_track_csv,
+    ensure_export_path,
     resolve_clip_export_dir,
+    sanitize_export_stem,
 )
 
 _log = logging.getLogger(__name__)
@@ -98,11 +100,14 @@ def resolve_r2r_source_clip_dir(entry: dict[str, Any]) -> Path | None:
 def clip_has_export_scene(clip_dir: Path, *, stem: str, profile: str = "") -> bool:
     clip_dir = Path(clip_dir)
     prof = (profile or "").strip().lower()
-    if prof == "meshmimic" or any(clip_dir.glob("*_terrain.obj")):
-        if (clip_dir / f"{stem}_terrain.obj").is_file() or any(
+    if (
+        prof == "meshmimic" or any(clip_dir.glob("*_terrain.obj"))
+    ) and (
+        (clip_dir / f"{stem}_terrain.obj").is_file() or any(
             clip_dir.glob("*_terrain.obj")
-        ):
-            return True
+        )
+    ):
+        return True
     # Web robot-export: ``object_*.csv`` + plain ``.obj`` (not only OMOMO
     # ``*_cleaned_simplified.obj``).
     if any(clip_dir.glob("object_*.csv")):
@@ -294,6 +299,7 @@ def write_r2r_export_bundle(
 
     out_root = Path(out_root)
     out_root.mkdir(parents=True, exist_ok=True)
+    stem = sanitize_export_stem(stem)
     fmt = (fmt or "csv").lower()
 
     source_path = entry.get("source_path")
@@ -342,7 +348,7 @@ def write_r2r_export_bundle(
     )
 
     if fmt == "pkl":
-        pkl_path = clip_dir / f"{stem}.pkl"
+        pkl_path = ensure_export_path(out_root, clip_dir / f"{stem}.pkl")
         with pkl_path.open("wb") as fp:
             pickle.dump(
                 {
@@ -357,8 +363,9 @@ def write_r2r_export_bundle(
     else:
         from hhtools.io.robot_csv import save_robot_csv
 
+        trajectory_path = ensure_export_path(out_root, clip_dir / f"{stem}.csv")
         save_robot_csv(
-            clip_dir / f"{stem}.csv",
+            trajectory_path,
             robot=target_model,
             joint_q=joint_q,
             sample_rate=sample_rate,
@@ -383,7 +390,10 @@ def write_r2r_export_bundle(
         )
 
     if not has_scene:
-        return clip_dir / (f"{stem}.pkl" if fmt == "pkl" else f"{stem}.csv")
+        return ensure_export_path(
+            out_root,
+            clip_dir / (f"{stem}.pkl" if fmt == "pkl" else f"{stem}.csv"),
+        )
 
     if not pack_scene:
         _log.info(
@@ -400,7 +410,7 @@ def write_r2r_export_bundle(
     # where ``out_root.name == stem``).
     from hhtools.web.output.export_bundle import zip_directory
 
-    zip_path = zip_directory(clip_dir, stem)
+    zip_path = ensure_export_path(out_root, zip_directory(clip_dir, stem))
     shutil.rmtree(clip_dir, ignore_errors=True)
     _log.info(
         "r2r export bundle %s (ratio=%.4f, meshes=%s, object_tracks=%s)",
