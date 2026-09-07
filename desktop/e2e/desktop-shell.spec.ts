@@ -70,7 +70,20 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
 
     await expect(page).toHaveTitle('Human-Humanoid Tools')
     await expect(page.locator("#app[data-hhtools-ready='true']")).toBeVisible()
-    await expect(page.getByLabel('HHTOOLS')).toBeVisible()
+    await expect(page.getByLabel('HHTOOLS', { exact: true })).toBeVisible()
+    const firstRunTutorial = page.getByRole('dialog', { name: '1. Welcome to hhtools' })
+    await expect(firstRunTutorial).toBeVisible()
+    await expect(page.locator('[data-tutorial-overlay]')).toHaveAttribute(
+      'data-tutorial-step',
+      'welcome'
+    )
+    await firstRunTutorial.getByRole('button', { name: 'Skip tutorial' }).click()
+    await expect(firstRunTutorial).toBeHidden()
+    await page.reload()
+    await expect(page.locator("#app[data-hhtools-ready='true']")).toBeVisible()
+    await expect(firstRunTutorial).toBeHidden()
+    await expect.poll(() => page.evaluate(() => window.hhtoolsDesktop.hasSeenTutorial())).toBe(true)
+
     const menu = page.getByRole('menubar', { name: 'Application menu' })
     await expect(menu.getByRole('menuitem')).toHaveText([
       'File',
@@ -182,7 +195,19 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
     const helpMenu = page.getByRole('menu', { name: 'Help' })
     await helpTrigger.hover()
     await expect(helpMenu.getByRole('menuitem')).toHaveText(['Tutorial', 'About hhtools'])
-    await expect(helpMenu.getByRole('menuitem', { name: 'Tutorial' })).toBeEnabled()
+    await helpMenu.getByRole('menuitem', { name: 'Tutorial' }).click()
+    const reopenedTutorial = page.getByRole('dialog', { name: '1. Welcome to hhtools' })
+    await expect(reopenedTutorial).toBeVisible()
+    await expect(page.locator('#app')).toHaveAttribute('inert', '')
+    await page.keyboard.press('Shift+Tab')
+    await expect(reopenedTutorial.getByRole('button', { name: 'Next' })).toBeFocused()
+    await page.keyboard.press('Tab')
+    const skipTutorial = reopenedTutorial.getByRole('button', { name: 'Skip tutorial' })
+    await expect(skipTutorial).toBeFocused()
+    await skipTutorial.click()
+    await expect(page.locator('#app')).not.toHaveAttribute('inert', '')
+    await expect(helpTrigger).toBeFocused()
+    await helpTrigger.hover()
     await helpMenu.getByRole('menuitem', { name: 'About hhtools' }).click()
     const aboutDialog = page.getByRole('dialog', { name: 'Human-Humanoid Tools' })
     await expect(aboutDialog).toBeVisible()
