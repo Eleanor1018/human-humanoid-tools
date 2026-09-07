@@ -10,11 +10,11 @@ import {
   isSupportedVideoName,
   parseOptionalFocalLength,
   SMPLX_DOWNLOAD_URL,
-  SMPLX_LICENSE_URL,
   setupGvhmrInDesktop,
   startVideoToMotion,
   summarizeMotionResult,
   toStageMotionPayload,
+  visibleGvhmrMissing,
   waitForVideoToMotion,
 } from "../src/features/video-to-motion/api.ts";
 
@@ -60,12 +60,8 @@ test("normalizes runtime status responses", async () => {
   assert.equal(status.body_models_root, "/models");
 });
 
-test("links licensed SMPL-X resources only to structured model absence", () => {
+test("links the SMPL-X download only to structured model absence", () => {
   assert.equal(SMPLX_DOWNLOAD_URL, "https://smpl-x.is.tue.mpg.de/download.php");
-  assert.equal(
-    SMPLX_LICENSE_URL,
-    "https://smpl-x.is.tue.mpg.de/modellicense.html",
-  );
   assert.equal(
     isSmplxNeutralMissing({
       ready: false,
@@ -89,6 +85,28 @@ test("links licensed SMPL-X resources only to structured model absence", () => {
       missing: ["licensed SMPL-X neutral model"],
     }),
     false,
+  );
+});
+
+test("replaces only the path-heavy SMPL-X missing detail", () => {
+  assert.deepEqual(
+    visibleGvhmrMissing({
+      ready: false,
+      checks: { smplx_neutral: false, cuda: false },
+      missing: [
+        "licensed SMPL-X neutral model: /private/models/SMPLX_NEUTRAL.npz",
+        "CUDA is not available",
+      ],
+    }),
+    ["CUDA is not available"],
+  );
+  assert.deepEqual(
+    visibleGvhmrMissing({
+      ready: false,
+      checks: { smplx_neutral: true },
+      missing: ["another runtime problem"],
+    }),
+    ["another runtime problem"],
   );
 });
 

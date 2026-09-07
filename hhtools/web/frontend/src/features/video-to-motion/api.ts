@@ -2,8 +2,8 @@ import type { StageMotionPayload } from "@/stage/types";
 
 export const SMPLX_DOWNLOAD_URL =
   "https://smpl-x.is.tue.mpg.de/download.php";
-export const SMPLX_LICENSE_URL =
-  "https://smpl-x.is.tue.mpg.de/modellicense.html";
+
+const SMPLX_MISSING_PREFIX = "licensed SMPL-X neutral model:";
 
 export const SUPPORTED_VIDEO_EXTENSIONS = [
   "mp4",
@@ -32,6 +32,15 @@ export function isSmplxNeutralMissing(
   status: GvhmrRuntimeStatus | null | undefined,
 ): boolean {
   return status?.checks?.smplx_neutral === false;
+}
+
+/** The dedicated download link replaces the backend's path-heavy model hint. */
+export function visibleGvhmrMissing(
+  status: GvhmrRuntimeStatus | null | undefined,
+): readonly string[] {
+  const missing = status?.missing ?? [];
+  if (!isSmplxNeutralMissing(status)) return missing;
+  return missing.filter((item) => !item.startsWith(SMPLX_MISSING_PREFIX));
 }
 
 export interface MotionResult extends Partial<StageMotionPayload> {
@@ -226,13 +235,14 @@ export async function getGvhmrRuntimeStatus(
     { signal },
     fetcher,
   );
-  return {
+  const normalized = {
     ...status,
     ready: status.ready === true,
     missing: Array.isArray(status.missing)
       ? status.missing.filter((item): item is string => typeof item === "string")
       : [],
   };
+  return { ...normalized, missing: visibleGvhmrMissing(normalized) };
 }
 
 export async function startVideoToMotion(
