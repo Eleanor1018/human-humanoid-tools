@@ -58,10 +58,7 @@ test("application menu descriptors retain the five-menu contract", () => {
     commands.find((command) => command.id === "export-current-result")?.enabled,
     false,
   );
-  assert.equal(
-    commands.find((command) => command.id === "exit-application")?.enabled,
-    false,
-  );
+  assert.equal(commands.some((command) => command.id === "exit-application"), false);
   assert.equal(
     commands.find((command) => command.id === "toggle-theme")?.label,
     "Dark Mode",
@@ -71,6 +68,34 @@ test("application menu descriptors retain the five-menu contract", () => {
     menus.find((menu) => menu.id === "settings")?.commands.map(({ id }) => id),
     ["open-settings", "toggle-theme"],
   );
+});
+
+test("desktop application menu retains an executable Exit command", () => {
+  let exitCount = 0;
+  const menus = createApplicationMenus({
+    locale: "en",
+    theme: "light",
+    canExportResult: false,
+    canExitApplication: true,
+    onNavigate: () => undefined,
+    onImport: () => undefined,
+    onExportResult: () => undefined,
+    onOpenSettings: () => undefined,
+    onToggleTheme: () => undefined,
+    onOpenTutorial: () => undefined,
+    onOpenAbout: () => undefined,
+    onExitApplication: () => {
+      exitCount += 1;
+    },
+  });
+
+  const exitCommand = menus
+    .find((menu) => menu.id === "file")
+    ?.commands.find((command) => command.id === "exit-application");
+  assert.equal(exitCommand?.dividerBefore, true);
+  assert.notEqual(exitCommand?.enabled, false);
+  exitCommand?.run();
+  assert.equal(exitCount, 1);
 });
 
 test("application menus localize without changing command identity", () => {

@@ -151,6 +151,17 @@ export function createApplicationMenus(
 ): readonly ApplicationMenu[] {
   const text = (english: string, chinese: string) =>
     localize(context.locale, english, chinese);
+  const exitCommands: readonly ApplicationCommand[] = context.canExitApplication
+    ? [
+        {
+          id: "exit-application",
+          label: text("Exit", "退出"),
+          detail: text("Close HHTOOLS", "关闭 HHTOOLS"),
+          dividerBefore: true,
+          run: context.onExitApplication,
+        },
+      ]
+    : [];
   return [
     {
       id: "file",
@@ -209,17 +220,7 @@ export function createApplicationMenus(
             : text("No exportable result", "没有可导出的结果"),
           run: context.onExportResult,
         },
-        {
-          id: "exit-application",
-          label: text("Exit", "退出"),
-          detail: text("Close HHTOOLS", "关闭 HHTOOLS"),
-          dividerBefore: true,
-          enabled: context.canExitApplication,
-          disabledReason: context.canExitApplication
-            ? undefined
-            : text("Desktop app only", "仅桌面应用可用"),
-          run: context.onExitApplication,
-        },
+        ...exitCommands,
       ],
     },
     {
@@ -303,7 +304,10 @@ export function createApplicationMenus(
         {
           id: "open-tutorial",
           label: text("Tutorial", "教程"),
-          detail: text("Open the project README", "打开项目说明"),
+          detail: text(
+            "Open the interactive workspace guide",
+            "打开交互式工作区教程",
+          ),
           run: context.onOpenTutorial,
         },
         {
