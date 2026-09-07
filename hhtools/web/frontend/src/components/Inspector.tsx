@@ -22,9 +22,11 @@ export function Inspector({
 
 export function InspectorPage({
   title,
+  headerAction,
   children,
 }: {
   title: string;
+  headerAction?: ReactNode;
   children: ReactNode;
 }) {
   return (
@@ -32,9 +34,12 @@ export function InspectorPage({
       className="flex h-full min-h-0 flex-col gap-4 overflow-y-auto p-[18px]"
       aria-label={title}
     >
-      <h1 className="text-[19px] leading-tight font-bold tracking-normal text-foreground">
-        {title}
-      </h1>
+      <header className="flex min-h-[30px] items-center justify-between gap-3">
+        <h1 className="text-[19px] leading-tight font-bold tracking-normal text-foreground">
+          {title}
+        </h1>
+        {headerAction}
+      </header>
       {children}
     </section>
   );
