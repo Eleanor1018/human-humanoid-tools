@@ -35,8 +35,12 @@ token.
    response does not report.
 2. Resolve both content-addressed inputs.
    - Prefer `search_assets` for an already registered motion or robot bundle.
-   - Register only with `register_asset_bundle` using a returned `root_id` and a portable
-     `relative_path`. Never pass or derive an absolute host path.
+   - If no matching bundle is registered, call `list_available_assets` with bounded filters.
+     Select only a returned candidate, then call `register_asset_bundle` with one `request`
+     containing `schema_version: "1.0"` plus its `root_id`, `relative_path`, `display_name`,
+     `kind`, `category`, and `recursive` fields. Never browse a root, pass, or derive an absolute
+     host path.
+   - Register only with `register_asset_bundle` using the catalog's portable identity.
    - Call `inspect_asset_bundle` with hash verification and parsing enabled for every selected
      motion and robot bundle. Stop on `invalid`; surface warnings before continuing.
    - Continue only when the motion inspection category is `plain_motion` and neither the

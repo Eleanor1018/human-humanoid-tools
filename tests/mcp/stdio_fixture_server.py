@@ -30,6 +30,7 @@ _UNUSED = cast(Any, object())
 _RUNTIME = AgentRuntime(
     capabilities=cast(Any, _Capabilities()),
     assets=_UNUSED,
+    available_assets=_UNUSED,
     preflight=_UNUSED,
     plans=_UNUSED,
     jobs=_UNUSED,

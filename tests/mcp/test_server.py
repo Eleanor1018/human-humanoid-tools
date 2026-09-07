@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import anyio
+import numpy as np
 import pytest
 from mcp import Client, MCPError, StdioServerParameters
 
@@ -21,6 +22,8 @@ from hhtools.contracts import (
     ApiError,
     ArtifactDescriptor,
     ArtifactExportReceipt,
+    AvailableAssetCatalogEntry,
+    AvailableAssetCatalogResponse,
     CapabilityResponse,
     ErrorStage,
     JobProgress,
@@ -30,7 +33,10 @@ from hhtools.contracts import (
 )
 from hhtools.mcp.runtime import AgentRuntime
 from hhtools.mcp.server import create_mcp_server
+from hhtools.robot.registry import clear_cache
 from hhtools.services.jobs import JobManagerError
+from hhtools.web import server as web_server
+from hhtools.web.server import state as server_state
 
 _DIGEST = "a" * 64
 _ASSET_ID = f"asset:sha256:{_DIGEST}"
@@ -43,6 +49,7 @@ _EXPECTED_TOOLS = {
     "get_capabilities",
     "register_asset_bundle",
     "search_assets",
+    "list_available_assets",
     "inspect_asset_bundle",
     "list_robots",
     "preflight_retarget",
@@ -174,6 +181,29 @@ class _AssetsService:
 
     def get(self, _asset_id: str) -> Any:
         raise AssertionError("asset resource is outside this focused fixture")
+
+
+class _AvailableAssetsService:
+    def __init__(self) -> None:
+        self.calls: list[Any] = []
+
+    def list_available(self, request: Any) -> AvailableAssetCatalogResponse:
+        self.calls.append(request)
+        entry = AvailableAssetCatalogEntry(
+            root_id="source",
+            relative_path="AMASS/walk.npz",
+            display_name="Walk",
+            kind="motion_bundle",
+            category="plain_motion",
+            dataset="amass",
+            reference="smpl",
+        )
+        return AvailableAssetCatalogResponse(
+            assets=[entry],
+            total=1,
+            limit=request.limit,
+            offset=request.offset,
+        )
 
 
 class _PreflightService:
@@ -310,6 +340,7 @@ class _Fixture:
     def __init__(self) -> None:
         self.capabilities = _CapabilitiesService()
         self.assets = _AssetsService()
+        self.available_assets = _AvailableAssetsService()
         self.preflight = _PreflightService()
         self.plans = _Plans()
         self.jobs = _Jobs()
@@ -317,6 +348,7 @@ class _Fixture:
         self.runtime = AgentRuntime(
             capabilities=cast(Any, self.capabilities),
             assets=cast(Any, self.assets),
+            available_assets=cast(Any, self.available_assets),
             preflight=cast(Any, self.preflight),
             plans=cast(Any, self.plans),
             jobs=cast(Any, self.jobs),
@@ -335,6 +367,7 @@ class _Fixture:
         self.runtime = AgentRuntime(
             capabilities=cast(Any, self.capabilities),
             assets=cast(Any, self.assets),
+            available_assets=cast(Any, self.available_assets),
             preflight=cast(Any, self.preflight),
             plans=cast(Any, self.plans),
             jobs=cast(Any, jobs),
@@ -375,6 +408,176 @@ async def test_mcp_enumerates_only_bounded_tools_and_resources() -> None:
         '"command"',
     ):
         assert forbidden not in serialized
+
+
+@pytest.mark.anyio
+async def test_mcp_lists_available_assets_with_closed_bounded_schema() -> None:
+    fixture = _Fixture()
+
+    async with Client(fixture.server(), raise_exceptions=True) as client:
+        tools = (await client.list_tools()).tools
+        result = await client.call_tool(
+            "list_available_assets",
+            {
+                "root_id": "source",
+                "query": "walk",
+                "kind": "motion_bundle",
+                "limit": 5,
+                "offset": 0,
+            },
+        )
+
+    tool = _tool_by_name(tools, "list_available_assets")
+    assert tool.input_schema["additionalProperties"] is False
+    assert tool.input_schema["properties"]["limit"]["maximum"] == 500
+    assert tool.output_schema["title"] == "AvailableAssetCatalogResponse"
+    assert result.is_error is False
+    assert result.structured_content["assets"][0]["relative_path"] == "AMASS/walk.npz"
+    assert fixture.available_assets.calls[0].root_id == "source"
+    assert fixture.available_assets.calls[0].limit == 5
+
+
+@pytest.mark.anyio
+async def test_mcp_rejects_catalog_bounds_before_calling_service() -> None:
+    fixture = _Fixture()
+
+    async with Client(fixture.server(), raise_exceptions=True) as client:
+        result = await client.call_tool("list_available_assets", {"limit": 501})
+
+    assert result.is_error is True
+    assert fixture.available_assets.calls == []
+
+
+@pytest.mark.anyio
+async def test_real_mcp_catalog_entries_register_and_inspect_without_host_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def local_tmpdir(tag: str) -> Path:
+        path = tmp_path / f"runtime-{tag}"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    source_root = tmp_path / "motions"
+    source_root.mkdir()
+    positions = np.zeros((2, 1, 3), dtype=np.float32)
+    quaternions = np.zeros((2, 1, 4), dtype=np.float32)
+    quaternions[..., 3] = 1.0
+    np.savez(
+        source_root / "walk.npz",
+        schema_version=np.array("1"),
+        name=np.array("walk"),
+        framerate=np.array(30.0),
+        up_axis=np.array("Z"),
+        bone_names=np.array(["root"]),
+        parent_indices=np.array([-1], dtype=np.int32),
+        positions=positions,
+        quaternions=quaternions,
+    )
+    robot_root = tmp_path / "robots" / "catalog_bot"
+    robot_root.mkdir(parents=True)
+    (robot_root / "robot.yaml").write_text(
+        "name: catalog_bot\n"
+        "display_name: Catalog Bot\n"
+        "urdf: robot.urdf\n"
+        "dof_order: [hip]\n"
+        "ik_map:\n"
+        "  hips: base\n",
+        encoding="utf-8",
+    )
+    (robot_root / "robot.urdf").write_text(
+        """<?xml version="1.0"?>
+<robot name="catalog_bot">
+  <link name="base"/>
+  <link name="torso"/>
+  <joint name="hip" type="revolute">
+    <parent link="base"/>
+    <child link="torso"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-1" upper="1" effort="10" velocity="2"/>
+  </joint>
+</robot>
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(server_state, "_tmpdir", local_tmpdir)
+    monkeypatch.setattr(server_state, "_robot_library_root", lambda: tmp_path / "robots")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv(
+        "HHTOOLS_MOTION_LIBRARY_SETTINGS_PATH",
+        str(tmp_path / "motion-library-settings.json"),
+    )
+    clear_cache()
+    app = web_server.create_app(
+        source_root=source_root,
+        save_dir=tmp_path / "save",
+        cache_dir=tmp_path / "cache",
+        job_history_dir=tmp_path / "history",
+        job_settings_path=tmp_path / "job-settings.json",
+        agent_mcp_available=True,
+        agent_rest_available=False,
+        agent_json_cli_available=False,
+    )
+
+    @asynccontextmanager
+    async def runtime_factory() -> AsyncIterator[AgentRuntime]:
+        async with app.router.lifespan_context(app):
+            yield AgentRuntime.from_application(app)
+
+    try:
+        async with Client(
+            create_mcp_server(runtime_factory=runtime_factory),
+            raise_exceptions=True,
+        ) as client:
+            motion_catalog = await client.call_tool(
+                "list_available_assets",
+                {"root_id": "source", "kind": "motion_bundle"},
+            )
+            robot_catalog = await client.call_tool(
+                "list_available_assets",
+                {"root_id": "robot-library", "kind": "robot_bundle"},
+            )
+            motion_entry = motion_catalog.structured_content["assets"][0]
+            robot_entry = robot_catalog.structured_content["assets"][0]
+
+            async def register_and_inspect(entry: dict[str, Any]) -> Any:
+                request = {
+                    field: entry[field]
+                    for field in (
+                        "root_id",
+                        "relative_path",
+                        "display_name",
+                        "kind",
+                        "category",
+                        "recursive",
+                    )
+                }
+                registered = await client.call_tool(
+                    "register_asset_bundle",
+                    {"request": request},
+                )
+                return await client.call_tool(
+                    "inspect_asset_bundle",
+                    {
+                        "request": {
+                            "asset_id": registered.structured_content["asset_id"],
+                            "verify_hashes": True,
+                            "parse_content": False,
+                        }
+                    },
+                )
+
+            motion_inspection = await register_and_inspect(motion_entry)
+            robot_inspection = await register_and_inspect(robot_entry)
+    finally:
+        clear_cache()
+
+    assert motion_entry["relative_path"] == "walk.npz"
+    assert robot_entry["relative_path"] == "catalog_bot"
+    assert motion_inspection.structured_content["status"] == "valid"
+    assert robot_inspection.structured_content["status"] == "valid"
+    serialized = json.dumps([motion_entry, robot_entry])
+    assert str(tmp_path) not in serialized
 
 
 @pytest.mark.anyio

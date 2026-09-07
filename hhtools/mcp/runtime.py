@@ -16,6 +16,7 @@ from typing import Any
 from hhtools.services import (
     AgentAssetService,
     ArtifactExportService,
+    AvailableAssetCatalogService,
     CapabilitiesService,
     JobManager,
     PlanStore,
@@ -42,6 +43,7 @@ class AgentRuntime:
 
     capabilities: CapabilitiesService
     assets: AgentAssetService
+    available_assets: AvailableAssetCatalogService
     preflight: PreflightService
     plans: PlanStore
     jobs: JobManager
@@ -54,6 +56,7 @@ class AgentRuntime:
         return cls(
             capabilities=app.state.agent_capabilities_service,
             assets=app.state.agent_asset_service,
+            available_assets=app.state.agent_available_asset_catalog_service,
             preflight=app.state.agent_preflight_service,
             plans=app.state.agent_plan_store,
             jobs=app.state.agent_job_manager,

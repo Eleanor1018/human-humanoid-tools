@@ -15,14 +15,14 @@ import sys
 from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from pathlib import Path
-from typing import Any, cast
+from typing import Annotated, Any, cast
 from urllib.parse import urlsplit
 
 from mcp.server import MCPServer
 from mcp.server.mcpserver import Context
 from mcp.server.mcpserver.exceptions import ResourceError
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from hhtools._version import __version__
 from hhtools.contracts import (
@@ -38,6 +38,8 @@ from hhtools.contracts import (
     AssetKind,
     AssetRegistrationRequest,
     AssetSearchResponse,
+    AvailableAssetCatalogRequest,
+    AvailableAssetCatalogResponse,
     CapabilityResponse,
     ErrorStage,
     EvaluationReport,
@@ -397,6 +399,35 @@ def create_mcp_server(
                 limit=limit,
                 offset=offset,
             )
+        )
+
+    @server.tool(annotations=_READ_ONLY)
+    def list_available_assets(
+        context: Context[AgentRuntime, Any],
+        root_id: Annotated[
+            str | None,
+            Field(
+                min_length=1,
+                max_length=128,
+                pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$",
+            ),
+        ] = None,
+        query: Annotated[str | None, Field(min_length=1, max_length=256)] = None,
+        kind: AssetKind | None = None,
+        limit: Annotated[int, Field(ge=1, le=500)] = 100,
+        offset: Annotated[int, Field(ge=0)] = 0,
+    ) -> AvailableAssetCatalogResponse:
+        """List registerable assets below configured allowlisted roots."""
+
+        request = AvailableAssetCatalogRequest(
+            root_id=root_id,
+            query=query,
+            kind=kind,
+            limit=limit,
+            offset=offset,
+        )
+        return _tool_call(
+            lambda: _runtime(context).available_assets.list_available(request)
         )
 
     @server.tool(annotations=_READ_ONLY)

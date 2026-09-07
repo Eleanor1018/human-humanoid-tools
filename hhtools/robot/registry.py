@@ -90,6 +90,15 @@ def list_presets_readonly() -> list[RobotPreset]:
     return sorted(discovered.values(), key=lambda preset: preset.name)
 
 
+def list_presets_in_root_readonly(root: Path) -> list[RobotPreset]:
+    """Discover existing presets below one trusted root without scaffolding."""
+
+    discovered = {
+        preset.name: preset for preset in _scan_root(Path(root), scaffold_missing=False)
+    }
+    return sorted(discovered.values(), key=lambda preset: preset.name)
+
+
 def get(name: str) -> RobotPreset:
     """Look up a preset by name.  Raises :class:`KeyError` if unknown."""
     _ensure_loaded()

@@ -170,6 +170,7 @@ async def test_robot_registration_next_action_replays_unchanged_through_live_mcp
     runtime = AgentRuntime(
         capabilities=cast(Any, object()),
         assets=assets,
+        available_assets=cast(Any, object()),
         preflight=preflight,
         plans=plans,
         jobs=cast(Any, object()),

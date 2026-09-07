@@ -13,6 +13,15 @@ from .artifact_exports import (
 from .artifacts import ArtifactStore, ArtifactStoreError, StoredArtifact
 from .asset_service import AgentAssetService
 from .assets import AssetRegistry, AssetServiceError
+from .available_assets import (
+    MAX_AVAILABLE_ASSET_CANDIDATES,
+    MAX_AVAILABLE_ASSET_SCAN_ENTRIES,
+    AvailableAssetCandidate,
+    AvailableAssetCatalogLimitError,
+    AvailableAssetCatalogService,
+    AvailableAssetProvider,
+    require_bounded_catalog_root,
+)
 from .capabilities import CapabilitiesService
 from .job_store import JobStore, JobStoreError, StoredJob, compute_request_fingerprint
 from .jobs import (
@@ -46,6 +55,10 @@ __all__ = [
     "ArtifactStoreError",
     "ArtifactExportError",
     "ArtifactExportService",
+    "AvailableAssetCandidate",
+    "AvailableAssetCatalogLimitError",
+    "AvailableAssetCatalogService",
+    "AvailableAssetProvider",
     "CapabilitiesService",
     "JobCancelledError",
     "JobExecutionContext",
@@ -67,8 +80,11 @@ __all__ = [
     "RetargetService",
     "RetargetServiceError",
     "RuntimeLeaseError",
+    "MAX_AVAILABLE_ASSET_CANDIDATES",
+    "MAX_AVAILABLE_ASSET_SCAN_ENTRIES",
     "StoredArtifact",
     "StoredJob",
     "compute_plan_id",
     "compute_request_fingerprint",
+    "require_bounded_catalog_root",
 ]

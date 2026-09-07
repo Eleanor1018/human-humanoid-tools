@@ -33,6 +33,8 @@ from hhtools.contracts import (
     AssetKind,
     AssetRegistrationRequest,
     AssetSearchResponse,
+    AvailableAssetCatalogRequest,
+    AvailableAssetCatalogResponse,
     CapabilityResponse,
     ErrorStage,
     JobLookupRequest,
@@ -72,6 +74,8 @@ _ERROR_STATUS_BY_CODE = {
     "ASSET_NOT_FOUND": 404,
     "ASSET_OUTSIDE_ALLOWED_ROOT": 403,
     "ASSET_REGISTRATION_MISMATCH": 409,
+    "AVAILABLE_ASSET_CATALOG_UNAVAILABLE": 503,
+    "AVAILABLE_ASSET_CATALOG_LIMIT_EXCEEDED": 422,
     "BACKEND_UNAVAILABLE": 503,
     "BUNDLE_AMBIGUOUS": 409,
     "INTERNAL_ERROR": 500,
@@ -335,6 +339,13 @@ class _AssetProvider(Protocol):
     def inspect(self, request: AssetInspectionRequest) -> AssetInspection: ...
 
 
+class _AvailableAssetCatalogProvider(Protocol):
+    def list_available(
+        self,
+        request: AvailableAssetCatalogRequest,
+    ) -> AvailableAssetCatalogResponse: ...
+
+
 class _PreflightProvider(Protocol):
     def preflight_retarget(
         self,
@@ -404,6 +415,13 @@ def _asset_service(request: Request) -> _AssetProvider:
     if service is None or any(not callable(getattr(service, name, None)) for name in required):
         raise RuntimeError("agent asset service is not configured")
     return cast("_AssetProvider", service)
+
+
+def _available_asset_catalog_service(request: Request) -> _AvailableAssetCatalogProvider:
+    service = getattr(request.app.state, "agent_available_asset_catalog_service", None)
+    if service is None or not callable(getattr(service, "list_available", None)):
+        raise RuntimeError("agent available asset catalog service is not configured")
+    return cast("_AvailableAssetCatalogProvider", service)
 
 
 def _preflight_service(request: Request) -> _PreflightProvider:
@@ -488,6 +506,36 @@ def search_assets(
         limit=limit,
         offset=offset,
     )
+
+
+@router.get(
+    "/assets/available",
+    response_model=AvailableAssetCatalogResponse,
+    response_model_exclude_none=True,
+)
+def list_available_assets(
+    request: Request,
+    root_id: str | None = Query(
+        default=None,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$",
+    ),
+    query: str | None = Query(default=None, min_length=1, max_length=256),
+    kind: AssetKind | None = None,
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+) -> AvailableAssetCatalogResponse:
+    """List portable registration candidates below configured allowlisted roots."""
+
+    catalog_request = AvailableAssetCatalogRequest(
+        root_id=root_id,
+        query=query,
+        kind=kind,
+        limit=limit,
+        offset=offset,
+    )
+    return _available_asset_catalog_service(request).list_available(catalog_request)
 
 
 @router.get(

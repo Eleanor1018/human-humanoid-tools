@@ -34,6 +34,8 @@ from hhtools.contracts import (
     AssetInspection,
     AssetRegistrationRequest,
     AssetSearchResponse,
+    AvailableAssetCatalogRequest,
+    AvailableAssetCatalogResponse,
     CapabilityResponse,
     ErrorStage,
     JobLookupRequest,
@@ -145,7 +147,32 @@ _COMMAND_SPECS: dict[tuple[str, ...], _CliCommandSpec] = {
     ("capabilities",): _CliCommandSpec(
         ("capabilities",), "Return the live Agent capability document."
     ),
-    ("asset",): _CliCommandSpec(("asset",), "Register, inspect, get, or search assets."),
+    ("asset",): _CliCommandSpec(
+        ("asset",), "Catalog, register, inspect, get, or search assets."
+    ),
+    ("asset", "catalog"): _CliCommandSpec(
+        ("asset", "catalog"),
+        "List registerable assets below configured allowlisted roots.",
+        options=(
+            _CliArgumentSpec("--root-id", "Filter by allowlisted root id.", value_name="ROOT_ID"),
+            _CliArgumentSpec("--query", "Filter by text query.", value_name="TEXT"),
+            _CliArgumentSpec("--kind", "Filter by asset kind.", value_name="KIND"),
+            _CliArgumentSpec(
+                "--limit",
+                "Limit the returned page.",
+                value_name="INTEGER",
+                expected="An integer from 1 through 500.",
+                value_kind="int",
+            ),
+            _CliArgumentSpec(
+                "--offset",
+                "Start the returned page at this offset.",
+                value_name="INTEGER",
+                expected="A non-negative integer offset.",
+                value_kind="int",
+            ),
+        ),
+    ),
     ("asset", "register"): _CliCommandSpec(
         ("asset", "register"),
         "Register one allowlisted content-addressed asset bundle.",
@@ -605,6 +632,13 @@ def _parser() -> _JsonArgumentParser:
     search.add_argument("--limit", type=int, default=100)
     search.add_argument("--offset", type=int, default=0)
     search.set_defaults(operation="asset_search")
+    catalog = asset_commands.add_parser("catalog", add_help=False)
+    catalog.add_argument("--root-id")
+    catalog.add_argument("--query")
+    catalog.add_argument("--kind")
+    catalog.add_argument("--limit", type=int, default=100)
+    catalog.add_argument("--offset", type=int, default=0)
+    catalog.set_defaults(operation="asset_catalog")
 
     preflight = commands.add_parser("preflight", add_help=False)
     preflight_commands = preflight.add_subparsers(dest="preflight_command", required=True)
@@ -870,6 +904,52 @@ def _execute(  # noqa: PLR0911 - one explicit branch per public CLI operation
                     "limit": namespace.limit,
                     "offset": namespace.offset,
                 },
+            ),
+        )
+
+    if operation == "asset_catalog":
+        try:
+            request = AvailableAssetCatalogRequest(
+                root_id=namespace.root_id,
+                query=namespace.query,
+                kind=namespace.kind,
+                limit=namespace.limit,
+                offset=namespace.offset,
+            )
+        except ValidationError as error:
+            invalid_fields = {issue["loc"][0] for issue in error.errors() if issue["loc"]}
+            argument_by_field: dict[str, AgentCliDiagnosticArgument] = {
+                "root_id": "--root-id",
+                "query": "--query",
+                "kind": "--kind",
+                "limit": "--limit",
+                "offset": "--offset",
+            }
+            field = next(
+                (name for name in argument_by_field if name in invalid_fields),
+                "limit",
+            )
+            raise _ArgumentError(
+                "INVALID_VALUE",
+                argument=argument_by_field[field],
+                expected={
+                    "root_id": "A capability-advertised portable root id.",
+                    "query": "A non-empty query no longer than 256 characters.",
+                    "kind": "A supported asset kind.",
+                    "limit": "An integer from 1 through 500.",
+                    "offset": "A non-negative integer offset.",
+                }[field],
+            ) from error
+        return _response(
+            AvailableAssetCatalogResponse,
+            transport.request_json(
+                "GET",
+                "/assets/available",
+                query=request.model_dump(
+                    mode="json",
+                    exclude_none=True,
+                    exclude={"schema_version"},
+                ),
             ),
         )
 
@@ -1203,6 +1283,11 @@ def asset_inspect_command(ctx: typer.Context) -> None:
 @asset_app.command("search", context_settings=_PASSTHROUGH_CONTEXT)
 def asset_search_command(ctx: typer.Context) -> None:
     _passthrough(["asset", "search"], ctx)
+
+
+@asset_app.command("catalog", context_settings=_PASSTHROUGH_CONTEXT)
+def asset_catalog_command(ctx: typer.Context) -> None:
+    _passthrough(["asset", "catalog"], ctx)
 
 
 preflight_app = typer.Typer(

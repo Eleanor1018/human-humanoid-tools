@@ -366,6 +366,7 @@ class CapabilitiesService:
         robot_provider: Callable[[], Iterable[RobotPreset]] | None = None,
         device_probe: Callable[[], list[DeviceCapability]] = _detect_devices,
         asset_root_provider: Callable[[], Iterable[str]] | None = None,
+        available_asset_catalog_available: bool = False,
         preflight_available: bool = False,
         artifact_store_available: bool = False,
         job_manager_available: bool = False,
@@ -382,6 +383,7 @@ class CapabilitiesService:
         self._robot_provider = robot_provider
         self._device_probe = device_probe
         self._asset_root_provider = asset_root_provider
+        self._available_asset_catalog_available = bool(available_asset_catalog_available)
         self._preflight_available = bool(preflight_available)
         self._artifact_store_available = bool(artifact_store_available)
         self._job_manager_available = bool(job_manager_available)
@@ -416,6 +418,7 @@ class CapabilitiesService:
                 "agent_rest": self._agent_rest_available,
                 "asset_inspection": self._asset_root_provider is not None,
                 "asset_registry": self._asset_root_provider is not None,
+                "available_asset_catalog": self._available_asset_catalog_available,
                 "artifact_store": self._artifact_store_available,
                 "idempotent_jobs": self._job_manager_available,
                 "job_cancellation": self._job_execution_available,

@@ -2,3 +2,9 @@ interface:
   display_name: "HHTools Agent"
   short_description: "Run safe, preflighted HHTools H2R jobs"
   default_prompt: "Use $hhtools-agent to preflight an H2R smoke run and stop for review before any full job."
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "hhtools"
+      description: "Local HHTools H2R Agent MCP server"
+      transport: "stdio"

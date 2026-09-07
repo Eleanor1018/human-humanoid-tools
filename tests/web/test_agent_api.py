@@ -24,6 +24,9 @@ from hhtools.contracts import (
     AssetInspection,
     AssetRegistrationRequest,
     AssetSearchResponse,
+    AvailableAssetCatalogEntry,
+    AvailableAssetCatalogRequest,
+    AvailableAssetCatalogResponse,
     CapabilityResponse,
     ErrorStage,
     InspectionStatus,
@@ -140,6 +143,39 @@ class _FakeAssets:
         )
 
 
+class _FakeAvailableAssets:
+    def list_available(
+        self,
+        request: AvailableAssetCatalogRequest,
+    ) -> AvailableAssetCatalogResponse:
+        if request.root_id == "unknown":
+            raise AssetServiceError(
+                ApiError(
+                    code="ASSET_OUTSIDE_ALLOWED_ROOT",
+                    message="The requested asset root is not allowed.",
+                    stage=ErrorStage.ASSET_REGISTRATION,
+                    details={"root_id": "unknown"},
+                )
+            )
+        entry = AvailableAssetCatalogEntry(
+            root_id="motion-library",
+            relative_path="AMASS/walk.npz",
+            display_name="Walk",
+            kind="motion_bundle",
+            category="plain_motion",
+            dataset="amass",
+            reference="smpl",
+        )
+        matches = request.query is None or request.query.casefold() in "walk amass"
+        assets = [entry] if matches and request.offset == 0 else []
+        return AvailableAssetCatalogResponse(
+            assets=assets[: request.limit],
+            total=1 if matches else 0,
+            limit=request.limit,
+            offset=request.offset,
+        )
+
+
 class _FakePreflight:
     def preflight_retarget(
         self,
@@ -162,6 +198,7 @@ def _agent_app() -> FastAPI:
     app = FastAPI()
     app.state.agent_capabilities_service = _FakeCapabilities()
     app.state.agent_asset_service = _FakeAssets()
+    app.state.agent_available_asset_catalog_service = _FakeAvailableAssets()
     app.state.agent_preflight_service = _FakePreflight()
     app.include_router(router)
     return app
@@ -274,6 +311,53 @@ def test_agent_router_serializes_the_service_contract() -> None:
         "supported_output_formats": ["csv", "pkl"],
         "features": {"agent_rest": True},
     }
+
+
+def test_agent_router_lists_available_assets_without_route_shadowing() -> None:
+    client = TestClient(_agent_app())
+
+    response = client.get(
+        "/api/agent/v1/assets/available",
+        params={
+            "root_id": "motion-library",
+            "query": "walk",
+            "kind": "motion_bundle",
+            "limit": 5,
+            "offset": 0,
+        },
+    )
+    unknown = client.get(
+        "/api/agent/v1/assets/available",
+        params={"root_id": "unknown"},
+    )
+    invalid = client.get(
+        "/api/agent/v1/assets/available",
+        params={"limit": 501},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "schema_version": "1.0",
+        "assets": [
+            {
+                "root_id": "motion-library",
+                "relative_path": "AMASS/walk.npz",
+                "display_name": "Walk",
+                "kind": "motion_bundle",
+                "category": "plain_motion",
+                "recursive": True,
+                "dataset": "amass",
+                "reference": "smpl",
+            }
+        ],
+        "total": 1,
+        "limit": 5,
+        "offset": 0,
+    }
+    assert unknown.status_code == 403
+    assert unknown.json()["code"] == "ASSET_OUTSIDE_ALLOWED_ROOT"
+    assert invalid.status_code == 422
+    assert invalid.json()["code"] == "INVALID_PARAMETER"
 
 
 def test_agent_router_rejects_duplicate_keys_and_nonfinite_json() -> None:
@@ -1016,6 +1100,32 @@ def test_full_web_app_registers_agent_api_before_the_static_root(
     clear_cache()
     source_root = tmp_path / "motions"
     source_root.mkdir()
+    robot_root = tmp_path / "robots" / "catalog_bot"
+    robot_root.mkdir(parents=True)
+    (robot_root / "robot.yaml").write_text(
+        "name: catalog_bot\n"
+        "display_name: Catalog Bot\n"
+        "urdf: robot.urdf\n"
+        "dof_order: [hip]\n"
+        "ik_map:\n"
+        "  hips: base\n",
+        encoding="utf-8",
+    )
+    (robot_root / "robot.urdf").write_text(
+        """<?xml version="1.0"?>
+<robot name="catalog_bot">
+  <link name="base"/>
+  <link name="torso"/>
+  <joint name="hip" type="revolute">
+    <parent link="base"/>
+    <child link="torso"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-1" upper="1" effort="10" velocity="2"/>
+  </joint>
+</robot>
+""",
+        encoding="utf-8",
+    )
     positions = np.zeros((2, 1, 3), dtype=np.float32)
     quaternions = np.zeros((2, 1, 4), dtype=np.float32)
     quaternions[..., 3] = 1.0
@@ -1068,11 +1178,48 @@ def test_full_web_app_registers_agent_api_before_the_static_root(
         agent_wrong_method = client.delete("/api/agent/v1/capabilities")
         service_missing = client.get(f"/api/agent/v1/assets/asset:sha256:{'0' * 64}")
         non_agent_missing = client.get("/api/does-not-exist")
+        motion_catalog = client.get(
+            "/api/agent/v1/assets/available",
+            params={"root_id": "source", "kind": "motion_bundle"},
+        )
+        robot_catalog = client.get(
+            "/api/agent/v1/assets/available",
+            params={"root_id": "robot-library", "kind": "robot_bundle"},
+        )
+        motion_entry = motion_catalog.json()["assets"][0]
         registered = client.post(
             "/api/agent/v1/assets",
-            json={"root_id": "source", "relative_path": "walk.npz"},
+            json={
+                field: motion_entry[field]
+                for field in (
+                    "root_id",
+                    "relative_path",
+                    "display_name",
+                    "kind",
+                    "category",
+                    "recursive",
+                )
+            },
         )
         inspected = client.get(f"/api/agent/v1/assets/{registered.json()['asset_id']}/inspect")
+        robot_entry = robot_catalog.json()["assets"][0]
+        registered_robot = client.post(
+            "/api/agent/v1/assets",
+            json={
+                field: robot_entry[field]
+                for field in (
+                    "root_id",
+                    "relative_path",
+                    "display_name",
+                    "kind",
+                    "category",
+                    "recursive",
+                )
+            },
+        )
+        inspected_robot = client.get(
+            f"/api/agent/v1/assets/{registered_robot.json()['asset_id']}/inspect"
+        )
         try:
             app.state.agent_job_manager = boundary_manager
             streamed_artifact = client.get(
@@ -1089,6 +1236,7 @@ def test_full_web_app_registers_agent_api_before_the_static_root(
     assert payload["scheduler"]["max_running_jobs"] == 0
     assert payload["features"]["agent_rest"] is True
     assert payload["features"]["asset_registry"] is True
+    assert payload["features"]["available_asset_catalog"] is True
     assert payload["features"]["asset_inspection"] is True
     assert payload["features"]["preflight"] is True
     assert payload["features"]["artifact_store"] is True
@@ -1130,6 +1278,17 @@ def test_full_web_app_registers_agent_api_before_the_static_root(
     assert registered.status_code == 201
     assert inspected.status_code == 200
     assert inspected.json()["status"] == "valid"
+    assert motion_catalog.status_code == 200
+    assert motion_catalog.json()["total"] == 1
+    assert motion_entry["relative_path"] == "walk.npz"
+    assert robot_catalog.status_code == 200
+    assert robot_catalog.json()["total"] == 1
+    assert robot_entry["relative_path"] == "catalog_bot"
+    assert registered_robot.status_code == 201
+    assert inspected_robot.status_code == 200
+    assert inspected_robot.json()["status"] == "valid"
+    assert str(tmp_path) not in motion_catalog.text
+    assert str(tmp_path) not in robot_catalog.text
     assert str(tmp_path) not in registered.text
     assert str(tmp_path) not in inspected.text
     clear_cache()
