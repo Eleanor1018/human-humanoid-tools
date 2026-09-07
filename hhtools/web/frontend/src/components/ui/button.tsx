@@ -11,11 +11,11 @@ const buttonVariants = cva(
         primary:
           "border border-primary bg-primary text-primary-foreground hover:bg-accent-foreground disabled:border-primary disabled:bg-primary disabled:text-primary-foreground disabled:opacity-50 disabled:hover:bg-primary",
         primaryOutline:
-          "border border-primary bg-surface text-primary hover:bg-accent disabled:border-primary disabled:text-primary disabled:opacity-50 disabled:hover:bg-surface",
+          "border border-primary/35 bg-surface text-primary hover:border-primary/60 hover:bg-accent disabled:border-primary/35 disabled:text-primary disabled:opacity-50 disabled:hover:bg-surface",
         danger:
           "border border-danger-border bg-danger-muted text-danger hover:border-danger hover:brightness-95 disabled:border-border disabled:bg-surface disabled:brightness-100",
         dangerOutline:
-          "border border-danger bg-surface text-danger hover:bg-danger-muted disabled:border-danger disabled:bg-surface disabled:text-danger disabled:opacity-50",
+          "border border-danger-border bg-surface text-danger hover:border-danger/60 hover:bg-danger-muted disabled:border-danger-border disabled:bg-surface disabled:text-danger disabled:opacity-50",
         outline:
           "border border-border bg-surface text-foreground hover:border-primary hover:bg-accent disabled:hover:border-border disabled:hover:bg-surface",
         ghost:
