@@ -138,6 +138,8 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
     await expect(page.getByRole('menu', { name: 'Analysis' })).toBeVisible()
     await page.keyboard.press('Escape')
     await expect(page.getByRole('menu', { name: 'Analysis' })).toBeHidden()
+    await page.keyboard.press('Alt+3')
+    await expect(page.locator('#app')).toHaveAttribute('data-active-view', 'motion')
 
     const sidebar = page.getByRole('complementary', { name: 'Workspace navigation' })
     await expect(sidebar.getByRole('button')).toHaveText([
@@ -207,6 +209,15 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
     await expect(h2rPage.locator('details')).toHaveCount(4)
     await expect(inspector.getByLabel('Select human motion')).toBeVisible()
     await expect(inspector.getByRole('button', { name: 'Load motion' })).toBeDisabled()
+    await expect(h2rPage.getByRole('button', { name: 'Import motion' })).toBeVisible()
+    await h2rPage.getByRole('button', { name: 'Import motion' }).click()
+    await expect(page.locator('#app')).toHaveAttribute('data-active-view', 'motion')
+    await sidebar.getByRole('button', { name: 'Human → Robot' }).click()
+    await h2rPage.locator('details').nth(1).locator('summary').click()
+    await expect(h2rPage.getByRole('button', { name: 'Import robot' })).toBeVisible()
+    await h2rPage.getByRole('button', { name: 'Import robot' }).click()
+    await expect(page.locator('#app')).toHaveAttribute('data-active-view', 'robot-assets')
+    await sidebar.getByRole('button', { name: 'Human → Robot' }).click()
     await expect(inspector.getByRole('heading', { name: 'Motion' })).toHaveCount(0)
 
     await sidebar.getByRole('button', { name: 'Robot → Robot' }).click()
@@ -217,6 +228,10 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
     const r2rSourceStep = r2rPage.locator('details').first()
     await expect(r2rSourceStep.getByLabel('Select source robot')).toHaveValue('')
     await expect(r2rSourceStep.getByRole('button', { name: 'Load' })).toBeDisabled()
+    await expect(r2rPage.locator('button[aria-label="Import robot"]')).toHaveCount(2)
+    await r2rPage.getByRole('button', { name: 'Import robot' }).first().click()
+    await expect(page.locator('#app')).toHaveAttribute('data-active-view', 'robot-assets')
+    await sidebar.getByRole('button', { name: 'Robot → Robot' }).click()
 
     await sidebar.getByRole('button', { name: 'Batch', exact: true }).click()
     await expect(inspector.getByRole('heading', { name: 'Batch' })).toBeVisible()

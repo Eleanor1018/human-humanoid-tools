@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Field, fieldClass } from "@/components/Field";
 import { CalibrationEditor } from "@/components/CalibrationEditor";
+import { AssetImportButton } from "@/components/AssetImportButton";
 import {
   normalizeCalibrationValues,
   setCalibrationJointValue,
@@ -77,6 +78,7 @@ export interface RobotToRobotViewProps {
   ) => void;
   comparisonPreset?: ComparisonPreset;
   onComparisonPresetChange?: (preset: ComparisonPreset) => void;
+  onOpenRobotLibrary: () => void;
 }
 
 function errorMessage(error: unknown): string {
@@ -106,6 +108,7 @@ function RobotSelect({
   disabled,
   onChange,
   onLoad,
+  onImport,
 }: {
   label: string;
   robots: readonly RobotSummary[];
@@ -114,6 +117,7 @@ function RobotSelect({
   disabled: boolean;
   onChange: (value: string) => void;
   onLoad: () => void;
+  onImport: () => void;
 }) {
   return (
     <div className="grid gap-2.5">
@@ -136,10 +140,11 @@ function RobotSelect({
             </option>
           ))}
         </select>
-        <Button size="sm" disabled={disabled || !value} onClick={onLoad}>
-          Load
-        </Button>
+        <AssetImportButton kind="robot" onClick={onImport} />
       </div>
+      <Button size="sm" disabled={disabled || !value} onClick={onLoad}>
+        Load
+      </Button>
       <p className="text-xs text-muted-foreground">
         {loaded ? `${loaded.display_name} loaded` : "Not loaded"}
       </p>
@@ -164,6 +169,7 @@ export function RobotToRobotView({
   onCalibrationInteraction,
   comparisonPreset,
   onComparisonPresetChange,
+  onOpenRobotLibrary,
 }: RobotToRobotViewProps) {
   const [robots, setRobots] = useState<readonly RobotSummary[]>([]);
   const [entries, setEntries] = useState<readonly MotionLibraryEntry[]>([]);
@@ -673,6 +679,7 @@ export function RobotToRobotView({
             disabled={busy !== null || calibration !== null}
             onChange={setSourceChoice}
             onLoad={() => void loadSourceRobot()}
+            onImport={onOpenRobotLibrary}
           />
         </WorkflowStep>
 
@@ -751,6 +758,7 @@ export function RobotToRobotView({
             disabled={busy !== null || calibration !== null}
             onChange={setTargetChoice}
             onLoad={() => void loadTargetRobot()}
+            onImport={onOpenRobotLibrary}
           />
         </WorkflowStep>
 

@@ -3,6 +3,10 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Field, fieldClass } from "@/components/Field";
 import { CalibrationEditor } from "@/components/CalibrationEditor";
 import {
+  AssetImportButton,
+  type ImportAssetKind,
+} from "@/components/AssetImportButton";
+import {
   normalizeCalibrationValues,
   setCalibrationJointValue,
   type CalibrationAngleUnit,
@@ -69,6 +73,8 @@ export interface HumanToRobotViewProps {
   ) => void;
   readonly comparisonPreset?: ComparisonPreset;
   readonly onComparisonPresetChange?: (preset: ComparisonPreset) => void;
+  readonly onOpenMotionLibrary: () => void;
+  readonly onOpenRobotLibrary: () => void;
 }
 
 function errorMessage(error: unknown): string {
@@ -93,6 +99,8 @@ function Picker({
   value,
   disabled,
   buttonLabel,
+  importKind,
+  onImport,
   onChange,
   onLoad,
   children,
@@ -101,21 +109,26 @@ function Picker({
   value: string;
   disabled: boolean;
   buttonLabel: string;
+  importKind: ImportAssetKind;
+  onImport(): void;
   onChange(value: string): void;
   onLoad(): void;
   children: ReactNode;
 }) {
   return (
     <div className="grid gap-2">
-      <select
-        className={fieldClass}
-        aria-label={label}
-        value={value}
-        disabled={disabled}
-        onChange={(event) => onChange(event.currentTarget.value)}
-      >
-        {children}
-      </select>
+      <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+        <select
+          className={fieldClass}
+          aria-label={label}
+          value={value}
+          disabled={disabled}
+          onChange={(event) => onChange(event.currentTarget.value)}
+        >
+          {children}
+        </select>
+        <AssetImportButton kind={importKind} onClick={onImport} />
+      </div>
       <Button size="sm" disabled={disabled || !value} onClick={onLoad}>
         {buttonLabel}
       </Button>
@@ -142,6 +155,8 @@ export function HumanToRobotView({
   onCalibrationInteraction,
   comparisonPreset,
   onComparisonPresetChange,
+  onOpenMotionLibrary,
+  onOpenRobotLibrary,
 }: HumanToRobotViewProps) {
   const [motionEntries, setMotionEntries] = useState<
     readonly MotionLibraryEntry[]
@@ -626,6 +641,8 @@ export function HumanToRobotView({
             value={motionPath}
             disabled={Boolean(busy || session)}
             buttonLabel="Load motion"
+            importKind="motion"
+            onImport={onOpenMotionLibrary}
             onChange={setMotionPath}
             onLoad={selectMotion}
           >
@@ -649,6 +666,8 @@ export function HumanToRobotView({
             value={robotName}
             disabled={Boolean(busy || session)}
             buttonLabel="Load robot"
+            importKind="robot"
+            onImport={onOpenRobotLibrary}
             onChange={setRobotName}
             onLoad={selectRobot}
           >

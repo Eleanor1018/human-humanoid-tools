@@ -45,6 +45,7 @@ may improve spacing, rounded corners, accessibility, and narrow-screen layout.
   - [x] Keep workflow navigation explicit and remove application-level shortcuts.
   - [x] Refresh R2R robot and trajectory catalogs whenever the workspace is entered.
   - [x] Restore compact Motion, Robot, and calibration validation summaries.
+  - [x] Link H2R/R2R asset selectors back to the owning import workspaces.
 - [x] Run route-contract tests and desktop/narrow-screen browser smoke for every pipeline.
 
 ## Verification

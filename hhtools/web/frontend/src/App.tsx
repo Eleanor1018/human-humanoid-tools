@@ -519,6 +519,8 @@ export function App() {
             onComparisonPresetChange={(preset) =>
               changeComparisonPreset("h2r", preset)
             }
+            onOpenMotionLibrary={() => setActiveView("motion")}
+            onOpenRobotLibrary={() => setActiveView("robot-assets")}
           />
         </div>
         <div className={activeView === "r2r" ? "h-full" : "hidden"}>
@@ -541,6 +543,7 @@ export function App() {
             onComparisonPresetChange={(preset) =>
               changeComparisonPreset("r2r", preset)
             }
+            onOpenRobotLibrary={() => setActiveView("robot-assets")}
           />
         </div>
         <div className={activeView === "batch" ? "h-full" : "hidden"}>
