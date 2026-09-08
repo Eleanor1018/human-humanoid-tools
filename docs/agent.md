@@ -9,11 +9,13 @@ agent should discover and call tools directly.
 | JSON CLI | Client of a running WebUI Agent API | `uv run hhtools agent ...` |
 | MCP | Own local stdio process; no WebUI required | `uv run --extra mcp hhtools-mcp` |
 
-The current Agent surface supports plain human-to-robot (H2R) retargeting:
-capability and robot discovery, allowlisted asset registration and inspection,
-preflight, jobs, revision-aware waiting, verified artifacts, and export. R2R, Batch, Video2Motion,
-Analysis, Interaction-Mesh, remote service access, and robot deployment are not
-part of this interface.
+The current Agent surface supports human-to-robot (H2R) retargeting: plain motion through
+Newton and safely inspectable object-interaction or terrain-scene bundles through
+Interaction-Mesh. It includes capability and robot discovery, allowlisted asset registration
+and inspection, preflight, jobs, revision-aware waiting, verified artifacts, and export. R2R,
+Batch, Video2Motion, Analysis, remote service access, and robot deployment are not part of this
+interface. Code-capable source formats still require safe content inspection; the Agent never
+bypasses an isolated-validation requirement.
 
 ## Install
 

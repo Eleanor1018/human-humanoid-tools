@@ -15,6 +15,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+from hhtools.io.mimic_detect import is_omomo_pkl, is_parc_ms_pkl
+
 _MOTION_EXTS = (".bvh", ".glb", ".gltf", ".npz", ".npy", ".pkl", ".pt")
 _MIMIC_PRIORITY = (".npz", ".bvh", ".glb", ".gltf", ".npy", ".pkl", ".pt")
 
@@ -25,23 +27,6 @@ def _is_sidecar_pkl(pkl: Path) -> bool:
     return any(
         (parent / f"{stem}{ext}").is_file() for ext in (".npz", ".npy", ".bvh", ".glb", ".gltf")
     )
-
-
-def _is_omomo_pkl(pkl: Path) -> bool:
-    """OMOMO / intermimic clip — not parc_ms meshmimic."""
-    parent = pkl.parent
-    stem = pkl.stem
-    if (parent / f"{stem}_cleaned_simplified.obj").is_file():
-        return True
-    return any(parent.glob("*_cleaned_simplified.obj"))
-
-
-def _is_parc_ms_pkl(pkl: Path) -> bool:
-    parent = pkl.parent
-    stem = pkl.stem
-    if (parent / f"{stem}_terrain.obj").is_file():
-        return True
-    return parent.name == stem
 
 
 def _is_parc_ms_npz(npz: Path) -> bool:
@@ -77,9 +62,9 @@ def _find_meshmimic_primaries(drop_dir: Path) -> list[tuple[str, Path]]:
         if npz.is_file() and _is_parc_ms_npz(npz):
             by_dir[npz.parent] = ("npz", npz)
     for pkl in sorted(drop_dir.rglob("*.pkl")):
-        if not pkl.is_file() or _is_sidecar_pkl(pkl) or _is_omomo_pkl(pkl):
+        if not pkl.is_file() or _is_sidecar_pkl(pkl) or is_omomo_pkl(pkl):
             continue
-        if not _is_parc_ms_pkl(pkl):
+        if not is_parc_ms_pkl(pkl):
             continue
         if pkl.parent not in by_dir:
             by_dir[pkl.parent] = ("pkl", pkl)

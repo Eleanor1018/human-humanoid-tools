@@ -98,6 +98,20 @@ def assemble_agent_services(
         for child in workspace_robot_root.iterdir()
     ):
         agent_robot_roots["workspace-robots"] = workspace_robot_root
+
+    def _agent_robot_provider():
+        from hhtools.robot.registry import list_presets_in_root_readonly
+
+        presets = []
+        seen: set[str] = set()
+        for provider in agent_robot_roots.values():
+            root = _resolved_catalog_root(provider)
+            for preset in list_presets_in_root_readonly(root):
+                if preset.name in seen:
+                    continue
+                seen.add(preset.name)
+                presets.append(preset)
+        return presets
     services.agent_legacy_root_locator = DynamicRootLocator(
         motion_roots=agent_motion_roots,
         robot_roots=agent_robot_roots,
@@ -284,7 +298,12 @@ def assemble_agent_services(
         path = resolved.source_path
         dataset = resolved.dataset
         suffix = path.suffix.casefold()
-        if dataset in {"omomo", "omnicontact"}:
+        if suffix == ".npz" and dataset in {"omomo", "omnicontact", "parc_ms"}:
+            from hhtools.io.npz import load_npz
+
+            motion = load_npz(path)
+            loaded_dataset = dataset
+        elif dataset in {"omomo", "omnicontact"}:
             motion, loaded_dataset = _load_intermimic(path)
         elif dataset == "parc_ms":
             motion, loaded_dataset = _load_meshmimic(
@@ -568,6 +587,7 @@ def assemble_agent_services(
     )
     services.agent_capabilities_service = CapabilitiesService(
         scheduler_snapshot=scheduler.snapshot,
+        robot_provider=_agent_robot_provider,
         asset_root_provider=lambda: services.agent_asset_service.allowed_root_ids,
         available_asset_catalog_available=True,
         preflight_available=True,
@@ -582,6 +602,7 @@ def assemble_agent_services(
         services.agent_asset_service,
         services.agent_plan_store,
         capabilities_provider=services.agent_capabilities_service.get_capabilities,
+        robot_provider=_agent_robot_provider,
     )
     # Phase 4's REST/JSON-CLI adapters call this exact transport-neutral
     # service instance; they do not reimplement path migration or construct

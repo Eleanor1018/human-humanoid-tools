@@ -1,6 +1,6 @@
 ---
 name: hhtools-agent
-description: "Run local HHTools human-to-humanoid (H2R) retargeting through the versioned MCP Agent interface: discover capabilities, register or inspect allowlisted motion and robot assets, preflight immutable smoke/full plans, pause for calibration, manage jobs, and review verified artifacts. Use for HHTools H2R execution, status, cancellation, retry, or result requests. Do not use for UI or solver-code edits, R2R, Batch, Interaction-Mesh, arbitrary filesystem access, remote service setup, or real-robot deployment."
+description: "Run local HHTools human-to-humanoid (H2R) retargeting through the versioned MCP Agent interface: discover capabilities, register or inspect allowlisted motion and robot assets, preflight immutable Newton or Interaction-Mesh smoke/full plans, pause for calibration, manage jobs, and review verified artifacts. Use for HHTools H2R execution, status, cancellation, retry, or result requests. Do not use for UI or solver-code edits, R2R, Batch, arbitrary filesystem access, remote service setup, or real-robot deployment."
 ---
 
 # HHTools Agent
@@ -43,9 +43,10 @@ token.
    - Register only with `register_asset_bundle` using the catalog's portable identity.
    - Call `inspect_asset_bundle` with hash verification and parsing enabled for every selected
      motion and robot bundle. Stop on `invalid`; surface warnings before continuing.
-   - Continue only when the motion inspection category is `plain_motion` and neither the
-     selected nor recommended backend is `interaction_mesh`. Stop on `object_interaction`,
-     `terrain_scene`, or Interaction-Mesh routing; this skill has no validated workflow for them.
+   - Continue only when category and backend agree: `plain_motion` uses `newton`, while
+     `object_interaction` and `terrain_scene` use `interaction_mesh`. Never override the
+     inspected routing identity. Stop when content inspection requires isolated validation;
+     do not decode a rejected code-capable source format yourself.
    - Select a supported `robot_id` from `list_robots` or the capability snapshot and pair it with
      the inspected robot bundle's `asset_id`. Do not guess either identity.
 3. Call `preflight_retarget` with a versioned `RetargetPreflightRequest`. Put
@@ -103,7 +104,7 @@ not validate against the live tool schema, stop and present the contract error.
 |---|---|
 | `MCP_ONLY` | Use HHTools MCP tools/resources only; never fall back to shell, JSON CLI, REST, or direct service imports. |
 | `ALLOWLISTED_ASSETS` | Asset registration accepts only a capability-advertised `root_id` plus normalized `relative_path`, never an arbitrary or absolute path. |
-| `PLAIN_H2R_ONLY` | Start new jobs only for inspected `plain_motion` assets on a non-`interaction_mesh` route; stop on object interaction, terrain scenes, or Interaction-Mesh. |
+| `H2R_BACKEND_ROUTING` | Use `newton` only for inspected `plain_motion`; use `interaction_mesh` only for inspected object interaction or terrain scenes, and never bypass isolated content validation. |
 | `PREFLIGHT_OWNS_MODE` | `run_mode` belongs in preflight `request.parameters`; `start_retarget` accepts only `plan_id` and `idempotency_key`. |
 | `OUTPUT_CREATE_NEW` | Use `output_policy: create_new`; other output policies are unsupported in the current H2R Agent service. |
 | `IDEMPOTENT_START` | Persist the exact plan and idempotency key, recover with `lookup_job`, and replay an ambiguous start only with that same plan and idempotency key; never create a second key for the same logical submission. |

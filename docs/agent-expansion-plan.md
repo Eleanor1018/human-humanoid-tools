@@ -16,7 +16,7 @@ Video-to-Motion 和 Analysis 暂不进入本轮实现。
 ## 实施状态
 
 - [x] 阶段 1：revision-aware `wait_job`（service、REST、MCP、JSON CLI、Agent skill）
-- [ ] 阶段 2：H2R Interaction-Mesh 正式验收
+- [x] 阶段 2：H2R Interaction-Mesh 正式验收（terrain 与 object 自包含 E2E）
 - [ ] 阶段 3：R2R
 - [ ] 阶段 4：H2R / R2R Batch
 - [ ] 阶段 5：标定辅助
@@ -132,11 +132,11 @@ JSON CLI 的既有 `--timeout` 表示整个 HTTP 请求超时，因此等待时�
 
 ## 阶段 2：H2R Interaction-Mesh 正式验收
 
-- 补齐 object-interaction 与 terrain-scene 的 Agent E2E fixtures；
-- 验证 backend 自动路由、manual calibration、输出格式和场景 artifact；
-- 验证取消、失败报告、execution provenance 和 portable export；
-- 更新 capability、Agent 文档和示例；
-- 完成之前继续标记为 experimental，不对外承诺正式支持。
+- [x] 补齐 object-interaction 与 terrain-scene 的自包含 MCP Agent E2E fixtures；
+- [x] 验证 backend 自动路由、manual calibration、CSV 场景 ZIP artifact；
+- [x] 验证 Interaction-Mesh 的协作取消、结构化失败报告与 execution provenance；
+- [x] 验证 portable export receipt、相对路径、hash 与场景 sidecar 内容；
+- [x] 更新 capability 验收、Agent 文档、skill 路由说明和示例。
 
 ## 阶段 3：R2R
 

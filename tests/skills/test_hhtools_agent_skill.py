@@ -84,13 +84,19 @@ def test_skill_has_minimal_repo_scoped_structure_and_trigger_metadata() -> None:
     metadata = _frontmatter(SKILL_FILE.read_text(encoding="utf-8"))
     assert metadata["name"] == SKILL_ROOT.name == "hhtools-agent"
     description = str(metadata["description"]).casefold()
-    for included_scope in ("h2r", "status", "cancellation", "retry", "result"):
+    for included_scope in (
+        "h2r",
+        "interaction-mesh",
+        "status",
+        "cancellation",
+        "retry",
+        "result",
+    ):
         assert included_scope in description
     for excluded_scope in (
         "solver-code edits",
         "r2r",
         "batch",
-        "interaction-mesh",
         "remote service setup",
         "real-robot deployment",
     ):
@@ -188,7 +194,7 @@ def test_workflow_invariants_preserve_transport_and_execution_boundaries() -> No
     assert set(rules) == {
         "MCP_ONLY",
         "ALLOWLISTED_ASSETS",
-        "PLAIN_H2R_ONLY",
+        "H2R_BACKEND_ROUTING",
         "PREFLIGHT_OWNS_MODE",
         "OUTPUT_CREATE_NEW",
         "IDEMPOTENT_START",
@@ -209,7 +215,7 @@ def test_workflow_invariants_preserve_transport_and_execution_boundaries() -> No
         for term in ("root_id", "relative_path", "absolute path")
     )
     assert all(
-        term in normalized["PLAIN_H2R_ONLY"]
+        term in normalized["H2R_BACKEND_ROUTING"]
         for term in ("plain_motion", "interaction_mesh", "object interaction", "terrain scenes")
     )
     assert all(
