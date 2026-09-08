@@ -47,32 +47,34 @@ hhtools 有三种交互式运行方式，另提供一个 Agent 自动化接口�
 
 ### 源码安装：终端或 WebUI
 
-克隆仓库，并使用 uv 管理的 Python 3.12 环境：
+克隆仓库，并使用任意兼容的 Python 3.12 或更高版本。`uv` 会优先选择本机已安装的
+兼容解释器，也可以在缺少解释器时安装一个：
 
 ```bash
 git clone https://github.com/Roboparty/human-humanoid-tools.git
 cd human-humanoid-tools
 curl -LsSf https://astral.sh/uv/install.sh | sh   # 若未安装
+# 本机没有 Python >=3.12 时才需要：
 uv python install 3.12
 ```
 
 只使用终端命令时：
 
 ```bash
-uv sync --locked --managed-python --python 3.12
+uv sync --locked
 uv run hhtools --help
 ```
 
-请按实际工作流安装额外依赖。如果需要所有可选的终端格式、查看器、机器人和重映射集成，使用：
+请按实际工作流安装额外依赖。如果需要全部格式、机器人、重映射、Web 与 Agent 集成，使用：
 
 ```bash
-uv sync --locked --managed-python --python 3.12 --extra all
+uv sync --locked --extra all
 ```
 
 使用浏览器 WebUI 时：
 
 ```bash
-uv sync --locked --managed-python --python 3.12 --extra web --extra retarget
+uv sync --locked --extra web --extra retarget
 uv run hhtools web
 ```
 

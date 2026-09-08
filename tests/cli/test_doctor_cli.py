@@ -4,6 +4,7 @@ import json
 import subprocess
 import sys
 
+from click import unstyle
 from typer.testing import CliRunner
 
 from hhtools.cli import doctor
@@ -11,12 +12,13 @@ from hhtools.cli import doctor
 
 def test_doctor_help_lists_repeatable_requirements() -> None:
     result = CliRunner().invoke(doctor.app, ["--help"])
+    help_text = unstyle(result.stdout)
 
     assert result.exit_code == 0
-    assert "--json" in result.stdout
-    assert "--require" in result.stdout
-    assert "web|robot|retarget|mcp" in result.stdout
-    assert "models|gvhmr" in result.stdout
+    assert "--json" in help_text
+    assert "--require" in help_text
+    assert "web|robot|retarget|mcp" in help_text
+    assert "models|gvhmr" in help_text
 
 
 def test_doctor_json_is_one_document_with_empty_stderr() -> None:

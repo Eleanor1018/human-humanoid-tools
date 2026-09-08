@@ -17,14 +17,14 @@ part of this interface.
 
 ## Install
 
-Use Python 3.12 and install the adapter you need:
+Use any compatible Python 3.12 or newer and install the adapter you need:
 
 ```bash
 # JSON CLI plus the resident WebUI service
-uv sync --locked --managed-python --python 3.12 --extra web --extra retarget
+uv sync --locked --extra web --extra retarget
 
 # Self-contained local MCP H2R server
-uv sync --locked --managed-python --python 3.12 --extra mcp
+uv sync --locked --extra mcp
 ```
 
 After installation, `uv run hhtools doctor --require mcp` provides a
