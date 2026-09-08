@@ -10,7 +10,12 @@ interface DesktopPackage {
     productName: string
     extraResources: Array<{ from: string; to: string }>
     linux: { executableName: string }
-    deb: { fpm: string[]; afterInstall?: string; afterRemove?: string }
+    deb: {
+      depends: string[]
+      fpm: string[]
+      afterInstall?: string
+      afterRemove?: string
+    }
     nsis: { include?: string }
   }
 }
@@ -55,5 +60,11 @@ describe('Linux package entry points', () => {
     expect(beforeInstall).toContain("legacy_gui='/opt/Human-Humanoid Tools/hhtools'")
     expect(beforeInstall).toContain('update-alternatives --remove hhtools "$legacy_gui"')
     expect(beforeInstall).toContain('sudo apt-get -f install')
+  })
+
+  it('declares Electron libraries absent from minimal Ubuntu 22.04', () => {
+    expect(packageMetadata.build.deb.depends).toEqual(
+      expect.arrayContaining(['libgbm1', 'libasound2'])
+    )
   })
 })
