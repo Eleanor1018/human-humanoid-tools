@@ -46,7 +46,19 @@ const STATUS_STYLES: Readonly<
 };
 
 const TASK_ACTION_CLASS =
-  "self-center shrink-0 border-0 bg-transparent p-0 text-[11px] text-muted-foreground transition-colors hover:text-foreground focus-visible:rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:cursor-default disabled:opacity-40 disabled:hover:text-muted-foreground max-[560px]:col-start-2 max-[560px]:justify-self-start";
+  "inline-flex items-center gap-0.5 self-center shrink-0 border-0 bg-transparent p-0 text-[11px] text-primary transition-colors hover:text-primary/80 focus-visible:rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:cursor-default disabled:text-muted-foreground disabled:opacity-40 disabled:hover:text-muted-foreground max-[560px]:col-start-2 max-[560px]:justify-self-start";
+
+function ExportLabel({ text }: { readonly text: (en: string, zh: string) => string }) {
+  return (
+    <>
+      <span>{text("Export", "导出")}</span>
+      <span
+        className="size-3 -rotate-90 bg-current [mask:url(/icons/common/chevron-down.svg)_center/contain_no-repeat] [-webkit-mask:url(/icons/common/chevron-down.svg)_center/contain_no-repeat]"
+        aria-hidden="true"
+      />
+    </>
+  );
+}
 
 const PARAMETER_LABELS: Readonly<Record<string, readonly [string, string]>> = {
   robot: ["Robot", "机器人"],
@@ -389,7 +401,7 @@ export function TaskDrawer() {
                           href={taskDownloadUrl(task.id)}
                           download={downloadName(task)}
                         >
-                          {text("Export", "导出")}
+                          <ExportLabel text={text} />
                         </a>
                       ) : (
                         <button
@@ -401,7 +413,7 @@ export function TaskDrawer() {
                             "工作流完成后可导出",
                           )}
                         >
-                          {text("Export", "导出")}
+                          <ExportLabel text={text} />
                         </button>
                       ))}
                   </article>
