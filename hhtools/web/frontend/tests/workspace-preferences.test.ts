@@ -4,7 +4,9 @@ import test from "node:test";
 import {
   WORKSPACE_LOCALE_STORAGE_KEY,
   storedLocale,
+  storedLocaleOverride,
   storeLocale,
+  systemLocale,
 } from "../src/localization.ts";
 import {
   DEFAULT_WORKSPACE_LAYOUT,
@@ -35,6 +37,15 @@ test("locale restores legacy preferences and otherwise follows Chinese browsers"
   );
   assert.equal(storedLocale(undefined, ["zh-Hans-SG", "en-US"]), "zh-CN");
   assert.equal(storedLocale(undefined, ["fr-FR"]), "en");
+  assert.equal(systemLocale(["zh-Hans-SG", "en-US"]), "zh-CN");
+  assert.equal(systemLocale(["en-US", "zh-CN"]), "en");
+  assert.equal(storedLocaleOverride(undefined), null);
+  assert.equal(
+    storedLocaleOverride(
+      storage({ [WORKSPACE_LOCALE_STORAGE_KEY]: '{"locale":"en"}' }),
+    ),
+    "en",
+  );
 });
 
 test("locale writes preserve other legacy workspace preferences", () => {

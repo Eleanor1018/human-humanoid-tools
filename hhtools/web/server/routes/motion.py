@@ -13,6 +13,7 @@ from pathlib import Path
 from fastapi import File, HTTPException, UploadFile
 from fastapi.responses import Response
 
+from hhtools.web.output.export_bundle import ensure_export_path
 from hhtools.web.server.boundary import _safe_upload_directory_name
 from hhtools.web.server.export_runtime import _parse_optional_fps
 from hhtools.web.server.library_runtime import (
@@ -399,11 +400,28 @@ def register_motion_routes(
                     "linked_folder": folder_label,
                 },
             )
+            artifact_dir = ensure_export_path(
+                state.export_root,
+                state.export_root / job.id,
+            )
+            artifact_dir.mkdir(parents=True, exist_ok=True)
+            artifact_path = ensure_export_path(
+                state.export_root,
+                artifact_dir / result_path.name,
+            )
+            shutil.copy2(result_path, artifact_path)
+            payload["artifact_path"] = str(artifact_path)
+            payload["download_name"] = result_path.name
             job.result = payload
             job.progress = 1.0
             job.message = "视频动作生成完成"
             job.mark_terminal("done")
         except Exception as err:  # noqa: BLE001
+            artifact_dir = state.export_root / job.id
+            if artifact_dir.is_symlink() or artifact_dir.is_file():
+                artifact_dir.unlink(missing_ok=True)
+            else:
+                shutil.rmtree(artifact_dir, ignore_errors=True)
             _log.exception("GVHMR video-to-motion job failed")
             job.error = str(err)
             job.mark_terminal("error")

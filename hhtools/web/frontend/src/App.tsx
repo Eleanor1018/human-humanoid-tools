@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -8,9 +9,8 @@ import {
 } from "react";
 
 import {
-  PROJECT_README_URL,
-  THEME_STORAGE_KEY,
-  storedTheme,
+  storeTheme,
+  storedThemeOverride,
   viewForImport,
   type ApplicationImportRequest,
   type ApplicationImportTarget,
@@ -23,10 +23,12 @@ import {
 import { Inspector } from "./components/Inspector";
 import { Navbar } from "./components/Navbar";
 import { Sidebar } from "./components/Sidebar";
+import { TutorialOverlay } from "./components/TutorialOverlay";
 import { LocaleProvider } from "./LocaleProvider";
 import {
-  storedLocale,
   storeLocale,
+  storedLocaleOverride,
+  systemLocale,
   type WorkspaceLocale,
 } from "./localization";
 import { MotionView } from "./features/motion/MotionView";
@@ -34,7 +36,17 @@ import type { MotionLibraryEntry } from "./features/motion/api";
 import { BatchView } from "./features/batch/BatchView";
 import { AnalysisView } from "./features/analysis/AnalysisView";
 import type { AnalysisRobotPreview } from "./features/analysis/api";
+import {
+  storedForceReanalysis,
+  storeForceReanalysis,
+} from "./features/analysis/preferences";
 import { RobotView } from "./features/robot/RobotView";
+import {
+  rememberTutorialSeen,
+  shouldAutoOpenTutorial,
+  type TutorialPersistenceBridge,
+  type TutorialStep,
+} from "./features/tutorial/model";
 import { HumanToRobotView } from "./features/h2r/HumanToRobotView";
 import {
   retargetExportUrl,
@@ -104,8 +116,7 @@ function calibrationTrajectory(
   };
 }
 
-interface ApplicationDesktopBridge {
-  readonly openExternal?: (url: string) => Promise<void>;
+interface ApplicationDesktopBridge extends Partial<TutorialPersistenceBridge> {
   readonly exitApplication?: () => Promise<void>;
   readonly selectDirectory?: () => Promise<string | null>;
 }
@@ -116,21 +127,51 @@ function desktopBridge(): ApplicationDesktopBridge | undefined {
   ).hhtoolsDesktop;
 }
 
+function preferredSystemTheme(): ApplicationTheme {
+  return typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-color-scheme: dark)").matches
+    ? "dark"
+    : "light";
+}
+
+function preferredSystemLocale(): WorkspaceLocale {
+  return systemLocale([
+    ...window.navigator.languages,
+    window.navigator.language,
+  ]);
+}
+
 export function App() {
+  const themeOverride = useRef<ApplicationTheme | null | undefined>(undefined);
+  const localeOverride = useRef<WorkspaceLocale | null | undefined>(undefined);
+  if (themeOverride.current === undefined) {
+    themeOverride.current = storedThemeOverride(window.localStorage);
+  }
+  if (localeOverride.current === undefined) {
+    localeOverride.current = storedLocaleOverride(window.localStorage);
+  }
+
   const [activeView, setActiveView] = useState<ViewId>("motion");
   const [theme, setTheme] = useState<ApplicationTheme>(() =>
-    storedTheme(window.localStorage),
+    themeOverride.current ?? preferredSystemTheme(),
   );
   const [locale, setLocale] = useState<WorkspaceLocale>(() =>
-    storedLocale(window.localStorage, [
-      ...window.navigator.languages,
-      window.navigator.language,
-    ]),
+    localeOverride.current ?? preferredSystemLocale(),
   );
   const [layout, setLayout] = useState(() =>
     storedWorkspaceLayout(window.localStorage),
   );
+  const [forceAnalysis, setForceAnalysis] = useState(() =>
+    storedForceReanalysis(window.localStorage),
+  );
   const [dialog, setDialog] = useState<ApplicationDialog>(null);
+  const [tutorialOpen, setTutorialOpen] = useState(false);
+  const [tutorialStep, setTutorialStep] = useState<TutorialStep["id"] | null>(
+    null,
+  );
+  const tutorialCheck = useRef<Promise<boolean> | null>(null);
+  const tutorialAutoTimer = useRef(0);
+  const tutorialHandled = useRef(false);
   const [importRequest, setImportRequest] =
     useState<ApplicationImportRequest | null>(null);
   const nextImportRequestId = useRef(0);
@@ -191,23 +232,79 @@ export function App() {
       storedComparisonPreset(window.localStorage, "r2r"),
     );
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     document.documentElement.dataset.theme = theme;
-    try {
-      window.localStorage.setItem(THEME_STORAGE_KEY, theme);
-    } catch {
-      // Private browser contexts can reject storage; the live theme still works.
-    }
   }, [theme]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     document.documentElement.lang = locale;
-    storeLocale(window.localStorage, locale);
   }, [locale]);
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return undefined;
+    const preference = window.matchMedia("(prefers-color-scheme: dark)");
+    const syncSystemTheme = (event: MediaQueryListEvent) => {
+      if (themeOverride.current === null) {
+        setTheme(event.matches ? "dark" : "light");
+      }
+    };
+    preference.addEventListener("change", syncSystemTheme);
+    return () => preference.removeEventListener("change", syncSystemTheme);
+  }, []);
+
+  useEffect(() => {
+    const syncSystemLocale = () => {
+      if (localeOverride.current === null) {
+        setLocale(preferredSystemLocale());
+      }
+    };
+    window.addEventListener("languagechange", syncSystemLocale);
+    return () => window.removeEventListener("languagechange", syncSystemLocale);
+  }, []);
+
+  const toggleTheme = useCallback(() => {
+    const next = theme === "light" ? "dark" : "light";
+    themeOverride.current = next;
+    setTheme(next);
+    storeTheme(window.localStorage, next);
+  }, [theme]);
+
+  const changeLocale = useCallback((next: WorkspaceLocale) => {
+    localeOverride.current = next;
+    setLocale(next);
+    storeLocale(window.localStorage, next);
+  }, []);
 
   useEffect(() => {
     storeWorkspaceLayout(window.localStorage, layout);
   }, [layout]);
+
+  useEffect(() => {
+    storeForceReanalysis(window.localStorage, forceAnalysis);
+  }, [forceAnalysis]);
+
+  useEffect(() => {
+    tutorialCheck.current ??= shouldAutoOpenTutorial(
+      window.localStorage,
+      desktopBridge(),
+    );
+    let active = true;
+    void tutorialCheck.current.then(async (shouldOpen) => {
+      if (!active) return;
+      await rememberTutorialSeen(window.localStorage, desktopBridge());
+      if (!active || !shouldOpen || tutorialHandled.current) return;
+      tutorialAutoTimer.current = window.setTimeout(
+        () => {
+          if (!tutorialHandled.current) setTutorialOpen(true);
+        },
+        400,
+      );
+    });
+    return () => {
+      active = false;
+      window.clearTimeout(tutorialAutoTimer.current);
+    };
+  }, []);
 
   const requestImport = useCallback((target: ApplicationImportTarget) => {
     setActiveView(viewForImport(target));
@@ -229,13 +326,22 @@ export function App() {
         : null;
 
   const openTutorial = useCallback(() => {
-    const bridge = desktopBridge();
-    if (bridge?.openExternal) {
-      void bridge.openExternal(PROJECT_README_URL);
-      return;
-    }
-    window.open(PROJECT_README_URL, "_blank", "noopener,noreferrer");
+    tutorialHandled.current = true;
+    window.clearTimeout(tutorialAutoTimer.current);
+    setDialog(null);
+    setTutorialOpen(true);
+    void rememberTutorialSeen(window.localStorage, desktopBridge());
   }, []);
+  const closeTutorial = useCallback(() => {
+    tutorialHandled.current = true;
+    window.clearTimeout(tutorialAutoTimer.current);
+    setTutorialStep(null);
+    setTutorialOpen(false);
+  }, []);
+  const changeTutorialStep = useCallback(
+    (step: TutorialStep) => setTutorialStep(step.id),
+    [],
+  );
 
   const changeComparisonPreset = useCallback(
     (workflow: "h2r" | "r2r", preset: ComparisonPreset) => {
@@ -456,6 +562,9 @@ export function App() {
     workspaceRobot,
   ]);
 
+  const sidebarHidden = tutorialOpen ? false : layout.sidebarHidden;
+  const inspectorHidden = tutorialOpen ? false : layout.inspectorHidden;
+
   return (
     <LocaleProvider locale={locale}>
       <div
@@ -463,16 +572,16 @@ export function App() {
         className="grid h-dvh min-h-0 min-w-0"
         style={
           {
-            "--workspace-sidebar-wide": layout.sidebarHidden ? "0px" : "208px",
-            "--workspace-sidebar-compact": layout.sidebarHidden ? "0px" : "64px",
-            "--workspace-inspector": layout.inspectorHidden ? "0px" : "360px",
+            "--workspace-sidebar-wide": sidebarHidden ? "0px" : "208px",
+            "--workspace-sidebar-compact": sidebarHidden ? "0px" : "64px",
+            "--workspace-inspector": inspectorHidden ? "0px" : "360px",
           } as CSSProperties
         }
         data-hhtools-ready="true"
         data-active-view={activeView}
         data-theme={theme}
-        data-sidebar-hidden={layout.sidebarHidden}
-        data-inspector-hidden={layout.inspectorHidden}
+        data-sidebar-hidden={sidebarHidden}
+        data-inspector-hidden={inspectorHidden}
       >
       <Navbar
         locale={locale}
@@ -483,9 +592,7 @@ export function App() {
         onImport={requestImport}
         onExportResult={() => exportLink.current?.click()}
         onOpenSettings={() => setDialog("settings")}
-        onToggleTheme={() =>
-          setTheme((current) => (current === "light" ? "dark" : "light"))
-        }
+        onToggleTheme={toggleTheme}
         onOpenTutorial={openTutorial}
         onOpenAbout={() => setDialog("about")}
         onExitApplication={() => void desktopBridge()?.exitApplication?.()}
@@ -493,7 +600,7 @@ export function App() {
       <Sidebar
         activeView={activeView}
         locale={locale}
-        hidden={layout.sidebarHidden}
+        hidden={sidebarHidden}
         onSelect={setActiveView}
       />
       <Stage
@@ -521,7 +628,7 @@ export function App() {
               : null
         }
       />
-      <Inspector hidden={layout.inspectorHidden}>
+      <Inspector hidden={inspectorHidden}>
         <div className={activeView === "motion" ? "h-full" : "hidden"}>
           <MotionView
             currentMotion={workspaceMotion}
@@ -567,6 +674,13 @@ export function App() {
             onComparisonPresetChange={(preset) =>
               changeComparisonPreset("h2r", preset)
             }
+            forceCalibrationOpen={
+              tutorialOpen && tutorialStep === "calibration"
+            }
+            forceResultOpen={
+              tutorialOpen &&
+              (tutorialStep === "retarget" || tutorialStep === "export")
+            }
             onOpenMotionLibrary={() => setActiveView("motion")}
             onOpenRobotLibrary={() => setActiveView("robot-assets")}
           />
@@ -604,15 +718,13 @@ export function App() {
         </div>
         <div className={activeView === "dataset-viz" ? "h-full" : "hidden"}>
           <AnalysisView
+            forceAnalysis={forceAnalysis}
             onMotionLoaded={publishAnalysisMotion}
             onRobotPreviewLoaded={publishAnalysisRobotPreview}
           />
         </div>
       </Inspector>
-      <TaskDrawer
-        canExportResult={currentExportUrl !== null}
-        onExportResult={() => exportLink.current?.click()}
-      />
+      <TaskDrawer />
       <a
         ref={exportLink}
         className="hidden"
@@ -625,13 +737,15 @@ export function App() {
         locale={locale}
         sidebarHidden={layout.sidebarHidden}
         inspectorHidden={layout.inspectorHidden}
-        onLocaleChange={setLocale}
+        forceAnalysis={forceAnalysis}
+        onLocaleChange={changeLocale}
         onSidebarHiddenChange={(hidden) =>
           setLayout((current) => ({ ...current, sidebarHidden: hidden }))
         }
         onInspectorHiddenChange={(hidden) =>
           setLayout((current) => ({ ...current, inspectorHidden: hidden }))
         }
+        onForceAnalysisChange={setForceAnalysis}
         onResetLayout={() => setLayout(DEFAULT_WORKSPACE_LAYOUT)}
         onMotionLibraryChange={() =>
           setMotionLibraryRevision((revision) => revision + 1)
@@ -640,6 +754,13 @@ export function App() {
           setGvhmrRevision((revision) => revision + 1)
         }
         onClose={() => setDialog(null)}
+      />
+      <TutorialOverlay
+        open={tutorialOpen}
+        locale={locale}
+        onNavigate={setActiveView}
+        onClose={closeTutorial}
+        onStepChange={changeTutorialStep}
       />
       </div>
     </LocaleProvider>

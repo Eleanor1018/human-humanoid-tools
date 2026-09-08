@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from hhtools.web import server
 from hhtools.web.server import state as server_state
+from hhtools.web.server.job_runtime import WebJobRuntime
 
 
 def _create_test_app(tmp_path: Path, monkeypatch):
@@ -91,6 +94,123 @@ def test_job_list_returns_compact_newest_first_records(
         assert "request" not in payload["jobs"][0]
         assert "result" not in payload["jobs"][0]
         assert older.last_accessed_at == old_accessed
+
+
+@pytest.mark.parametrize(
+    ("kind", "filename", "media_type"),
+    [
+        ("video_to_motion", "hmr4d_results.pt", "application/octet-stream"),
+        ("retarget", "walk.csv", "text/csv"),
+        ("r2r_retarget", "r2r.csv", "text/csv"),
+        ("batch", "batch.zip", "application/zip"),
+    ],
+)
+def test_completed_job_artifact_download_survives_restart(
+    tmp_path: Path,
+    monkeypatch,
+    kind: str,
+    filename: str,
+    media_type: str,
+) -> None:
+    app = _create_test_app(tmp_path, monkeypatch)
+    state = app.state.session_state
+    artifact = state.export_root / kind / filename
+    artifact.parent.mkdir(parents=True)
+    artifact.write_bytes(b"result-bytes")
+    runtime = WebJobRuntime(
+        state,
+        app.state.job_scheduler,
+        max_retained_jobs=64,
+        job_ttl_seconds=60,
+    )
+    job = server_state.Job(
+        id=f"{kind}-artifact",
+        kind=kind,
+        result={"artifact_path": str(artifact), "download_name": filename},
+        on_terminal=runtime.persist_terminal,
+    )
+    with state.job_lock:
+        state.jobs[job.id] = job
+    job.mark_terminal("done")
+
+    with TestClient(app) as client:
+        listed = next(
+            item for item in client.get("/api/jobs").json()["jobs"] if item["id"] == job.id
+        )
+        response = client.get(f"/api/job/{job.id}/download")
+
+        assert listed["can_download"] is True
+        assert response.content == b"result-bytes"
+        assert response.headers["content-type"].startswith(media_type)
+        assert filename in response.headers["content-disposition"]
+
+    restarted = _create_test_app(tmp_path, monkeypatch)
+    with TestClient(restarted) as client:
+        listed = next(
+            item for item in client.get("/api/jobs").json()["jobs"] if item["id"] == job.id
+        )
+        response = client.get(f"/api/job/{job.id}/download")
+
+        assert listed["scope"] == "persistent"
+        assert listed["can_download"] is True
+        assert response.content == b"result-bytes"
+        assert response.headers["content-type"].startswith(media_type)
+
+
+def test_terminal_status_waits_for_artifact_adoption(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    app = _create_test_app(tmp_path, monkeypatch)
+    state = app.state.session_state
+    artifact = state.export_root / "result.zip"
+    artifact.write_bytes(b"result-bytes")
+    runtime = WebJobRuntime(
+        state,
+        app.state.job_scheduler,
+        max_retained_jobs=64,
+        job_ttl_seconds=60,
+    )
+    adoption_started = threading.Event()
+    allow_adoption = threading.Event()
+    original_adopt = state.job_history.adopt_artifact
+
+    def blocking_adopt(*args, **kwargs):
+        adoption_started.set()
+        if not allow_adoption.wait(timeout=2):
+            raise TimeoutError("test did not release artifact adoption")
+        return original_adopt(*args, **kwargs)
+
+    monkeypatch.setattr(state.job_history, "adopt_artifact", blocking_adopt)
+    job = server_state.Job(
+        id="ordered-artifact",
+        kind="batch",
+        result={"artifact_path": str(artifact), "download_name": artifact.name},
+        on_terminal=runtime.persist_terminal,
+    )
+    with state.job_lock:
+        state.jobs[job.id] = job
+
+    worker = threading.Thread(target=job.mark_terminal, args=("done",))
+    with TestClient(app) as client:
+        worker.start()
+        try:
+            assert adoption_started.wait(timeout=2)
+            visible = client.get(f"/api/job/{job.id}").json()
+            assert visible["status"] == "running"
+            assert visible["can_download"] is False
+            assert visible["result"]["artifact_path"] == str(artifact)
+        finally:
+            allow_adoption.set()
+            worker.join(timeout=2)
+
+        assert worker.is_alive() is False
+        visible = client.get(f"/api/job/{job.id}").json()
+        retained = Path(visible["result"]["artifact_path"])
+        assert visible["status"] == "done"
+        assert visible["can_download"] is True
+        assert retained.is_relative_to(state.job_history.artifacts_dir)
+        assert state.job_history.get(job.id)["artifact_path"] == str(retained)
 
 
 def test_job_config_and_status_expose_captured_request(

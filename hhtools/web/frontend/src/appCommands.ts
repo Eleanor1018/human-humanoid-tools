@@ -75,17 +75,41 @@ export const THEME_STORAGE_KEY = "hhtools.theme";
 export const PROJECT_README_URL =
   "https://github.com/Eleanor1018/human-humanoid-tools#readme";
 
+interface ThemeStorage {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+}
+
 export function viewForImport(target: ApplicationImportTarget): ViewId {
   return IMPORT_VIEWS[target];
 }
 
-export function storedTheme(
-  storage: Pick<Storage, "getItem"> | undefined,
-): ApplicationTheme {
+export function storedThemeOverride(
+  storage: Pick<ThemeStorage, "getItem"> | undefined,
+): ApplicationTheme | null {
   try {
-    return storage?.getItem(THEME_STORAGE_KEY) === "dark" ? "dark" : "light";
+    const stored = storage?.getItem(THEME_STORAGE_KEY);
+    return stored === "light" || stored === "dark" ? stored : null;
   } catch {
-    return "light";
+    return null;
+  }
+}
+
+export function storedTheme(
+  storage: Pick<ThemeStorage, "getItem"> | undefined,
+  systemTheme: ApplicationTheme = "light",
+): ApplicationTheme {
+  return storedThemeOverride(storage) ?? systemTheme;
+}
+
+export function storeTheme(
+  storage: Pick<ThemeStorage, "setItem"> | undefined,
+  theme: ApplicationTheme,
+): void {
+  try {
+    storage?.setItem(THEME_STORAGE_KEY, theme);
+  } catch {
+    // Restricted browser contexts can reject persistence; live state remains valid.
   }
 }
 
@@ -127,6 +151,17 @@ export function createApplicationMenus(
 ): readonly ApplicationMenu[] {
   const text = (english: string, chinese: string) =>
     localize(context.locale, english, chinese);
+  const exitCommands: readonly ApplicationCommand[] = context.canExitApplication
+    ? [
+        {
+          id: "exit-application",
+          label: text("Exit", "退出"),
+          detail: text("Close HHTOOLS", "关闭 HHTOOLS"),
+          dividerBefore: true,
+          run: context.onExitApplication,
+        },
+      ]
+    : [];
   return [
     {
       id: "file",
@@ -185,17 +220,7 @@ export function createApplicationMenus(
             : text("No exportable result", "没有可导出的结果"),
           run: context.onExportResult,
         },
-        {
-          id: "exit-application",
-          label: text("Exit", "退出"),
-          detail: text("Close HHTOOLS", "关闭 HHTOOLS"),
-          dividerBefore: true,
-          enabled: context.canExitApplication,
-          disabledReason: context.canExitApplication
-            ? undefined
-            : text("Desktop app only", "仅桌面应用可用"),
-          run: context.onExitApplication,
-        },
+        ...exitCommands,
       ],
     },
     {
@@ -279,7 +304,10 @@ export function createApplicationMenus(
         {
           id: "open-tutorial",
           label: text("Tutorial", "教程"),
-          detail: text("Open the project README", "打开项目说明"),
+          detail: text(
+            "Open the interactive workspace guide",
+            "打开交互式工作区教程",
+          ),
           run: context.onOpenTutorial,
         },
         {

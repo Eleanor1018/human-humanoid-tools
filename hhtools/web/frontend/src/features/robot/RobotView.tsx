@@ -310,7 +310,10 @@ export function RobotView({
 
   return (
     <InspectorPage title={text("Robot", "机器人")}>
-      <div className="flex shrink-0 flex-col gap-2.5">
+      <div
+        className="flex shrink-0 flex-col gap-2.5"
+        data-tutorial="robot-import"
+      >
         <ImportDropzone
           label={text("URDF import area", "URDF 导入区")}
           icon="/icons/robot/file.svg"

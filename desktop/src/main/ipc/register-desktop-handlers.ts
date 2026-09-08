@@ -12,6 +12,8 @@ export function registerDesktopHandlers(options: {
   getOptionalComponents: () => OptionalComponentsState
   restartBackend: () => Promise<RuntimeState>
   setupGvhmr: () => Promise<GvhmrSetupResult>
+  hasSeenTutorial: () => boolean
+  markTutorialSeen: () => void
 }): () => void {
   // Every handler applies the same WebContents, main-frame, and origin checks before doing work.
   const trusted = (event: Electron.IpcMainInvokeEvent): void =>
@@ -56,6 +58,14 @@ export function registerDesktopHandlers(options: {
     trusted(event)
     options.mainWindow.close()
   })
+  ipcMain.handle(DESKTOP_CHANNELS.hasSeenTutorial, (event) => {
+    trusted(event)
+    return options.hasSeenTutorial()
+  })
+  ipcMain.handle(DESKTOP_CHANNELS.markTutorialSeen, (event) => {
+    trusted(event)
+    options.markTutorialSeen()
+  })
 
   return () => {
     ipcMain.removeHandler(DESKTOP_CHANNELS.getRuntimeState)
@@ -65,5 +75,7 @@ export function registerDesktopHandlers(options: {
     ipcMain.removeHandler(DESKTOP_CHANNELS.selectDirectory)
     ipcMain.removeHandler(DESKTOP_CHANNELS.openExternal)
     ipcMain.removeHandler(DESKTOP_CHANNELS.exitApplication)
+    ipcMain.removeHandler(DESKTOP_CHANNELS.hasSeenTutorial)
+    ipcMain.removeHandler(DESKTOP_CHANNELS.markTutorialSeen)
   }
 }

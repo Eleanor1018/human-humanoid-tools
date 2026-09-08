@@ -14,6 +14,10 @@ const desktopApi: HHToolsDesktopApi = {
   exitApplication: async () => {
     await ipcRenderer.invoke(DESKTOP_CHANNELS.exitApplication)
   },
+  hasSeenTutorial: () => ipcRenderer.invoke(DESKTOP_CHANNELS.hasSeenTutorial),
+  markTutorialSeen: async () => {
+    await ipcRenderer.invoke(DESKTOP_CHANNELS.markTutorialSeen)
+  },
   onRuntimeStateChanged: (listener: (state: RuntimeState) => void) => {
     const wrapped = (_event: Electron.IpcRendererEvent, state: RuntimeState): void => listener(state)
     ipcRenderer.on(DESKTOP_CHANNELS.runtimeStateChanged, wrapped)

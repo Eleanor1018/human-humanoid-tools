@@ -32,6 +32,46 @@ import numpy as np
 
 _log = logging.getLogger(__name__)
 
+_WINDOWS_RESERVED_STEMS = frozenset(
+    {
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
+        *(f"COM{i}" for i in range(1, 10)),
+        *(f"LPT{i}" for i in range(1, 10)),
+    }
+)
+
+
+def sanitize_export_stem(stem: object) -> str:
+    """Return one portable filename component while retaining readable Unicode."""
+    raw = str(stem or "").strip().replace("\\", "/").rsplit("/", 1)[-1]
+    safe = "".join(
+        "_" if ord(char) < 32 or ord(char) == 127 or char in '<>:"|?*' else char
+        for char in raw
+    ).strip(" .")
+    safe = safe.encode("utf-8", errors="ignore")[:120].decode(
+        "utf-8",
+        errors="ignore",
+    ).rstrip(" .")
+    if not safe or safe in {".", ".."}:
+        safe = "export"
+    if safe.split(".", 1)[0].upper() in _WINDOWS_RESERVED_STEMS:
+        safe = f"_{safe}"
+    return safe
+
+
+def ensure_export_path(out_root: str | Path, candidate: str | Path) -> Path:
+    """Require an output path, including existing symlinks, to stay in ``out_root``."""
+    root = Path(out_root).resolve(strict=False)
+    path = Path(candidate)
+    try:
+        path.resolve(strict=False).relative_to(root)
+    except (OSError, ValueError) as err:
+        raise ValueError(f"export path escapes output root: {path}") from err
+    return path
+
 
 def motion_has_scene(motion) -> bool:
     return bool(getattr(motion, "terrain", None) is not None or getattr(motion, "objects", None))
@@ -52,16 +92,18 @@ def resolve_clip_export_dir(
     gain an extra ``clip/clip/`` nesting level.
     """
     out_root = Path(out_root)
+    stem = sanitize_export_stem(stem)
     if source_path is not None:
         parent = Path(source_path).resolve().parent
         if parent.name == stem:
             if out_root.name == stem:
-                return out_root
-            return out_root / stem
+                return ensure_export_path(out_root, out_root)
+            return ensure_export_path(out_root, out_root / stem)
         if has_scene:
-            return out_root / stem
-        return out_root
-    return out_root / stem if has_scene else out_root
+            return ensure_export_path(out_root, out_root / stem)
+        return ensure_export_path(out_root, out_root)
+    candidate = out_root / stem if has_scene else out_root
+    return ensure_export_path(out_root, candidate)
 
 
 OBJECT_CSV_HEADER = (
@@ -210,7 +252,12 @@ def _scaled_terrain(source_motion, smpl_scale: float, z_terrain: float):
         return terrain
 
 
-def _robot_pkl_blob(retargeted, joint_q: np.ndarray, sample_rate: float, meta: dict) -> dict[str, object]:
+def _robot_pkl_blob(
+    retargeted,
+    joint_q: np.ndarray,
+    sample_rate: float,
+    meta: dict,
+) -> dict[str, object]:
     joint_q_wxyz = np.empty_like(joint_q)
     joint_q_wxyz[:, :3] = joint_q[:, :3]
     joint_q_wxyz[:, 3] = joint_q[:, 6]
@@ -486,10 +533,8 @@ def resolve_export_frame_window(
         i0 = int(round(float(t_start) * sr))
     if t_end is not None:
         i1 = int(round(float(t_end) * sr))
-    if i0 < 0:
-        i0 = 0
-    if i1 > n:
-        i1 = n
+    i0 = max(i0, 0)
+    i1 = min(i1, n)
     if i0 >= n:
         raise ValueError(
             f"t_start={t_start!r}s is past clip end "
@@ -593,7 +638,11 @@ def apply_export_time_window(
         meta=meta,
     )
 
-    src_n = int(np.asarray(getattr(source_motion, "positions", np.zeros((0,)))).shape[0]) if source_motion is not None else 0
+    src_n = (
+        int(np.asarray(getattr(source_motion, "positions", np.zeros((0,)))).shape[0])
+        if source_motion is not None
+        else 0
+    )
     if source_motion is not None and src_n > 0 and src_n != jq.shape[0]:
         # Map retargeted frame window onto the source frame grid.
         src_i0 = int(round(i0 * src_n / jq.shape[0]))
@@ -652,6 +701,7 @@ def write_retarget_export_bundle(
 
     out_root = Path(out_root)
     out_root.mkdir(parents=True, exist_ok=True)
+    stem = sanitize_export_stem(stem)
     fmt = (fmt or "csv").lower()
     has_scene = motion_has_scene(source_motion)
 
@@ -698,19 +748,25 @@ def write_retarget_export_bundle(
             "format": "pkl",
             "retarget_backend": backend,
             "robot": _robot_pkl_blob(ret2, joint_q, sample_rate, meta),
-            "objects": _object_track_blobs(ret2, source_motion, smpl_scale=smpl_scale, z_offset=z_offset),
+            "objects": _object_track_blobs(
+                ret2,
+                source_motion,
+                smpl_scale=smpl_scale,
+                z_offset=z_offset,
+            ),
         }
         terrain_robot = _scaled_terrain(source_motion, smpl_scale, z_terrain)
         if terrain_robot is not None:
             blob["terrain_data"] = terrain_robot.to_ms_terrain_data_dict()
-        pkl_path = clip_dir / f"{stem}.pkl"
+        pkl_path = ensure_export_path(out_root, clip_dir / f"{stem}.pkl")
         with open(pkl_path, "wb") as f:
             pickle.dump(blob, f)
     else:
         from hhtools.io.robot_csv import save_robot_csv
 
+        trajectory_path = ensure_export_path(out_root, clip_dir / f"{stem}.csv")
         save_robot_csv(
-            clip_dir / f"{stem}.csv",
+            trajectory_path,
             robot=model,
             joint_q=joint_q,
             sample_rate=sample_rate,
@@ -737,7 +793,10 @@ def write_retarget_export_bundle(
         )
 
     if not has_scene:
-        return clip_dir / (f"{stem}.pkl" if fmt == "pkl" else f"{stem}.csv")
+        return ensure_export_path(
+            out_root,
+            clip_dir / (f"{stem}.pkl" if fmt == "pkl" else f"{stem}.csv"),
+        )
 
     if not pack_scene:
         _log.info(
@@ -752,7 +811,7 @@ def write_retarget_export_bundle(
     # ``clip_dir == out_root`` (batch upload layout: ``out/sub10/sub10/``):
     # the ``.zip`` is created *inside* the tree being walked and gets re-
     # included.  ``zip_directory`` always writes the archive beside ``clip_dir``.
-    zip_path = zip_directory(clip_dir, stem)
+    zip_path = ensure_export_path(out_root, zip_directory(clip_dir, stem))
     shutil.rmtree(clip_dir, ignore_errors=True)
     _log.info(
         "export bundle %s (meshes=%s, object_tracks=%s)",
@@ -778,15 +837,24 @@ def zip_directory(
     import zipfile
 
     src_dir = Path(src_dir)
-    archive_path = src_dir.parent / f"{zip_stem}.zip"
+    archive_root = src_dir.parent
+    ensure_export_path(archive_root, src_dir)
+    zip_stem = sanitize_export_stem(zip_stem)
+    archive_path = ensure_export_path(archive_root, archive_root / f"{zip_stem}.zip")
     if archive_path.exists():
         archive_path.unlink()
     compression = zipfile.ZIP_DEFLATED if compress else zipfile.ZIP_STORED
     kwargs: dict = {"compression": compression}
     if compress:
         kwargs["compresslevel"] = 3
+    members = sorted(src_dir.rglob("*"))
+    for path in members:
+        if path.is_symlink():
+            raise ValueError(f"export bundle contains a symlink: {path}")
+        if path.is_file():
+            ensure_export_path(src_dir, path)
     with zipfile.ZipFile(archive_path, "w", **kwargs) as zf:
-        for path in sorted(src_dir.rglob("*")):
+        for path in members:
             if path.is_file():
                 zf.write(path, path.relative_to(src_dir).as_posix())
     return archive_path

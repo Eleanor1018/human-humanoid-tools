@@ -20,6 +20,20 @@ interface TaskListResponse {
   readonly jobs: readonly TaskRecord[];
 }
 
+const RESULT_TASK_KINDS: ReadonlySet<string> = new Set([
+  "video_to_motion",
+  "retarget",
+  "r2r_retarget",
+  "batch",
+  "r2r_batch",
+]);
+
+export function canExportTaskResult(
+  task: Pick<TaskRecord, "kind" | "can_download">,
+): boolean {
+  return task.can_download && RESULT_TASK_KINDS.has(task.kind);
+}
+
 export async function listTasks(options: {
   readonly signal?: AbortSignal;
   readonly fetcher?: Fetcher;

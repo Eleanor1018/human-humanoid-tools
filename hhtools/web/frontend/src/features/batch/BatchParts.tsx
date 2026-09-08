@@ -199,7 +199,12 @@ export function EntryList({
         <span>
           {entries.length} {kind === "human" ? text("clips", "个动作") : text("trajectories", "条轨迹")}
         </span>
-        <Button size="sm" variant="danger" disabled={busy || !entries.length} onClick={onClear}>
+        <Button
+          size="sm"
+          variant="dangerOutline"
+          disabled={busy || !entries.length}
+          onClick={onClear}
+        >
           {text("Clear all", "全部清除")}
         </Button>
       </div>

@@ -322,7 +322,15 @@ export function VideoBatchView({
             <span>
               {completedCount} {text("ready", "就绪")} · {failedCount} {text("failed", "失败")}
             </span>
-            <Button size="sm" variant="danger" disabled={busy || !videos.length} onClick={() => { setVideos([]); setNotice(""); }}>
+            <Button
+              size="sm"
+              variant="dangerOutline"
+              disabled={busy || !videos.length}
+              onClick={() => {
+                setVideos([]);
+                setNotice("");
+              }}
+            >
               {text("Clear all", "全部清除")}
             </Button>
           </div>

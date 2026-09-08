@@ -14,7 +14,7 @@ may improve spacing, rounded corners, accessibility, and narrow-screen layout.
 | Robot to Robot | Complete | Source loading, calibration, comparison, diagnostics, and export are connected |
 | Batch | Functional | Run full solver smoke when the licensed/runtime dependencies are available |
 | Analysis | Complete | Scatter preview, stable filtering, histogram brushing, and removable upload basket are connected |
-| Application menu | Complete | Typed navigation, imports, current export, settings, help, theme, and desktop exit are connected |
+| Application menu | Complete | Typed navigation, imports, current export, settings, help, theme, and desktop-only exit are connected |
 
 ## Order
 
@@ -43,9 +43,13 @@ may improve spacing, rounded corners, accessibility, and narrow-screen layout.
   - [x] Connect the desktop Exit command through the trusted Electron IPC boundary.
   - [x] Connect all five application menus without global DOM commands.
   - [x] Keep workflow navigation explicit and remove application-level shortcuts.
+  - [x] Restore the nine-step React tutorial; show it automatically only on first entry and keep Help available for replay.
+  - [x] Keep File > Exit in the desktop GUI and omit it entirely from the WebUI.
   - [x] Restore language, panel layout, Motion Library, GVHMR, and job settings.
   - [x] Localize every Inspector workflow and shared workflow control in English and Chinese.
   - [x] Keep Batch ownership inside Batch; Motion no longer exposes an add-to-Batch action.
+  - [x] Persist Force re-analysis in Workspace Settings; Analysis only consumes the policy.
+  - [x] Expose cached analysis as the read-only Load existing result action.
   - [x] Restore About metadata, source, license, and contact information.
   - [x] Use shared refresh icons and semantic destructive-action colors.
   - [x] Keep feature refresh icons borderless in Motion, Robot, V2M, and Batch.
@@ -58,13 +62,15 @@ may improve spacing, rounded corners, accessibility, and narrow-screen layout.
   - [x] Refresh R2R robot and trajectory catalogs whenever the workspace is entered.
   - [x] Restore compact Motion, Robot, and calibration validation summaries.
   - [x] Link H2R/R2R asset selectors back to the owning import workspaces.
+  - [x] Keep Task result export on V2M, H2R, R2R, and Batch rows; retain new artifacts across restarts.
 - [x] Simplify Motion Library to search, type filtering, loading, and a Settings link.
 - [x] Run route-contract tests and desktop/narrow-screen browser smoke for every pipeline.
 
 ## Verification
 
-- Frontend: 96 tests passed; production build passed.
+- Frontend: 105 tests passed; production build passed.
 - Web backend: 277 tests passed; 2 dependency-gated tests skipped.
+- Task artifacts: 33 focused history, lifecycle, and export-path tests passed.
 - Desktop: 38 tests and the Electron window E2E passed.
 - Browser: desktop and 390 x 844 layouts have no overflow or panel overlap;
   Motion, all six built-in robots, H2R/R2R calibration, Analysis, and menus were

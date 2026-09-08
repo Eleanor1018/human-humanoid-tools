@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { useLocaleText } from "@/LocaleProvider";
+
 import {
   timelineDuration,
   type StagePlaybackRef,
@@ -61,6 +63,7 @@ export function Stage({
   calibrationInteraction?: CalibrationInteractionModel | null;
   layerPreset?: readonly StageLayerId[] | null;
 }) {
+  const text = useLocaleText();
   const [visibleLayers, setVisibleLayers] = useState<StageLayerId[]>([]);
   const [r2rVisibleLayers, setR2rVisibleLayers] = useState<StageLayerId[]>([]);
   const [cameraRevision, setCameraRevision] = useState(0);
@@ -177,7 +180,7 @@ export function Stage({
   return (
     <main
       className="app-content @container relative col-start-2 row-start-2 min-h-0 min-w-0 overflow-hidden bg-stage-canvas"
-      aria-label="Workspace content"
+      aria-label={text("Workspace content", "工作区内容")}
     >
       <StageCanvas
         motion={motion}
@@ -234,8 +237,8 @@ export function Stage({
           <button
             type="button"
             className="pointer-events-auto grid size-11 shrink-0 cursor-pointer place-items-center rounded-full border-[1.5px] border-primary/30 bg-surface/[.88] text-primary shadow-[0_1px_3px_rgba(0,0,0,0.08)] backdrop-blur-[20px] transition hover:border-primary hover:bg-primary/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring active:scale-95 @max-[520px]:size-[38px]"
-            aria-label="Reset view"
-            title="Reset view"
+            aria-label={text("Reset view", "回到默认视角")}
+            title={text("Reset view", "回到默认视角")}
             onClick={() => setCameraRevision((revision) => revision + 1)}
           >
             <span

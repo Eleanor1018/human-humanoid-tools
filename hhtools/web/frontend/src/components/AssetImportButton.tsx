@@ -21,6 +21,7 @@ export function AssetImportButton({
   return (
     <Button
       size="sm"
+      variant="primaryOutline"
       className="shrink-0 gap-1.5 px-2.5"
       aria-label={label}
       title={text(

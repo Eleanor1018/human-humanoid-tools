@@ -97,31 +97,23 @@ export function BatchView({
   }
 
   return (
-    <InspectorPage title={text("Batch", "批处理")}>
-      <div className="grid gap-2">
-        <SegmentedControl
-          label={text("Batch workflow", "批处理流程")}
-          items={modes}
-          value={mode}
-          onValueChange={setMode}
+    <InspectorPage
+      title={text("Batch", "批处理")}
+      headerAction={
+        <RefreshButton
+          label={text("Refresh Batch catalogs", "刷新批处理资源库")}
+          busy={catalogBusy}
+          variant="ghost"
+          onClick={refreshCatalogs}
         />
-        <div className="flex min-h-7 items-center justify-between gap-3 text-[10px] text-muted-foreground">
-          <span>
-            {catalogBusy
-              ? text("Refreshing catalogs…", "正在刷新资源库…")
-              : text(
-                  `${motions.length} library items · ${robots.length} robots`,
-                  `${motions.length} 个动作 · ${robots.length} 个机器人`,
-                )}
-          </span>
-          <RefreshButton
-            label={text("Refresh Batch catalogs", "刷新批处理资源库")}
-            busy={catalogBusy}
-            variant="ghost"
-            onClick={refreshCatalogs}
-          />
-        </div>
-      </div>
+      }
+    >
+      <SegmentedControl
+        label={text("Batch workflow", "批处理流程")}
+        items={modes}
+        value={mode}
+        onValueChange={setMode}
+      />
 
       <div hidden={mode !== "v2m"}>
         <VideoBatchView

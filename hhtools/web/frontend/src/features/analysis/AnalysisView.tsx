@@ -40,6 +40,8 @@ import { UploadBasket } from "./UploadBasket";
 type BusyAction = "scan" | "upload" | "remove" | "analyze" | "subset" | "preview" | null;
 
 export interface AnalysisViewProps {
+  /** App-owned cache policy shared with Workspace Settings. */
+  readonly forceAnalysis: boolean;
   /** Optional Stage handoff for human clips selected from the result table. */
   readonly onMotionLoaded?: (motion: StageMotionPayload | null) => void;
   /** Robot previews remain owned by Analysis instead of replacing a workspace robot. */
@@ -204,6 +206,7 @@ function SummaryCards({ summary }: { summary: DatasetSummary }) {
 }
 
 export function AnalysisView({
+  forceAnalysis,
   onMotionLoaded,
   onRobotPreviewLoaded,
 }: AnalysisViewProps) {
@@ -223,7 +226,6 @@ export function AnalysisView({
   const [sourceSummary, setSourceSummary] = useState<DatasetUploadSummary | null>(null);
   const [uploadSource, setUploadSource] = useState<string | null>(null);
   const [embedding, setEmbedding] = useState<AnalysisEmbedding>("handcrafted");
-  const [force, setForce] = useState(false);
   const [result, setResult] = useState<DatasetAnalysisResult | null>(null);
   const [busy, setBusy] = useState<BusyAction>(null);
   const [progress, setProgress] = useState(0);
@@ -465,7 +467,7 @@ export function AnalysisView({
       {
         ...(source.trim() ? { source: source.trim() } : {}),
         embedding,
-        force,
+        force: forceAnalysis,
       },
       {
         signal: request.signal,
@@ -738,16 +740,6 @@ export function AnalysisView({
                 <option value="pae" disabled>{text("PAE (reserved)", "PAE（预留）")}</option>
               </select>
             </Field>
-            <label className="flex min-h-8 items-center gap-2 text-xs font-medium text-foreground">
-              <input
-                type="checkbox"
-                className="size-4 accent-primary"
-                checked={force}
-                disabled={busy !== null}
-                onChange={(event) => setForce(event.target.checked)}
-              />
-              {text("Ignore cache", "忽略缓存")}
-            </label>
             <div className="grid grid-cols-2 gap-2">
               <Button
                 variant="primary"
@@ -758,7 +750,7 @@ export function AnalysisView({
                 {busy === "analyze" ? text("Analyzing...", "分析中……") : text("Start analysis", "开始分析")}
               </Button>
               <Button size="sm" disabled={!source.trim() || busy !== null} onClick={() => void loadCached()}>
-                {text("Load cached", "加载缓存")}
+                {text("Load existing result", "加载已有结果")}
               </Button>
             </div>
             {busy === "analyze" && (

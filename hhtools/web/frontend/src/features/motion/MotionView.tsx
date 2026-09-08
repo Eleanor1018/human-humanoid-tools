@@ -322,7 +322,10 @@ export function MotionView({
 
   return (
     <InspectorPage title={text("Motion", "动作")}>
-      <div className="flex shrink-0 flex-col gap-2.5">
+      <div
+        className="flex shrink-0 flex-col gap-2.5"
+        data-tutorial="motion-import"
+      >
         <SegmentedControl
           label={text("Motion import type", "动作导入类型")}
           items={profiles}
@@ -393,6 +396,7 @@ export function MotionView({
       <section
         className="flex min-h-40 flex-[1_1_220px] flex-col gap-2"
         aria-labelledby="motion-library-title"
+        data-tutorial="motion-library"
       >
         <div className="flex items-center justify-between gap-2">
           <h2

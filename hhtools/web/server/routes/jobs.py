@@ -397,8 +397,12 @@ def register_job_routes(
             raise HTTPException(status_code=404, detail="no download artifact")
         if not path.is_file():
             raise HTTPException(status_code=404, detail="artifact missing")
+        media_type = {
+            ".csv": "text/csv",
+            ".zip": "application/zip",
+        }.get(path.suffix.lower(), "application/octet-stream")
         return FileResponse(
             path,
             filename=name or path.name,
-            media_type="application/zip",
+            media_type=media_type,
         )

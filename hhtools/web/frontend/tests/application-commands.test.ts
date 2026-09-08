@@ -13,7 +13,9 @@ registerHooks({
 const {
   PROJECT_README_URL,
   createApplicationMenus,
+  storeTheme,
   storedTheme,
+  storedThemeOverride,
   viewForImport,
 } = await import("../src/appCommands.ts");
 const { getJobAdmissionSettings, updateJobAdmissionSettings } = await import(
@@ -56,10 +58,7 @@ test("application menu descriptors retain the five-menu contract", () => {
     commands.find((command) => command.id === "export-current-result")?.enabled,
     false,
   );
-  assert.equal(
-    commands.find((command) => command.id === "exit-application")?.enabled,
-    false,
-  );
+  assert.equal(commands.some((command) => command.id === "exit-application"), false);
   assert.equal(
     commands.find((command) => command.id === "toggle-theme")?.label,
     "Dark Mode",
@@ -69,6 +68,34 @@ test("application menu descriptors retain the five-menu contract", () => {
     menus.find((menu) => menu.id === "settings")?.commands.map(({ id }) => id),
     ["open-settings", "toggle-theme"],
   );
+});
+
+test("desktop application menu retains an executable Exit command", () => {
+  let exitCount = 0;
+  const menus = createApplicationMenus({
+    locale: "en",
+    theme: "light",
+    canExportResult: false,
+    canExitApplication: true,
+    onNavigate: () => undefined,
+    onImport: () => undefined,
+    onExportResult: () => undefined,
+    onOpenSettings: () => undefined,
+    onToggleTheme: () => undefined,
+    onOpenTutorial: () => undefined,
+    onOpenAbout: () => undefined,
+    onExitApplication: () => {
+      exitCount += 1;
+    },
+  });
+
+  const exitCommand = menus
+    .find((menu) => menu.id === "file")
+    ?.commands.find((command) => command.id === "exit-application");
+  assert.equal(exitCommand?.dividerBefore, true);
+  assert.notEqual(exitCommand?.enabled, false);
+  exitCommand?.run();
+  assert.equal(exitCount, 1);
 });
 
 test("application menus localize without changing command identity", () => {
@@ -108,17 +135,35 @@ test("import intents select the owning persistent workspace", () => {
   assert.equal(viewForImport("video-file"), "video-to-motion");
 });
 
-test("theme persistence accepts only the dark opt-in", () => {
-  assert.equal(storedTheme({ getItem: () => "dark" }), "dark");
-  assert.equal(storedTheme({ getItem: () => "unknown" }), "light");
+test("theme follows the system until a valid manual preference is stored", () => {
+  assert.equal(storedThemeOverride({ getItem: () => "dark" }), "dark");
+  assert.equal(storedThemeOverride({ getItem: () => "unknown" }), null);
+  assert.equal(storedTheme({ getItem: () => "dark" }, "light"), "dark");
+  assert.equal(storedTheme({ getItem: () => "light" }, "dark"), "light");
+  assert.equal(storedTheme({ getItem: () => null }, "dark"), "dark");
+  assert.equal(storedTheme({ getItem: () => "unknown" }, "dark"), "dark");
   assert.equal(
-    storedTheme({
-      getItem: () => {
-        throw new Error("storage unavailable");
+    storedTheme(
+      {
+        getItem: () => {
+          throw new Error("storage unavailable");
+        },
       },
-    }),
+      "dark",
+    ),
+    "dark",
+  );
+
+  let stored = "";
+  storeTheme(
+    {
+      setItem: (_key, value) => {
+        stored = value;
+      },
+    },
     "light",
   );
+  assert.equal(stored, "light");
   assert.equal(
     PROJECT_README_URL,
     "https://github.com/Eleanor1018/human-humanoid-tools#readme",

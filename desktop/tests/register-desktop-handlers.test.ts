@@ -42,9 +42,13 @@ describe('registerDesktopHandlers', () => {
     event: IpcMainInvokeEvent
     mainWindow: BrowserWindow
     closeWindow: ReturnType<typeof vi.fn>
+    hasSeenTutorial: ReturnType<typeof vi.fn>
+    markTutorialSeen: ReturnType<typeof vi.fn>
   } {
     const event = {} as IpcMainInvokeEvent
     const closeWindow = vi.fn()
+    const hasSeenTutorial = vi.fn(() => false)
+    const markTutorialSeen = vi.fn()
     const mainWindow = { close: closeWindow } as unknown as BrowserWindow
     registerDesktopHandlers({
       mainWindow,
@@ -69,9 +73,11 @@ describe('registerDesktopHandlers', () => {
           estimatedAdditionalBytes: 22,
         },
       }),
-      restartBackend: async () => ({ appPhase: 'ready', backendState: 'ready' })
+      restartBackend: async () => ({ appPhase: 'ready', backendState: 'ready' }),
+      hasSeenTutorial,
+      markTutorialSeen
     })
-    return { event, mainWindow, closeWindow }
+    return { event, mainWindow, closeWindow, hasSeenTutorial, markTutorialSeen }
   }
 
   it('opens a trusted native directory picker and returns the selected path', async () => {
@@ -135,6 +141,53 @@ describe('registerDesktopHandlers', () => {
     expect(closeWindow).not.toHaveBeenCalled()
   })
 
+  it('returns persisted tutorial state to a trusted sender', () => {
+    const { event, mainWindow, hasSeenTutorial } = register()
+    hasSeenTutorial.mockReturnValue(true)
+
+    const handler = electronMocks.handlers.get(DESKTOP_CHANNELS.hasSeenTutorial)
+    expect(handler?.(event)).toBe(true)
+
+    expect(securityMocks.assertTrustedIpcSender).toHaveBeenCalledWith(
+      event,
+      mainWindow,
+      'http://127.0.0.1:43100'
+    )
+    expect(hasSeenTutorial).toHaveBeenCalledOnce()
+    expect(securityMocks.assertTrustedIpcSender.mock.invocationCallOrder[0]).toBeLessThan(
+      hasSeenTutorial.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY
+    )
+  })
+
+  it('marks the tutorial seen only after validating the sender', () => {
+    const { event, mainWindow, markTutorialSeen } = register()
+
+    const handler = electronMocks.handlers.get(DESKTOP_CHANNELS.markTutorialSeen)
+    expect(handler?.(event)).toBeUndefined()
+
+    expect(securityMocks.assertTrustedIpcSender).toHaveBeenCalledWith(
+      event,
+      mainWindow,
+      'http://127.0.0.1:43100'
+    )
+    expect(markTutorialSeen).toHaveBeenCalledOnce()
+    expect(securityMocks.assertTrustedIpcSender.mock.invocationCallOrder[0]).toBeLessThan(
+      markTutorialSeen.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY
+    )
+  })
+
+  it('does not persist tutorial state for an untrusted sender', () => {
+    const { event, markTutorialSeen } = register()
+    securityMocks.assertTrustedIpcSender.mockImplementationOnce(() => {
+      throw new Error('Rejected IPC from an unknown WebContents')
+    })
+
+    const handler = electronMocks.handlers.get(DESKTOP_CHANNELS.markTutorialSeen)
+
+    expect(() => handler?.(event)).toThrow('Rejected IPC from an unknown WebContents')
+    expect(markTutorialSeen).not.toHaveBeenCalled()
+  })
+
   it('removes the directory picker handler during cleanup', () => {
     const mainWindow = {} as BrowserWindow
     const unregister = registerDesktopHandlers({
@@ -160,12 +213,16 @@ describe('registerDesktopHandlers', () => {
           estimatedAdditionalBytes: 22,
         },
       }),
-      restartBackend: async () => ({ appPhase: 'ready', backendState: 'ready' })
+      restartBackend: async () => ({ appPhase: 'ready', backendState: 'ready' }),
+      hasSeenTutorial: () => false,
+      markTutorialSeen: () => undefined
     })
 
     unregister()
 
     expect(electronMocks.removeHandler).toHaveBeenCalledWith(DESKTOP_CHANNELS.selectDirectory)
     expect(electronMocks.removeHandler).toHaveBeenCalledWith(DESKTOP_CHANNELS.exitApplication)
+    expect(electronMocks.removeHandler).toHaveBeenCalledWith(DESKTOP_CHANNELS.hasSeenTutorial)
+    expect(electronMocks.removeHandler).toHaveBeenCalledWith(DESKTOP_CHANNELS.markTutorialSeen)
   })
 })

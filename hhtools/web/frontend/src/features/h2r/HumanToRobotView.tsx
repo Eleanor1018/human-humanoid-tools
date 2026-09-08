@@ -83,6 +83,8 @@ export interface HumanToRobotViewProps {
   ) => void;
   readonly comparisonPreset?: ComparisonPreset;
   readonly onComparisonPresetChange?: (preset: ComparisonPreset) => void;
+  readonly forceCalibrationOpen?: boolean;
+  readonly forceResultOpen?: boolean;
   readonly onOpenMotionLibrary: () => void;
   readonly onOpenRobotLibrary: () => void;
 }
@@ -142,7 +144,12 @@ function Picker({
         </select>
         <AssetImportButton kind={importKind} onClick={onImport} />
       </div>
-      <Button size="sm" disabled={disabled || !value} onClick={onLoad}>
+      <Button
+        size="sm"
+        variant="primary"
+        disabled={disabled || !value}
+        onClick={onLoad}
+      >
         {buttonLabel}
       </Button>
     </div>
@@ -168,6 +175,8 @@ export function HumanToRobotView({
   onCalibrationInteraction,
   comparisonPreset,
   onComparisonPresetChange,
+  forceCalibrationOpen = false,
+  forceResultOpen = false,
   onOpenMotionLibrary,
   onOpenRobotLibrary,
 }: HumanToRobotViewProps) {
@@ -782,6 +791,8 @@ export function HumanToRobotView({
           title={text("3. Calibration", "3. 标定")}
           status={calibrationStep.label}
           statusTone={calibrationStep.tone}
+          forceOpen={forceCalibrationOpen}
+          tutorialAnchor="h2r-calibration"
         >
           <div className="grid gap-2.5">
             <Field label={text("Reference pose", "参考姿势")}>
@@ -804,6 +815,7 @@ export function HumanToRobotView({
             </Field>
             <Button
               size="sm"
+              variant="primary"
               disabled={!robot || !reference || checking || Boolean(busy || session)}
               onClick={editCalibration}
             >
@@ -841,6 +853,8 @@ export function HumanToRobotView({
           title={text("4. Result", "4. 结果")}
           status={resultStep.label}
           statusTone={resultStep.tone}
+          forceOpen={forceResultOpen}
+          tutorialAnchor="h2r-result"
         >
           <div className="grid gap-2.5">
             <div className="grid grid-cols-2 gap-2">

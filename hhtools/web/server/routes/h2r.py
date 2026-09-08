@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import logging
+import shutil
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 
 from fastapi import HTTPException
 
-from hhtools.web.server.export_runtime import _parse_optional_fps
+from hhtools.web.output.export_bundle import ensure_export_path, sanitize_export_stem
+from hhtools.web.server.export_runtime import _parse_optional_fps, _write_export
 from hhtools.web.server.motion_runtime import _motion_for_retarget
 from hhtools.web.server.preview_runtime import (
     _align_scaled_preview_to_robot_playback,
@@ -265,34 +267,66 @@ def register_h2r_routes(app, *, state, jobs) -> H2RRouteOperations:
             # Keep the retarget result + source motion in memory so the export
             # endpoint can render CSV or PKL at any target fps on demand.
             export_token = uuid.uuid4().hex[:10]
+            stem = sanitize_export_stem(motion.name or token)
+            yellow_foot_z = _scaled_overlay_foot_z(scaled, 0)
             state.motions[f"export::{export_token}"] = {
                 "retargeted": ret,
                 "robot": robot,
                 "source_motion": motion,
                 "backend": backend,
-                "stem": motion.name or token,
+                "stem": stem,
                 "has_scene": bool(motion.terrain is not None or motion.objects),
                 "source_path": rec.get("source_path"),
                 # Same yellow-foot Z the viewer used so CSV/PKL bake matches playback.
-                "yellow_foot_z": _scaled_overlay_foot_z(scaled, 0),
+                "yellow_foot_z": yellow_foot_z,
             }
+            artifact_dir = ensure_export_path(
+                state.export_root,
+                state.export_root / job.id,
+            )
+            artifact_path = ensure_export_path(
+                state.export_root,
+                _write_export(
+                    ret,
+                    model,
+                    motion,
+                    artifact_dir,
+                    stem=stem,
+                    fps=None,
+                    fmt="csv",
+                    backend=backend,
+                    csv_header=True,
+                    source_path=rec.get("source_path"),
+                    yellow_foot_z=yellow_foot_z,
+                ),
+            )
             job.result = {
                 "trajectory": traj,
                 "scaled_preview": scaled,
                 "scaled_scene": scaled_scene,
                 "diagnostics": diagnostics,
                 "export_token": export_token,
-                "stem": motion.name or token,
+                "stem": stem,
                 "motion_source_fps": motion_source_fps,
                 "retarget_fps": float(motion_retarget_fps),
                 "source_fps": float(ret.sample_rate),
                 "has_scene": bool(motion.terrain is not None or motion.objects),
                 "num_frames": ret.num_frames,
+                "format": "csv",
+                "artifact_path": str(artifact_path),
+                "download_name": (
+                    f"{stem}_export.zip" if artifact_path.suffix == ".zip" else artifact_path.name
+                ),
             }
             job.progress = 1.0
             job.message = "done"
             job.mark_terminal("done")
         except Exception as err:  # noqa: BLE001
+            artifact_dir = state.export_root / job.id
+            if artifact_dir.is_symlink() or artifact_dir.is_file():
+                artifact_dir.unlink(missing_ok=True)
+            else:
+                shutil.rmtree(artifact_dir, ignore_errors=True)
             _log.exception("retarget job failed")
             job.error = str(err)
             job.mark_terminal("error")

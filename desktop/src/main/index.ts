@@ -14,6 +14,7 @@ import { app, BrowserWindow, dialog, session } from 'electron'
 import { DESKTOP_CHANNELS } from '../shared/desktop-api'
 import type { RuntimeState } from '../shared/runtime-state'
 import { AppLifecycle } from './app-lifecycle'
+import { DesktopTutorialState } from './desktop-tutorial-state'
 import { DesktopLogger } from './desktop-logger'
 import { diagnosticsDataUrl } from './diagnostics-page'
 import {
@@ -207,6 +208,7 @@ async function startDesktop(): Promise<void> {
 
   const preloadPath = join(dirname(fileURLToPath(import.meta.url)), '../preload/index.cjs')
   const stateStore = new WindowStateStore(join(userData, 'window-state.json'))
+  const tutorialState = new DesktopTutorialState(userData)
   const windowResult = createMainWindow({
     iconPath: desktopIconPath(),
     preloadPath,
@@ -261,6 +263,8 @@ async function startDesktop(): Promise<void> {
     trustedOrigin: backendOrigin,
     getRuntimeState: () => runtimeState(),
     getOptionalComponents: () => optionalComponents!.getState(),
+    hasSeenTutorial: () => tutorialState.hasSeenTutorial(),
+    markTutorialSeen: () => tutorialState.markTutorialSeen(),
     restartBackend: async () => {
       if (lifecycle.phase === 'shutting-down' || supervisor === undefined) {
         throw new Error('The application is shutting down')

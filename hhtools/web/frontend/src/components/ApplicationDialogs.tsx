@@ -31,9 +31,11 @@ export interface ApplicationDialogsProps {
   readonly locale: WorkspaceLocale;
   readonly sidebarHidden: boolean;
   readonly inspectorHidden: boolean;
+  readonly forceAnalysis: boolean;
   readonly onLocaleChange: (locale: WorkspaceLocale) => void;
   readonly onSidebarHiddenChange: (hidden: boolean) => void;
   readonly onInspectorHiddenChange: (hidden: boolean) => void;
+  readonly onForceAnalysisChange: (force: boolean) => void;
   readonly onResetLayout: () => void;
   readonly onMotionLibraryChange: (
     settings: MotionLibrarySettingsSnapshot,
@@ -372,6 +374,19 @@ function SettingsDialog(props: SettingsDialogProps) {
         </SettingRow>
         <SmplxModelLinks runtime={gvhmrRuntime} />
 
+        <SectionTitle>{text("Analysis", "分析")}</SectionTitle>
+        <SettingRow title={text("Force re-analysis", "强制重新分析")}>
+          <input
+            className="size-4 accent-primary"
+            type="checkbox"
+            aria-label={text("Force re-analysis", "强制重新分析")}
+            checked={props.forceAnalysis}
+            onChange={(event) =>
+              props.onForceAnalysisChange(event.currentTarget.checked)
+            }
+          />
+        </SettingRow>
+
         <SectionTitle>
           {text("Background-job scheduling", "后台任务调度")}
         </SectionTitle>
@@ -475,6 +490,11 @@ function AboutDialog({
       onClose={onClose}
     >
       <div className="grid gap-4 text-sm leading-relaxed text-muted-foreground">
+        <img
+          className="h-auto w-[168px] [html[data-theme=dark]_&]:brightness-0 [html[data-theme=dark]_&]:invert"
+          src="/roboparty.svg"
+          alt="ROBOPARTY"
+        />
         <p>
           {text(
             "Humanoid motion retargeting and dataset analysis",

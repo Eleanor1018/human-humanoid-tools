@@ -153,7 +153,12 @@ function RobotSelect({
         </select>
         <AssetImportButton kind="robot" onClick={onImport} />
       </div>
-      <Button size="sm" disabled={disabled || !value} onClick={onLoad}>
+      <Button
+        size="sm"
+        variant="primary"
+        disabled={disabled || !value}
+        onClick={onLoad}
+      >
         {text("Load", "加载")}
       </Button>
       <p className="text-xs text-muted-foreground">
@@ -887,14 +892,25 @@ export function RobotToRobotView({
               </select>
             </Field>
             <div className="grid grid-cols-3 gap-2 max-[420px]:grid-cols-2">
-              <Button size="sm" disabled={!sourceRobot || !selectedEntry || busy !== null || calibration !== null} onClick={loadLibraryTrajectory}>
+              <Button
+                size="sm"
+                variant="primary"
+                disabled={!sourceRobot || !selectedEntry || busy !== null || calibration !== null}
+                onClick={loadLibraryTrajectory}
+              >
                 {text("Load from library", "从资源库加载")}
               </Button>
-              <Button size="sm" disabled={!sourceRobot || busy !== null || calibration !== null} onClick={() => fileInput.current?.click()}>
+              <Button
+                size="sm"
+                variant="primaryOutline"
+                disabled={!sourceRobot || busy !== null || calibration !== null}
+                onClick={() => fileInput.current?.click()}
+              >
                 {text("Upload files", "上传文件")}
               </Button>
               <Button
                 size="sm"
+                variant="primaryOutline"
                 disabled={!sourceRobot || busy !== null || calibration !== null}
                 onClick={() => folderInput.current?.click()}
               >
@@ -967,6 +983,7 @@ export function RobotToRobotView({
               </span>
               <Button
                 size="sm"
+                variant="primary"
                 disabled={
                   !sourceRobot ||
                   !targetRobot ||

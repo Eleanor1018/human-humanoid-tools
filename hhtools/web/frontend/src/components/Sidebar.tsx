@@ -19,10 +19,10 @@ export function Sidebar({ activeView, locale, hidden = false, onSelect }: Sideba
     <aside
       id="sidebar"
       hidden={hidden}
-      className="col-start-1 row-start-2 row-span-2 min-h-0 min-w-0 overflow-hidden border-r border-border-subtle bg-surface max-[780px]:row-span-3"
+      className="col-start-1 row-start-2 row-span-2 flex min-h-0 min-w-0 flex-col overflow-hidden border-r border-border-subtle bg-surface max-[780px]:row-span-3"
       aria-label="Workspace navigation"
     >
-      <nav className="h-full min-h-0 min-w-0 overflow-y-auto px-3 py-3.5 max-[900px]:px-2">
+      <nav className="min-h-0 min-w-0 flex-1 overflow-y-auto px-3 py-3.5 max-[900px]:px-2">
         <div className="flex flex-col gap-3.5">
           {navigationGroups.map((group) => (
             <section
@@ -61,6 +61,15 @@ export function Sidebar({ activeView, locale, hidden = false, onSelect }: Sideba
           ))}
         </div>
       </nav>
+      <footer className="flex shrink-0 justify-start px-[25px] py-3 max-[600px]:px-3">
+        <span className="block h-[41px] w-[120px] overflow-hidden max-[900px]:h-[30px] max-[900px]:w-[30px]">
+          <img
+            className="block h-auto w-[120px] max-w-none max-[900px]:h-[30px] max-[900px]:w-auto [html[data-theme=dark]_&]:brightness-0 [html[data-theme=dark]_&]:invert"
+            src="/roboparty.svg"
+            alt="ROBOPARTY"
+          />
+        </span>
+      </footer>
     </aside>
   );
 }

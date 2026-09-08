@@ -13,18 +13,12 @@ import {
 import type { ApplicationImportRequest } from "@/importIntent";
 import { useLocaleText } from "@/LocaleProvider";
 import { cn } from "@/lib/utils";
-import {
-  toStageMotionPayload as toStageImportedMotionPayload,
-  uploadMotion,
-  type MotionJob,
-} from "@/features/motion/api";
 import type { StageMotionPayload } from "@/stage/types";
 
 import {
   canSetupGvhmrInDesktop,
   formatFileSize,
   getGvhmrRuntimeStatus,
-  isGvhmrResultName,
   isSupportedVideoName,
   parseOptionalFocalLength,
   setupGvhmrInDesktop,
@@ -88,18 +82,14 @@ export function VideoToMotionView({
   const [workflowErrorOwner, setWorkflowErrorOwner] =
     useState<WorkflowErrorOwner | null>(null);
   const [result, setResult] = useState<MotionResultSummary | null>(null);
-  const [importing, setImporting] = useState(false);
-  const [importJob, setImportJob] = useState<MotionJob | null>(null);
-  const [importError, setImportError] = useState<string | null>(null);
   const [setupBusy, setSetupBusy] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
-  const resultInput = useRef<HTMLInputElement>(null);
   const handledImportRequest = useRef<number | null>(null);
   const previewUrl = useRef<string | null>(null);
   const runtimeRequest = useRef<AbortController | null>(null);
   const operation = useRef<AbortController | null>(null);
   const generating = workflowPhase === "uploading" || workflowPhase === "running";
-  const busy = importing || generating;
+  const busy = generating;
 
   const refreshRuntime = useCallback(() => {
     runtimeRequest.current?.abort();
@@ -151,7 +141,6 @@ export function VideoToMotionView({
     if (!isSupportedVideoName(file.name)) {
       setWorkflowPhase("error");
       setWorkflowErrorOwner("selection");
-      setImportError(null);
       setWorkflowError(
         text(
           "Supported formats are MP4, MOV, MKV, AVI, WebM, and M4V.",
@@ -169,7 +158,6 @@ export function VideoToMotionView({
     setWorkflowPhase("idle");
     setWorkflowError(null);
     setWorkflowErrorOwner(null);
-    setImportError(null);
     setJob(null);
     setResult(null);
   };
@@ -208,7 +196,6 @@ export function VideoToMotionView({
     setWorkflowPhase("uploading");
     setWorkflowError(null);
     setWorkflowErrorOwner(null);
-    setImportError(null);
     setJob(null);
     setResult(null);
     try {
@@ -239,50 +226,6 @@ export function VideoToMotionView({
       setWorkflowError(errorMessage(error));
     } finally {
       if (operation.current === request) operation.current = null;
-    }
-  };
-
-  const importResult = async (file: File | null) => {
-    if (!file || busy) return;
-    if (!isGvhmrResultName(file.name)) {
-      setWorkflowError(null);
-      setWorkflowErrorOwner(null);
-      setImportError(text("A GVHMR result must be a .pt file.", "GVHMR 结果必须是 .pt 文件。"));
-      return;
-    }
-
-    operation.current?.abort();
-    const request = new AbortController();
-    operation.current = request;
-    setImporting(true);
-    setImportJob(null);
-    setImportError(null);
-    setWorkflowError(null);
-    setWorkflowErrorOwner(null);
-    try {
-      const payload = await uploadMotion([file], {
-        profile: "mimic",
-        signal: request.signal,
-        onUpdate: (snapshot) => {
-          if (!request.signal.aborted) setImportJob(snapshot);
-        },
-      });
-      if (request.signal.aborted) return;
-      const stageMotion = toStageImportedMotionPayload(payload);
-      if (!stageMotion) {
-        throw new Error(text("The imported motion has no preview data.", "导入的动作没有预览数据。"));
-      }
-      setResult(summarizeMotionResult(payload, file.name));
-      onMotionLoaded?.(stageMotion);
-      setWorkflowPhase("done");
-    } catch (error) {
-      if (request.signal.aborted) return;
-      setImportError(errorMessage(error));
-    } finally {
-      if (operation.current === request) {
-        operation.current = null;
-        if (!request.signal.aborted) setImporting(false);
-      }
     }
   };
 
@@ -346,40 +289,27 @@ export function VideoToMotionView({
         : generationBlocked
           ? "warning"
           : "neutral";
-  const resultStatus = importError
-    ? text("Import failed", "导入失败")
-    : importing
-      ? `${Math.round((importJob?.progress ?? 0) * 100)}%`
-      : result
-        ? text("Motion Library", "动作资源库")
-        : text("Empty", "暂无结果");
-  const resultTone: WorkflowStatusTone = importError
-    ? "danger"
-    : importing
-      ? "info"
-      : result
-        ? "success"
-        : "neutral";
+  const resultStatus = result
+    ? text("Motion Library", "动作资源库")
+    : text("Empty", "暂无结果");
+  const resultTone: WorkflowStatusTone = result ? "success" : "neutral";
 
   const pipelineIndex = selectionFailed
     ? 0
-    : importing || importError || workflowPhase === "done"
+    : workflowPhase === "done"
       ? 3
       : generationFailed || generating || (video && runtimePhase === "ready")
         ? 2
         : video
           ? 1
           : 0;
-  const pipelineCompletedIndex =
-    importError || importing
-      ? 2
-      : selectionFailed
-        ? -1
-        : generationFailed
-          ? 1
-          : workflowPhase === "done"
-            ? 3
-            : pipelineIndex - 1;
+  const pipelineCompletedIndex = selectionFailed
+    ? -1
+    : generationFailed
+      ? 1
+      : workflowPhase === "done"
+        ? 3
+        : pipelineIndex - 1;
 
   return (
     <InspectorPage title={text("Video → Motion", "视频 → 动作")}>
@@ -616,51 +546,6 @@ export function VideoToMotionView({
           statusTone={resultTone}
           defaultOpen
         >
-          <input
-            ref={resultInput}
-            className="hidden"
-            type="file"
-            accept=".pt"
-            aria-label={text("Select an existing GVHMR result", "选择已有的 GVHMR 结果")}
-            disabled={busy}
-            onChange={(event) => {
-              void importResult(event.currentTarget.files?.[0] ?? null);
-              event.currentTarget.value = "";
-            }}
-          />
-          <div className="mb-2.5 grid gap-2">
-            <Button
-              size="sm"
-              onClick={() => resultInput.current?.click()}
-              disabled={busy}
-            >
-              {importing
-                ? text("Importing…", "导入中…")
-                : text("Import existing GVHMR result (.pt)", "导入已有 GVHMR 结果（.pt）")}
-            </Button>
-            {importing && (
-              <div className="grid gap-1.5 text-[11px] text-muted-foreground" role="status">
-                <div className="flex items-center justify-between gap-3">
-                  <span className="min-w-0 truncate">
-                    {importJob?.message ?? text("Uploading motion result", "正在上传动作结果")}
-                  </span>
-                  <strong className="shrink-0 text-foreground">
-                    {Math.round((importJob?.progress ?? 0) * 100)}%
-                  </strong>
-                </div>
-                <progress
-                  className="h-1.5 w-full accent-primary"
-                  value={importJob?.progress ?? 0}
-                  max="1"
-                />
-              </div>
-            )}
-            {importError && (
-              <p className="rounded-md border border-danger-border bg-danger-muted px-2.5 py-2 text-[11px] leading-relaxed text-danger break-words" role="alert">
-                {importError}
-              </p>
-            )}
-          </div>
           {result ? (
             <div className="grid gap-2">
               <p className="truncate text-xs font-semibold text-foreground" title={result.name}>

@@ -70,7 +70,20 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
 
     await expect(page).toHaveTitle('Human-Humanoid Tools')
     await expect(page.locator("#app[data-hhtools-ready='true']")).toBeVisible()
-    await expect(page.getByLabel('HHTOOLS')).toBeVisible()
+    await expect(page.getByLabel('HHTOOLS', { exact: true })).toBeVisible()
+    const firstRunTutorial = page.getByRole('dialog', { name: '1. Welcome to hhtools' })
+    await expect(firstRunTutorial).toBeVisible()
+    await expect(page.locator('[data-tutorial-overlay]')).toHaveAttribute(
+      'data-tutorial-step',
+      'welcome'
+    )
+    await firstRunTutorial.getByRole('button', { name: 'Skip tutorial' }).click()
+    await expect(firstRunTutorial).toBeHidden()
+    await page.reload()
+    await expect(page.locator("#app[data-hhtools-ready='true']")).toBeVisible()
+    await expect(firstRunTutorial).toBeHidden()
+    await expect.poll(() => page.evaluate(() => window.hhtoolsDesktop.hasSeenTutorial())).toBe(true)
+
     const menu = page.getByRole('menubar', { name: 'Application menu' })
     await expect(menu.getByRole('menuitem')).toHaveText([
       'File',
@@ -143,6 +156,13 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
     await expect(settingsDialog.getByRole('button', { name: 'Refresh settings' })).toBeEnabled()
     await expect(settingsDialog.getByLabel('Maximum running jobs')).toBeEnabled()
     await expect(settingsDialog.getByLabel('Maximum queued jobs')).toBeEnabled()
+    const forceReanalysis = settingsDialog.getByLabel('Force re-analysis')
+    await expect(forceReanalysis).not.toBeChecked()
+    await forceReanalysis.check()
+    await expect(forceReanalysis).toBeChecked()
+    await expect.poll(() =>
+      page.evaluate(() => localStorage.getItem('hhtools.analysis.force-reanalysis'))
+    ).toBe('true')
     await expect(settingsDialog.getByRole('button', { name: 'Save' })).toBeEnabled()
     await expect(settingsDialog).not.toContainText(
       'Language, layout, libraries, and background jobs'
@@ -154,11 +174,20 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
     await expect(settingsDialog).not.toContainText(/Running:\s*0.*Queued:\s*0/)
     await settingsDialog.getByRole('button', { name: 'Close' }).click()
     await expect(settingsDialog).toBeHidden()
-
     await settingsTrigger.hover()
+    await settingsMenu.getByRole('menuitem', { name: 'Settings', exact: true }).click()
+    settingsDialog = page.getByRole('dialog', { name: 'Workspace Settings' })
+    await expect(settingsDialog.getByLabel('Force re-analysis')).toBeChecked()
+    await settingsDialog.getByLabel('Force re-analysis').uncheck()
+    await expect.poll(() =>
+      page.evaluate(() => localStorage.getItem('hhtools.analysis.force-reanalysis'))
+    ).toBe('false')
+    await settingsDialog.getByRole('button', { name: 'Close' }).click()
+
+    await settingsTrigger.click()
     await settingsMenu.getByRole('menuitem', { name: 'Dark Mode', exact: true }).click()
     await expect(page.locator('#app')).toHaveAttribute('data-theme', 'dark')
-    await settingsTrigger.hover()
+    await settingsTrigger.click()
     await settingsMenu.getByRole('menuitem', { name: 'Light Mode', exact: true }).click()
     await expect(page.locator('#app')).toHaveAttribute('data-theme', 'light')
 
@@ -166,7 +195,31 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
     const helpMenu = page.getByRole('menu', { name: 'Help' })
     await helpTrigger.hover()
     await expect(helpMenu.getByRole('menuitem')).toHaveText(['Tutorial', 'About hhtools'])
-    await expect(helpMenu.getByRole('menuitem', { name: 'Tutorial' })).toBeEnabled()
+    await helpMenu.getByRole('menuitem', { name: 'Tutorial' }).click()
+    const reopenedTutorial = page.getByRole('dialog', { name: '1. Welcome to hhtools' })
+    await expect(reopenedTutorial).toBeVisible()
+    const tutorialOverlay = page.locator('[data-tutorial-overlay]')
+    await expect(page.locator('#app')).toHaveAttribute('inert', '')
+    await page.keyboard.press('Shift+Tab')
+    await expect(tutorialOverlay.getByRole('button', { name: 'Next' })).toBeFocused()
+    await page.keyboard.press('Tab')
+    const skipTutorial = tutorialOverlay.getByRole('button', { name: 'Skip tutorial' })
+    await expect(skipTutorial).toBeFocused()
+    const nextTutorial = tutorialOverlay.getByRole('button', { name: 'Next' })
+    for (let step = 1; step < 5; step += 1) {
+      await nextTutorial.click()
+    }
+    const calibrationStep = page.locator('[data-tutorial="h2r-calibration"]')
+    await expect(tutorialOverlay).toHaveAttribute(
+      'data-tutorial-step',
+      'calibration'
+    )
+    await expect(calibrationStep).toHaveAttribute('open', '')
+    await skipTutorial.click()
+    await expect(page.locator('#app')).not.toHaveAttribute('inert', '')
+    await expect(calibrationStep).not.toHaveAttribute('open', '')
+    await expect(helpTrigger).toBeFocused()
+    await helpTrigger.hover()
     await helpMenu.getByRole('menuitem', { name: 'About hhtools' }).click()
     const aboutDialog = page.getByRole('dialog', { name: 'Human-Humanoid Tools' })
     await expect(aboutDialog).toBeVisible()
@@ -206,8 +259,12 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
     await expect(page.getByRole('menu', { name: 'Analysis' })).toBeVisible()
     await page.keyboard.press('Escape')
     await expect(page.getByRole('menu', { name: 'Analysis' })).toBeHidden()
+    const activeViewBeforeShortcut = await page.locator('#app').getAttribute('data-active-view')
     await page.keyboard.press('Alt+3')
-    await expect(page.locator('#app')).toHaveAttribute('data-active-view', 'motion')
+    await expect(page.locator('#app')).toHaveAttribute(
+      'data-active-view',
+      activeViewBeforeShortcut ?? ''
+    )
 
     const sidebar = page.getByRole('complementary', { name: 'Workspace navigation' })
     await expect(sidebar.getByRole('button')).toHaveText([
@@ -225,7 +282,9 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
         icons.every((icon) => getComputedStyle(icon).maskImage.includes('/icons/sidebar/'))
       )
     ).toBe(true)
-    await expect(sidebar.getByRole('button', { name: 'Motion', exact: true })).toHaveAttribute(
+    const motionButton = sidebar.getByRole('button', { name: 'Motion', exact: true })
+    await motionButton.click()
+    await expect(motionButton).toHaveAttribute(
       'aria-current',
       'page'
     )
@@ -383,6 +442,11 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
     await expect(analysisPage.getByText('Original source path')).toHaveCount(0)
     await expect(analysisPage.getByRole('button', { name: 'Choose folder' })).toBeEnabled()
     await expect(analysisPage.getByRole('button', { name: 'Built-in library' })).toBeEnabled()
+    await expect(analysisPage.getByLabel('Ignore cache')).toHaveCount(0)
+    await analysisPage.locator('details').nth(1).locator('summary').click()
+    const loadExistingResult = analysisPage.getByRole('button', { name: 'Load existing result' })
+    await expect(loadExistingResult).toBeEnabled()
+    await expect(analysisPage.getByRole('button', { name: 'Load cached' })).toHaveCount(0)
     await expect(analysisPipeline.locator('li').nth(0)).toHaveAttribute('data-state', 'active')
     await analysisPage.getByRole('button', { name: 'Built-in library' }).click()
     await expect(analysisPipeline.locator('li').nth(0)).toHaveAttribute('data-state', 'complete')

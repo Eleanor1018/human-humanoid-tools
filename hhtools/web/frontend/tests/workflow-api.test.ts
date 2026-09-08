@@ -18,6 +18,7 @@ const { deleteRobot, uploadRobot } = await import("../src/features/robot/api.ts"
 const {
   analyzeDataset,
   computeDatasetSubset,
+  getCachedDatasetResult,
   previewDatasetRobot,
   removeDatasetUploadFolder,
   uploadDataset,
@@ -295,6 +296,25 @@ test("analysis starts the dataset job and enforces its job kind", async () => {
     force: true,
   });
   assert.equal(result.meta.source_root, "/data/motions");
+});
+
+test("analysis existing result reads cache without starting work", async () => {
+  let requestedUrl = "";
+  const result = await getCachedDatasetResult(
+    "/data/my motions",
+    "handcrafted",
+    {
+      fetcher: async (input) => {
+        requestedUrl = String(input);
+        return Response.json({ available: false });
+      },
+    },
+  );
+  assert.equal(
+    requestedUrl,
+    "/api/dataset/result?embedding=handcrafted&source=%2Fdata%2Fmy+motions",
+  );
+  assert.equal(result.available, false);
 });
 
 test("analysis robot preview uses its dedicated job contract", async () => {

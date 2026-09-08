@@ -5,6 +5,7 @@ import { boundedProgress, displayFileName } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 import {
+  canExportTaskResult,
   listTasks,
   taskDownloadUrl,
   type TaskRecord,
@@ -116,13 +117,7 @@ function formatDuration(
 }
 
 /** Compact task history dock shared by the browser and Electron renderer. */
-export function TaskDrawer({
-  canExportResult,
-  onExportResult,
-}: {
-  readonly canExportResult: boolean;
-  readonly onExportResult: () => void;
-}) {
+export function TaskDrawer() {
   const locale = useLocale();
   const text = useLocaleText();
   const [open, setOpen] = useState(false);
@@ -216,14 +211,6 @@ export function TaskDrawer({
               {text("Tasks", "任务")}
             </strong>
             <div className="ml-auto flex items-center gap-1">
-              <button
-                type="button"
-                className="mr-1 h-7 rounded-md bg-primary px-2.5 text-[11px] font-semibold text-primary-foreground hover:brightness-95 focus-visible:outline-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-40"
-                disabled={!canExportResult}
-                onClick={onExportResult}
-              >
-                {text("Export Result", "导出结果")}
-              </button>
               <button
                 type="button"
                 className="grid size-8 place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
@@ -355,9 +342,9 @@ export function TaskDrawer({
                         </div>
                       )}
                     </div>
-                    {task.can_download && (
+                    {canExportTaskResult(task) && (
                       <a
-                        className="self-center rounded-md border border-primary px-2.5 py-1.5 text-[11px] font-semibold text-primary hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring max-[560px]:col-start-2 max-[560px]:justify-self-start"
+                        className="self-center text-center text-[11px] text-muted-foreground hover:text-foreground focus-visible:rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring max-[560px]:col-start-2 max-[560px]:justify-self-start"
                         href={taskDownloadUrl(task.id)}
                         download={downloadName(task)}
                       >
