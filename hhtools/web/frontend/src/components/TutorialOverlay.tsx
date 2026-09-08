@@ -96,6 +96,7 @@ export function TutorialOverlay({
   const [index, setIndex] = useState(0);
   const [highlightStyle, setHighlightStyle] = useState<RectStyle | null>(null);
   const [popoverStyle, setPopoverStyle] = useState<PointStyle | null>(null);
+  const [positionedIndex, setPositionedIndex] = useState<number | null>(null);
   const popover = useRef<HTMLDivElement>(null);
   const returnFocus = useRef<HTMLElement | null>(null);
   const titleId = useId();
@@ -119,6 +120,7 @@ export function TutorialOverlay({
           left: Math.max(VIEWPORT_MARGIN, (window.innerWidth - popoverWidth) / 2),
           top: Math.max(VIEWPORT_MARGIN, (window.innerHeight - popoverHeight) / 2),
         });
+        setPositionedIndex(index);
         return;
       }
 
@@ -136,8 +138,9 @@ export function TutorialOverlay({
           popoverHeight,
         ),
       );
+      setPositionedIndex(index);
     },
-    [open, step],
+    [index, open, step],
   );
 
   useEffect(() => {
@@ -150,12 +153,13 @@ export function TutorialOverlay({
     if (!open) {
       setHighlightStyle(null);
       setPopoverStyle(null);
+      setPositionedIndex(null);
       setIndex(0);
       return;
     }
 
     setHighlightStyle(null);
-    setPopoverStyle(null);
+    setPositionedIndex(null);
     let secondFrame = 0;
     const firstFrame = window.requestAnimationFrame(() => {
       secondFrame = window.requestAnimationFrame(() => position(true));
@@ -237,8 +241,8 @@ export function TutorialOverlay({
   }, [close, open]);
 
   useEffect(() => {
-    if (open && popoverStyle) popover.current?.focus();
-  }, [index, open, popoverStyle]);
+    if (open && positionedIndex === index) popover.current?.focus();
+  }, [index, open, positionedIndex]);
 
   if (!open) return null;
 
@@ -263,7 +267,7 @@ export function TutorialOverlay({
       )}
       <div
         ref={popover}
-        className={`fixed grid max-h-[calc(100vh-24px)] w-[min(320px,calc(100vw-24px))] gap-3 overflow-y-auto rounded-lg border border-border-subtle bg-surface px-4 pt-3.5 pb-4 text-foreground shadow-[0_18px_50px_rgba(0,0,0,0.22)] outline-none transition-opacity duration-[180ms] ${popoverStyle ? "opacity-100" : "pointer-events-none opacity-0"}`}
+        className={`fixed grid max-h-[calc(100vh-24px)] w-[min(320px,calc(100vw-24px))] gap-3 overflow-y-auto rounded-lg border border-border-subtle bg-surface px-4 pt-3.5 pb-4 text-foreground shadow-[0_18px_50px_rgba(0,0,0,0.22)] outline-none transition-opacity duration-[180ms] ${positionedIndex === index ? "opacity-100" : "pointer-events-none opacity-0"}`}
         style={popoverStyle ?? { left: VIEWPORT_MARGIN, top: VIEWPORT_MARGIN }}
         role="dialog"
         aria-modal="true"
