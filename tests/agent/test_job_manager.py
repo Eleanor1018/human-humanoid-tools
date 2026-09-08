@@ -207,7 +207,7 @@ def test_success_persists_exact_spec_evaluation_outputs_and_terminal_manifest(
     assert manifest.job_spec == spec
     assert manifest.state is JobState.COMPLETED
     assert manifest.outcome is JobOutcome.SUCCESS
-    assert manifest.execution_provenance["device"] == "cuda:0"
+    assert manifest.execution_provenance.device == "cuda:0"
     assert manifest.summary["num_frames"] == 30
     assert manifest_descriptor.artifact_id not in {item.artifact_id for item in manifest.artifacts}
     assert len(manifest.artifacts) == 3

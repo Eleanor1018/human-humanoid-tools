@@ -333,7 +333,6 @@ def test_r2r_export_reuses_safe_stem_policy(tmp_path: Path, monkeypatch) -> None
         meta={},
     )
     motion = type("M", (), {"terrain": None, "objects": []})()
-    monkeypatch.setattr(r2r_export_bundle, "r2r_scene_scale_ratio", lambda *_args: 1.0)
     monkeypatch.setattr(
         r2r_export_bundle,
         "_bake_export_joint_q",
@@ -344,8 +343,7 @@ def test_r2r_export_reuses_safe_stem_policy(tmp_path: Path, monkeypatch) -> None
         ret,
         _DummyModel(),
         motion,
-        source_model=_DummyModel(),
-        calibrated_joint_q={},
+        scene_scale_ratio=1.0,
         entry={"source_path": str(source_path)},
         out_root=out_root,
         stem="../../机器人动作",

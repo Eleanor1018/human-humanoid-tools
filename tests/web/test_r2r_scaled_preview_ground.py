@@ -12,8 +12,6 @@ from hhtools.core.hierarchy import Hierarchy
 from hhtools.core.motion import Motion
 from hhtools.retarget.retarget_result import RetargetedMotion
 from hhtools.robot.foot_geometry import lowest_ankle_z, quat_xyzw_to_rotmat
-from hhtools.robot.loader import load_robot
-from hhtools.robot.registry import get, refresh
 from hhtools.web.output.serialize import (
     _scaled_overlay_foot_z,
     serialize_robot_trajectory,
@@ -21,15 +19,8 @@ from hhtools.web.output.serialize import (
 
 
 @pytest.fixture(scope="module")
-def g1_rp1():
-    refresh()
-    try:
-        return (
-            load_robot(get("g1"), compile_mjcf=False),
-            load_robot(get("rp1"), compile_mjcf=False),
-        )
-    except KeyError:
-        pytest.skip("g1/rp1 robots not registered in this environment")
+def g1_rp1(grounding_robot_pair):
+    return grounding_robot_pair
 
 
 def _r2r_motion(*, ankle_z: float = 0.06, sole_z: float = 0.0) -> Motion:

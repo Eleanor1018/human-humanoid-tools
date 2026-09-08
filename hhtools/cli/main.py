@@ -1,7 +1,7 @@
 """``hhtools`` Typer application.
 
 Sub-commands are registered lazily from ``sys.argv`` so ``hhtools web`` does not
-import Viser / Newton / robot CLI modules (and their heavy deps) at startup.
+import Newton / robot CLI modules (and their heavy deps) at startup.
 """
 
 from __future__ import annotations
@@ -41,7 +41,6 @@ _SUBCOMMANDS: list[tuple[str, str, str]] = [
     ("doctor", "hhtools.cli.doctor", "Check local runtime readiness without running jobs."),
     ("robot", "hhtools.cli.robot", "List or add humanoid robot presets."),
     ("retarget", "hhtools.cli.retarget", "Retarget an NPZ motion to a humanoid robot."),
-    ("ui", "hhtools.cli.ui", "Launch the Viser-based web viewer (legacy)."),
     ("web", "hhtools.cli.web", "Launch the HTML / three.js web UI (recommended)."),
 ]
 

@@ -13,9 +13,18 @@ from pathlib import Path
 from fastapi import File, HTTPException, UploadFile
 from fastapi.responses import Response
 
-from hhtools.web.output.export_bundle import ensure_export_path
+from hhtools.application.export import _parse_optional_fps
+from hhtools.application.motions import (
+    _FORMAT_TO_REFERENCE,
+    _ground_motion_for_web,
+    _load_motion_file,
+    _load_motion_for_web,
+    _load_via_adapter,
+)
+from hhtools.application.previews import _load_robot_export_for_web
+from hhtools.application.state import Job, _snapshot_job_request
+from hhtools.io.export_bundle import ensure_export_path
 from hhtools.web.server.boundary import _safe_upload_directory_name
-from hhtools.web.server.export_runtime import _parse_optional_fps
 from hhtools.web.server.library_runtime import (
     _DATASET_TO_REFERENCE,
     _enrich_basket_entry,
@@ -23,15 +32,6 @@ from hhtools.web.server.library_runtime import (
     _library_entry_from_upload,
     _matching_materialized_clip,
 )
-from hhtools.web.server.motion_runtime import (
-    _FORMAT_TO_REFERENCE,
-    _ground_motion_for_web,
-    _load_motion_file,
-    _load_motion_for_web,
-    _load_via_adapter,
-)
-from hhtools.web.server.preview_runtime import _load_robot_export_for_web
-from hhtools.web.server.state import Job, _snapshot_job_request
 
 _log = logging.getLogger(__name__)
 
@@ -90,18 +90,18 @@ def register_motion_routes(
         job: Job | None = None,
         extra: dict | None = None,
     ) -> dict:
-        from hhtools.web.output.serialize import serialize_motion
+        from hhtools.io.scene_serialize import serialize_motion
 
         ground_cb = None
         if job is not None:
-            from hhtools.web.jobs.motion_progress import MotionLoadProgress
+            from hhtools.services.motion_progress import MotionLoadProgress
 
             ground_cb = MotionLoadProgress(job, base=0.42, span=0.13).as_callback()
             ground_cb(0.0, "对齐地面与坐标…")
 
         # Ground + centre the clip ONCE so the visualization, retarget input
         # and any export all share the same source frame (the user wants
-        # "保存时以可视化看到的为来源").  Mirrors the Viser viewer defaults.
+        # "保存时以可视化看到的为来源"). Preserves the established preview defaults.
         motion = _ground_motion_for_web(motion)
         if ground_cb is not None:
             ground_cb(1.0, "地面对齐完成")
@@ -123,7 +123,7 @@ def register_motion_routes(
 
         ser_cb = None
         if job is not None:
-            from hhtools.web.jobs.motion_progress import MotionLoadProgress
+            from hhtools.services.motion_progress import MotionLoadProgress
 
             ser_cb = MotionLoadProgress(job, base=0.55, span=0.17).as_callback()
 
@@ -147,11 +147,11 @@ def register_motion_routes(
         return payload
 
     def _run_motion_library_job(job: Job, body: dict) -> None:
-        from hhtools.web.jobs.motion_progress import MotionLoadProgress
-        from hhtools.web.library.r2r_upload_resolve import _is_robot_export_trajectory
+        from hhtools.services.motion_progress import MotionLoadProgress
+        from hhtools.services.r2r_upload_resolve import _is_robot_export_trajectory
 
         try:
-            from hhtools.web.library.motion_library_links import library_entry_for_load
+            from hhtools.services.motion_library_links import library_entry_for_load
 
             entry = library_entry_for_load(
                 dataset=body["dataset"],
@@ -198,7 +198,7 @@ def register_motion_routes(
             job.mark_terminal("error")
 
     def _run_basket_upload_job(job: Job, drop: Path, profile: str) -> None:
-        from hhtools.web.library.upload_resolve import (
+        from hhtools.services.upload_resolve import (
             enumerate_upload_clips,
             upload_validation_error,
         )
@@ -241,9 +241,9 @@ def register_motion_routes(
         profile: str,
         prefer_paths: list[str] | None = None,
     ) -> None:
-        from hhtools.web.jobs.motion_progress import MotionLoadProgress
-        from hhtools.web.library.motion_library_links import materialize_drop
-        from hhtools.web.library.upload_resolve import resolve_upload_drop
+        from hhtools.services.motion_library_links import materialize_drop
+        from hhtools.services.motion_progress import MotionLoadProgress
+        from hhtools.services.upload_resolve import resolve_upload_drop
 
         try:
             load_prog = MotionLoadProgress(job, base=0.08, span=0.34)
@@ -320,9 +320,9 @@ def register_motion_routes(
         """Convert one uploaded video with the isolated official GVHMR runtime."""
 
         from hhtools.integrations.gvhmr import GvhmrConfig, run_gvhmr
-        from hhtools.web.jobs.motion_progress import MotionLoadProgress
-        from hhtools.web.library.motion_library_links import materialize_drop
-        from hhtools.web.library.upload_resolve import load_clip_at_path
+        from hhtools.services.motion_library_links import materialize_drop
+        from hhtools.services.motion_progress import MotionLoadProgress
+        from hhtools.services.upload_resolve import load_clip_at_path
 
         try:
             config = GvhmrConfig.from_environment()
@@ -498,8 +498,8 @@ def register_motion_routes(
     @app.post("/api/motion/load_library")
     async def load_library(body: dict) -> dict:
         if body.get("usage") == "human_to_robot":
-            from hhtools.web.library.motion_library_links import library_entry_for_load
-            from hhtools.web.library.r2r_upload_resolve import _is_robot_export_trajectory
+            from hhtools.services.motion_library_links import library_entry_for_load
+            from hhtools.services.r2r_upload_resolve import _is_robot_export_trajectory
 
             try:
                 entry = library_entry_for_load(
@@ -564,7 +564,7 @@ def register_motion_routes(
     @app.post("/api/basket/scan")
     def basket_scan(body: dict) -> dict:
         """Enumerate Human2Robot clips on a server-local path (no copy)."""
-        from hhtools.web.library.upload_resolve import enumerate_upload_clips
+        from hhtools.services.upload_resolve import enumerate_upload_clips
 
         raw = str(body.get("source") or "").strip()
         profile = str(body.get("profile") or "auto").strip() or "auto"
@@ -607,12 +607,12 @@ def register_motion_routes(
     ) -> dict:
         """Upload motion clips; auto-link or copy them into the managed library."""
 
-        from hhtools.web.library.motion_library_links import motions_library_root
+        from hhtools.services.motion_library_links import motions_library_root
 
         if not files:
             raise HTTPException(status_code=400, detail="empty upload")
 
-        from hhtools.web.library.upload_resolve import (
+        from hhtools.services.upload_resolve import (
             enumerate_upload_clips,
             upload_validation_error,
         )
@@ -670,7 +670,7 @@ def register_motion_routes(
         rec = state.motions.get(token)
         if not rec:
             raise HTTPException(status_code=404, detail="unknown motion token")
-        from hhtools.web.output.serialize import object_mesh_glb
+        from hhtools.io.scene_serialize import object_mesh_glb
 
         objs = rec["motion"].objects
         if index < 0 or index >= len(objs):

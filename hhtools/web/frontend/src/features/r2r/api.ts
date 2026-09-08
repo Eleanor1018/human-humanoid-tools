@@ -29,6 +29,7 @@ import type {
   StageVec3,
 } from "@/stage/types";
 import type { CalibrationJointWorld } from "@/stage/calibrationInteraction";
+import type { ExecutionProvenance } from "@/types/execution";
 
 export { getRobotLibrary, loadRobot };
 export type { MotionLibraryEntry, RobotPayload, RobotSummary };
@@ -117,6 +118,7 @@ export interface R2rRetargetResult {
   readonly scaled_scene?: R2rScenePayload;
   readonly diagnostics?: ResultDiagnosticsPayload;
   readonly has_scene?: boolean;
+  readonly execution_provenance: ExecutionProvenance;
 }
 
 interface RequestOptions {

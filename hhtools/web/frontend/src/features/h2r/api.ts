@@ -14,6 +14,7 @@ import type {
   StageRobotTrajectoryPayload,
 } from "@/stage/types";
 import type { CalibrationJointWorld } from "@/stage/calibrationInteraction";
+import type { ExecutionProvenance } from "@/types/execution";
 
 export interface CalibrationStatus {
   readonly calibrated: boolean;
@@ -73,6 +74,7 @@ export interface RetargetResult {
   readonly source_fps?: number;
   readonly has_scene?: boolean;
   readonly num_frames: number;
+  readonly execution_provenance: ExecutionProvenance;
 }
 
 export interface RetargetRequest {

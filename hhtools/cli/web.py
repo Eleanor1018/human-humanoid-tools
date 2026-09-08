@@ -1,7 +1,7 @@
 """``hhtools web`` — launch the HTML / three.js web UI (FastAPI backend).
 
-This is the modern replacement for the Viser viewer (``hhtools ui``).  The
-browser does all 3D rendering; the backend re-uses the hhtools pipeline.
+The browser performs 3D rendering while the backend reuses the hhtools
+application and retargeting services.
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ def launch(
         "--save-dir",
         envvar="HHTOOLS_SAVE_DIR",
         show_envvar=True,
-        help="Viser-style persisted NPZ cache (web exports download via the browser).",
+        help="Optional persisted NPZ cache (web exports download via the browser).",
     ),
     cache: Path | None = typer.Option(
         None,

@@ -121,7 +121,7 @@ def _copy_sidecars(src_file: Path, dst_dir: Path) -> None:
 
 def stash_failed_clip(entry: dict, log_root: Path) -> Path:
     """Copy a failed clip (and clip-folder sidecars) into ``log_root``."""
-    from hhtools.web.library.motion_library_links import resolve_clip_on_disk
+    from hhtools.services.motion_library_links import resolve_clip_on_disk
 
     src = resolve_clip_on_disk(
         entry["source_path"],

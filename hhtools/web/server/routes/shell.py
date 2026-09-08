@@ -8,8 +8,16 @@ from pathlib import Path
 from fastapi import Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from hhtools.agent.boundary import agent_error_response, is_agent_path
+from hhtools.agent.boundary import (
+    _is_loopback_literal,
+    _loopback_host,
+    _loopback_origin,
+    agent_error_response,
+    is_agent_path,
+)
 from hhtools.web.server.boundary import _UPLOAD_ENDPOINTS
+
+_STATE_CHANGING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 
 def register_shell_routes(
@@ -69,14 +77,19 @@ def register_shell_routes(
             )
         return JSONResponse({"detail": legacy_detail}, status_code=status_code)
 
+    def _local_write_boundary_failure(request: Request) -> JSONResponse | None:
+        headers = list(request.scope.get("headers", []))
+        if request.client is None or not _is_loopback_literal(request.client.host):
+            return JSONResponse({"detail": "Loopback connection required"}, status_code=403)
+        if not _loopback_host(headers):
+            return JSONResponse({"detail": "Invalid localhost Host"}, status_code=403)
+        if not _loopback_origin(headers):
+            return JSONResponse({"detail": "Origin forbidden"}, status_code=403)
+        return None
+
     @app.middleware("http")
     async def _desktop_request_guard(request, call_next):  # type: ignore[no-untyped-def]
-        """Protect the localhost API when it is hosted inside Electron.
-
-        Browser mode leaves ``desktop_session_secret`` unset and keeps its original behavior.
-        Desktop mode requires the per-launch secret on every request; exact Host and Origin checks
-        add defense against DNS rebinding and requests from unrelated local pages.
-        """
+        """Enforce the local trust boundary, plus Electron's per-launch session."""
         if desktop_session_secret is not None:
             host = request.headers.get("host", "")
             if desktop_allowed_host is not None and host.lower() != desktop_allowed_host.lower():
@@ -111,6 +124,11 @@ def register_shell_routes(
                     message="The desktop Agent origin is invalid.",
                     legacy_detail="Invalid desktop origin",
                 )
+
+        elif request.method in _STATE_CHANGING_METHODS:
+            boundary_failure = _local_write_boundary_failure(request)
+            if boundary_failure is not None:
+                return boundary_failure
 
         response = await call_next(request)
         if desktop_session_secret is not None:

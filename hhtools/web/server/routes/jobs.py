@@ -11,20 +11,20 @@ from typing import Any
 from fastapi import HTTPException
 from fastapi.responses import FileResponse, Response
 
-from hhtools.web.jobs.job_specs import (
+from hhtools.application.motions import (
+    _load_motion_file,
+    _load_motion_for_web,
+    _load_via_adapter,
+)
+from hhtools.application.previews import _load_robot_export_for_web
+from hhtools.application.state import Job, _snapshot_job_request
+from hhtools.contracts.legacy_jobs import (
     JobSpecError,
     build_job_spec,
     normalize_job_spec,
     replay_capability,
 )
 from hhtools.web.server.job_runtime import _ACTIVE_JOB_STATUSES
-from hhtools.web.server.motion_runtime import (
-    _load_motion_file,
-    _load_motion_for_web,
-    _load_via_adapter,
-)
-from hhtools.web.server.preview_runtime import _load_robot_export_for_web
-from hhtools.web.server.state import Job, _snapshot_job_request
 
 _log = logging.getLogger(__name__)
 
@@ -84,7 +84,7 @@ def register_job_routes(
 
     def _load_replay_motion(job: Job, request: dict[str, Any]) -> str:
         """Rebuild a motion token from the source path captured by JobSpec."""
-        from hhtools.web.library.r2r_upload_resolve import _is_robot_export_trajectory
+        from hhtools.services.r2r_upload_resolve import _is_robot_export_trajectory
 
         source_path = Path(str(request["source_path"])).expanduser().resolve()
         job.progress = max(job.progress, 0.02)
@@ -98,7 +98,7 @@ def register_job_routes(
             candidate = dict(source_entry)
             candidate["source_path"] = str(source_path)
             try:
-                from hhtools.web.library.motion_library_links import library_entry_for_load
+                from hhtools.services.motion_library_links import library_entry_for_load
 
                 entry = library_entry_for_load(
                     dataset=str(candidate.get("dataset") or "unknown"),

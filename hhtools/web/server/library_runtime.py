@@ -33,7 +33,7 @@ def _adopt_motion_library_root(
 ) -> Path:
     """Create or explicitly adopt one dedicated managed library container."""
 
-    from hhtools.web.library.motion_library_settings import (
+    from hhtools.services.motion_library_settings import (
         motion_library_marker_path,
         motion_library_marker_payload,
         validate_motion_library_marker,
@@ -121,7 +121,7 @@ def _matching_materialized_clip(
     profile: str,
 ) -> Path:
     """Match a loaded snapshot clip to its newly materialized library path."""
-    from hhtools.web.library.upload_resolve import enumerate_upload_clips
+    from hhtools.services.upload_resolve import enumerate_upload_clips
 
     library_root = Path(library_root).resolve()
     snapshot_root = Path(snapshot_root).resolve()
@@ -168,7 +168,7 @@ def _library_entry_from_link(
     dataset: str | None,
 ) -> dict[str, Any]:
     """Build a library-shaped entry for a clip under the managed library root."""
-    from hhtools.web.library.motion_library_links import scan_motions_library
+    from hhtools.services.motion_library_links import scan_motions_library
 
     picked = Path(picked).resolve()
     sp = str(picked)
@@ -208,7 +208,7 @@ def _library_entry_from_upload(
     origin: str = "upload",
 ) -> dict[str, Any]:
     """Build a batch entry for a direct-path clip, uploaded or server-local."""
-    from hhtools.web.library.upload_resolve import export_subdir_for_clip
+    from hhtools.services.upload_resolve import export_subdir_for_clip
 
     picked = Path(picked).resolve()
     drop_dir = Path(drop_dir).resolve()
@@ -264,7 +264,7 @@ def _entries_for_batch_source(
     profile: object = "auto",
 ) -> tuple[Path, str, list[dict[str, Any]]]:
     """Enumerate a local batch directory while leaving every clip in place."""
-    from hhtools.web.library.upload_resolve import (
+    from hhtools.services.upload_resolve import (
         enumerate_upload_clips,
         upload_validation_error,
     )

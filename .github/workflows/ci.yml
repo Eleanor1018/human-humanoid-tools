@@ -1,70 +1,156 @@
 name: CI
 
-on:
+"on":
   push:
-    branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  lint-and-test:
-    name: Lint & test (CPU)
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-        python-version: ["3.12"]
+  python:
+    name: Python 3.12 · full application
+    runs-on: ubuntu-22.04
+    timeout-minutes: 40
+    env:
+      UV_FROZEN: "1"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          python-version: ${{ matrix.python-version }}
-          cache: pip
+          version: "0.12.9"
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
 
-      - name: Install package (CPU-only)
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[formats,dev]"
+      - name: Sync locked application dependencies
+        run: uv sync --all-extras --dev
 
-      - name: Python architecture boundaries
-        run: python -m pytest -q tests/test_python_package_boundaries.py
+      - name: Reject critical Python errors
+        run: uv run --no-sync ruff check hhtools tests --select E9,F63,F7,F82
 
-      - name: Ruff (lint)
-        run: ruff check hhtools
+      - name: Lint maintained application boundaries
+        run: >-
+          uv run --no-sync ruff check
+          hhtools/application hhtools/contracts hhtools/mcp hhtools/services
+          hhtools/web/server
 
-      - name: Ruff (format)
-        run: ruff format --check hhtools
+      - name: Check maintained Python formatting
+        run: >-
+          uv run --no-sync ruff format --check
+          hhtools/application hhtools/contracts hhtools/mcp hhtools/services
+          hhtools/web/server
 
-  frontend:
-    name: Frontend architecture & tests
-    runs-on: ubuntu-latest
+      - name: Run complete Python regression suite
+        run: uv run --no-sync python -m pytest -q
+
+      - name: Build wheel
+        run: uv build --wheel --clear --force-pep517
+
+      - name: Verify wheel contents
+        run: uv run --no-sync python scripts/verify_wheel_contents.py dist/*.whl
+
+  windows-contracts:
+    name: Windows · portable contracts
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      UV_FROZEN: "1"
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.9"
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Sync portable dependencies
+        run: uv sync --extra dev
+
+      - name: Run portable architecture and contract tests
+        run: >-
+          uv run --no-sync python -m pytest -q
+          tests/test_python_package_boundaries.py
+          tests/test_agent_distribution.py
+          tests/agent/test_contracts.py
+
+      - name: Check lightweight CLI startup
+        run: uv run --no-sync hhtools --version
+
+  web-renderer:
+    name: React Web/Electron renderer
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: hhtools/web/frontend
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: "24"
           cache: npm
           cache-dependency-path: hhtools/web/frontend/package-lock.json
 
-      - name: Install frontend dependencies
+      - name: Install locked frontend dependencies
         run: npm ci
 
-      - name: Frontend architecture and unit tests
+      - name: Type-check and run renderer tests
         run: npm test
 
-      - name: Build shared Web/Electron renderer
+      - name: Build shared renderer
+        run: npm run build
+
+      - name: Verify committed renderer assets are current
+        working-directory: .
+        shell: bash
+        run: |
+          git status --porcelain -- hhtools/web/static > "$RUNNER_TEMP/hhtools-static-status.txt"
+          cat "$RUNNER_TEMP/hhtools-static-status.txt"
+          test ! -s "$RUNNER_TEMP/hhtools-static-status.txt"
+
+  desktop-shell:
+    name: Electron desktop shell
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: desktop
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install locked desktop dependencies
+        run: npm ci
+
+      - name: Type-check desktop shell
+        run: npm run typecheck
+
+      - name: Run desktop tests
+        run: npm test
+
+      - name: Build Electron main and preload bundles
         run: npm run build

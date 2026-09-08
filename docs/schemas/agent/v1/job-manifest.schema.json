@@ -189,6 +189,233 @@
       "title": "ErrorStage",
       "type": "string"
     },
+    "ExecutionProvenance": {
+      "additionalProperties": false,
+      "description": "Observed execution environment recorded after a solver actually runs.",
+      "properties": {
+        "backend": {
+          "default": "unknown",
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Backend",
+          "type": "string"
+        },
+        "cuda_graph_requested": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cuda Graph Requested"
+        },
+        "cuda_graph_used": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cuda Graph Used"
+        },
+        "cuda_runtime": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cuda Runtime"
+        },
+        "dataset": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dataset"
+        },
+        "device": {
+          "default": "unknown",
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Device",
+          "type": "string"
+        },
+        "device_kind": {
+          "default": "unknown",
+          "enum": [
+            "cpu",
+            "cuda",
+            "mps",
+            "unknown"
+          ],
+          "title": "Device Kind",
+          "type": "string"
+        },
+        "executor": {
+          "default": "unknown",
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Executor",
+          "type": "string"
+        },
+        "fallback_reason": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fallback Reason"
+        },
+        "fallback_used": {
+          "default": false,
+          "title": "Fallback Used",
+          "type": "boolean"
+        },
+        "motion_asset_id": {
+          "anyOf": [
+            {
+              "description": "Content-addressed asset id.",
+              "pattern": "^asset:sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Motion Asset Id"
+        },
+        "motion_sha256": {
+          "anyOf": [
+            {
+              "description": "Lower-case SHA-256 content digest.",
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Motion Sha256"
+        },
+        "precision": {
+          "default": "unknown",
+          "enum": [
+            "float32",
+            "float64",
+            "mixed",
+            "unknown"
+          ],
+          "title": "Precision",
+          "type": "string"
+        },
+        "reference": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reference"
+        },
+        "robot_asset_id": {
+          "anyOf": [
+            {
+              "description": "Content-addressed asset id.",
+              "pattern": "^asset:sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Robot Asset Id"
+        },
+        "robot_config_sha256": {
+          "anyOf": [
+            {
+              "description": "Lower-case SHA-256 content digest.",
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Robot Config Sha256"
+        },
+        "runtime": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Runtime"
+        },
+        "runtime_version": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Runtime Version"
+        },
+        "solver": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Solver"
+        }
+      },
+      "title": "ExecutionProvenance",
+      "type": "object"
+    },
     "JobOutcome": {
       "description": "Semantic result of a completed job.",
       "enum": [
@@ -591,9 +818,7 @@
       "default": null
     },
     "execution_provenance": {
-      "additionalProperties": true,
-      "title": "Execution Provenance",
-      "type": "object"
+      "$ref": "#/$defs/ExecutionProvenance"
     },
     "job_id": {
       "maxLength": 256,

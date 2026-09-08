@@ -9,16 +9,16 @@ from typing import Any
 
 from fastapi import HTTPException, Request
 
+from hhtools.services.job_scheduler import JobSchedulerClosedError
+from hhtools.services.job_settings import JobAdmissionSettings, updated_job_admission_settings
+from hhtools.services.motion_library_links import motions_library_root
+from hhtools.services.motion_library_settings import (
+    effective_motion_library_root,
+    updated_motion_library_settings,
+)
 from hhtools.utils.paths import (
     HHTOOLS_MOTION_LIBRARY_ROOT_ENV,
     user_motion_library_root,
-)
-from hhtools.web.jobs.job_scheduler import JobSchedulerClosedError
-from hhtools.web.jobs.job_settings import JobAdmissionSettings, updated_job_admission_settings
-from hhtools.web.library.motion_library_links import motions_library_root
-from hhtools.web.library.motion_library_settings import (
-    effective_motion_library_root,
-    updated_motion_library_settings,
 )
 from hhtools.web.server.library_runtime import _adopt_motion_library_root
 

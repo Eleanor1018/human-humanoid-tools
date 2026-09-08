@@ -6,7 +6,7 @@ from pathlib import Path
 
 from fastapi import HTTPException
 
-from hhtools.web.library.motion_library_links import motions_library_root
+from hhtools.services.motion_library_links import motions_library_root
 from hhtools.web.server.library_runtime import _enrich_basket_entry
 
 
@@ -18,8 +18,8 @@ def register_library_routes(
 ) -> None:
     @app.get("/api/library")
     def library(source: str | None = None) -> dict:
-        from hhtools.viewer.library import scan_library
-        from hhtools.web.library.motion_library_links import scan_motions_library
+        from hhtools.services.motion_library import scan_library
+        from hhtools.services.motion_library_links import scan_motions_library
 
         root = Path(source) if source else state.source_root
         merged: list[dict] = []
@@ -70,7 +70,7 @@ def register_library_routes(
 
     @app.post("/api/library/link")
     def library_link(body: dict) -> dict:
-        from hhtools.web.library.motion_library_links import link_to_library, scan_motions_library
+        from hhtools.services.motion_library_links import link_to_library, scan_motions_library
 
         path = str(body.get("path") or "").strip()
         folder_label = str(body.get("folder_label") or "").strip() or None
@@ -98,7 +98,7 @@ def register_library_routes(
 
     @app.delete("/api/library/link/{folder_label}")
     def library_unlink(folder_label: str) -> dict:
-        from hhtools.web.library.motion_library_links import remove_library_folder
+        from hhtools.services.motion_library_links import remove_library_folder
 
         with motion_library_publish_lock:
             removed = remove_library_folder(folder_label)

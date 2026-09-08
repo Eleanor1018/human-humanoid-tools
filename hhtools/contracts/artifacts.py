@@ -7,6 +7,7 @@ from typing import Annotated, Any
 from pydantic import AwareDatetime, Field, model_validator
 
 from .common import ApiError, ContractModel, ErrorStage, MachineCode, PlanId, SchemaVersion
+from .execution import ExecutionProvenance
 from .job_spec import JobSpecV2
 from .jobs import ArtifactDescriptor, JobOutcome, JobState
 
@@ -61,7 +62,7 @@ class JobManifest(ContractModel):
     error: ApiError | None = None
     cancellation_requested: bool = False
     job_spec: JobSpecV2
-    execution_provenance: dict[str, Any] = Field(default_factory=dict)
+    execution_provenance: ExecutionProvenance = Field(default_factory=ExecutionProvenance)
     summary: dict[str, Any] = Field(default_factory=dict)
     artifacts: list[ArtifactDescriptor] = Field(default_factory=list, max_length=10_000)
     submitted_at: AwareDatetime

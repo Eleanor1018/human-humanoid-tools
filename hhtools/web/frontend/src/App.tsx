@@ -1,4 +1,6 @@
 import {
+  Suspense,
+  lazy,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -33,28 +35,23 @@ import {
 } from "./localization";
 import { MotionView } from "./features/motion/MotionView";
 import type { MotionLibraryEntry } from "./features/motion/api";
-import { BatchView } from "./features/batch/BatchView";
-import { AnalysisView } from "./features/analysis/AnalysisView";
 import type { AnalysisRobotPreview } from "./features/analysis/api";
 import {
   storedForceReanalysis,
   storeForceReanalysis,
 } from "./features/analysis/preferences";
-import { RobotView } from "./features/robot/RobotView";
 import {
   rememberTutorialSeen,
   shouldAutoOpenTutorial,
   type TutorialPersistenceBridge,
   type TutorialStep,
 } from "./features/tutorial/model";
-import { HumanToRobotView } from "./features/h2r/HumanToRobotView";
 import {
   retargetExportUrl,
   type CalibrationPose,
   type RetargetResult as H2rResult,
   type ScaledPreviewResult as H2rScaledPreview,
 } from "./features/h2r/api";
-import { RobotToRobotView } from "./features/r2r/RobotToRobotView";
 import {
   r2rExportUrl,
   type R2rRetargetResult,
@@ -68,7 +65,6 @@ import {
   type ComparisonPreset,
 } from "./features/result/comparison";
 import { TaskDrawer } from "./features/tasks/TaskDrawer";
-import { VideoToMotionView } from "./features/video-to-motion/VideoToMotionView";
 import type { ViewId } from "./navigation";
 import { Stage } from "./stage/Stage";
 import { DEFAULT_CALIBRATION_DISPLAY } from "./stage/calibrationDisplay";
@@ -85,6 +81,26 @@ import {
   storedWorkspaceLayout,
   storeWorkspaceLayout,
 } from "./workspaceLayout";
+
+const AnalysisView = lazy(async () => ({
+  default: (await import("./features/analysis/AnalysisView")).AnalysisView,
+}));
+const BatchView = lazy(async () => ({
+  default: (await import("./features/batch/BatchView")).BatchView,
+}));
+const HumanToRobotView = lazy(async () => ({
+  default: (await import("./features/h2r/HumanToRobotView")).HumanToRobotView,
+}));
+const RobotToRobotView = lazy(async () => ({
+  default: (await import("./features/r2r/RobotToRobotView")).RobotToRobotView,
+}));
+const RobotView = lazy(async () => ({
+  default: (await import("./features/robot/RobotView")).RobotView,
+}));
+const VideoToMotionView = lazy(async () => ({
+  default: (await import("./features/video-to-motion/VideoToMotionView"))
+    .VideoToMotionView,
+}));
 
 function motionWithScene(
   motion: StageMotionPayload | null | undefined,
@@ -141,6 +157,17 @@ function preferredSystemLocale(): WorkspaceLocale {
   ]);
 }
 
+function InspectorLoading() {
+  return (
+    <div
+      className="grid h-full place-items-center text-xs text-muted-foreground"
+      role="status"
+    >
+      Loading workspace…
+    </div>
+  );
+}
+
 export function App() {
   const themeOverride = useRef<ApplicationTheme | null | undefined>(undefined);
   const localeOverride = useRef<WorkspaceLocale | null | undefined>(undefined);
@@ -152,6 +179,9 @@ export function App() {
   }
 
   const [activeView, setActiveView] = useState<ViewId>("motion");
+  const [mountedViews, setMountedViews] = useState<ReadonlySet<ViewId>>(
+    () => new Set(["motion"]),
+  );
   const [theme, setTheme] = useState<ApplicationTheme>(() =>
     themeOverride.current ?? preferredSystemTheme(),
   );
@@ -235,6 +265,12 @@ export function App() {
   useLayoutEffect(() => {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
+
+  useEffect(() => {
+    setMountedViews((current) =>
+      current.has(activeView) ? current : new Set([...current, activeView]),
+    );
+  }, [activeView]);
 
   useLayoutEffect(() => {
     document.documentElement.lang = locale;
@@ -642,22 +678,32 @@ export function App() {
             libraryRevision={motionLibraryRevision}
           />
         </div>
-        <div className={activeView === "robot-assets" ? "h-full" : "hidden"}>
-          <RobotView
-            currentRobot={workspaceRobot}
-            onRobotLoaded={publishRobot}
-            importRequest={importRequest}
-          />
-        </div>
-        <div className={activeView === "video-to-motion" ? "h-full" : "hidden"}>
-          <VideoToMotionView
-            onMotionLoaded={publishMotion}
-            importRequest={importRequest}
-            runtimeRevision={gvhmrRevision}
-          />
-        </div>
-        <div className={activeView === "h2r" ? "h-full" : "hidden"}>
-          <HumanToRobotView
+        {mountedViews.has("robot-assets") && (
+          <div className={activeView === "robot-assets" ? "h-full" : "hidden"}>
+            <Suspense fallback={<InspectorLoading />}>
+              <RobotView
+                currentRobot={workspaceRobot}
+                onRobotLoaded={publishRobot}
+                importRequest={importRequest}
+              />
+            </Suspense>
+          </div>
+        )}
+        {mountedViews.has("video-to-motion") && (
+          <div className={activeView === "video-to-motion" ? "h-full" : "hidden"}>
+            <Suspense fallback={<InspectorLoading />}>
+              <VideoToMotionView
+                onMotionLoaded={publishMotion}
+                importRequest={importRequest}
+                runtimeRevision={gvhmrRevision}
+              />
+            </Suspense>
+          </div>
+        )}
+        {mountedViews.has("h2r") && (
+          <div className={activeView === "h2r" ? "h-full" : "hidden"}>
+            <Suspense fallback={<InspectorLoading />}>
+              <HumanToRobotView
             currentMotion={workspaceMotion}
             currentRobot={workspaceRobot}
             currentResult={h2rResult}
@@ -683,10 +729,14 @@ export function App() {
             }
             onOpenMotionLibrary={() => setActiveView("motion")}
             onOpenRobotLibrary={() => setActiveView("robot-assets")}
-          />
-        </div>
-        <div className={activeView === "r2r" ? "h-full" : "hidden"}>
-          <RobotToRobotView
+              />
+            </Suspense>
+          </div>
+        )}
+        {mountedViews.has("r2r") && (
+          <div className={activeView === "r2r" ? "h-full" : "hidden"}>
+            <Suspense fallback={<InspectorLoading />}>
+              <RobotToRobotView
             active={activeView === "r2r"}
             currentSourceRobot={r2rSourceRobot}
             currentTargetRobot={r2rTargetRobot}
@@ -706,23 +756,33 @@ export function App() {
               changeComparisonPreset("r2r", preset)
             }
             onOpenRobotLibrary={() => setActiveView("robot-assets")}
-          />
-        </div>
-        <div className={activeView === "batch" ? "h-full" : "hidden"}>
-          <BatchView
-            active={activeView === "batch"}
-            runtimeRevision={gvhmrRevision}
-            humanEntries={humanBatchEntries}
-            onHumanEntriesChange={setHumanBatchEntries}
-          />
-        </div>
-        <div className={activeView === "dataset-viz" ? "h-full" : "hidden"}>
-          <AnalysisView
-            forceAnalysis={forceAnalysis}
-            onMotionLoaded={publishAnalysisMotion}
-            onRobotPreviewLoaded={publishAnalysisRobotPreview}
-          />
-        </div>
+              />
+            </Suspense>
+          </div>
+        )}
+        {mountedViews.has("batch") && (
+          <div className={activeView === "batch" ? "h-full" : "hidden"}>
+            <Suspense fallback={<InspectorLoading />}>
+              <BatchView
+                active={activeView === "batch"}
+                runtimeRevision={gvhmrRevision}
+                humanEntries={humanBatchEntries}
+                onHumanEntriesChange={setHumanBatchEntries}
+              />
+            </Suspense>
+          </div>
+        )}
+        {mountedViews.has("dataset-viz") && (
+          <div className={activeView === "dataset-viz" ? "h-full" : "hidden"}>
+            <Suspense fallback={<InspectorLoading />}>
+              <AnalysisView
+                forceAnalysis={forceAnalysis}
+                onMotionLoaded={publishAnalysisMotion}
+                onRobotPreviewLoaded={publishAnalysisRobotPreview}
+              />
+            </Suspense>
+          </div>
+        )}
       </Inspector>
       <TaskDrawer />
       <a

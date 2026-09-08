@@ -30,3 +30,10 @@ def test_version_flag_does_not_load_optional_command_trees(monkeypatch) -> None:
     monkeypatch.setattr(sys, "argv", ["hhtools", "--version"])
 
     assert main._subcommands_for_argv() == []
+
+
+def test_legacy_ui_command_is_retired() -> None:
+    commands = {name for name, _module, _help in main._SUBCOMMANDS}
+
+    assert "ui" not in commands
+    assert "web" in commands

@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 from contextlib import asynccontextmanager
+from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any, cast
 
+from hhtools.application.runtime import ApplicationPaths
 from hhtools.contracts import CapabilityResponse, SchedulerCapability, SchedulerMode
 from hhtools.mcp.runtime import LocalRuntimeConfig, local_agent_runtime
 from hhtools.mcp.server import create_mcp_server
@@ -71,5 +74,9 @@ if __name__ == "__main__":
     )
     sys.modules["hhtools.web.server"] = fake_web_server
 
-    config = LocalRuntimeConfig()
-    create_mcp_server(config, runtime_factory=lambda: local_agent_runtime(config)).run("stdio")
+    with tempfile.TemporaryDirectory(prefix="hhtools-stdio-warp-") as temporary:
+        config = LocalRuntimeConfig(paths=ApplicationPaths.isolated(Path(temporary)))
+        create_mcp_server(
+            config,
+            runtime_factory=lambda: local_agent_runtime(config),
+        ).run("stdio")

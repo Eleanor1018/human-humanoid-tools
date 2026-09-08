@@ -9,27 +9,27 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from hhtools.web.server.export_runtime import (
+from hhtools.application.export import (
     _batch_export_subdir,
     _parse_csv_header,
     _parse_optional_fps,
     _parse_optional_time,
     _write_r2r_export,
 )
-from hhtools.web.server.motion_runtime import _motion_for_retarget
-from hhtools.web.server.preview_runtime import _ground_skeleton_preview
-from hhtools.web.server.progress import (
+from hhtools.application.motions import _motion_for_retarget
+from hhtools.application.previews import _ground_skeleton_preview
+from hhtools.application.progress import (
     _set_batch_job_progress,
     _set_retarget_job_clip_progress,
 )
-from hhtools.web.server.robot_runtime import (
+from hhtools.application.robots import (
     _join_robot_prewarm,
     _require_newton_package,
 )
-from hhtools.web.server.state import _snapshot_job_request
+from hhtools.application.state import _snapshot_job_request
 
 if TYPE_CHECKING:
-    from hhtools.web.server.state import Job, SessionState
+    from hhtools.application.state import Job, SessionState
 
 _log = logging.getLogger(__name__)
 
@@ -99,17 +99,17 @@ def _run_r2r_source_upload_job(
     source_fps: float | None = None,
     selected_path: Path | None = None,
 ) -> None:
+    from hhtools.io.r2r_export_bundle import clip_has_export_scene
+    from hhtools.io.scene_serialize import (
+        serialize_motion_skeleton_preview,
+        serialize_robot_trajectory,
+    )
     from hhtools.retarget import robot_to_robot as r2r
-    from hhtools.web.library.r2r_upload_resolve import (
+    from hhtools.services.r2r_upload_resolve import (
         detect_r2r_profile,
         enumerate_r2r_clips,
         r2r_clip_ref_for_path,
         validate_r2r_upload,
-    )
-    from hhtools.web.output.r2r_export_bundle import clip_has_export_scene
-    from hhtools.web.output.serialize import (
-        serialize_motion_skeleton_preview,
-        serialize_robot_trajectory,
     )
 
     try:
@@ -172,7 +172,8 @@ def _run_r2r_source_upload_job(
         if src_has_scene:
             job.progress = 0.88
             job.message = "正在加载地形/物体…"
-            from hhtools.web.output.r2r_scene import load_r2r_clip_scene
+            from hhtools.io.r2r_scene import load_r2r_clip_scene
+            from hhtools.retarget.interaction_mesh.heightfield import obj_to_heightfield
 
             scaled_scene = load_r2r_clip_scene(
                 clip_dir,
@@ -180,6 +181,7 @@ def _run_r2r_source_upload_job(
                 robot_path=picked,
                 num_frames=int(traj.joint_q.shape[0]),
                 framerate=float(traj.framerate),
+                terrain_loader=obj_to_heightfield,
             )
 
         job.progress = 0.9
@@ -236,7 +238,7 @@ def _run_r2r_source_upload_job(
 
 def _r2r_entry_from_upload(drop_dir: Path, ref) -> dict:
     from hhtools.retarget import robot_to_robot as r2r
-    from hhtools.web.library.r2r_upload_resolve import export_subdir_for_r2r_clip
+    from hhtools.services.r2r_upload_resolve import export_subdir_for_r2r_clip
 
     picked = Path(ref.path).resolve()
     drop_dir = Path(drop_dir).resolve()
@@ -276,7 +278,7 @@ def _r2r_entry_from_upload(drop_dir: Path, ref) -> dict:
 
 
 def _run_r2r_basket_upload_job(job: Job, drop: Path, profile: str) -> None:
-    from hhtools.web.library.r2r_upload_resolve import (
+    from hhtools.services.r2r_upload_resolve import (
         enumerate_r2r_clips,
         validate_r2r_upload,
     )
@@ -314,13 +316,15 @@ def _r2r_prepare_retarget_motion(
         return motion
     if not has_scene or clip_dir is None or robot_path is None:
         return motion
-    from hhtools.web.output.r2r_scene import attach_r2r_clip_scene_to_motion
+    from hhtools.io.r2r_scene import attach_r2r_clip_scene_to_motion
+    from hhtools.retarget.interaction_mesh.heightfield import obj_to_heightfield
 
     return attach_r2r_clip_scene_to_motion(
         motion,
         Path(clip_dir),
         profile=profile,
         robot_path=Path(robot_path),
+        terrain_loader=obj_to_heightfield,
     )
 
 

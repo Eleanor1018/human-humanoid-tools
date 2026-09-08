@@ -9,8 +9,8 @@ from pathlib import Path
 from fastapi import File, HTTPException, UploadFile
 from fastapi.responses import Response
 
-from hhtools.web.server.preview_runtime import _run_dataset_robot_preview_job
-from hhtools.web.server.state import Job
+from hhtools.application.previews import _run_dataset_robot_preview_job
+from hhtools.application.state import Job
 
 _log = logging.getLogger(__name__)
 
@@ -255,7 +255,7 @@ def register_dataset_routes(app, *, state, jobs, uploads) -> None:
         """Serve object mesh from a dataset robot-preview clip folder."""
         from types import SimpleNamespace
 
-        from hhtools.web.output.serialize import object_mesh_glb
+        from hhtools.io.scene_serialize import object_mesh_glb
 
         rec = state.dataset_previews.get(token)
         if rec is None:

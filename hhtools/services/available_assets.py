@@ -112,9 +112,7 @@ def is_catalog_motion_sidecar(path: Path) -> bool:
 
     name = path.name.casefold()
     suffix = path.suffix.casefold()
-    if suffix == ".csv" and (
-        name == "motion_actor.csv" or name.startswith(("object_", "prop_"))
-    ):
+    if suffix == ".csv" and (name == "motion_actor.csv" or name.startswith(("object_", "prop_"))):
         return True
     if suffix not in {".pkl", ".pickle"}:
         return False
@@ -256,9 +254,7 @@ def classify_catalog_robot_trajectory(
                     continue
                 cells = [cell.strip() for cell in stripped.split(",")]
                 normalized = [cell.casefold() for cell in cells]
-                if "root_x" in normalized or any(
-                    cell.startswith("dof_") for cell in normalized
-                ):
+                if "root_x" in normalized or any(cell.startswith("dof_") for cell in normalized):
                     robot_trajectory = True
                     break
                 try:
@@ -347,9 +343,7 @@ class AvailableAssetCatalogService:
         aliases = self._registration_hints.canonical_root_aliases(self._preferred_root_ids)
         canonical_roots = set(aliases.values())
         root_ids = (
-            [aliases[request.root_id]]
-            if request.root_id is not None
-            else sorted(canonical_roots)
+            [aliases[request.root_id]] if request.root_id is not None else sorted(canonical_roots)
         )
         entries: dict[tuple[str, str, str], AvailableAssetCatalogEntry] = {}
         for root_id in root_ids:

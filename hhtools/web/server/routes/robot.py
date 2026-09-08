@@ -9,13 +9,13 @@ from pathlib import Path
 
 from fastapi import File, HTTPException, UploadFile
 
-from hhtools.web.server.boundary import _safe_upload_directory_name
-from hhtools.web.server.robot_runtime import (
+from hhtools.application.robots import (
     _is_builtin_robot_preset,
     _merge_retarget_references,
     _read_yaml_retarget_references,
     _start_robot_prewarm,
 )
+from hhtools.web.server.boundary import _safe_upload_directory_name
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,9 +50,9 @@ def register_robot_routes(app, *, state, uploads) -> RobotRouteOperations:
         }
 
     def _serialize_and_store_robot(name: str) -> dict:
+        from hhtools.io.scene_serialize import serialize_robot
         from hhtools.robot.loader import load_robot
         from hhtools.robot.registry import get as get_preset
-        from hhtools.web.output.serialize import serialize_robot
 
         preset = get_preset(name)
         model = load_robot(preset, compile_mjcf=True)

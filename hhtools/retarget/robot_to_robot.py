@@ -1326,7 +1326,7 @@ def align_retargeted_ankles_to_scaled_source(
     """
     from dataclasses import replace
 
-    from hhtools.viewer.anatomy import motion_has_interaction_scene
+    from hhtools.core.anatomy import motion_has_interaction_scene
 
     if motion_has_interaction_scene(source_motion):
         return retargeted
@@ -1385,6 +1385,36 @@ def align_retargeted_ankles_to_scaled_source(
     return replace(retargeted, joint_q=out, meta=meta)
 
 
+def r2r_scene_scale_ratio(
+    source_model,
+    target_model,
+    motion,
+    calibrated_joint_q: dict[str, float],
+) -> float:
+    """Return the source-to-target scene scale used by R2R preview and export."""
+
+    from hhtools.retarget.calibration.calibration import uniform_overlay_scale_for_motion
+
+    config, reference = _build_scaler_config(
+        source_model,
+        target_model,
+        calibrated_joint_q,
+    )
+    ik_canonicals = (
+        frozenset(target_model.preset.ik_map.keys())
+        if target_model.preset.ik_map
+        else frozenset()
+    )
+    return float(
+        uniform_overlay_scale_for_motion(
+            config,
+            float(reference.height_m),
+            motion,
+            ik_map_keys=ik_canonicals,
+        )
+    )
+
+
 def suggested_r2r_backend(profile: str, *, has_scene: bool = False) -> str:
     """Default retarget backend for an R2R upload profile."""
     prof = (profile or "mimic").strip().lower()
@@ -1411,7 +1441,7 @@ def retarget_robot_to_robot(
     ``backend`` is ``"newton"`` (GPU IK) or ``"interaction_mesh"`` (MPC on
     terrain / interaction objects).  For the latter, attach scene data to
     ``source_motion`` before calling (see
-    :func:`~hhtools.web.output.r2r_scene.attach_r2r_clip_scene_to_motion`).
+    :func:`~hhtools.io.r2r_scene.attach_r2r_clip_scene_to_motion`).
     """
     cfg, ref = _build_scaler_config(source_model, target_model, calibrated_joint_q)
     reference_key = f"robot_{source_model.preset.name}"

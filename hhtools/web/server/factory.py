@@ -12,20 +12,14 @@ Run via ``hhtools web`` (see :mod:`hhtools.cli.web`) or::
 from __future__ import annotations
 
 import logging
-import threading
 from pathlib import Path
 
-from hhtools.services.runtime_lease import AgentRuntimeLease
-from hhtools.web.jobs.job_scheduler import (
-    JobScheduler,
+from hhtools.application.runtime import (
+    ApplicationPaths,
+    ApplicationRuntime,
+    build_application_runtime,
 )
-from hhtools.web.jobs.job_settings import (
-    JobAdmissionSettingsStore,
-)
-from hhtools.web.server.job_runtime import WebJobRuntime
-from hhtools.web.server.lifecycle import RuntimeLifecycle
-from hhtools.web.server.paths import STATIC_ROOT
-from hhtools.web.server.settings import (
+from hhtools.application.settings import (
     _DEFAULT_JOB_TTL_SECONDS,
     _DEFAULT_MAX_QUEUED_JOBS,
     _DEFAULT_MAX_RETAINED_JOBS,
@@ -35,13 +29,14 @@ from hhtools.web.server.settings import (
     _DEFAULT_MAX_UPLOAD_REQUEST_BYTES,
     UI_BUILD_ID,
 )
-from hhtools.web.server.state import SessionState, _cleanup_session_state
+from hhtools.web.server.job_runtime import WebJobRuntime
+from hhtools.web.server.paths import STATIC_ROOT
 from hhtools.web.server.upload_runtime import UploadStore
 
 _log = logging.getLogger(__name__)
 
 
-def _create_app_owned(
+def _mount_web_app(
     *,
     source_root: Path,
     save_dir: Path,
@@ -61,15 +56,11 @@ def _create_app_owned(
     agent_mcp_available: bool = False,
     agent_rest_available: bool = True,
     agent_json_cli_available: bool = True,
-    agent_runtime_lease: AgentRuntimeLease,
+    runtime: ApplicationRuntime,
 ):
-    """Build the FastAPI application while ``agent_runtime_lease`` is held."""
+    """Mount HTTP adapters onto an application-owned runtime."""
     from fastapi import FastAPI
     from fastapi.staticfiles import StaticFiles
-
-    from hhtools.utils.paths import user_job_history_dir
-    from hhtools.viewer.cache import EphemeralCache
-    from hhtools.web.jobs.job_history import JobHistoryStore
 
     static_dir = STATIC_ROOT
 
@@ -94,40 +85,19 @@ def _create_app_owned(
         names = ", ".join(invalid_limits)
         raise ValueError(f"job scheduler limits must be non-negative: {names}")
 
-    state = SessionState(source_root=Path(source_root), save_dir=Path(save_dir))
-    try:
-        state.cache = EphemeralCache.create(cache_dir=cache_dir, save_dir=save_dir)
-        history_root = (
-            Path(job_history_dir) if job_history_dir is not None else user_job_history_dir()
-        )
-        state.job_history = JobHistoryStore(history_root, max_records=max_retained_jobs)
-        scheduler = JobScheduler(
-            max_running_jobs=max_running_jobs,
-            max_queued_jobs=max_queued_jobs,
-        )
-        job_settings_store = (
-            JobAdmissionSettingsStore(job_settings_path) if job_settings_path is not None else None
-        )
-    except Exception:
-        _cleanup_session_state(state)
-        raise
-    # Motion uploads load from immutable per-request drops.  Publication into
-    # the shared label namespace is short and serialized so same-label imports
-    # cannot interleave delete/copy operations.
-    motion_library_publish_lock = threading.Lock()
-    job_settings_update_lock = threading.Lock()
-    lifecycle = RuntimeLifecycle(
-        state,
-        scheduler,
-        job_settings_update_lock,
-        agent_runtime_lease,
-    )
-    app = FastAPI(title="hhtools web", version="0.1", lifespan=lifecycle.lifespan)
-    # Exposed for diagnostics and lifecycle regression tests, not as an HTTP API.
+    state = runtime.state
+    scheduler = runtime.scheduler
+    job_settings_store = runtime.job_settings_store
+    motion_library_publish_lock = runtime.motion_library_publish_lock
+    job_settings_update_lock = runtime.job_settings_update_lock
+    app = FastAPI(title="hhtools web", version="0.1", lifespan=runtime.lifecycle.lifespan)
+    app.state.application_runtime = runtime
     app.state.session_state = state
     app.state.job_scheduler = scheduler
     app.state.job_settings_store = job_settings_store
-    app.state.agent_runtime_lease = agent_runtime_lease
+    app.state.agent_runtime_lease = runtime.lifecycle.agent_lease
+    for name, service in vars(runtime.services).items():
+        setattr(app.state, name, service)
 
     uploads = UploadStore(
         max_files=max_upload_files,
@@ -142,31 +112,16 @@ def _create_app_owned(
         job_ttl_seconds=job_ttl_seconds,
     )
 
-    from hhtools.utils.paths import user_motion_library_settings_path
-    from hhtools.web.library.motion_library_links import (
-        ensure_motions_library,
-    )
-    from hhtools.web.library.motion_library_settings import MotionLibrarySettingsStore
-
-    motion_library_settings_store = MotionLibrarySettingsStore(
-        user_motion_library_settings_path(),
-    )
+    motion_library_settings_store = runtime.motion_library_settings_store
     app.state.motion_library_settings_store = motion_library_settings_store
-    ensure_motions_library()
-
+    from hhtools.agent.api import router as agent_router
     from hhtools.web.server.agent_runtime import (
-        configure_agent_runtime,
         install_agent_boundary,
+        register_agent_error_handler,
     )
 
-    configure_agent_runtime(
-        app,
-        state=state,
-        scheduler=scheduler,
-        agent_mcp_available=agent_mcp_available,
-        agent_rest_available=agent_rest_available,
-        agent_json_cli_available=agent_json_cli_available,
-    )
+    register_agent_error_handler(app)
+    app.include_router(agent_router)
 
     from hhtools.web.server.routes.batch import register_batch_routes
     from hhtools.web.server.routes.dataset import register_dataset_routes
@@ -268,9 +223,23 @@ def create_app(
     constructed, and is transferred to the application lifespan on success.
     """
 
-    runtime_lease = AgentRuntimeLease.acquire(Path(save_dir) / ".hhtools-agent")
+    runtime = build_application_runtime(
+        ApplicationPaths(
+            source_root=source_root,
+            save_dir=save_dir,
+            cache_dir=cache_dir,
+            job_history_dir=job_history_dir,
+            job_settings_path=job_settings_path,
+        ),
+        max_running_jobs=max_running_jobs,
+        max_queued_jobs=max_queued_jobs,
+        max_retained_jobs=max_retained_jobs,
+        agent_mcp_available=agent_mcp_available,
+        agent_rest_available=agent_rest_available,
+        agent_json_cli_available=agent_json_cli_available,
+    )
     try:
-        return _create_app_owned(
+        return _mount_web_app(
             source_root=source_root,
             save_dir=save_dir,
             cache_dir=cache_dir,
@@ -289,8 +258,10 @@ def create_app(
             agent_mcp_available=agent_mcp_available,
             agent_rest_available=agent_rest_available,
             agent_json_cli_available=agent_json_cli_available,
-            agent_runtime_lease=runtime_lease,
+            runtime=runtime,
         )
     except BaseException:
-        runtime_lease.release()
+        runtime.scheduler.shutdown(wait=True)
+        runtime.lifecycle._cleanup_once()
+        runtime.lifecycle.agent_lease.release()
         raise

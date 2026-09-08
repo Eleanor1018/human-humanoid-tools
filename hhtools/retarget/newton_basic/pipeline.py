@@ -48,15 +48,14 @@ from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
 from typing import Iterable
 
-import numpy as np
-from numpy.typing import NDArray
-
 import newton
 import newton.ik as ik
+import numpy as np
 import warp as wp
+from numpy.typing import NDArray
 
+from hhtools.core.math import quaternion as Q
 from hhtools.core.motion import Motion
-from hhtools.robot.loader import URDFRobotModel
 from hhtools.retarget.newton_basic._warp_config import configure as configure_warp_cache
 from hhtools.retarget.newton_basic.config import (
     FeetStabilizerConfig,
@@ -76,9 +75,7 @@ from hhtools.retarget.newton_basic.robot_model import (
     build_newton_model,
 )
 from hhtools.retarget.newton_basic.scaler import HumanToRobotScaler
-
-from hhtools.core.math import quaternion as Q
-
+from hhtools.robot.loader import URDFRobotModel
 
 __all__ = [
     "NewtonBasicPipeline",
@@ -499,7 +496,6 @@ class ScaledMotionPreview:
 
 from hhtools.retarget.retarget_result import RetargetedMotion  # noqa: F401 — re-export
 
-
 # --------------------------------------------------------------------------- pipeline
 
 
@@ -550,6 +546,8 @@ class NewtonBasicPipeline:
         self.config = pipeline_config or PipelineConfig()
         self.human_height = float(human_height)
         self._active_motion_source_format: str = ""
+        self._last_cuda_graph_requested = False
+        self._last_cuda_graph_used = False
         # Optional explicit source-joint → canonical rename.  When ``None``
         # we auto-detect SMPL-family rigs at ``run`` time.
         self._source_to_canonical_override = source_to_canonical
@@ -644,6 +642,8 @@ class NewtonBasicPipeline:
         uses this to draw a scaled-human skeleton next to the robot so the
         user can eyeball the target envelope.
         """
+        self._last_cuda_graph_requested = False
+        self._last_cuda_graph_used = False
         motion = self._ensure_z_up(motion)
         if motion.num_frames == 0:
             return ScaledMotionPreview(
@@ -747,7 +747,10 @@ class NewtonBasicPipeline:
                 joint_q=np.zeros((0, self.ctx.joint_coord_count), dtype=np.float32),
                 sample_rate=motion.framerate,
                 dof_names=self.robot.dof_names(),
-                meta={"robot": self.robot.preset.name},
+                meta={
+                    "robot": self.robot.preset.name,
+                    "execution_provenance": self.execution_provenance(),
+                },
             )
 
         ik_map_restore = self._push_motion_ik_policy(motion)
@@ -761,8 +764,8 @@ class NewtonBasicPipeline:
 
     def _push_motion_ik_policy(self, motion: Motion):
         """Drop head/neck IK entries for OmniContact→G1; return prior mapping."""
-        from hhtools.robot.ik_map_policy import drop_head_targets_for_motion
         from hhtools.retarget.newton_basic.robot_model import IKMapping
+        from hhtools.robot.ik_map_policy import drop_head_targets_for_motion
 
         if not drop_head_targets_for_motion(self.robot.preset.name, motion):
             return None
@@ -1028,6 +1031,7 @@ class NewtonBasicPipeline:
                 "ik_iterations": self.config.ik_iterations,
                 "human_height": self.human_height,
                 "clip_floor_snap_m": float(clip_floor_snap_m),
+                "execution_provenance": self.execution_provenance(),
             },
         )
 
@@ -1079,6 +1083,8 @@ class NewtonBasicPipeline:
         """
         if not motions:
             return []
+        self._last_cuda_graph_requested = False
+        self._last_cuda_graph_used = False
         motions = [self._ensure_z_up(m) for m in motions]
         if len(motions) == 1:
             return [self.run(motions[0], progress_callback=progress_callback)]
@@ -1240,7 +1246,10 @@ class NewtonBasicPipeline:
             ),
             sample_rate=m.framerate,
             dof_names=self.robot.dof_names(),
-            meta={"robot": self.robot.preset.name},
+            meta={
+                "robot": self.robot.preset.name,
+                "execution_provenance": self.execution_provenance(),
+            },
         )
 
     def _build_ik_targets(self, motion: Motion) -> NDArray:
@@ -1359,7 +1368,7 @@ class NewtonBasicPipeline:
                     continue
                 hand_end_tgt = wrist_tgt.copy()
                 try:
-                    from hhtools.viewer.anatomy import scaled_hand_tip_positions_world
+                    from hhtools.retarget.anatomy import scaled_hand_tip_positions_world
 
                     tips = scaled_hand_tip_positions_world(motion, scaler, side)
                 except Exception:
@@ -1528,8 +1537,38 @@ class NewtonBasicPipeline:
                 "ik_iterations": self.config.ik_iterations,
                 "clip_floor_snap_m": float(clip_floor_snap_m),
                 "human_height": self.human_height,
+                "execution_provenance": self.execution_provenance(),
             },
         )
+
+    def execution_provenance(self) -> dict[str, object]:
+        """Return facts observed from the Warp context used by the latest solve."""
+
+        try:
+            device = wp.get_device()
+            device_name = str(device)
+            device_kind = "cuda" if bool(device.is_cuda) else "cpu"
+        except Exception:  # pragma: no cover - only possible before Warp initializes
+            device_name = "unknown"
+            device_kind = "unknown"
+        graph_requested = bool(self._last_cuda_graph_requested)
+        graph_used = bool(self._last_cuda_graph_used)
+        fallback_used = bool(graph_requested and not graph_used)
+        provenance: dict[str, object] = {
+            "backend": "newton",
+            "device": device_name,
+            "device_kind": device_kind,
+            "precision": "float32",
+            "runtime": "warp",
+            "runtime_version": str(getattr(wp, "__version__", "unknown")),
+            "solver": f"newton-{getattr(newton, '__version__', 'unknown')}",
+            "cuda_graph_requested": graph_requested,
+            "cuda_graph_used": graph_used,
+            "fallback_used": fallback_used,
+        }
+        if fallback_used:
+            provenance["fallback_reason"] = "cuda_graph_unavailable_or_failed"
+        return provenance
 
     def _inverse_body_quat(self) -> NDArray | None:
         """Return ``conj(source_body_quat)`` or ``None`` if it's identity."""
@@ -1992,6 +2031,9 @@ class NewtonBasicPipeline:
                 pass
 
         ik_graph: object | None = None
+        self._last_cuda_graph_requested = bool(
+            num_frames > 0 and self.config.ik_use_cuda_graph and _warp_device_is_cuda()
+        )
         if num_frames > 0 and _cuda_graph_enabled(self.config):
 
             def _ik_step_once() -> None:
@@ -2049,6 +2091,7 @@ class NewtonBasicPipeline:
                 except Exception:  # pragma: no cover — UI hooks shouldn't break IK
                     pass
 
+        self._last_cuda_graph_used = ik_graph is not None
         return out
 
     # ---- multi-env batch solve ------------------------------------------------
@@ -2211,6 +2254,9 @@ class NewtonBasicPipeline:
         solver.reset()
 
         ik_graph: object | None = None
+        self._last_cuda_graph_requested = bool(
+            max_frames > 0 and self.config.ik_use_cuda_graph and _warp_device_is_cuda()
+        )
         if max_frames > 0 and _cuda_graph_enabled(self.config):
 
             def _ik_batch_step_once() -> None:
@@ -2244,6 +2290,7 @@ class NewtonBasicPipeline:
                 except Exception:
                     pass
 
+        self._last_cuda_graph_used = ik_graph is not None
         return [out[env, :frame_counts[env], :] for env in range(N)]
 
     # ---- smooth-joint-filter mask assembly ------------------------------------

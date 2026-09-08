@@ -191,7 +191,6 @@ hhtools import run --dataset gvhmr --root /path/to/gvhmr/output --out /path/to/m
 | `hhtools retarget interaction-mesh run` | Interaction-mesh（地形/物体）→ CSV |
 | `hhtools retarget interaction-mesh precompute-laplacian` | 预计算 Laplacian 目标（`.npz`） |
 | `hhtools web` | HTML / three.js UI（默认 `127.0.0.1:8009`） |
-| `hhtools ui` | 旧版 Viser 查看器 |
 
 **转换与导入**
 
