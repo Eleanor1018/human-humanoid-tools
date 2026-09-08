@@ -1,6 +1,7 @@
 # Frontend Parity
 
-This checklist compares the React renderer with `hhtools/web/frontend-old`.
+This checklist compares the React renderer with the legacy frontend preserved in Git history.
+The local `hhtools/web/frontend-old/` archive is ignored and no longer tracked.
 The old frontend defines behavior and Stage semantics; the current visual design
 may improve spacing, rounded corners, accessibility, and narrow-screen layout.
 
