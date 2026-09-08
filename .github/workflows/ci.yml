@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   python:
-    name: Python 3.12 · full application
+    name: Python 3.12 · minimum supported full suite
     runs-on: ubuntu-22.04
     timeout-minutes: 40
     env:
@@ -59,10 +59,20 @@ jobs:
       - name: Verify wheel contents
         run: uv run --no-sync python scripts/verify_wheel_contents.py dist/*.whl
 
-  windows-contracts:
-    name: Windows · portable contracts
-    runs-on: windows-latest
+  portable-contracts:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows · Python 3.12 contracts
+            os: windows-latest
+            python: "3.12"
+          - name: Linux · Python 3.14 contracts
+            os: ubuntu-24.04
+            python: "3.14"
     env:
       UV_FROZEN: "1"
 
@@ -73,7 +83,7 @@ jobs:
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: "0.12.9"
-          python-version: "3.12"
+          python-version: ${{ matrix.python }}
           enable-cache: true
           cache-dependency-glob: uv.lock
 

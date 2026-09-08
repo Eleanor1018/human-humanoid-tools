@@ -52,7 +52,8 @@ def test_codex_project_mcp_uses_portable_isolated_runtime_paths() -> None:
 
 def test_readmes_discover_the_public_agent_guide() -> None:
     guide = (REPO_ROOT / "docs" / "agent.md").read_text(encoding="utf-8")
-    assert "uv sync --locked --managed-python --python 3.12 --extra mcp" in guide
+    assert "uv sync --locked --extra mcp" in guide
+    assert "--managed-python --python 3.12" not in guide
     assert "uv run hhtools agent capabilities" in guide
     assert "hhtools agent asset catalog" in guide
     assert "list_available_assets" in guide
@@ -62,4 +63,7 @@ def test_readmes_discover_the_public_agent_guide() -> None:
     assert "../.codex/config.toml" in guide
 
     for readme in ("README.md", "README_cn.md"):
-        assert "(docs/agent.md)" in (REPO_ROOT / readme).read_text(encoding="utf-8")
+        contents = (REPO_ROOT / readme).read_text(encoding="utf-8")
+        assert "(docs/agent.md)" in contents
+        assert "uv sync --locked" in contents
+        assert "--managed-python --python 3.12" not in contents

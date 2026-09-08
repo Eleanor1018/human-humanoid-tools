@@ -47,33 +47,35 @@ robot, and retargeting core, but their installation and launch paths are intenti
 
 ### Source checkout: Terminal or WebUI
 
-Clone the repository and use a uv-managed Python 3.12 environment:
+Clone the repository and use any compatible Python 3.12 or newer. `uv` will
+select an installed compatible interpreter (and can install one when needed):
 
 ```bash
 git clone https://github.com/Roboparty/human-humanoid-tools.git
 cd human-humanoid-tools
 curl -LsSf https://astral.sh/uv/install.sh | sh   # if needed
+# Optional when no Python >=3.12 is installed:
 uv python install 3.12
 ```
 
 For the terminal command set:
 
 ```bash
-uv sync --locked --managed-python --python 3.12
+uv sync --locked
 uv run hhtools --help
 ```
 
-Install only the extras required by your workflow. To provision every optional terminal format,
-viewer, robot, and retargeting integration, use:
+Install only the extras required by your workflow. To provision every optional
+format, robot, retargeting, Web, and Agent integration, use:
 
 ```bash
-uv sync --locked --managed-python --python 3.12 --extra all
+uv sync --locked --extra all
 ```
 
 For the browser WebUI:
 
 ```bash
-uv sync --locked --managed-python --python 3.12 --extra web --extra retarget
+uv sync --locked --extra web --extra retarget
 uv run hhtools web
 ```
 
