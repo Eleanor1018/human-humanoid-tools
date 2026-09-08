@@ -28,10 +28,16 @@ const RESULT_TASK_KINDS: ReadonlySet<string> = new Set([
   "r2r_batch",
 ]);
 
+export function isWorkflowResultTask(
+  task: Pick<TaskRecord, "kind">,
+): boolean {
+  return RESULT_TASK_KINDS.has(task.kind);
+}
+
 export function canExportTaskResult(
   task: Pick<TaskRecord, "kind" | "can_download">,
 ): boolean {
-  return task.can_download && RESULT_TASK_KINDS.has(task.kind);
+  return task.can_download && isWorkflowResultTask(task);
 }
 
 export async function listTasks(options: {
