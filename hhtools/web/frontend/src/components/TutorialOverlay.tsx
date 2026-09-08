@@ -254,7 +254,7 @@ export function TutorialOverlay({
     >
       {highlightStyle ? (
         <div
-          className="pointer-events-none fixed rounded-lg border-2 border-primary opacity-100 shadow-[0_0_0_9999px_rgba(15,23,42,0.52)] transition-[top,left,width,height,opacity] duration-150"
+          className="pointer-events-none fixed rounded-lg border-2 border-primary opacity-100 shadow-[0_0_0_9999px_rgba(15,23,42,0.52)] transition-opacity duration-[180ms]"
           style={highlightStyle}
           aria-hidden="true"
         />
@@ -263,7 +263,7 @@ export function TutorialOverlay({
       )}
       <div
         ref={popover}
-        className={`fixed grid max-h-[calc(100vh-24px)] w-[min(320px,calc(100vw-24px))] gap-3 overflow-y-auto rounded-lg border border-border-subtle bg-surface px-4 pt-3.5 pb-4 text-foreground shadow-[0_18px_50px_rgba(0,0,0,0.22)] outline-none transition-opacity duration-150 ${popoverStyle ? "opacity-100" : "pointer-events-none opacity-0"}`}
+        className={`fixed grid max-h-[calc(100vh-24px)] w-[min(320px,calc(100vw-24px))] gap-3 overflow-y-auto rounded-lg border border-border-subtle bg-surface px-4 pt-3.5 pb-4 text-foreground shadow-[0_18px_50px_rgba(0,0,0,0.22)] outline-none transition-opacity duration-[180ms] ${popoverStyle ? "opacity-100" : "pointer-events-none opacity-0"}`}
         style={popoverStyle ?? { left: VIEWPORT_MARGIN, top: VIEWPORT_MARGIN }}
         role="dialog"
         aria-modal="true"
