@@ -6,6 +6,7 @@
         "plain_motion",
         "object_interaction",
         "terrain_scene",
+        "robot_trajectory",
         "robot_model",
         "calibration"
       ],
@@ -16,6 +17,7 @@
       "description": "Logical type of a registered asset.",
       "enum": [
         "motion_bundle",
+        "robot_trajectory_bundle",
         "robot_bundle",
         "calibration_bundle",
         "dataset_bundle",

@@ -44,6 +44,7 @@ from hhtools.contracts import (
     ErrorStage,
     JobProgress,
     PreflightResponse,
+    R2RPreflightResponse,
     SchedulerCapability,
 )
 
@@ -912,6 +913,43 @@ def test_preflight_non_ready_is_structured_and_uses_preflight_exit_code() -> Non
     }
 
 
+def test_r2r_preflight_uses_the_same_strict_json_cli_boundary() -> None:
+    preflight = R2RPreflightResponse(
+        request_id="req_r2r_cli",
+        status="rejected",
+        recommended_backend="newton",
+        error=ApiError(
+            code="R2R_CALIBRATION_REQUIRED",
+            message="Pair calibration is required.",
+            stage=ErrorStage.PREFLIGHT,
+        ),
+    )
+    request = {
+        "schema_version": "1.0",
+        "trajectory_asset_id": _ASSET_ID,
+        "source_robot_id": "source_bot",
+        "source_robot_asset_id": f"asset:sha256:{'b' * 64}",
+        "target_robot_id": "target_bot",
+        "target_robot_asset_id": f"asset:sha256:{'c' * 64}",
+    }
+    transport = FakeTransport([preflight])
+
+    code, document, _selected = _invoke(
+        ["preflight", "r2r", "--request", "-"],
+        transport,
+        stdin=json.dumps(request),
+    )
+
+    assert code == EXIT_PREFLIGHT_ERROR
+    assert document["error"]["code"] == "R2R_CALIBRATION_REQUIRED"
+    assert transport.requests[0][0:2] == ("POST", "/preflight/r2r")
+    assert transport.requests[0][3] == request | {
+        "output_format": "csv",
+        "output_policy": "create_new",
+        "parameters": {},
+    }
+
+
 @pytest.mark.parametrize(
     ("stage", "expected"),
     [
@@ -985,9 +1023,7 @@ def test_valid_remote_success_contract_with_host_path_fails_closed_on_stdout() -
 
 
 def test_job_commands_use_public_requests_and_versioned_routes() -> None:
-    transport = FakeTransport(
-        [_job(), _job(), _job(), _job(), _job(), _job("job_retry")]
-    )
+    transport = FakeTransport([_job(), _job(), _job(), _job(), _job(), _job("job_retry")])
 
     start_code, _, _ = _invoke(
         ["job", "start", "--plan", _PLAN_ID, "--idempotency-key", "cli:start-1"],
@@ -1025,9 +1061,7 @@ def test_job_commands_use_public_requests_and_versioned_routes() -> None:
         transport,
     )
 
-    assert {start_code, lookup_code, get_code, wait_code, cancel_code, retry_code} == {
-        EXIT_SUCCESS
-    }
+    assert {start_code, lookup_code, get_code, wait_code, cancel_code, retry_code} == {EXIT_SUCCESS}
     assert lookup_document["job_id"] == "job_cli"
     assert transport.requests == [
         (

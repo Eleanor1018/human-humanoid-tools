@@ -695,11 +695,13 @@ def _bundle_registration_request(bundle: AssetBundle) -> AssetRegistrationReques
 
 def _robot_bundle_and_preset(
     asset_service: AgentAssetService,
-    request: RetargetPreflightRequest,
+    *,
+    robot_id: str,
+    robot_asset_id: str | None,
     presets: Iterable[RobotPreset],
 ) -> tuple[AssetBundle, RobotPreset, dict[str, tuple[float | None, float | None]]]:
-    if request.robot_asset_id is None:
-        advertised_preset = _installed_robot_preset(presets, request.robot_id)
+    if robot_asset_id is None:
+        advertised_preset = _installed_robot_preset(presets, robot_id)
         try:
             registration = asset_service.registration_hint(
                 advertised_preset.root_dir,
@@ -715,23 +717,23 @@ def _robot_bundle_and_preset(
         _fail(
             "ROBOT_ASSET_REQUIRED",
             "A content-addressed robot bundle is required for a runnable plan.",
-            details={"robot_id": request.robot_id},
+            details={"robot_id": robot_id},
             next_action=action,
         )
     try:
-        bundle = asset_service.get(request.robot_asset_id)
+        bundle = asset_service.get(robot_asset_id)
         if bundle.kind is not AssetKind.ROBOT_BUNDLE:
             _fail(
                 "ASSET_KIND_MISMATCH",
                 "robot_asset_id must refer to a registered robot bundle.",
                 details={
-                    "asset_id": request.robot_asset_id,
+                    "asset_id": robot_asset_id,
                     "kind": bundle.kind.value,
                 },
             )
         inspection = asset_service.inspect(
             AssetInspectionRequest(
-                asset_id=request.robot_asset_id,
+                asset_id=robot_asset_id,
                 verify_hashes=True,
                 parse_content=True,
             )
@@ -745,13 +747,13 @@ def _robot_bundle_and_preset(
             fallback_message=("The registered robot bundle did not pass structural inspection."),
         )
 
-    advertised_preset = _installed_robot_preset(presets, request.robot_id)
+    advertised_preset = _installed_robot_preset(presets, robot_id)
     yaml_value = advertised_preset.meta.get("yaml_path")
     if not isinstance(yaml_value, str) or not yaml_value:
         _fail(
             "ROBOT_BUNDLE_INVALID",
             "The selected robot preset has no bound robot YAML.",
-            details={"robot_id": request.robot_id},
+            details={"robot_id": robot_id},
         )
     try:
         yaml_path = _contained_file(Path(yaml_value), advertised_preset.root_dir)
@@ -760,13 +762,13 @@ def _robot_bundle_and_preset(
             _error(
                 "ROBOT_BUNDLE_INVALID",
                 "The selected robot YAML is unavailable or outside the preset boundary.",
-                details={"robot_id": request.robot_id},
+                details={"robot_id": robot_id},
             ),
             _check(
                 "ROBOT_BUNDLE_INVALID",
                 PreflightCheckLevel.ERROR,
                 "The selected robot YAML is unavailable or outside the preset boundary.",
-                details={"robot_id": request.robot_id},
+                details={"robot_id": robot_id},
             ),
         ) from error
     # Reload the exact manifest-bound YAML instead of trusting a mutable or
@@ -784,32 +786,32 @@ def _robot_bundle_and_preset(
         _fail(
             "ROBOT_BUNDLE_MISMATCH",
             "The robot asset does not contain the YAML used by the selected preset.",
-            details={"robot_id": request.robot_id},
+            details={"robot_id": robot_id},
         )
     except _FileChangedError:
         _fail(
             "ASSET_HASH_MISMATCH",
             "The selected robot YAML changed during preflight; register it again.",
-            details={"robot_id": request.robot_id},
+            details={"robot_id": robot_id},
             retryable=True,
         )
     except (OSError, TypeError, ValueError):
         _fail(
             "ROBOT_BUNDLE_INVALID",
             "The manifest-bound robot YAML could not be loaded read-only.",
-            details={"robot_id": request.robot_id},
+            details={"robot_id": robot_id},
         )
-    if preset.name != request.robot_id:
+    if preset.name != robot_id:
         _fail(
             "ROBOT_BUNDLE_MISMATCH",
             "The manifest-bound robot YAML resolves to a different preset id.",
-            details={"robot_id": request.robot_id},
+            details={"robot_id": robot_id},
         )
     if not preset.has_urdf or preset.urdf_path is None:
         _fail(
             "ROBOT_BUNDLE_INVALID",
             "The selected robot preset has no readable URDF.",
-            details={"robot_id": request.robot_id},
+            details={"robot_id": robot_id},
         )
 
     primary = next(item for item in bundle.files if item.relative_path == bundle.primary_file)
@@ -820,13 +822,13 @@ def _robot_bundle_and_preset(
             _error(
                 "ROBOT_BUNDLE_INVALID",
                 "The robot preset URDF is outside its trusted preset directory.",
-                details={"robot_id": request.robot_id},
+                details={"robot_id": robot_id},
             ),
             _check(
                 "ROBOT_BUNDLE_INVALID",
                 PreflightCheckLevel.ERROR,
                 "The robot preset URDF is outside its trusted preset directory.",
-                details={"robot_id": request.robot_id},
+                details={"robot_id": robot_id},
             ),
         ) from error
     try:
@@ -839,27 +841,27 @@ def _robot_bundle_and_preset(
         _fail(
             "ROBOT_BUNDLE_MISMATCH",
             "The robot asset does not match the URDF used by the selected preset.",
-            details={"robot_id": request.robot_id},
+            details={"robot_id": robot_id},
         )
     except _FileChangedError:
         _fail(
             "ASSET_HASH_MISMATCH",
             "The selected robot URDF changed during preflight; register it again.",
-            details={"robot_id": request.robot_id},
+            details={"robot_id": robot_id},
             retryable=True,
         )
     except ValueError:
         _fail(
             "ROBOT_BUNDLE_INVALID",
             "The robot URDF topology or joint limits could not be validated.",
-            details={"robot_id": request.robot_id},
+            details={"robot_id": robot_id},
         )
     actuated, limits, links = robot_facts
     if not preset.dof_order or len(set(preset.dof_order)) != len(preset.dof_order):
         _fail(
             "ROBOT_CONFIGURATION_INVALID",
             "The robot preset must declare a non-empty, unique DOF order.",
-            details={"robot_id": request.robot_id},
+            details={"robot_id": robot_id},
         )
     invalid_dofs = sorted(set(preset.dof_order).difference(actuated))
     if invalid_dofs:
@@ -872,7 +874,7 @@ def _robot_bundle_and_preset(
         _fail(
             "ROBOT_CONFIGURATION_INVALID",
             "The robot preset must declare a non-empty IK mapping.",
-            details={"robot_id": request.robot_id},
+            details={"robot_id": robot_id},
         )
     missing_links = sorted(
         {
@@ -1341,8 +1343,9 @@ class PreflightService:
 
             robot_bundle, preset, joint_limits = _robot_bundle_and_preset(
                 self._asset_service,
-                request,
-                self._robot_provider(),
+                robot_id=request.robot_id,
+                robot_asset_id=request.robot_asset_id,
+                presets=self._robot_provider(),
             )
             checks.append(
                 _check(

@@ -49,6 +49,8 @@ from hhtools.contracts import (
     JobRetryRequest,
     JobStartRequest,
     PreflightResponse,
+    R2RPreflightRequest,
+    R2RPreflightResponse,
     RetargetPreflightRequest,
     RobotListResponse,
 )
@@ -319,7 +321,7 @@ def _read_report[T](
 
 def _server_instructions(web_ui_url: str) -> str:
     return (
-        "For every new H2R run: get capabilities, register/search and inspect assets, "
+        "For every new H2R or R2R run: get capabilities, register/search and inspect assets, "
         "preflight a smoke plan, start only a ready plan, wait by revision, then read "
         "evaluation and manifest for human review. Persist each plan_id plus idempotency "
         "key before start; use lookup_job to recover an ambiguous submission without job "
@@ -489,11 +491,37 @@ def create_mcp_server(
         return _tool_call(lambda: _runtime(context).preflight.preflight_retarget(request))
 
     @server.tool(annotations=_SAFE_WRITE)
+    def preflight_r2r(
+        request: R2RPreflightRequest,
+        context: Context[AgentRuntime, Any],
+    ) -> R2RPreflightResponse:
+        """Validate one scene-free R2R intent and freeze both robot identities."""
+
+        return _tool_call(lambda: _runtime(context).r2r_preflight.preflight_r2r(request))
+
+    @server.tool(annotations=_SAFE_WRITE)
+    def start_job(
+        request: JobStartRequest,
+        context: Context[AgentRuntime, Any],
+    ) -> AgentJobView:
+        """Submit one H2R or R2R immutable plan through the shared lifecycle."""
+
+        def start() -> AgentJobView:
+            jobs = _runtime(context).jobs
+            submit = getattr(jobs, "start_job", jobs.start_retarget)
+            return submit(
+                request.plan_id,
+                idempotency_key=request.idempotency_key,
+            )
+
+        return _tool_call(start)
+
+    @server.tool(annotations=_SAFE_WRITE)
     def start_retarget(
         request: JobStartRequest,
         context: Context[AgentRuntime, Any],
     ) -> AgentJobView:
-        """Submit one preflighted plan; run_mode cannot be changed at this step."""
+        """Compatibility alias for submitting an immutable preflighted plan."""
 
         return _tool_call(
             lambda: _runtime(context).jobs.start_retarget(

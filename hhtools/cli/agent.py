@@ -45,6 +45,8 @@ from hhtools.contracts import (
     LegacyJobUpgradeResponse,
     PreflightResponse,
     PreflightStatus,
+    R2RPreflightRequest,
+    R2RPreflightResponse,
     RetargetPreflightRequest,
 )
 from hhtools.contracts.cli import (
@@ -162,9 +164,7 @@ _COMMAND_SPECS: dict[tuple[str, ...], _CliCommandSpec] = {
     ("capabilities",): _CliCommandSpec(
         ("capabilities",), "Return the live Agent capability document."
     ),
-    ("asset",): _CliCommandSpec(
-        ("asset",), "Catalog, register, inspect, get, or search assets."
-    ),
+    ("asset",): _CliCommandSpec(("asset",), "Catalog, register, inspect, get, or search assets."),
     ("asset", "catalog"): _CliCommandSpec(
         ("asset", "catalog"),
         "List registerable assets below configured allowlisted roots.",
@@ -236,6 +236,11 @@ _COMMAND_SPECS: dict[tuple[str, ...], _CliCommandSpec] = {
     ("preflight", "retarget"): _CliCommandSpec(
         ("preflight", "retarget"),
         "Validate one retarget request and freeze an immutable plan.",
+        options=(_REQUEST_ARGUMENT,),
+    ),
+    ("preflight", "r2r"): _CliCommandSpec(
+        ("preflight", "r2r"),
+        "Validate one robot-to-robot request and freeze both robot identities.",
         options=(_REQUEST_ARGUMENT,),
     ),
     ("job",): _CliCommandSpec(
@@ -669,6 +674,9 @@ def _parser() -> _JsonArgumentParser:
     retarget = preflight_commands.add_parser("retarget", add_help=False)
     retarget.add_argument("--request", required=True)
     retarget.set_defaults(operation="preflight_retarget")
+    r2r = preflight_commands.add_parser("r2r", add_help=False)
+    r2r.add_argument("--request", required=True)
+    r2r.set_defaults(operation="preflight_r2r")
 
     job = commands.add_parser("job", add_help=False)
     job_commands = job.add_subparsers(dest="job_command", required=True)
@@ -993,6 +1001,17 @@ def _execute(  # noqa: PLR0911 - one explicit branch per public CLI operation
             ),
         )
 
+    if operation == "preflight_r2r":
+        preflight_request = _validated_request(R2RPreflightRequest, namespace.request, stdin)
+        return _response(
+            R2RPreflightResponse,
+            transport.request_json(
+                "POST",
+                "/preflight/r2r",
+                document=preflight_request.model_dump(mode="json", exclude_none=True),
+            ),
+        )
+
     if operation == "job_start":
         try:
             start_request = JobStartRequest(
@@ -1182,7 +1201,7 @@ def _error_exit_code(error: ApiError) -> int:
 
 
 def _result_exit_code(result: BaseModel) -> int:
-    if isinstance(result, PreflightResponse):
+    if isinstance(result, PreflightResponse | R2RPreflightResponse):
         return EXIT_SUCCESS if result.status is PreflightStatus.READY else EXIT_PREFLIGHT_ERROR
     if isinstance(result, LegacyJobUpgradeResponse):
         return (
@@ -1375,6 +1394,11 @@ def preflight_group(ctx: typer.Context) -> None:
 @preflight_app.command("retarget", context_settings=_PASSTHROUGH_CONTEXT)
 def preflight_retarget_command(ctx: typer.Context) -> None:
     _passthrough(["preflight", "retarget"], ctx)
+
+
+@preflight_app.command("r2r", context_settings=_PASSTHROUGH_CONTEXT)
+def preflight_r2r_command(ctx: typer.Context) -> None:
+    _passthrough(["preflight", "r2r"], ctx)
 
 
 job_app = typer.Typer(

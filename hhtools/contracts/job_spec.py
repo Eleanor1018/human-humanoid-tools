@@ -18,6 +18,7 @@ from .preflight import OutputPolicy
 
 class JobSpecKind(StrEnum):
     RETARGET = "retarget"
+    R2R_RETARGET = "r2r_retarget"
     BATCH_RETARGET = "batch_retarget"
 
 
@@ -72,6 +73,7 @@ class JobSpecV2(ContractModel):
     plan_id: PlanId
     inputs: Annotated[list[JobSpecInput], Field(min_length=1)]
     robot: JobSpecRobot
+    source_robot: JobSpecRobot | None = None
     calibration: JobSpecCalibration | None
     backend: Annotated[str, Field(min_length=1, max_length=128)]
     effective_parameters: dict[str, Any] = Field(default_factory=dict)
@@ -84,4 +86,13 @@ class JobSpecV2(ContractModel):
         asset_ids = [item.asset_id for item in self.inputs]
         if len(asset_ids) != len(set(asset_ids)):
             raise ValueError("JobSpec v2 inputs must not contain duplicate asset ids")
+        if self.kind is JobSpecKind.R2R_RETARGET:
+            if self.source_robot is None:
+                raise ValueError("R2R JobSpec v2 requires a source robot identity")
+            if self.calibration is None:
+                raise ValueError("R2R JobSpec v2 requires pair calibration identity")
+            if self.source_robot.asset_id == self.robot.asset_id:
+                raise ValueError("R2R source and target robot assets must differ")
+        elif self.source_robot is not None:
+            raise ValueError("only R2R JobSpec v2 may declare a source robot")
         return self

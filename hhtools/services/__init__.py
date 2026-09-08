@@ -45,6 +45,9 @@ from .legacy_job_upgrade import (
 )
 from .plans import PlanStore, PlanStoreError, compute_plan_id
 from .preflight import PreflightService
+from .r2r_asset_inspection import R2RTrajectoryInspector
+from .r2r_preflight import R2RPreflightService
+from .r2r_retarget import R2RRetargetService, WorkflowRetargetService
 from .retarget import RetargetService, RetargetServiceError
 from .runtime_lease import AgentRuntimeLease, RuntimeLeaseError
 
@@ -80,9 +83,13 @@ __all__ = [
     "PlanStore",
     "PlanStoreError",
     "PreflightService",
+    "R2RPreflightService",
+    "R2RRetargetService",
+    "R2RTrajectoryInspector",
     "RetargetService",
     "RetargetServiceError",
     "RuntimeLeaseError",
+    "WorkflowRetargetService",
     "MAX_AVAILABLE_ASSET_CANDIDATES",
     "MAX_AVAILABLE_ASSET_SCAN_ENTRIES",
     "StoredArtifact",

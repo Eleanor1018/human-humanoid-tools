@@ -72,7 +72,7 @@ def joint_q_width_from_npz(path: Path) -> int:
     """Return joint-q column count for an hhtools robot-export NPZ, else zero."""
 
     try:
-        data = np.load(path, allow_pickle=True)
+        data = np.load(path, allow_pickle=False)
     except Exception:  # noqa: BLE001 - format sniffer treats malformed inputs as non-matches
         return 0
     keys = set(data.files)

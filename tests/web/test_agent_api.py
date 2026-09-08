@@ -42,6 +42,8 @@ from hhtools.contracts import (
     NextAction,
     OutputPolicy,
     PreflightResponse,
+    R2RPreflightRequest,
+    R2RPreflightResponse,
     RetargetPlan,
     RetargetPreflightRequest,
     SchedulerCapability,
@@ -195,12 +197,31 @@ class _FakePreflight:
         )
 
 
+class _FakeR2RPreflight:
+    def preflight_r2r(
+        self,
+        request: R2RPreflightRequest,
+    ) -> R2RPreflightResponse:
+        assert request.trajectory_asset_id == _ASSET_ID
+        return R2RPreflightResponse(
+            request_id="req_r2r_rest_test",
+            status="rejected",
+            recommended_backend="newton",
+            error=ApiError(
+                code="R2R_CALIBRATION_REQUIRED",
+                message="Pair calibration is required.",
+                stage=ErrorStage.PREFLIGHT,
+            ),
+        )
+
+
 def _agent_app() -> FastAPI:
     app = FastAPI()
     app.state.agent_capabilities_service = _FakeCapabilities()
     app.state.agent_asset_service = _FakeAssets()
     app.state.agent_available_asset_catalog_service = _FakeAvailableAssets()
     app.state.agent_preflight_service = _FakePreflight()
+    app.state.agent_r2r_preflight_service = _FakeR2RPreflight()
     app.include_router(router)
     return app
 
@@ -740,6 +761,25 @@ def test_agent_preflight_route_returns_a_business_evaluation_contract() -> None:
     assert "detail" not in response.json()
 
 
+def test_agent_r2r_preflight_route_uses_the_versioned_pair_contract() -> None:
+    response = TestClient(_agent_app()).post(
+        "/api/agent/v1/preflight/r2r",
+        json={
+            "trajectory_asset_id": _ASSET_ID,
+            "source_robot_id": "source_bot",
+            "source_robot_asset_id": f"asset:sha256:{'b' * 64}",
+            "target_robot_id": "target_bot",
+            "target_robot_asset_id": f"asset:sha256:{'c' * 64}",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["schema_version"] == "1.0"
+    assert response.json()["status"] == "rejected"
+    assert response.json()["recommended_backend"] == "newton"
+    assert response.json()["error"]["code"] == "R2R_CALIBRATION_REQUIRED"
+
+
 def test_agent_job_rest_lifecycle_idempotency_retry_and_canonical_artifacts(
     tmp_path: Path,
 ) -> None:
@@ -989,9 +1029,9 @@ def test_agent_job_wait_blocks_for_revision_and_validates_timeout(
                 },
             )
             assert unchanged.status_code == 200
-            assert unchanged.json()["progress"]["revision"] == changed_document["progress"][
-                "revision"
-            ]
+            assert (
+                unchanged.json()["progress"]["revision"] == changed_document["progress"]["revision"]
+            )
 
             invalid_timeout = client.get(
                 f"/api/agent/v1/jobs/{job_id}/wait",
@@ -1162,6 +1202,7 @@ def test_agent_legacy_upgrade_is_a_thin_versioned_adapter() -> None:
 def test_agent_phase4_routes_and_examples_are_visible_in_openapi() -> None:
     schema = TestClient(_agent_app()).get("/openapi.json").json()
     expected_paths = {
+        "/api/agent/v1/preflight/r2r",
         "/api/agent/v1/jobs",
         "/api/agent/v1/jobs/lookup",
         "/api/agent/v1/jobs/{job_id}",
@@ -1244,8 +1285,7 @@ def test_full_web_app_registers_agent_api_before_the_static_root(
         quaternions=quaternions,
     )
     (source_root / "robot.csv").write_text(
-        "root_x,root_y,root_z,root_qx,root_qy,root_qz,root_qw,dof_hip\n"
-        "0,0,0,0,0,0,1,0\n",
+        "root_x,root_y,root_z,root_qx,root_qy,root_qz,root_qw,dof_hip\n0,0,0,0,0,0,1,0\n",
         encoding="utf-8",
     )
     np.savez(source_root / "robot-trajectory.npz", joint_q=np.zeros((2, 8)))
@@ -1542,7 +1582,7 @@ def test_agent_robot_loader_uses_and_releases_an_isolated_manifest_snapshot(
         created_at=datetime(2026, 8, 31, tzinfo=UTC),
     )
     executor = app.state.agent_job_manager._executor  # noqa: SLF001
-    bindings = executor._bindings  # noqa: SLF001
+    bindings = executor.h2r._bindings  # noqa: SLF001
 
     model = bindings.get_robot_model(spec)
     snapshot_root = model.preset.root_dir

@@ -172,6 +172,7 @@ async def test_robot_registration_next_action_replays_unchanged_through_live_mcp
         assets=assets,
         available_assets=cast(Any, object()),
         preflight=preflight,
+        r2r_preflight=cast(Any, object()),
         plans=plans,
         jobs=cast(Any, object()),
         exports=cast(Any, object()),

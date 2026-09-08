@@ -1087,10 +1087,7 @@ class JobStore:
                         stage=ErrorStage.REQUEST,
                         details={"current_revision": current.revision},
                     )
-                if (
-                    current.view.state in _TERMINAL_STATES
-                    or current.revision > observed_revision
-                ):
+                if current.view.state in _TERMINAL_STATES or current.revision > observed_revision:
                     return current
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:

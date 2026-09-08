@@ -71,6 +71,8 @@ def test_capabilities_report_unlimited_defaults_and_backend_specific_dependencie
         "mcp": False,
         "persistent_jobs": False,
         "preflight": False,
+        "r2r_execution": False,
+        "r2r_preflight": False,
         "revision_polling": False,
         "revision_waiting": False,
     }
@@ -118,7 +120,10 @@ def test_capabilities_normalize_live_scheduler_and_available_gpu_backends(
         "newton",
     }
     newton = next(backend for backend in response.backends if backend.backend_id == "newton")
-    assert [category.value for category in newton.supported_categories] == ["plain_motion"]
+    assert [category.value for category in newton.supported_categories] == [
+        "plain_motion",
+        "robot_trajectory",
+    ]
 
 
 def test_scheduler_reports_effective_unlimited_mode_when_queue_limit_is_ignored() -> None:

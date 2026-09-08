@@ -379,14 +379,14 @@ class JobManager:
             )
         return stored
 
-    def start_retarget(
+    def start_job(
         self,
         plan_id: str,
         *,
         idempotency_key: str,
         parent_job_id: str | None = None,
     ) -> AgentJobView:
-        """Create at most one admitted job for one immutable plan request."""
+        """Create at most one admitted job for one immutable workflow plan."""
 
         with self._submission_lock:
             existing = self._existing_submission(
@@ -507,6 +507,21 @@ class JobManager:
             finally:
                 if not submitted:
                     reservation.cancel()
+
+    def start_retarget(
+        self,
+        plan_id: str,
+        *,
+        idempotency_key: str,
+        parent_job_id: str | None = None,
+    ) -> AgentJobView:
+        """Compatibility alias for clients created before generic job start."""
+
+        return self.start_job(
+            plan_id,
+            idempotency_key=idempotency_key,
+            parent_job_id=parent_job_id,
+        )
 
     def _project_polled_job(
         self,
@@ -689,7 +704,7 @@ class JobManager:
                 "Only a terminal job can be retried.",
                 details={"job_id": parent.job_id, "state": parent.view.state.value},
             )
-        return self.start_retarget(
+        return self.start_job(
             parent.spec.plan_id,
             idempotency_key=idempotency_key,
             parent_job_id=parent.job_id,

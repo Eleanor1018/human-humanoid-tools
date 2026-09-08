@@ -29,6 +29,7 @@ from hhtools.contracts import (
     JobProgress,
     NextAction,
     PreflightResponse,
+    R2RPreflightResponse,
     SchedulerCapability,
 )
 from hhtools.mcp.runtime import AgentRuntime
@@ -53,6 +54,8 @@ _EXPECTED_TOOLS = {
     "inspect_asset_bundle",
     "list_robots",
     "preflight_retarget",
+    "preflight_r2r",
+    "start_job",
     "start_retarget",
     "get_job",
     "wait_job",
@@ -228,6 +231,31 @@ class _PreflightService:
         )
 
 
+class _R2RPreflightService:
+    def __init__(self) -> None:
+        self.calls: list[Any] = []
+
+    def preflight_r2r(self, request: Any) -> R2RPreflightResponse:
+        self.calls.append(request)
+        return R2RPreflightResponse(
+            request_id="request-mcp-r2r",
+            status="human_action_required",
+            recommended_backend="newton",
+            required_actions=[
+                NextAction(
+                    actor="human",
+                    action="open_calibration_ui",
+                    message="Calibrate this exact robot pair before retrying.",
+                    url="http://127.0.0.1:8009/?panel=r2r&calibrate=1",
+                    parameters={
+                        "source_robot_id": request.source_robot_id,
+                        "target_robot_id": request.target_robot_id,
+                    },
+                )
+            ],
+        )
+
+
 class _Plans:
     def get(self, _plan_id: str) -> Any:
         raise AssertionError("plan resource is outside this focused fixture")
@@ -354,6 +382,7 @@ class _Fixture:
         self.assets = _AssetsService()
         self.available_assets = _AvailableAssetsService()
         self.preflight = _PreflightService()
+        self.r2r_preflight = _R2RPreflightService()
         self.plans = _Plans()
         self.jobs = _Jobs()
         self.exports = _Exports()
@@ -362,6 +391,7 @@ class _Fixture:
             assets=cast(Any, self.assets),
             available_assets=cast(Any, self.available_assets),
             preflight=cast(Any, self.preflight),
+            r2r_preflight=self.r2r_preflight,
             plans=cast(Any, self.plans),
             jobs=cast(Any, self.jobs),
             exports=cast(Any, self.exports),
@@ -381,6 +411,7 @@ class _Fixture:
             assets=cast(Any, self.assets),
             available_assets=cast(Any, self.available_assets),
             preflight=cast(Any, self.preflight),
+            r2r_preflight=self.r2r_preflight,
             plans=cast(Any, self.plans),
             jobs=cast(Any, jobs),
             exports=cast(Any, self.exports),
@@ -727,6 +758,39 @@ async def test_human_action_preflight_never_starts_a_job() -> None:
     assert action["url"].startswith("http://127.0.0.1:8009/")
     assert len(fixture.preflight.calls) == 1
     assert fixture.jobs.start_calls == []
+
+
+@pytest.mark.anyio
+async def test_r2r_preflight_and_generic_start_use_the_shared_job_lifecycle() -> None:
+    fixture = _Fixture()
+    request = {
+        "schema_version": "1.0",
+        "trajectory_asset_id": _ASSET_ID,
+        "source_robot_id": "source_bot",
+        "source_robot_asset_id": f"asset:sha256:{'b' * 64}",
+        "target_robot_id": "target_bot",
+        "target_robot_asset_id": f"asset:sha256:{'c' * 64}",
+    }
+
+    async with Client(fixture.server(), raise_exceptions=True) as client:
+        preflight = await client.call_tool("preflight_r2r", {"request": request})
+        started = await client.call_tool(
+            "start_job",
+            {
+                "request": {
+                    "schema_version": "1.0",
+                    "plan_id": _PLAN_ID,
+                    "idempotency_key": "r2r-mcp-test",
+                }
+            },
+        )
+
+    assert preflight.is_error is False
+    assert preflight.structured_content["status"] == "human_action_required"
+    assert preflight.structured_content["recommended_backend"] == "newton"
+    assert fixture.r2r_preflight.calls[0].source_robot_id == "source_bot"
+    assert started.is_error is False
+    assert fixture.jobs.start_calls == [(_PLAN_ID, "r2r-mcp-test")]
 
 
 @pytest.mark.anyio

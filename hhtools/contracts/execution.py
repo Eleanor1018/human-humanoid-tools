@@ -48,6 +48,24 @@ class AgentH2RExecutionParameters(HumanRetargetExecutionOptions):
         return self
 
 
+class AgentR2RExecutionParameters(SolverExecutionOptions):
+    """Fully resolved parameters for one plain robot-to-robot trajectory."""
+
+    run_mode: Literal["smoke", "full"]
+    limit_frames: PositiveExecutionInt | None = None
+    source_fps: PositiveExecutionFloat | None = None
+    output_format: Literal["csv", "pkl"]
+    trajectory_profile: Literal["mimic"] = "mimic"
+
+    @model_validator(mode="after")
+    def validate_run_scope(self) -> AgentR2RExecutionParameters:
+        if self.backend != "newton":
+            raise ValueError("the initial R2R Agent workflow supports only newton")
+        if self.run_mode == "full" and self.limit_frames is not None:
+            raise ValueError("full execution cannot declare limit_frames")
+        return self
+
+
 class ExecutionProvenance(ContractModel):
     """Observed execution environment recorded after a solver actually runs."""
 
@@ -69,6 +87,8 @@ class ExecutionProvenance(ContractModel):
     motion_sha256: Sha256Hex | None = None
     robot_asset_id: AssetId | None = None
     robot_config_sha256: Sha256Hex | None = None
+    source_robot_asset_id: AssetId | None = None
+    source_robot_config_sha256: Sha256Hex | None = None
     reference: Annotated[str | None, Field(default=None, max_length=128)]
 
     @model_validator(mode="after")
@@ -82,6 +102,7 @@ class ExecutionProvenance(ContractModel):
 
 __all__ = [
     "AgentH2RExecutionParameters",
+    "AgentR2RExecutionParameters",
     "ExecutionIdentifier",
     "ExecutionProvenance",
     "HumanRetargetExecutionOptions",
