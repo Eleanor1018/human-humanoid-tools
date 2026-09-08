@@ -249,6 +249,7 @@ export function RobotToRobotView({
   const folderInput = useRef<HTMLInputElement | null>(null);
   const actionRequest = useRef<AbortController | null>(null);
   const calibrationStatusRequest = useRef<AbortController | null>(null);
+  const catalogPrefetched = useRef(false);
   const poseCallback = useRef(onTargetPose);
   const referenceCallback = useRef(onCalibrationReference);
   const interactionCallback = useRef(onCalibrationInteraction);
@@ -265,10 +266,18 @@ export function RobotToRobotView({
     [],
   );
 
-  // This view stays mounted to preserve jobs, so refresh its catalogs on entry.
+  // Preload once with the rest of the workspace, then refresh again on entry.
+  // Leaving the panel keeps its draft mounted without issuing another request.
   useEffect(() => {
-    if (!active) return;
+    if (!active && catalogPrefetched.current) return;
     const request = new AbortController();
+    let pendingCatalogs = 2;
+    const settleCatalog = () => {
+      pendingCatalogs -= 1;
+      if (pendingCatalogs === 0 && !request.signal.aborted) {
+        catalogPrefetched.current = true;
+      }
+    };
     void getRobotLibrary({ signal: request.signal })
       .then((catalog) => {
         if (request.signal.aborted) return;
@@ -283,7 +292,8 @@ export function RobotToRobotView({
           setError(errorMessage(reason));
           setErrorOwner(null);
         }
-      });
+      })
+      .finally(settleCatalog);
     void getR2rLibrary({ signal: request.signal })
       .then((libraryEntries) => {
         if (request.signal.aborted) return;
@@ -295,7 +305,8 @@ export function RobotToRobotView({
           setError(errorMessage(reason));
           setErrorOwner(null);
         }
-      });
+      })
+      .finally(settleCatalog);
     return () => request.abort();
   }, [active]);
 

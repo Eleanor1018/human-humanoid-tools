@@ -56,6 +56,7 @@ export function BatchView({
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [catalogBusy, setCatalogBusy] = useState(false);
   const catalogRequest = useRef<AbortController | null>(null);
+  const catalogPrefetched = useRef(false);
   const humanEntriesRef = useRef(humanEntries);
   humanEntriesRef.current = humanEntries;
 
@@ -78,13 +79,19 @@ export function BatchView({
         if (!request.signal.aborted) setCatalogError(errorMessage(reason));
       })
       .finally(() => {
-        if (!request.signal.aborted) setCatalogBusy(false);
+        if (!request.signal.aborted) {
+          catalogPrefetched.current = true;
+          setCatalogBusy(false);
+        }
       });
   }, []);
 
   useEffect(() => {
-    if (active) refreshCatalogs();
-    else catalogRequest.current?.abort();
+    if (!active && catalogPrefetched.current) {
+      catalogRequest.current?.abort();
+      return;
+    }
+    refreshCatalogs();
   }, [active, refreshCatalogs]);
 
   useEffect(() => () => catalogRequest.current?.abort(), []);
