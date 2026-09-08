@@ -71,19 +71,10 @@ async def local_agent_runtime(
 ) -> AsyncIterator[AgentRuntime]:
     """Create one service owner and drain its scheduler when stdio closes."""
 
-    # Warp prints its device banner to stdout on first initialization.  stdout
-    # is the MCP JSON-RPC wire, so configure the library before importing the
-    # application composition root (and therefore before any lazy Newton import can
-    # initialize Warp).  ``quiet`` is deliberately MCP-only: normal CLI/WebUI
-    # processes keep Warp's useful startup diagnostics.
-    from hhtools.retarget.newton_basic._warp_config import configure as configure_warp_cache
-
-    configure_warp_cache(quiet=True)
-
     from dataclasses import replace
 
-    from hhtools.application.runtime import build_application_runtime
     from hhtools.application.settings import effective_job_admission_settings
+    from hhtools.services.runtime_lease import AgentRuntimeLease
 
     paths = config.paths or ApplicationPaths(
         source_root=config.source_root,
@@ -91,19 +82,36 @@ async def local_agent_runtime(
         cache_dir=config.cache_dir,
         job_settings_path=config.job_settings_path,
     )
-    settings, settings_path = effective_job_admission_settings(
-        max_running_jobs=config.max_running_jobs,
-        max_queued_jobs=config.max_queued_jobs,
-        job_settings_path=paths.job_settings_path,
-    )
-    runtime = build_application_runtime(
-        replace(paths, job_settings_path=settings_path),
-        max_running_jobs=settings.max_running_jobs,
-        max_queued_jobs=settings.max_queued_jobs,
-        agent_mcp_available=True,
-        agent_rest_available=False,
-        agent_json_cli_available=False,
-    )
+    lease = AgentRuntimeLease.acquire(Path(paths.save_dir) / ".hhtools-agent")
+    try:
+        # Warp prints its device banner to stdout on first initialization.
+        # Acquire ownership first so a conflicting process fails before any
+        # heavyweight import, then quiet Warp before application assembly.
+        from hhtools.retarget.newton_basic._warp_config import (
+            configure as configure_warp_cache,
+        )
+
+        configure_warp_cache(quiet=True)
+
+        from hhtools.application.runtime import build_application_runtime
+
+        settings, settings_path = effective_job_admission_settings(
+            max_running_jobs=config.max_running_jobs,
+            max_queued_jobs=config.max_queued_jobs,
+            job_settings_path=paths.job_settings_path,
+        )
+        runtime = build_application_runtime(
+            replace(paths, job_settings_path=settings_path),
+            max_running_jobs=settings.max_running_jobs,
+            max_queued_jobs=settings.max_queued_jobs,
+            agent_mcp_available=True,
+            agent_rest_available=False,
+            agent_json_cli_available=False,
+            agent_runtime_lease=lease,
+        )
+    except BaseException:
+        lease.release()
+        raise
     async with runtime.lifespan():
         yield AgentRuntime.from_services(runtime.services)
 

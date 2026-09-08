@@ -74,6 +74,7 @@ def build_application_runtime(
     agent_mcp_available: bool = False,
     agent_rest_available: bool = True,
     agent_json_cli_available: bool = True,
+    agent_runtime_lease: AgentRuntimeLease | None = None,
 ) -> ApplicationRuntime:
     from hhtools.application.agent_services import assemble_agent_services
     from hhtools.utils.paths import user_job_history_dir, user_motion_library_settings_path
@@ -82,7 +83,9 @@ def build_application_runtime(
         raise ValueError("job scheduler limits must be non-negative")
     if max_retained_jobs <= 0:
         raise ValueError("resource limits must be positive: max_retained_jobs")
-    lease = AgentRuntimeLease.acquire(Path(paths.save_dir) / ".hhtools-agent")
+    lease = agent_runtime_lease or AgentRuntimeLease.acquire(
+        Path(paths.save_dir) / ".hhtools-agent"
+    )
     state = None
     scheduler = None
     lifecycle = None
