@@ -45,6 +45,34 @@ robot, and retargeting core, but their installation and launch paths are intenti
 | **Desktop GUI (`.deb`)** | Local desktop shell for an installed checkout | Application menu or `hhtools-desktop` |
 | **Agent (JSON CLI / MCP)** | Versioned local H2R automation | [`hhtools agent` / `hhtools-mcp`](docs/agent.md) |
 
+### One-line Linux release install
+
+Tagged releases provide a POSIX `sh` installer for the complete Python, WebUI,
+retargeting, and Agent runtime:
+
+```bash
+curl --proto '=https' --tlsv1.2 -fsSL \
+  https://github.com/Roboparty/human-humanoid-tools/releases/latest/download/install.sh | sh
+hhtools web
+```
+
+The default install is isolated under the current user's data directory and does
+not need `sudo`. It installs the locked `all` dependency set but does not download
+GVHMR, SMPL-family weights, robot model archives, or NVIDIA drivers. The isolated
+full-stack environment currently selects Python 3.12 or 3.13 because all binary
+dependencies are verified there; this does not change the source package's Python
+3.12+ contract. A machine-wide install is explicit:
+
+```bash
+curl --proto '=https' --tlsv1.2 -fsSL \
+  https://github.com/Roboparty/human-humanoid-tools/releases/latest/download/install.sh \
+  | sudo sh -s -- --system
+```
+
+Native Windows does not include `sh`; a PowerShell installer will be provided
+separately. Git Bash adds a shell but is still a Windows runtime, so this Linux-only
+installer rejects it. WSL can use the installer normally.
+
 ### Source checkout: Terminal or WebUI
 
 Clone the repository and use any compatible Python 3.12 or newer. `uv` will

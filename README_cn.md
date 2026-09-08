@@ -45,6 +45,31 @@ hhtools 有三种交互式运行方式，另提供一个 Agent 自动化接口�
 | **桌面 GUI（`.deb`）** | 复用已安装源码环境的桌面壳 | 应用菜单或 `hhtools-desktop` |
 | **Agent（JSON CLI / MCP）** | 带版本契约的本机 H2R 自动化 | [`hhtools agent` / `hhtools-mcp`](docs/agent.md) |
 
+### Linux 一行安装
+
+带 tag 的 Release 会提供 POSIX `sh` 安装器，一次安装完整的 Python、WebUI、
+重映射和 Agent 运行环境：
+
+```bash
+curl --proto '=https' --tlsv1.2 -fsSL \
+  https://github.com/Roboparty/human-humanoid-tools/releases/latest/download/install.sh | sh
+hhtools web
+```
+
+默认安装到当前用户的独立数据目录，不需要 `sudo`。安装器使用锁定的 `all` 依赖集，
+但不会下载 GVHMR、SMPL 系列权重、机器人模型归档或 NVIDIA 驱动。隔离的全套环境当前
+会选择 Python 3.12 或 3.13，因为完整二进制依赖已在这两个版本验证；这不会改变源码包
+支持 Python 3.12+ 的约定。全局安装必须显式执行：
+
+```bash
+curl --proto '=https' --tlsv1.2 -fsSL \
+  https://github.com/Roboparty/human-humanoid-tools/releases/latest/download/install.sh \
+  | sudo sh -s -- --system
+```
+
+原生 Windows 默认没有 `sh`，后续会单独提供 PowerShell 安装器。Git Bash 虽然附带
+Shell，但仍是 Windows 运行环境，因此本 Linux 安装器会拒绝它；WSL 可以正常使用。
+
 ### 源码安装：终端或 WebUI
 
 克隆仓库，并使用任意兼容的 Python 3.12 或更高版本。`uv` 会优先选择本机已安装的
