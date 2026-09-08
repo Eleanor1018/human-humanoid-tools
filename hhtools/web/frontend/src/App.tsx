@@ -81,7 +81,6 @@ import type {
   StageRobotTrajectoryPayload,
 } from "./stage/types";
 import {
-  DEFAULT_WORKSPACE_LAYOUT,
   storedWorkspaceLayout,
   storeWorkspaceLayout,
 } from "./workspaceLayout";
@@ -746,7 +745,6 @@ export function App() {
           setLayout((current) => ({ ...current, inspectorHidden: hidden }))
         }
         onForceAnalysisChange={setForceAnalysis}
-        onResetLayout={() => setLayout(DEFAULT_WORKSPACE_LAYOUT)}
         onMotionLibraryChange={() =>
           setMotionLibraryRevision((revision) => revision + 1)
         }

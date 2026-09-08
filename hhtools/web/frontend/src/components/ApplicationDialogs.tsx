@@ -36,7 +36,6 @@ export interface ApplicationDialogsProps {
   readonly onSidebarHiddenChange: (hidden: boolean) => void;
   readonly onInspectorHiddenChange: (hidden: boolean) => void;
   readonly onForceAnalysisChange: (force: boolean) => void;
-  readonly onResetLayout: () => void;
   readonly onMotionLibraryChange: (
     settings: MotionLibrarySettingsSnapshot,
   ) => void;
@@ -446,29 +445,23 @@ function SettingsDialog(props: SettingsDialogProps) {
       </div>
 
       <footer className="flex items-center justify-between gap-3 border-t border-border-subtle pt-3">
-        <Button size="sm" variant="ghost" onClick={props.onResetLayout}>
-          {text("Reset layout", "重置布局")}
+        <RefreshButton
+          variant="ghost"
+          label={text("Refresh settings", "刷新设置")}
+          busy={loading}
+          disabled={action !== null}
+          onClick={() => void refresh()}
+        />
+        <Button
+          size="sm"
+          variant="primary"
+          disabled={busy || !limitsValid || jobAdmission?.editable !== true}
+          onClick={() => void saveJobs()}
+        >
+          {action === "jobs"
+            ? text("Saving…", "保存中……")
+            : text("Save", "保存")}
         </Button>
-        <div className="flex gap-2">
-          <RefreshButton
-            label={text("Refresh settings", "刷新设置")}
-            busy={loading}
-            disabled={action !== null}
-            onClick={() => void refresh()}
-          />
-          <Button
-            size="sm"
-            variant="primary"
-            disabled={
-              busy || !limitsValid || jobAdmission?.editable !== true
-            }
-            onClick={() => void saveJobs()}
-          >
-            {action === "jobs"
-              ? text("Saving…", "保存中……")
-              : text("Save", "保存")}
-          </Button>
-        </div>
       </footer>
     </Modal>
   );
