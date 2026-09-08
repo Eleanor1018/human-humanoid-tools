@@ -267,10 +267,11 @@ export function TutorialOverlay({
       )}
       <div
         ref={popover}
-        className={`fixed grid max-h-[calc(100vh-24px)] w-[min(320px,calc(100vw-24px))] gap-3 overflow-y-auto rounded-lg border border-border-subtle bg-surface px-4 pt-3.5 pb-4 text-foreground shadow-[0_18px_50px_rgba(0,0,0,0.22)] outline-none transition-opacity duration-[180ms] ${positionedIndex === index ? "opacity-100" : "pointer-events-none opacity-0"}`}
+        className={`fixed grid max-h-[calc(100vh-24px)] w-[min(320px,calc(100vw-24px))] gap-3 overflow-y-auto rounded-lg border border-border-subtle bg-surface px-4 pt-3.5 pb-4 text-foreground shadow-[0_18px_50px_rgba(0,0,0,0.22)] outline-none transition-opacity duration-[180ms] ${positionedIndex === index ? "visible opacity-100" : "invisible pointer-events-none opacity-0"}`}
         style={popoverStyle ?? { left: VIEWPORT_MARGIN, top: VIEWPORT_MARGIN }}
         role="dialog"
         aria-modal="true"
+        aria-hidden={positionedIndex !== index}
         aria-labelledby={titleId}
         tabIndex={-1}
       >
