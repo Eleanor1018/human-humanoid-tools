@@ -105,12 +105,15 @@ export const TUTORIAL_STEPS: readonly TutorialStep[] = [
   {
     id: "welcome",
     view: "motion",
-    anchor: "#topbar",
-    placement: "bottom",
-    title: copy("1. Welcome to hhtools", "1. 欢迎使用 hhtools"),
+    anchor: '[data-tutorial="workspace-navigation"]',
+    placement: "right",
+    title: copy(
+      "1. Welcome to Human-Humanoid Tools",
+      "1. 欢迎使用 Human-Humanoid Tools",
+    ),
     body: copy(
-      "This guide follows the recommended workspace order: Motion, Robot, Calibration, Retarget, Preview, and Export. Use the top menu for application commands and the left navigation to switch assets, workflows, and analysis tools.",
-      "本教程会按推荐顺序介绍工作区：动作、机器人、标定、重定向、预览和导出。顶部菜单用于应用命令，左侧导航用于切换资源、工作流与分析工具。",
+      "Human-Humanoid Tools helps you quickly retarget human motion and robot trajectories to humanoid robots. Use the highlighted workspace functions to manage motion and robot assets, run retargeting workflows and batches, and analyze results. This guide will follow the recommended path from Motion through Export.",
+      "Human-Humanoid Tools 是一个帮助你快速完成人体动作与机器人轨迹到人形机器人重映射的工具。左侧高亮的功能区域用于管理动作和机器人资源、执行重映射与批处理，以及分析结果。本教程会沿着推荐路径，从动作一直介绍到导出。",
     ),
   },
   {
