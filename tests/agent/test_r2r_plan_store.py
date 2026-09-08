@@ -126,3 +126,28 @@ def test_r2r_pair_calibration_id_must_match_digest(tmp_path: Path) -> None:
         PlanStore(tmp_path / "state").put_if_absent(_plan(payload), payload)
 
     assert captured.value.code == "PLAN_CONFLICT"
+
+
+@pytest.mark.parametrize(
+    ("section", "field", "value"),
+    [
+        ("trajectory", "source_robot_id", "another_source"),
+        ("trajectory", "profile", "intermimic"),
+        (None, "backend", "interaction_mesh"),
+    ],
+)
+def test_r2r_v1_semantics_reject_unsupported_or_inconsistent_routing(
+    tmp_path: Path,
+    section: str | None,
+    field: str,
+    value: str,
+) -> None:
+    payload = _payload()
+    target = payload if section is None else payload[section]
+    assert isinstance(target, dict)
+    target[field] = value
+
+    with pytest.raises(PlanStoreError) as captured:
+        PlanStore(tmp_path / "state").put_if_absent(_plan(payload), payload)
+
+    assert captured.value.code == "PLAN_CONFLICT"

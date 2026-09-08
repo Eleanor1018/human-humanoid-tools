@@ -8,11 +8,13 @@ import pytest
 import yaml
 
 from hhtools.contracts import (
+    ApiError,
     AssetCategory,
     AssetRegistrationRequest,
     BackendCapability,
     CapabilityResponse,
     DeviceCapability,
+    ErrorStage,
     JobSpecKind,
     PreflightStatus,
     R2RPreflightRequest,
@@ -23,7 +25,7 @@ from hhtools.retarget.robot_to_robot import save_r2r_calibration
 from hhtools.robot.registry import list_presets_in_root_readonly
 from hhtools.services.asset_service import AgentAssetService
 from hhtools.services.assets import AssetRegistry
-from hhtools.services.plans import PlanStore
+from hhtools.services.plans import PlanStore, PlanStoreError
 from hhtools.services.r2r_preflight import R2RPreflightService
 from hhtools.services.r2r_retarget import R2RRetargetService
 from hhtools.services.retarget import RetargetServiceError
@@ -317,3 +319,39 @@ def test_ready_r2r_plan_projects_to_a_two_robot_jobspec_and_detects_drift(
     with pytest.raises(RetargetServiceError) as captured:
         projector.get_job_spec(response.plan.plan_id)
     assert captured.value.code == "PLAN_STALE"
+
+
+def test_identical_concurrent_preflight_recovers_the_winning_plan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    grounding_robot_pair,
+) -> None:
+    service, plans, request, _assets = _setup(
+        tmp_path,
+        monkeypatch,
+        grounding_robot_pair,
+    )
+    first = service.preflight_r2r(request)
+    assert first.plan is not None
+    original_get = plans.get
+    miss_once = True
+
+    def stale_read(plan_id: str):
+        nonlocal miss_once
+        if miss_once:
+            miss_once = False
+            raise PlanStoreError(
+                ApiError(
+                    code="PLAN_NOT_FOUND",
+                    message="Simulated concurrent cache miss.",
+                    stage=ErrorStage.PREFLIGHT,
+                )
+            )
+        return original_get(plan_id)
+
+    monkeypatch.setattr(plans, "get", stale_read)
+
+    repeated = service.preflight_r2r(request)
+
+    assert repeated.status is PreflightStatus.READY
+    assert repeated.plan == first.plan

@@ -386,7 +386,7 @@ def create_mcp_server(
     server: MCPServer[AgentRuntime] = _HHToolsMCPServer(
         "hhtools",
         title="HHTools Agent",
-        description="Safe local human-to-humanoid retargeting services.",
+        description="Safe local H2R and scene-free R2R retargeting services.",
         instructions=_server_instructions(web_ui_url),
         version=__version__,
         lifespan=lifespan,
@@ -592,7 +592,7 @@ def create_mcp_server(
         request: JobRetryRequest,
         context: Context[AgentRuntime, Any],
     ) -> AgentJobView:
-        """Create an idempotent whole-plan child attempt for a terminal H2R job."""
+        """Create an idempotent whole-plan child attempt for a terminal workflow job."""
 
         return _tool_call(
             lambda: _runtime(context).jobs.retry_job(
@@ -731,7 +731,7 @@ def create_mcp_server(
     @server.resource(
         "hhtools://jobs/{job_id}/status",
         name="hhtools-job-status",
-        description="Compact current state for one H2R job.",
+        description="Compact current state for one H2R or R2R job.",
         mime_type="application/json",
     )
     async def job_resource(
@@ -743,7 +743,7 @@ def create_mcp_server(
     @server.resource(
         "hhtools://jobs/{job_id}/manifest",
         name="hhtools-job-manifest",
-        description="Verified terminal audit manifest for one H2R job.",
+        description="Verified terminal audit manifest for one H2R or R2R job.",
         mime_type="application/json",
     )
     async def manifest_resource(

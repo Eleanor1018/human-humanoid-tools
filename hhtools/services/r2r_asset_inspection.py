@@ -29,6 +29,8 @@ from hhtools.io.robot_trajectory_detect import sniff_robot_csv
 SUPPORTED_R2R_PRIMARY_EXTENSIONS = frozenset({".csv", ".npz", ".pickle", ".pkl"})
 _MAX_TRAJECTORY_ARRAY_BYTES = 512 * 1024 * 1024
 _MAX_METADATA_MEMBER_BYTES = 1024 * 1024
+_MAX_NPZ_MEMBERS = 4_096
+_MAX_NPZ_NAME_BYTES = 256 * 1024
 
 
 class R2RTrajectoryDiscoveryError(ValueError):
@@ -115,9 +117,15 @@ def _source_robot_from_csv(path: Path) -> str | None:
 def _npz_member_names(path: Path) -> set[str]:
     try:
         with zipfile.ZipFile(path) as archive:
+            names = archive.namelist()
+            if (
+                len(names) > _MAX_NPZ_MEMBERS
+                or sum(len(name.encode("utf-8")) for name in names) > _MAX_NPZ_NAME_BYTES
+            ):
+                return set()
             return {
                 Path(name).name.removesuffix(".npy").casefold()
-                for name in archive.namelist()
+                for name in names
                 if name.casefold().endswith(".npy")
             }
     except (OSError, ValueError, zipfile.BadZipFile):
@@ -129,17 +137,22 @@ def _source_robot_from_npz(path: Path) -> str | None:
         with np.load(path, allow_pickle=False) as archive:
             for key in ("source_robot", "robot"):
                 if key in archive.files:
-                    value = np.asarray(archive[key])
-                    if value.nbytes <= _MAX_METADATA_MEMBER_BYTES and value.dtype.kind in {
-                        "S",
-                        "U",
-                    }:
+                    value = _bounded_npz_array(
+                        archive,
+                        key,
+                        max_bytes=_MAX_METADATA_MEMBER_BYTES,
+                    )
+                    if value.dtype.kind in {"S", "U"}:
                         robot_id = str(value.reshape(()).item()).strip()
                         if robot_id:
                             return robot_id
             if "meta_json" in archive.files:
-                raw = np.asarray(archive["meta_json"])
-                if raw.nbytes <= _MAX_METADATA_MEMBER_BYTES and raw.dtype.kind in {"S", "U"}:
+                raw = _bounded_npz_array(
+                    archive,
+                    "meta_json",
+                    max_bytes=_MAX_METADATA_MEMBER_BYTES,
+                )
+                if raw.dtype.kind in {"S", "U"}:
                     metadata = json.loads(str(raw.reshape(()).item()))
                     if isinstance(metadata, dict):
                         robot_id = str(
@@ -283,6 +296,8 @@ def _positive_float(value: object, *, field: str) -> float:
 
 
 def _inspect_csv(path: Path) -> _TrajectoryFacts:
+    if path.stat().st_size > _MAX_TRAJECTORY_ARRAY_BYTES:
+        raise _TrajectoryValidationError("robot CSV exceeds the inspection limit")
     metadata: dict[str, str] = {}
     records: list[list[str]] = []
     with path.open("r", encoding="utf-8", errors="strict", newline="") as stream:

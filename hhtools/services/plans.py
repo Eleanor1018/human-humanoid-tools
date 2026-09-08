@@ -341,6 +341,12 @@ def _validate_r2r_plan_projection(
         raise _InvalidDocumentError("parameters must be a JSON object")
     if trajectory.get("category") != "robot_trajectory":
         raise _InvalidDocumentError("R2R input category must be robot_trajectory")
+    if trajectory.get("source_robot_id") != source_robot.get("robot_id"):
+        raise _InvalidDocumentError("R2R trajectory source identity is inconsistent")
+    if trajectory.get("profile") != "mimic":
+        raise _InvalidDocumentError("R2R v1 supports only scene-free mimic trajectories")
+    if canonical_payload.get("backend") != "newton":
+        raise _InvalidDocumentError("R2R v1 supports only the Newton backend")
 
     digests = {
         "trajectory": trajectory.get("digest"),

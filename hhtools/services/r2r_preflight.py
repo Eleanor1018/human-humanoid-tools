@@ -640,14 +640,6 @@ class R2RPreflightService:
             plan_id = compute_plan_id(canonical_payload)
             try:
                 plan = self._plan_store.get(plan_id)
-                if not isinstance(plan, R2RPlan):
-                    raise PlanStoreError(
-                        _error_for_action(
-                            "PLAN_CONFLICT",
-                            "The plan id is bound to another workflow.",
-                            NextAction(actor="agent", action="run_preflight"),
-                        )
-                    )
             except PlanStoreError as error:
                 if error.code != "PLAN_NOT_FOUND":
                     raise
@@ -669,10 +661,16 @@ class R2RPreflightService:
                     target_robot_digest=_asset_digest(target_bundle.asset_id),
                     calibration_digest=calibration_digest,
                 )
-                stored = self._plan_store.put_if_absent(candidate, canonical_payload)
-                if not isinstance(stored, R2RPlan):
-                    _fail("PLAN_CONFLICT", "The persisted plan has another workflow type.")
-                plan = stored
+                try:
+                    plan = self._plan_store.put_if_absent(candidate, canonical_payload)
+                except PlanStoreError as conflict:
+                    if conflict.code != "PLAN_CONFLICT":
+                        raise
+                    plan = self._plan_store.get(plan_id)
+                    if self._plan_store.get_payload(plan_id) != canonical_payload:
+                        raise
+            if not isinstance(plan, R2RPlan):
+                _fail("PLAN_CONFLICT", "The persisted plan has another workflow type.")
             return R2RPreflightResponse(
                 request_id=request_id,
                 status=PreflightStatus.READY,

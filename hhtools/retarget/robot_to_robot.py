@@ -693,28 +693,28 @@ def _load_npz_trajectory(
     fallback_dof_names: tuple[str, ...] | None,
     source_fps: float | None = None,
 ) -> SourceTrajectory:
-    data = np.load(path, allow_pickle=False)
-    keys = set(data.files)
-    jq_key = next((k for k in ("joint_q", "qpos", "q") if k in keys), None)
-    if jq_key is None:
-        raise ValueError(f"{path}: npz has no joint_q/qpos array (keys: {sorted(keys)})")
-    joint_q = np.asarray(data[jq_key], dtype=np.float32)
-    if "dof_names" in keys:
-        dof_names = tuple(str(n) for n in data["dof_names"].tolist())
-    else:
-        dof_names = _align_trajectory_dof_names(
-            joint_q.shape[1] - 7,
-            fallback_dof_names,
-        )
-    declared = None
-    for k in ("sample_rate", "fps", "framerate"):
-        if k in keys:
-            declared = float(np.asarray(data[k]).reshape(-1)[0])
-            break
-    fps = _resolve_source_framerate(declared, source_fps)
-    quat_fmt = "xyzw"
-    if "root_quat_format" in keys:
-        quat_fmt = str(data["root_quat_format"]).lower()
+    with np.load(path, allow_pickle=False) as data:
+        keys = set(data.files)
+        jq_key = next((k for k in ("joint_q", "qpos", "q") if k in keys), None)
+        if jq_key is None:
+            raise ValueError(f"{path}: npz has no joint_q/qpos array (keys: {sorted(keys)})")
+        joint_q = np.asarray(data[jq_key], dtype=np.float32)
+        if "dof_names" in keys:
+            dof_names = tuple(str(n) for n in data["dof_names"].tolist())
+        else:
+            dof_names = _align_trajectory_dof_names(
+                joint_q.shape[1] - 7,
+                fallback_dof_names,
+            )
+        declared = None
+        for k in ("sample_rate", "fps", "framerate"):
+            if k in keys:
+                declared = float(np.asarray(data[k]).reshape(-1)[0])
+                break
+        fps = _resolve_source_framerate(declared, source_fps)
+        quat_fmt = "xyzw"
+        if "root_quat_format" in keys:
+            quat_fmt = str(data["root_quat_format"]).lower()
     if quat_fmt == "wxyz":
         joint_q = _wxyz_to_xyzw(joint_q)
     return SourceTrajectory(joint_q=joint_q, dof_names=dof_names, framerate=fps, meta={})

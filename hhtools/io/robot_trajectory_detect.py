@@ -72,20 +72,24 @@ def joint_q_width_from_npz(path: Path) -> int:
     """Return joint-q column count for an hhtools robot-export NPZ, else zero."""
 
     try:
-        data = np.load(path, allow_pickle=False)
+        archive = np.load(path, allow_pickle=False)
     except Exception:  # noqa: BLE001 - format sniffer treats malformed inputs as non-matches
-        return 0
-    keys = set(data.files)
-    joint_q_key = next((key for key in ("joint_q", "qpos", "q") if key in keys), None)
-    if joint_q_key is None:
         return 0
     try:
-        joint_q = np.asarray(data[joint_q_key])
+        with archive:
+            keys = set(archive.files)
+            joint_q_key = next(
+                (key for key in ("joint_q", "qpos", "q") if key in keys),
+                None,
+            )
+            if joint_q_key is None:
+                return 0
+            joint_q = np.asarray(archive[joint_q_key])
+            if joint_q.ndim != 2 or joint_q.shape[1] < 8:
+                return 0
+            return int(joint_q.shape[1])
     except Exception:  # noqa: BLE001 - format sniffer treats malformed inputs as non-matches
         return 0
-    if joint_q.ndim != 2 or joint_q.shape[1] < 8:
-        return 0
-    return int(joint_q.shape[1])
 
 
 def is_human_sidecar_csv(path: Path) -> bool:

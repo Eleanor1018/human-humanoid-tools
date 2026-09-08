@@ -17,7 +17,7 @@ Video-to-Motion 和 Analysis 暂不进入本轮实现。
 
 - [x] 阶段 1：revision-aware `wait_job`（service、REST、MCP、JSON CLI、Agent skill）
 - [x] 阶段 2：H2R Interaction-Mesh 正式验收（terrain 与 object 自包含 E2E）
-- [ ] 阶段 3：R2R
+- [x] 阶段 3：scene-free R2R（不可变 robot pair identity 与自包含 MCP E2E）
 - [ ] 阶段 4：H2R / R2R Batch
 - [ ] 阶段 5：标定辅助
 
@@ -140,12 +140,13 @@ JSON CLI 的既有 `--timeout` 表示整个 HTTP 请求超时，因此等待时�
 
 ## 阶段 3：R2R
 
-- 定义 source trajectory、source robot、target robot 与 pair calibration 的不可变 identity；
-- 增加 R2R asset inspection 与 `preflight_r2r`；
-- 复用共享 JobManager，新增 R2R executor adapter；
-- 对 source/target 不匹配、缺少 pair calibration、过期计划和场景输入进行前置拒绝；
-- 产物沿用现有 CSV / scene bundle / diagnostics，并补齐 provenance；
-- CLI 增加 `hhtools retarget r2r`，交互首页与 GUI 使用相同术语。
+- [x] 定义 source trajectory、source robot、target robot 与 pair calibration 的不可变 identity；
+- [x] 增加安全 R2R asset inspection、可发现目录项与 `preflight_r2r`；
+- [x] 复用共享 JobManager / `start_job`，新增 R2R executor adapter；
+- [x] 对 source/target 不匹配、缺少 pair calibration、过期计划和场景输入进行前置拒绝；
+- [x] 产物沿用现有 CSV / PKL、preview、diagnostics 与 portable export，并补齐 provenance；
+- [x] MCP、REST 和 JSON CLI 增加 R2R 契约并完成自包含真实求解 E2E；
+- [ ] 人类 CLI 的 `hhtools retarget r2r` 简洁入口与 TUI 首页留在第 6 个提交统一完成。
 
 ## 阶段 4：Batch
 
