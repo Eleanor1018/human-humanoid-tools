@@ -104,6 +104,11 @@ test("tutorial retains the nine-step product journey with plain localized copy",
       "motion",
     ],
   );
+  assert.equal(
+    TUTORIAL_STEPS[0].anchor,
+    '[data-tutorial="workspace-navigation"]',
+  );
+  assert.equal(TUTORIAL_STEPS[0].placement, "right");
   assert.equal(TUTORIAL_STEPS[6].anchor, ".stage-view-menu");
   assert.equal(TUTORIAL_STEPS[7].anchor, '[data-tutorial="h2r-result"]');
   for (const step of TUTORIAL_STEPS) {

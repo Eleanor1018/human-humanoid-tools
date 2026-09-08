@@ -10,12 +10,14 @@ from pathlib import Path
 from fastapi import File, HTTPException, UploadFile
 from fastapi.responses import Response
 
-from hhtools.web.output.export_bundle import ensure_export_path, sanitize_export_stem
-from hhtools.web.server.export_runtime import _parse_optional_fps, _write_r2r_export
-from hhtools.web.server.motion_runtime import _motion_for_retarget
-from hhtools.web.server.preview_runtime import (
+from hhtools.application.export import _parse_optional_fps, _write_r2r_export
+from hhtools.application.motions import _motion_for_retarget
+from hhtools.application.previews import (
     _compute_r2r_scaled_preview,
 )
+from hhtools.application.robots import _join_robot_prewarm, _require_newton_package
+from hhtools.application.state import Job, _snapshot_job_request
+from hhtools.io.export_bundle import ensure_export_path, sanitize_export_stem
 from hhtools.web.server.r2r_runtime import (
     _build_r2r_calibration_session,
     _r2r_entry_from_upload,
@@ -25,8 +27,7 @@ from hhtools.web.server.r2r_runtime import (
     _run_r2r_batch_job,
     _run_r2r_source_upload_job,
 )
-from hhtools.web.server.robot_runtime import _join_robot_prewarm, _require_newton_package
-from hhtools.web.server.state import Job, _snapshot_job_request
+from hhtools.web.server.requests import RobotRetargetRequest
 
 _log = logging.getLogger(__name__)
 
@@ -90,8 +91,8 @@ def register_r2r_routes(app, *, state, jobs, uploads) -> None:
     @app.post("/api/r2r/source/library")
     async def r2r_source_library(body: dict) -> dict:
         """Load one existing robot trajectory without crossing into H2R data."""
-        from hhtools.web.library.motion_library_links import library_entry_for_load
-        from hhtools.web.library.r2r_upload_resolve import r2r_clip_ref_for_path
+        from hhtools.services.motion_library_links import library_entry_for_load
+        from hhtools.services.r2r_upload_resolve import r2r_clip_ref_for_path
 
         source_robot = str(body.get("source_robot") or "").strip()
         if not source_robot:
@@ -134,7 +135,7 @@ def register_r2r_routes(app, *, state, jobs, uploads) -> None:
         """Serve an interaction-object mesh from an uploaded R2R clip folder."""
         from types import SimpleNamespace
 
-        from hhtools.web.output.serialize import object_mesh_glb
+        from hhtools.io.scene_serialize import object_mesh_glb
 
         rec = state.r2r_sources.get(token)
         if rec is None:
@@ -277,7 +278,7 @@ def register_r2r_routes(app, *, state, jobs, uploads) -> None:
                 ik_iterations=ik_iters,
                 progress_callback=_cb,
             )
-            from hhtools.web.output.serialize import serialize_robot_trajectory
+            from hhtools.io.scene_serialize import serialize_robot_trajectory
 
             scaled = _compute_r2r_scaled_preview(src, tgt, motion, calib)
             traj = serialize_robot_trajectory(
@@ -287,7 +288,7 @@ def register_r2r_routes(app, *, state, jobs, uploads) -> None:
                 ground_follow=False,
                 yellow_align="ankle",
             )
-            from hhtools.web.analysis.result_diagnostics import build_result_diagnostics
+            from hhtools.analysis.result_diagnostics import build_result_diagnostics
 
             diagnostics = build_result_diagnostics(
                 traj,
@@ -295,9 +296,10 @@ def register_r2r_routes(app, *, state, jobs, uploads) -> None:
                 ik_map=tgt.preset.ik_map,
                 feet=tgt.preset.feet,
             )
-            from hhtools.web.output.r2r_export_bundle import clip_has_export_scene
-            from hhtools.web.output.r2r_scene import compute_r2r_target_scaled_scene
-            from hhtools.web.output.serialize import _scaled_overlay_foot_z
+            from hhtools.io.r2r_export_bundle import clip_has_export_scene
+            from hhtools.io.r2r_scene import compute_r2r_target_scaled_scene
+            from hhtools.io.scene_serialize import _scaled_overlay_foot_z
+            from hhtools.retarget.interaction_mesh.heightfield import obj_to_heightfield
 
             stem = sanitize_export_stem(rec.get("stem") or "r2r")
             clip_dir_path = Path(rec.get("clip_dir") or Path(rec["source_path"]).parent)
@@ -310,10 +312,9 @@ def register_r2r_routes(app, *, state, jobs, uploads) -> None:
             tgt_scene = None
             if src_has_scene and rec.get("clip_dir") and rec.get("source_path"):
                 tgt_scene = compute_r2r_target_scaled_scene(
-                    src,
-                    tgt,
                     motion,
-                    calib,
+                    scale_ratio=r2r.r2r_scene_scale_ratio(src, tgt, motion, calib),
+                    terrain_loader=obj_to_heightfield,
                     clip_dir=Path(rec["clip_dir"]),
                     profile=scene_prof,
                     robot_path=Path(rec["source_path"]),
@@ -364,6 +365,8 @@ def register_r2r_routes(app, *, state, jobs, uploads) -> None:
                     yellow_foot_z=yellow_foot_z,
                 ),
             )
+            from hhtools.services.execution import build_execution_provenance
+
             job.result = {
                 "trajectory": traj,
                 "export_token": export_token,
@@ -379,6 +382,11 @@ def register_r2r_routes(app, *, state, jobs, uploads) -> None:
                 "download_name": (
                     f"{stem}_export.zip" if artifact_path.suffix == ".zip" else artifact_path.name
                 ),
+                "execution_provenance": build_execution_provenance(
+                    ret,
+                    executor="web_r2r_v1",
+                    backend=backend,
+                ).model_dump(mode="json", exclude_none=True),
             }
             job.progress = 1.0
             job.message = "done"
@@ -394,7 +402,38 @@ def register_r2r_routes(app, *, state, jobs, uploads) -> None:
             job.mark_terminal("error")
 
     @app.post("/api/r2r/retarget")
-    async def r2r_retarget(body: dict) -> dict:
+    async def r2r_retarget(request: RobotRetargetRequest) -> dict:
+        from hhtools.retarget import robot_to_robot as r2r
+
+        record = state.r2r_sources.get(request.source_token)
+        if record is None:
+            raise HTTPException(
+                status_code=404,
+                detail="source trajectory expired; reload the clip",
+            )
+        if record.get("source_robot") != request.source:
+            raise HTTPException(
+                status_code=422,
+                detail="source robot does not match the trajectory",
+            )
+        try:
+            target = _r2r_get_model(request.target, compile_mjcf=False)
+            _r2r_get_model(request.source, compile_mjcf=False)
+            calibration = r2r.load_r2r_calibration(
+                target.preset.urdf_path.parent,
+                request.source,
+                target_robot=target.preset.name,
+            )
+        except (KeyError, FileNotFoundError) as error:
+            raise HTTPException(status_code=404, detail="robot asset not found") from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        if not calibration:
+            raise HTTPException(
+                status_code=409,
+                detail="target robot is not calibrated; calibrate first",
+            )
+        body = request.model_dump()
         job = _schedule_job(
             "r2r_retarget",
             body,
@@ -437,7 +476,7 @@ def register_r2r_routes(app, *, state, jobs, uploads) -> None:
     @app.post("/api/r2r/basket/scan")
     def r2r_basket_scan(body: dict) -> dict:
         """Enumerate R2R clips on a server-local path (no copy)."""
-        from hhtools.web.library.r2r_upload_resolve import enumerate_r2r_clips, validate_r2r_upload
+        from hhtools.services.r2r_upload_resolve import enumerate_r2r_clips, validate_r2r_upload
 
         raw = str(body.get("source") or "").strip()
         profile = str(body.get("profile") or "auto").strip() or "auto"

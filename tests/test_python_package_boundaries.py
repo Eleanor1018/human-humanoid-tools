@@ -1,8 +1,9 @@
 """Regression guard for HHTools' Python package dependency direction.
 
 The target graph keeps numerical/domain code independent from application
-services and host adapters.  ``web``, ``viewer``, and ``mcp`` are sibling
-hosts: they may share lower layers, but they must not import one another.
+services and host adapters. ``web`` and ``mcp`` are sibling hosts: they may
+share lower layers, but they must not import one another. ``viewer`` is now a
+compatibility namespace and may only project migrated lower-layer helpers.
 
 This test deliberately parses source with :mod:`ast` instead of importing the
 package.  Besides keeping optional runtime dependencies out of architecture
@@ -39,21 +40,36 @@ ALLOWED_DEPENDENCIES: dict[str, frozenset[str]] = {
     "contracts": frozenset(),
     "core": frozenset(),
     "agent": frozenset({"contracts", "services"}),
+    "application": frozenset(
+        {
+            "agent",
+            "analysis",
+            "contracts",
+            "core",
+            "io",
+            "retarget",
+            "robot",
+            "services",
+            "utils",
+        }
+    ),
     "bodymodels": frozenset({"core", "utils"}),
-    "human": frozenset(),
+    "human": frozenset({"core"}),
     "robot": frozenset({"core", "utils"}),
     "io": frozenset({"bodymodels", "core", "robot"}),
     "integrations": frozenset(),
     "retarget": frozenset({"bodymodels", "core", "io", "robot", "utils"}),
-    "analysis": frozenset({"io"}),
-    "services": frozenset({"_version", "contracts", "io", "retarget", "robot", "utils"}),
+    "analysis": frozenset({"core", "io", "retarget", "robot", "services"}),
+    "services": frozenset(
+        {"_version", "contracts", "core", "io", "retarget", "robot", "utils"}
+    ),
     "web": frozenset(
         {
             "analysis",
             "agent",
+            "application",
             "contracts",
             "core",
-            "human",
             "integrations",
             "io",
             "retarget",
@@ -62,8 +78,8 @@ ALLOWED_DEPENDENCIES: dict[str, frozenset[str]] = {
             "utils",
         }
     ),
-    "viewer": frozenset({"_version", "core", "human", "io", "retarget", "robot"}),
-    "mcp": frozenset({"_version", "contracts", "retarget", "services"}),
+    "viewer": frozenset({"core", "services"}),
+    "mcp": frozenset({"_version", "application", "contracts", "retarget", "services"}),
     "cli": frozenset({"_version", "bodymodels", "contracts", "core", "io", "retarget", "robot"}),
 }
 
@@ -72,7 +88,6 @@ ALLOWED_DEPENDENCIES: dict[str, frozenset[str]] = {
 # blanket access to every Web or Viewer implementation module.
 CLI_HOST_LAUNCH_EXCEPTIONS: dict[str, frozenset[str]] = {
     "hhtools/cli/desktop_sidecar.py": frozenset({"hhtools.web.dependencies", "hhtools.web.server"}),
-    "hhtools/cli/ui.py": frozenset({"hhtools.viewer.app"}),
     "hhtools/cli/web.py": frozenset({"hhtools.web.dependencies", "hhtools.web.server"}),
 }
 
@@ -111,23 +126,10 @@ class InternalImport:
         )
 
 
-# Current static debt: 51 forbidden import occurrences represented by 50 locations.
+# Current static debt: 26 forbidden import occurrences represented by 25 locations.
 # Reduce this table whenever an inversion is removed.  Never add an entry merely
 # to make a new failure green; fix the dependency direction instead.
 _LEGACY_LOCATION_BASELINE: dict[ImportIdentity, int] = {
-    ImportIdentity(
-        "hhtools/analysis/canonical.py",
-        "hhtools.retarget.newton_basic.human_aliases",
-        "project_motion",
-    ): 1,
-    ImportIdentity("hhtools/analysis/clip.py", "hhtools.web.library.r2r_upload_resolve", "_load_source"): 1,
-    ImportIdentity(
-        "hhtools/analysis/clip.py", "hhtools.retarget.robot_to_robot", "_load_source"
-    ): 1,
-    ImportIdentity(
-        "hhtools/cli/retarget.py", "hhtools.web.output.export_bundle", "interaction_mesh_run"
-    ): 1,
-    ImportIdentity("hhtools/cli/retarget.py", "hhtools.web.output.export_bundle", "retarget"): 1,
     ImportIdentity(
         "hhtools/core/grounding.py",
         "hhtools.retarget.newton_basic.human_aliases",
@@ -138,7 +140,6 @@ _LEGACY_LOCATION_BASELINE: dict[ImportIdentity, int] = {
         "hhtools.retarget.newton_basic.human_aliases",
         _MODULE_SCOPE,
     ): 1,
-    ImportIdentity("hhtools/io/bvh_detect.py", "hhtools.viewer.library", _MODULE_SCOPE): 1,
     ImportIdentity(
         "hhtools/io/datasets/meshmimic_holosoma.py",
         "hhtools.retarget.interaction_mesh.heightfield",
@@ -149,7 +150,6 @@ _LEGACY_LOCATION_BASELINE: dict[ImportIdentity, int] = {
         "hhtools.retarget.interaction_mesh.heightfield",
         "ParcMsAdapter.load_motion",
     ): 2,
-    ImportIdentity("hhtools/io/mimic_detect.py", "hhtools.viewer.library", _MODULE_SCOPE): 1,
     ImportIdentity(
         "hhtools/io/mocap_parkour_import.py",
         "hhtools.retarget.interaction_mesh.heightfield",
@@ -164,17 +164,6 @@ _LEGACY_LOCATION_BASELINE: dict[ImportIdentity, int] = {
         "hhtools/io/parc_export.py",
         "hhtools.retarget.interaction_mesh.heightfield",
         _MODULE_SCOPE,
-    ): 1,
-    ImportIdentity("hhtools/mcp/runtime.py", "hhtools.web.server", "local_agent_runtime"): 1,
-    ImportIdentity(
-        "hhtools/retarget/newton_basic/pipeline.py",
-        "hhtools.viewer.anatomy",
-        "NewtonBasicPipeline._augment_canonical_targets",
-    ): 1,
-    ImportIdentity(
-        "hhtools/retarget/robot_to_robot.py",
-        "hhtools.viewer.anatomy",
-        "align_retargeted_ankles_to_scaled_source",
     ): 1,
     ImportIdentity(
         "hhtools/robot/ik_map_policy.py",
@@ -266,89 +255,12 @@ _LEGACY_LOCATION_BASELINE: dict[ImportIdentity, int] = {
         "hhtools.retarget.interaction_mesh.mujoco_scene",
         "estimate_robot_standing_height",
     ): 1,
-    ImportIdentity(
-        "hhtools/services/legacy_job_upgrade.py", "hhtools.web.jobs.job_specs", _MODULE_SCOPE
-    ): 1,
-    ImportIdentity(
-        "hhtools/viewer/app.py",
-        "hhtools.web.output.export_bundle",
-        "_build_robot_tab._on_retarget._worker",
-    ): 1,
-    ImportIdentity(
-        "hhtools/viewer/app.py",
-        "hhtools.web.analysis.scaled_preview",
-        "_build_robot_tab._compute_scaled_preview",
-    ): 1,
-    ImportIdentity(
-        "hhtools/web/analysis/calibration_session.py",
-        "hhtools.viewer.anatomy",
-        "build_calibration_session",
-    ): 1,
-    ImportIdentity("hhtools/web/analysis/dataset_analysis.py", "hhtools.viewer.library", "build_entries"): 1,
-    ImportIdentity(
-        "hhtools/web/library/motion_library_links.py",
-        "hhtools.viewer.library",
-        "library_entry_for_load",
-    ): 1,
-    ImportIdentity("hhtools/web/analysis/scaled_preview.py", "hhtools.viewer.anatomy", _MODULE_SCOPE): 1,
-    ImportIdentity(
-        "hhtools/web/output/serialize.py", "hhtools.viewer.anatomy", "_prune_canonical_names"
-    ): 1,
-    ImportIdentity(
-        "hhtools/web/server/motion_runtime.py",
-        "hhtools.viewer.anatomy",
-        "_ground_motion_for_web",
-    ): 1,
-    ImportIdentity(
-        "hhtools/web/server/factory.py", "hhtools.viewer.cache", "_create_app_owned"
-    ): 1,
-    ImportIdentity(
-        "hhtools/web/server/motion_runtime.py",
-        "hhtools.viewer.cache",
-        "_load_clip_for_batch",
-    ): 1,
-    ImportIdentity(
-        "hhtools/web/server/motion_runtime.py",
-        "hhtools.viewer.cache",
-        "_load_motion_for_web",
-    ): 1,
-    ImportIdentity(
-        "hhtools/web/server/routes/library.py",
-        "hhtools.viewer.library",
-        "register_library_routes.library",
-    ): 1,
-    ImportIdentity(
-        "hhtools/web/library/upload_resolve.py",
-        "hhtools.viewer.library",
-        "_infer_dataset_from_path",
-    ): 1,
 }
 
 # Imported symbols are a part of the baseline identity.  Without this second,
 # static snapshot, an existing forbidden ``from`` import could silently grow
 # from one private helper to several while retaining the same package edge.
 _LEGACY_IMPORT_FINGERPRINTS: dict[tuple[str, str, str], str] = {
-    (
-        "hhtools/analysis/canonical.py",
-        "hhtools.retarget.newton_basic.human_aliases",
-        "project_motion",
-    ): "from:auto_source_to_canonical",
-    (
-        "hhtools/analysis/clip.py",
-        "hhtools.retarget.robot_to_robot",
-        "_load_source",
-    ): "from:load_source_trajectory",
-    (
-        "hhtools/analysis/clip.py",
-        "hhtools.web.library.r2r_upload_resolve",
-        "_load_source",
-    ): "from:_is_robot_export_trajectory",
-    (
-        "hhtools/cli/retarget.py",
-        "hhtools.web.output.export_bundle",
-        "interaction_mesh_run",
-    ): "from:bake_export_root_z",
-    ("hhtools/cli/retarget.py", "hhtools.web.output.export_bundle", "retarget"): "from:bake_export_root_z",
     (
         "hhtools/core/grounding.py",
         "hhtools.retarget.newton_basic.human_aliases",
@@ -360,11 +272,6 @@ _LEGACY_IMPORT_FINGERPRINTS: dict[tuple[str, str, str], str] = {
         _MODULE_SCOPE,
     ): "from:is_mixamo_cmu_like,is_mocap_spine3_bvh_like,is_soma_bvh_like,is_xsens_mocap_like",
     (
-        "hhtools/io/bvh_detect.py",
-        "hhtools.viewer.library",
-        _MODULE_SCOPE,
-    ): "from:_DIR_TO_ADAPTER,_normalise_dirname",
-    (
         "hhtools/io/datasets/meshmimic_holosoma.py",
         "hhtools.retarget.interaction_mesh.heightfield",
         "_load_terrain_heightfield",
@@ -374,11 +281,6 @@ _LEGACY_IMPORT_FINGERPRINTS: dict[tuple[str, str, str], str] = {
         "hhtools.retarget.interaction_mesh.heightfield",
         "ParcMsAdapter.load_motion",
     ): "from:obj_to_heightfield",
-    (
-        "hhtools/io/mimic_detect.py",
-        "hhtools.viewer.library",
-        _MODULE_SCOPE,
-    ): "from:_DIR_TO_ADAPTER,_normalise_dirname",
     (
         "hhtools/io/mocap_parkour_import.py",
         "hhtools.retarget.interaction_mesh.heightfield",
@@ -394,21 +296,6 @@ _LEGACY_IMPORT_FINGERPRINTS: dict[tuple[str, str, str], str] = {
         "hhtools.retarget.interaction_mesh.heightfield",
         _MODULE_SCOPE,
     ): "from:obj_to_heightfield",
-    (
-        "hhtools/mcp/runtime.py",
-        "hhtools.web.server",
-        "local_agent_runtime",
-    ): "from:create_app,effective_job_admission_settings",
-    (
-        "hhtools/retarget/newton_basic/pipeline.py",
-        "hhtools.viewer.anatomy",
-        "NewtonBasicPipeline._augment_canonical_targets",
-    ): "from:scaled_hand_tip_positions_world",
-    (
-        "hhtools/retarget/robot_to_robot.py",
-        "hhtools.viewer.anatomy",
-        "align_retargeted_ankles_to_scaled_source",
-    ): "from:motion_has_interaction_scene",
     (
         "hhtools/robot/ik_map_policy.py",
         "hhtools.retarget.newton_basic.human_aliases",
@@ -499,80 +386,6 @@ _LEGACY_IMPORT_FINGERPRINTS: dict[tuple[str, str, str], str] = {
         "hhtools.retarget.interaction_mesh.mujoco_scene",
         "estimate_robot_standing_height",
     ): "from:require_mujoco_model",
-    (
-        "hhtools/services/legacy_job_upgrade.py",
-        "hhtools.web.jobs.job_specs",
-        _MODULE_SCOPE,
-    ): "from:JobSpecError,build_job_spec,normalize_job_spec",
-    (
-        "hhtools/viewer/app.py",
-        "hhtools.web.output.export_bundle",
-        "_build_robot_tab._on_retarget._worker",
-    ): "from:bake_export_root_z",
-    (
-        "hhtools/viewer/app.py",
-        "hhtools.web.analysis.scaled_preview",
-        "_build_robot_tab._compute_scaled_preview",
-    ): "from:resolve_scaled_overlay_z_correction",
-    (
-        "hhtools/web/analysis/calibration_session.py",
-        "hhtools.viewer.anatomy",
-        "build_calibration_session",
-    ): "from:detect_virtual_root",
-    (
-        "hhtools/web/analysis/dataset_analysis.py",
-        "hhtools.viewer.library",
-        "build_entries",
-    ): "from:scan_library",
-    (
-        "hhtools/web/library/motion_library_links.py",
-        "hhtools.viewer.library",
-        "library_entry_for_load",
-    ): "from:LibraryEntry",
-    (
-        "hhtools/web/analysis/scaled_preview.py",
-        "hhtools.viewer.anatomy",
-        _MODULE_SCOPE,
-    ): (
-        "from:exclude_joint_from_compact_scaled_preview,"
-        "exclude_unmapped_head_neck_from_scaled_preview,"
-        "motion_has_interaction_scene,scaled_overlay_exclude_bone_indices"
-    ),
-    (
-        "hhtools/web/output/serialize.py",
-        "hhtools.viewer.anatomy",
-        "_prune_canonical_names",
-    ): "from:deepest_mapped_canonicals",
-    (
-        "hhtools/web/server/motion_runtime.py",
-        "hhtools.viewer.anatomy",
-        "_ground_motion_for_web",
-    ): "from:center_motion_root_xy,snap_motion_to_ground",
-    (
-        "hhtools/web/server/factory.py",
-        "hhtools.viewer.cache",
-        "_create_app_owned",
-    ): "from:EphemeralCache",
-    (
-        "hhtools/web/server/motion_runtime.py",
-        "hhtools.viewer.cache",
-        "_load_clip_for_batch",
-    ): "from:_attach_library_folder_label",
-    (
-        "hhtools/web/server/motion_runtime.py",
-        "hhtools.viewer.cache",
-        "_load_motion_for_web",
-    ): "from:_attach_library_folder_label",
-    (
-        "hhtools/web/server/routes/library.py",
-        "hhtools.viewer.library",
-        "register_library_routes.library",
-    ): "from:scan_library",
-    (
-        "hhtools/web/library/upload_resolve.py",
-        "hhtools.viewer.library",
-        "_infer_dataset_from_path",
-    ): "from:_DIR_TO_ADAPTER,_normalise_dirname",
 }
 
 LEGACY_VIOLATION_BASELINE: dict[ImportIdentity, int] = {
@@ -849,7 +662,7 @@ def _fix_hint(source_group: str, target_group: str) -> str:
     if source_group in hosts and target_group in hosts:
         if source_group == "cli":
             return (
-                "Only the three explicit CLI launch modules may start Web/Viewer; "
+                "Only the two explicit CLI launch modules may start Web; "
                 "move reusable behavior below the host adapters."
             )
         return "Sibling hosts must share contracts/services instead of importing each other."

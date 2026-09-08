@@ -672,8 +672,7 @@ def _candidate_urdfs(candidate: Path, bundle_root: Path) -> list[Path]:
                 (
                     name
                     for name in directory_names
-                    if not name.startswith((".", "_"))
-                    and not (Path(current) / name).is_symlink()
+                    if not name.startswith((".", "_")) and not (Path(current) / name).is_symlink()
                 ),
                 key=str.casefold,
             )

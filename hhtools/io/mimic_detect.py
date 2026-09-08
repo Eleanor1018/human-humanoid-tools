@@ -7,7 +7,7 @@ Combines **path hints** (parent folder names like ``SOMA/``, ``AMASS/``) with
 PyTorch checkpoint layout) so a standalone drop is routed to the correct adapter
 even when the parent directory name is missing.
 
-Registered mimic datasets (see :data:`hhtools.viewer.library._DIR_TO_ADAPTER`):
+Registered mimic datasets (see :data:`hhtools.services.motion_library._DIR_TO_ADAPTER`):
 
 * ``amass``, ``motion_x``, ``phuma`` — SMPL-family parameter files
 * ``soma``, ``lafan``, ``xsens_mocap`` — BVH dialects
@@ -23,7 +23,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from hhtools.viewer.library import _DIR_TO_ADAPTER, _normalise_dirname
+from hhtools.io.dataset_naming import (
+    DATASET_DIR_TO_ADAPTER as _DIR_TO_ADAPTER,
+)
+from hhtools.io.dataset_naming import (
+    normalize_dataset_dirname as _normalise_dirname,
+)
 
 _SOURCE_MANIFEST = "source.yaml"
 

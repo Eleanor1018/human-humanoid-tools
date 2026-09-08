@@ -18,13 +18,14 @@ def test_mcp_extra_owns_its_product_runtime_dependencies() -> None:
     extras = project["optional-dependencies"]
     requirements = extras["mcp"]
     names = {_requirement_name(requirement) for requirement in requirements}
-    product_runtime_names = {
+    execution_runtime_names = {
         _requirement_name(requirement)
-        for extra in ("web", "robot", "retarget")
+        for extra in ("formats", "smpl", "robot", "retarget", "retarget-interaction")
         for requirement in extras[extra]
     }
 
-    assert {"mcp", *product_runtime_names} <= names
+    assert {"mcp", *execution_runtime_names} <= names
+    assert {"fastapi", "uvicorn", "python-multipart"}.isdisjoint(names)
     assert all(not requirement.startswith("hhtools[") for requirement in requirements)
 
 

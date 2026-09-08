@@ -23,7 +23,7 @@ export function Sidebar({ activeView, locale, hidden = false, onSelect }: Sideba
       aria-label="Workspace navigation"
     >
       <nav className="min-h-0 min-w-0 flex-1 overflow-y-auto px-3 py-3.5 max-[900px]:px-2">
-        <div className="flex flex-col gap-3.5">
+        <div data-tutorial="workspace-navigation" className="flex flex-col gap-3.5">
           {navigationGroups.map((group) => (
             <section
               key={group.label}

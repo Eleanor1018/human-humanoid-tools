@@ -124,11 +124,15 @@ export function TutorialOverlay({
         return;
       }
 
+      const left = Math.max(0, anchorRect.left - ANCHOR_PADDING);
+      const top = Math.max(0, anchorRect.top - ANCHOR_PADDING);
+      const right = Math.min(window.innerWidth, anchorRect.right + ANCHOR_PADDING);
+      const bottom = Math.min(window.innerHeight, anchorRect.bottom + ANCHOR_PADDING);
       setHighlightStyle({
-        left: Math.max(0, anchorRect.left - ANCHOR_PADDING),
-        top: Math.max(0, anchorRect.top - ANCHOR_PADDING),
-        width: anchorRect.width + ANCHOR_PADDING * 2,
-        height: anchorRect.height + ANCHOR_PADDING * 2,
+        left,
+        top,
+        width: right - left,
+        height: bottom - top,
       });
       setPopoverStyle(
         placedPopover(
@@ -172,14 +176,41 @@ export function TutorialOverlay({
 
   useEffect(() => {
     if (!open) return;
-    const reposition = () => position(false);
+    let repositionFrame = 0;
+    const reposition = () => {
+      window.cancelAnimationFrame(repositionFrame);
+      repositionFrame = window.requestAnimationFrame(() => position(false));
+    };
+    const resizeObserver = new ResizeObserver(reposition);
+    const observeAnchor = () => {
+      resizeObserver.disconnect();
+      const anchor = document.querySelector<HTMLElement>(step.anchor);
+      if (anchor) resizeObserver.observe(anchor);
+    };
+    const application = document.getElementById("app");
+    const mutationObserver = new MutationObserver(() => {
+      observeAnchor();
+      reposition();
+    });
+    observeAnchor();
+    if (application) {
+      mutationObserver.observe(application, {
+        attributes: true,
+        attributeFilter: ["class", "hidden", "style"],
+        childList: true,
+        subtree: true,
+      });
+    }
     window.addEventListener("resize", reposition);
     window.addEventListener("scroll", reposition, true);
     return () => {
+      window.cancelAnimationFrame(repositionFrame);
+      mutationObserver.disconnect();
+      resizeObserver.disconnect();
       window.removeEventListener("resize", reposition);
       window.removeEventListener("scroll", reposition, true);
     };
-  }, [open, position]);
+  }, [open, position, step.anchor]);
 
   const close = useCallback(
     (reason: TutorialCloseReason) => {

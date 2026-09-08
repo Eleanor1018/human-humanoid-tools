@@ -201,7 +201,6 @@ Entry point: `uv run hhtools` (same package as the Web UI). Use this for large d
 | `hhtools retarget interaction-mesh run` | Interaction-mesh (terrain / objects) → CSV |
 | `hhtools retarget interaction-mesh precompute-laplacian` | Precompute Laplacian targets (`.npz`) |
 | `hhtools web` | HTML / three.js UI (default `127.0.0.1:8009`) |
-| `hhtools ui` | Legacy Viser viewer |
 
 **Convert & import**
 

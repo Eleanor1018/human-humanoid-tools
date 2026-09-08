@@ -79,9 +79,7 @@ _HTTPS_URI = (
     rf"https://{PORTABLE_URI_HOST_PATTERN}"
     rf"(?::{PORTABLE_URI_PORT_PATTERN})?{PORTABLE_URI_TAIL_PATTERN}"
 )
-_HHTOOLS_ARTIFACT_URI = (
-    r"hhtools://jobs/[A-Za-z0-9._~:-]+/artifacts/[A-Za-z0-9._~:-]+"
-)
+_HHTOOLS_ARTIFACT_URI = r"hhtools://jobs/[A-Za-z0-9._~:-]+/artifacts/[A-Za-z0-9._~:-]+"
 _UI_QUERY_PAIR = r"(?:calibrate|panel|robot|view)=[^&#\s]{0,256}"
 _UI_QUERY = rf"\?(?:{_UI_QUERY_PAIR}(?:&{_UI_QUERY_PAIR})*)?"
 _LOCAL_UI_URL = (

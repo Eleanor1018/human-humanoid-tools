@@ -29,7 +29,7 @@ human-humanoid-tools/
 
 ## 2. 包结构（自下而上）
 
-下层模块不依赖上层；重依赖（torch、warp、mujoco、viser）一律 **lazy import**。
+下层模块不依赖上层；重依赖（torch、warp、mujoco）一律 **lazy import**。
 
 ```
 hhtools/
@@ -362,4 +362,5 @@ J_L = \mathrm{kron}(L, I_3) \cdot J_V, \quad
 - 历史空包：`hhtools/analytics/`、`hhtools/backend/`、`hhtools/robot/adapters/`
 - stub CLI：`hhtools/cli/analyze.py`
 
-`hhtools/viewer/` 保留：`web/` 后端复用其 `library`、`anatomy`、`cache` 模块；Viser 旧 UI（`hhtools ui`）仍可用但不再是推荐入口。
+旧 Viser UI 已退役；曾被复用的 `library`、`anatomy`、`cache` 实现已迁入
+`services` / `core`，`hhtools/viewer/` 仅保留兼容导入。

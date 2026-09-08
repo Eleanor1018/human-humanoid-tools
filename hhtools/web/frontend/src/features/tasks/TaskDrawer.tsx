@@ -11,6 +11,7 @@ import {
   type TaskRecord,
   type TaskStatus,
 } from "./api";
+import { taskPollingDelay } from "./polling";
 
 const KIND_LABELS: Readonly<Record<string, readonly [string, string]>> = {
   dataset_analyze: ["Dataset Analysis", "数据集分析"],
@@ -124,6 +125,10 @@ export function TaskDrawer() {
   const [tasks, setTasks] = useState<readonly TaskRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [consecutiveFailures, setConsecutiveFailures] = useState(0);
+  const [pageVisible, setPageVisible] = useState(
+    () => document.visibilityState !== "hidden",
+  );
   const request = useRef<AbortController | null>(null);
 
   const refresh = useCallback(async (quiet = false) => {
@@ -134,9 +139,11 @@ export function TaskDrawer() {
     try {
       setTasks(await listTasks({ signal: controller.signal }));
       setError(null);
+      setConsecutiveFailures(0);
     } catch (reason) {
       if (!controller.signal.aborted) {
         setError(reason instanceof Error ? reason.message : String(reason));
+        setConsecutiveFailures((count) => Math.min(6, count + 1));
       }
     } finally {
       if (request.current === controller) {
@@ -148,12 +155,36 @@ export function TaskDrawer() {
 
   useEffect(() => {
     void refresh();
-    const timer = window.setInterval(() => void refresh(true), 2_500);
     return () => {
-      window.clearInterval(timer);
       request.current?.abort();
     };
   }, [refresh]);
+
+  const hasActiveTasks = tasks.some(
+    (task) => task.status === "pending" || task.status === "running",
+  );
+  useEffect(() => {
+    const delay = taskPollingDelay({
+      visible: pageVisible,
+      drawerOpen: open,
+      hasActiveTasks,
+      consecutiveFailures,
+    });
+    if (delay === null) return;
+    const timer = window.setTimeout(() => void refresh(true), delay);
+    return () => window.clearTimeout(timer);
+  }, [consecutiveFailures, hasActiveTasks, open, pageVisible, refresh]);
+
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      const visible = document.visibilityState !== "hidden";
+      setPageVisible(visible);
+      if (visible && (open || hasActiveTasks)) void refresh(true);
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () =>
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+  }, [hasActiveTasks, open, refresh]);
 
   useEffect(() => {
     const toggle = (event: KeyboardEvent) => {
@@ -196,7 +227,10 @@ export function TaskDrawer() {
           type="button"
           className="flex h-full w-full items-center gap-2 border-x-0 border-t border-b-0 border-border-subtle bg-surface px-3 text-left text-xs font-semibold text-foreground hover:bg-muted focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring"
           aria-expanded="false"
-          onClick={() => setOpen(true)}
+          onClick={() => {
+            setOpen(true);
+            void refresh(true);
+          }}
         >
           <span>{text("Tasks", "任务")}</span>
           <span

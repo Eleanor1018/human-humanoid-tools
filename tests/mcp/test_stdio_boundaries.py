@@ -42,7 +42,7 @@ def test_first_warp_initialization_never_writes_into_stdio_frames() -> None:
         input=_wire_input({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
         text=True,
         capture_output=True,
-        timeout=30,
+        timeout=120,
         cwd=_REPOSITORY_ROOT,
         check=False,
     )

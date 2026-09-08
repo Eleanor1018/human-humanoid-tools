@@ -52,13 +52,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-viewer = [
-    "viser>=0.2",
-    "fastapi>=0.111",
-    "uvicorn[standard]>=0.30",
-    "websockets>=12.0",
-]
-# Modern HTML / three.js front-end (replaces the Viser viewer). Includes robot
+# HTML / three.js front-end shared by browser and desktop. Includes robot
 # + SMPL deps the UI needs (URDF load, AMASS mesh baking). Retarget IK still
 # needs the separate ``retarget`` extra (``uv sync --extra web --extra retarget``).
 web = [
@@ -105,13 +99,10 @@ retarget-interaction = [
     "osqp>=0.6",
 ]
 mcp = [
-    # The stdio host assembles the production Web composition root directly.
-    # Keep this list explicit instead of depending on hhtools' own extras: a
-    # clean ``hhtools[mcp]`` install must be able to inspect assets and run H2R.
+    # The stdio host assembles the transport-neutral application runtime.
+    # Keep execution dependencies explicit without pulling FastAPI, Uvicorn,
+    # or multipart parsing into an MCP-only installation.
     "mcp>=2.1.1,<3",
-    "fastapi>=0.111",
-    "uvicorn[standard]>=0.30",
-    "python-multipart>=0.0.9",
     "yourdfpy>=0.0.56",
     "mujoco>=3.1",
     "smplx>=0.1.28",
@@ -130,7 +121,7 @@ dev = [
     "mcp>=2.1.1,<3",
 ]
 all = [
-    "hhtools[web,viewer,formats,smpl,robot,retarget,retarget-interaction,mcp]",
+    "hhtools[web,formats,smpl,robot,retarget,retarget-interaction,mcp]",
 ]
 
 [project.scripts]

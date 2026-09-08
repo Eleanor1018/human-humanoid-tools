@@ -458,9 +458,7 @@ def create_mcp_server(
             limit=limit,
             offset=offset,
         )
-        return _tool_call(
-            lambda: _runtime(context).available_assets.list_available(request)
-        )
+        return _tool_call(lambda: _runtime(context).available_assets.list_available(request))
 
     @server.tool(annotations=_READ_ONLY)
     def inspect_asset_bundle(

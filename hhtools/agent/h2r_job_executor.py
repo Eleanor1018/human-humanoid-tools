@@ -15,7 +15,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+from pydantic import ValidationError
+
 from hhtools.contracts import (
+    AgentH2RExecutionParameters,
     ApiError,
     AssetCategory,
     ErrorStage,
@@ -26,6 +29,7 @@ from hhtools.contracts import (
 )
 from hhtools.services.artifacts import ArtifactStoreError
 from hhtools.services.assets import AssetServiceError
+from hhtools.services.execution import build_execution_provenance
 from hhtools.services.jobs import (
     JobCancelledError,
     JobExecutionContext,
@@ -149,18 +153,6 @@ class H2RExecutorBindings:
     release_robot_model: Callable[[Any], None] = _noop_release_robot_model
 
 
-@dataclass(frozen=True, slots=True)
-class _ExecutionParameters:
-    run_mode: str
-    reference: str
-    ik_iterations: int
-    human_height: float
-    limit_frames: int | None
-    retarget_fps: float | None
-    foot_clamp_anti_penetration: bool
-    output_format: str
-
-
 class _LegacyProgressBridge:
     """Present the tiny mutable shape expected by the existing solver helpers."""
 
@@ -227,30 +219,7 @@ def _execution_error(
     )
 
 
-def _finite_number(value: Any, *, name: str, positive: bool = False) -> float:
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        raise _execution_error(
-            "INVALID_PARAMETER",
-            "The persisted JobSpec contains an invalid execution parameter.",
-            details={"parameter": name},
-        )
-    normalized = float(value)
-    if not math.isfinite(normalized) or (positive and normalized <= 0.0):
-        raise _execution_error(
-            "INVALID_PARAMETER",
-            "The persisted JobSpec contains an invalid execution parameter.",
-            details={"parameter": name},
-        )
-    return normalized
-
-
-def _optional_positive_float(value: Any, *, name: str) -> float | None:
-    if value is None:
-        return None
-    return _finite_number(value, name=name, positive=True)
-
-
-def _parameters(spec: JobSpecV2) -> _ExecutionParameters:
+def _parameters(spec: JobSpecV2) -> AgentH2RExecutionParameters:
     if spec.kind is not JobSpecKind.RETARGET or len(spec.inputs) != 1:
         raise _execution_error(
             "INVALID_PARAMETER",
@@ -263,77 +232,19 @@ def _parameters(spec: JobSpecV2) -> _ExecutionParameters:
             stage=ErrorStage.PREFLIGHT,
             details={"output_policy": spec.output_policy.value},
         )
-    raw = spec.effective_parameters
-    run_mode = raw.get("run_mode")
-    reference = raw.get("reference")
-    output_format = raw.get("output_format")
-    if run_mode not in {"smoke", "full"}:
+    try:
+        return AgentH2RExecutionParameters.model_validate(
+            {**spec.effective_parameters, "backend": spec.backend}
+        )
+    except ValidationError as error:
+        first = error.errors(include_url=False)[0] if error.error_count() else {}
+        location = first.get("loc") if isinstance(first, dict) else None
+        parameter = str(location[-1]) if isinstance(location, tuple | list) and location else None
         raise _execution_error(
             "INVALID_PARAMETER",
-            "The persisted JobSpec has an unsupported run mode.",
-            details={"parameter": "run_mode"},
-        )
-    if not isinstance(reference, str) or not reference:
-        raise _execution_error(
-            "INVALID_PARAMETER",
-            "The persisted JobSpec has no calibration reference.",
-            details={"parameter": "reference"},
-        )
-    if output_format not in {"csv", "pkl"}:
-        raise _execution_error(
-            "INVALID_PARAMETER",
-            "The persisted JobSpec has an unsupported output format.",
-            details={"parameter": "output_format"},
-        )
-
-    limit_value = raw.get("limit_frames")
-    if limit_value is None:
-        limit_frames = None
-    elif isinstance(limit_value, bool) or not isinstance(limit_value, int) or limit_value <= 0:
-        raise _execution_error(
-            "INVALID_PARAMETER",
-            "The persisted JobSpec has an invalid frame limit.",
-            details={"parameter": "limit_frames"},
-        )
-    else:
-        limit_frames = limit_value
-
-    clamp = raw.get("foot_clamp_anti_penetration")
-    if not isinstance(clamp, bool):
-        raise _execution_error(
-            "INVALID_PARAMETER",
-            "The persisted JobSpec has an invalid foot-clamp option.",
-            details={"parameter": "foot_clamp_anti_penetration"},
-        )
-
-    iterations_value = raw.get("ik_iterations", 24)
-    if (
-        isinstance(iterations_value, bool)
-        or not isinstance(iterations_value, int)
-        or iterations_value <= 0
-    ):
-        raise _execution_error(
-            "INVALID_PARAMETER",
-            "The persisted JobSpec has an invalid IK iteration count.",
-            details={"parameter": "ik_iterations"},
-        )
-    return _ExecutionParameters(
-        run_mode=run_mode,
-        reference=reference,
-        ik_iterations=iterations_value,
-        human_height=_finite_number(
-            raw.get("human_height"),
-            name="human_height",
-            positive=True,
-        ),
-        limit_frames=limit_frames,
-        retarget_fps=_optional_positive_float(
-            raw.get("retarget_fps"),
-            name="retarget_fps",
-        ),
-        foot_clamp_anti_penetration=clamp,
-        output_format=output_format,
-    )
+            "The persisted JobSpec contains invalid execution parameters.",
+            details={**({"parameter": parameter} if parameter else {})},
+        ) from error
 
 
 def _quality_verdict(
@@ -556,6 +467,17 @@ class H2RJobExecutor:
             context.raise_if_cancelled()
             num_frames = int(retargeted.num_frames)
             sample_rate = float(retargeted.sample_rate)
+            execution_provenance = build_execution_provenance(
+                retargeted,
+                executor="existing_web_h2r_adapter_v1",
+                backend=spec.backend,
+                dataset=resolved.dataset,
+                motion_asset_id=spec.inputs[0].asset_id,
+                motion_sha256=spec.inputs[0].sha256,
+                robot_asset_id=spec.robot.asset_id,
+                robot_config_sha256=spec.robot.config_sha256,
+                reference=parameters.reference,
+            )
 
             stage = "preview"
             context.report_progress(
@@ -673,16 +595,10 @@ class H2RJobExecutor:
                 evaluation_summary=evaluation_summary,
                 evaluation_metrics=metrics,
                 evaluation_checks=checks,
-                execution_provenance={
-                    "executor": "existing_web_h2r_adapter_v1",
-                    "backend": spec.backend,
-                    "dataset": resolved.dataset,
-                    "motion_asset_id": spec.inputs[0].asset_id,
-                    "motion_sha256": spec.inputs[0].sha256,
-                    "robot_asset_id": spec.robot.asset_id,
-                    "robot_config_sha256": spec.robot.config_sha256,
-                    "reference": parameters.reference,
-                },
+                execution_provenance=execution_provenance.model_dump(
+                    mode="json",
+                    exclude_none=True,
+                ),
             )
         except (JobCancelledError, JobExecutionError, ArtifactStoreError):
             raise

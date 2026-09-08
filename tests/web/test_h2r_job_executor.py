@@ -8,6 +8,12 @@ from typing import Any
 
 import pytest
 
+from hhtools.agent.h2r_job_executor import (
+    H2RExecutorBindings,
+    H2RJobExecutor,
+    H2RPreview,
+    ResolvedMotion,
+)
 from hhtools.contracts import (
     ApiError,
     AssetCategory,
@@ -24,12 +30,6 @@ from hhtools.contracts import (
 from hhtools.services.artifacts import ArtifactStore
 from hhtools.services.jobs import JobCancelledError, JobExecutionContext, JobExecutionError
 from hhtools.services.retarget import RetargetServiceError
-from hhtools.agent.h2r_job_executor import (
-    H2RExecutorBindings,
-    H2RJobExecutor,
-    H2RPreview,
-    ResolvedMotion,
-)
 
 SHA_A = "a" * 64
 SHA_B = "b" * 64
@@ -50,6 +50,22 @@ class _Motion:
 class _Retargeted:
     num_frames: int = 30
     sample_rate: float = 30.0
+    meta: dict[str, Any] = field(
+        default_factory=lambda: {
+            "execution_provenance": {
+                "backend": "newton",
+                "device": "cuda:0",
+                "device_kind": "cuda",
+                "precision": "float32",
+                "runtime": "warp",
+                "runtime_version": "1.12.1",
+                "solver": "newton-1.1.0",
+                "cuda_graph_requested": True,
+                "cuda_graph_used": True,
+                "fallback_used": False,
+            }
+        }
+    )
 
 
 def _spec(**parameter_updates: Any) -> JobSpecV2:
@@ -270,6 +286,15 @@ def test_executor_maps_exact_job_spec_to_existing_h2r_chain_and_managed_artifact
     assert result.execution_provenance == {
         "executor": "existing_web_h2r_adapter_v1",
         "backend": "newton",
+        "device": "cuda:0",
+        "device_kind": "cuda",
+        "precision": "float32",
+        "runtime": "warp",
+        "runtime_version": "1.12.1",
+        "solver": "newton-1.1.0",
+        "cuda_graph_requested": True,
+        "cuda_graph_used": True,
+        "fallback_used": False,
         "dataset": "amass",
         "motion_asset_id": MOTION_ID,
         "motion_sha256": SHA_A,

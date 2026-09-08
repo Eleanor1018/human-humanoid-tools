@@ -1,4 +1,4 @@
-"""Calibration session helpers for the web UI (parity with Viser ``_enter_calibration_mode``)."""
+"""Calibration session helpers for the Web UI."""
 
 from __future__ import annotations
 
@@ -138,7 +138,7 @@ def serialize_reference_skeleton(
 ) -> dict[str, Any]:
     """Single-frame reference T-pose for three.js (blue overlay).
 
-    Matches Viser ``ReferenceSkeletonRenderer``: yaw in XY, then foot-floor to
+    Uses the established reference transform: yaw in XY, then foot-floor to
     z=0.  Robot mesh lift is applied only on the robot ``group`` (``ground_offset_z``),
     not baked into reference joint positions.
     """
@@ -188,7 +188,7 @@ def serialize_reference_skeleton(
 
 def _robot_ground_offset_z(model: URDFRobotModel, joint_q: dict[str, float] | None = None) -> float:
     """Lift so the lowest mesh vertex at ``joint_q`` rests on z=0."""
-    from hhtools.web.output.serialize import _ground_offset_z
+    from hhtools.io.scene_serialize import _ground_offset_z
 
     try:
         if joint_q is not None:
@@ -248,7 +248,7 @@ def build_calibration_session(
         model, ref, motion, reference, current_q=joint_q,
     )
     ref_payload = serialize_reference_skeleton(ref, heading_rad=heading)
-    from hhtools.viewer.anatomy import detect_virtual_root
+    from hhtools.core.anatomy import detect_virtual_root
 
     exclude: list[int] = []
     if reference == "glb" and motion is not None and motion.num_bones > 0:

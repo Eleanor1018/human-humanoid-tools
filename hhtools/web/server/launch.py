@@ -6,10 +6,10 @@ import logging
 import threading
 from pathlib import Path
 
+from hhtools.application.settings import UI_BUILD_ID, effective_job_admission_settings
 from hhtools.web.dependencies import require_web_runtime_dependencies
 from hhtools.web.server.factory import create_app
 from hhtools.web.server.paths import STATIC_ROOT
-from hhtools.web.server.settings import UI_BUILD_ID, effective_job_admission_settings
 
 _log = logging.getLogger(__name__)
 

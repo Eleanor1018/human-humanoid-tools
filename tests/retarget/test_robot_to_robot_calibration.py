@@ -341,7 +341,7 @@ def test_user_calibration_symlink_is_rejected(tmp_path: Path) -> None:
     except (NotImplementedError, OSError):
         pytest.skip("symlinks are unavailable on this host")
 
-    with pytest.raises(ValueError, match="non-symlink"):
+    with pytest.raises(ValueError, match="calibration path escapes its storage root"):
         r2r.load_r2r_calibration(
             target_dir,
             "source_bot",

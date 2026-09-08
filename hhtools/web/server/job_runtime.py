@@ -11,13 +11,13 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from hhtools.web.jobs.job_scheduler import (
+from hhtools.contracts.legacy_jobs import build_job_spec, replay_capability
+from hhtools.services.job_scheduler import (
     JobQueueFullError,
     JobReservation,
     JobScheduler,
     JobSchedulerClosedError,
 )
-from hhtools.web.jobs.job_specs import build_job_spec, replay_capability
 
 from .boundary import _is_loopback_address
 from .state import Job, SessionState, _snapshot_job_request

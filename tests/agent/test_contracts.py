@@ -12,6 +12,7 @@ from hhtools.contracts import (
     AgentCliHelp,
     AgentCliHelpArgument,
     AgentCliHelpSubcommand,
+    AgentH2RExecutionParameters,
     AgentJobView,
     ApiError,
     ArtifactDescriptor,
@@ -32,8 +33,10 @@ from hhtools.contracts import (
     CapabilityResponse,
     DeviceCapability,
     EvaluationReport,
+    ExecutionProvenance,
     FailureItem,
     FailureReport,
+    HumanRetargetExecutionOptions,
     InspectionStatus,
     JobManifest,
     JobOutcome,
@@ -744,6 +747,9 @@ def test_legacy_upgrade_transport_request_is_wrapped_and_strict() -> None:
         JobSpecCalibration,
         JobSpecProvenance,
         JobSpecV2,
+        HumanRetargetExecutionOptions,
+        AgentH2RExecutionParameters,
+        ExecutionProvenance,
     ],
 )
 def test_every_public_object_schema_forbids_unknown_fields(model: type) -> None:
@@ -761,3 +767,42 @@ def test_public_enum_values_are_stable_english_tokens() -> None:
     assert JobState.CANCELLED.value == "cancelled"
     assert JobOutcome.PARTIAL.value == "partial"
     assert JobOutcome.REVIEW_REQUIRED.value == "review_required"
+
+
+def test_web_and_agent_h2r_execution_options_share_strict_solver_fields() -> None:
+    web = HumanRetargetExecutionOptions(
+        backend="newton",
+        ik_iterations=24,
+        retarget_fps=30.0,
+        reference="smpl",
+        foot_clamp_anti_penetration=True,
+    )
+    agent = AgentH2RExecutionParameters(
+        **web.model_dump(exclude_none=True),
+        run_mode="smoke",
+        human_height=1.72,
+        limit_frames=30,
+        retarget_profile="bundled_scaler",
+        output_format="csv",
+    )
+    assert agent.ik_iterations == web.ik_iterations
+    assert agent.retarget_fps == web.retarget_fps
+    with pytest.raises(ValidationError):
+        HumanRetargetExecutionOptions(foot_clamp_anti_penetration="yes")
+
+
+def test_execution_provenance_requires_truthful_fallback_and_cuda_graph_flags() -> None:
+    observed = ExecutionProvenance(
+        executor="web_h2r_v1",
+        backend="newton",
+        device="cuda:0",
+        device_kind="cuda",
+        precision="float32",
+        cuda_graph_requested=True,
+        cuda_graph_used=True,
+    )
+    assert observed.fallback_used is False
+    with pytest.raises(ValidationError):
+        ExecutionProvenance(cuda_graph_requested=False, cuda_graph_used=True)
+    with pytest.raises(ValidationError):
+        ExecutionProvenance(fallback_reason="silent fallback")

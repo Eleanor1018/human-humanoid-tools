@@ -37,15 +37,9 @@ _IPV6_ADDRESS_PATTERN = (
     r":(?:(?::[0-9A-Fa-f]{1,4}){1,7}|:)"
     r")"
 )
-PORTABLE_URI_HOST_PATTERN = (
-    rf"(?:\[(?:{_IPV6_ADDRESS_PATTERN})\]|[A-Za-z0-9._~-]+)"
-)
-_URI_PCHAR_PATTERN = (
-    r"(?:[A-Za-z0-9._~!$&'()*+,;=:@-]|%[0-9A-Fa-f]{2})"
-)
-PORTABLE_URI_TAIL_PATTERN = (
-    rf"(?:[/?#](?:{_URI_PCHAR_PATTERN}|[/?#])*)?"
-)
+PORTABLE_URI_HOST_PATTERN = rf"(?:\[(?:{_IPV6_ADDRESS_PATTERN})\]|[A-Za-z0-9._~-]+)"
+_URI_PCHAR_PATTERN = r"(?:[A-Za-z0-9._~!$&'()*+,;=:@-]|%[0-9A-Fa-f]{2})"
+PORTABLE_URI_TAIL_PATTERN = rf"(?:[/?#](?:{_URI_PCHAR_PATTERN}|[/?#])*)?"
 
 _MAX_PERCENT_DECODE_ROUNDS = 8
 _MAX_NESTED_URI_DEPTH = 4
@@ -87,9 +81,7 @@ _SENSITIVE_PUBLIC_KEY = re.compile(
 _PORTABLE_IPV6_ADDRESS = re.compile(rf"^(?:{_IPV6_ADDRESS_PATTERN})$")
 _PORTABLE_HOSTNAME = re.compile(r"^[A-Za-z0-9._~-]+$")
 _PORTABLE_HTTP_PATH = re.compile(rf"^(?:{_URI_PCHAR_PATTERN}|/)*$")
-_PORTABLE_HTTP_QUERY_FRAGMENT = re.compile(
-    rf"^(?:{_URI_PCHAR_PATTERN}|[/?])*$"
-)
+_PORTABLE_HTTP_QUERY_FRAGMENT = re.compile(rf"^(?:{_URI_PCHAR_PATTERN}|[/?])*$")
 
 
 class PortableJsonError(ValueError):

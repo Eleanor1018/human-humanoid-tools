@@ -10,16 +10,17 @@ from dataclasses import dataclass
 
 from fastapi import HTTPException
 
-from hhtools.web.output.export_bundle import ensure_export_path, sanitize_export_stem
-from hhtools.web.server.export_runtime import _parse_optional_fps, _write_export
-from hhtools.web.server.motion_runtime import _motion_for_retarget
-from hhtools.web.server.preview_runtime import (
+from hhtools.application.export import _parse_optional_fps, _write_export
+from hhtools.application.motions import _motion_for_retarget
+from hhtools.application.previews import (
     _align_scaled_preview_to_robot_playback,
     _compute_scaled_preview,
     _compute_scaled_scene,
 )
-from hhtools.web.server.retarget_runtime import _request_human_height, _retarget_single
-from hhtools.web.server.state import Job, _snapshot_job_request
+from hhtools.application.retarget import _request_human_height, _retarget_single
+from hhtools.application.state import Job, _snapshot_job_request
+from hhtools.io.export_bundle import ensure_export_path, sanitize_export_stem
+from hhtools.web.server.requests import HumanRetargetRequest
 
 _log = logging.getLogger(__name__)
 
@@ -227,7 +228,7 @@ def register_h2r_routes(app, *, state, jobs) -> H2RRouteOperations:
                 state=state,
                 foot_clamp_anti_penetration=foot_clamp_anti_penetration,
             )
-            from hhtools.web.output.serialize import serialize_robot_trajectory
+            from hhtools.io.scene_serialize import serialize_robot_trajectory
 
             scaled = _compute_scaled_preview(
                 model,
@@ -247,7 +248,7 @@ def register_h2r_routes(app, *, state, jobs) -> H2RRouteOperations:
                 scaled,
                 traj,
             )
-            from hhtools.web.analysis.result_diagnostics import build_result_diagnostics
+            from hhtools.analysis.result_diagnostics import build_result_diagnostics
 
             diagnostics = build_result_diagnostics(
                 traj,
@@ -262,7 +263,7 @@ def register_h2r_routes(app, *, state, jobs) -> H2RRouteOperations:
                 reference,
                 human_height,
             )
-            from hhtools.web.output.serialize import _scaled_overlay_foot_z
+            from hhtools.io.scene_serialize import _scaled_overlay_foot_z
 
             # Keep the retarget result + source motion in memory so the export
             # endpoint can render CSV or PKL at any target fps on demand.
@@ -300,6 +301,8 @@ def register_h2r_routes(app, *, state, jobs) -> H2RRouteOperations:
                     yellow_foot_z=yellow_foot_z,
                 ),
             )
+            from hhtools.services.execution import build_execution_provenance
+
             job.result = {
                 "trajectory": traj,
                 "scaled_preview": scaled,
@@ -317,6 +320,12 @@ def register_h2r_routes(app, *, state, jobs) -> H2RRouteOperations:
                 "download_name": (
                     f"{stem}_export.zip" if artifact_path.suffix == ".zip" else artifact_path.name
                 ),
+                "execution_provenance": build_execution_provenance(
+                    ret,
+                    executor="web_h2r_v1",
+                    backend=backend,
+                    reference=reference,
+                ).model_dump(mode="json", exclude_none=True),
             }
             job.progress = 1.0
             job.message = "done"
@@ -332,7 +341,21 @@ def register_h2r_routes(app, *, state, jobs) -> H2RRouteOperations:
             job.mark_terminal("error")
 
     @app.post("/api/retarget")
-    async def retarget(body: dict) -> dict:
+    async def retarget(request: HumanRetargetRequest) -> dict:
+        from hhtools.retarget.calibration import resolve_preset_calibration_file
+        from hhtools.robot.retarget_profile import bundled_scaler_path
+
+        if request.motion_token not in state.motions:
+            raise HTTPException(status_code=404, detail="motion token expired; reload the clip")
+        model = state.robots.get(request.robot)
+        if model is None:
+            raise HTTPException(status_code=404, detail="robot not loaded")
+        if (
+            resolve_preset_calibration_file(model.preset, request.reference) is None
+            and bundled_scaler_path(model.preset, request.reference) is None
+        ):
+            raise HTTPException(status_code=409, detail="robot is not calibrated; calibrate first")
+        body = request.model_dump()
         job = _schedule_job("retarget", body, _run_retarget_job, args=(body,))
         return {"job_id": job.id}
 

@@ -18,7 +18,7 @@ def __getattr__(name: str):
 
         return create_app
     if name == "effective_job_admission_settings":
-        from hhtools.web.server.settings import effective_job_admission_settings
+        from hhtools.application.settings import effective_job_admission_settings
 
         return effective_job_admission_settings
     if name in {"run_desktop_sidecar", "run_web"}:

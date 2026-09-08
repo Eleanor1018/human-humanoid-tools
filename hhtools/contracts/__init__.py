@@ -50,6 +50,13 @@ from .common import (
     SchemaVersion,
     Sha256Hex,
 )
+from .execution import (
+    AgentH2RExecutionParameters,
+    ExecutionIdentifier,
+    ExecutionProvenance,
+    HumanRetargetExecutionOptions,
+    SolverExecutionOptions,
+)
 from .job_spec import (
     JobSpecCalibration,
     JobSpecInput,
@@ -121,9 +128,12 @@ __all__ = [
     "DeviceCapability",
     "DeviceKind",
     "ErrorStage",
+    "ExecutionIdentifier",
+    "ExecutionProvenance",
     "EvaluationReport",
     "FailureItem",
     "FailureReport",
+    "HumanRetargetExecutionOptions",
     "InspectionStatus",
     "JobOutcome",
     "JobProgress",
@@ -157,6 +167,8 @@ __all__ = [
     "RobotListResponse",
     "SchedulerCapability",
     "SchedulerMode",
+    "SolverExecutionOptions",
     "SchemaVersion",
     "Sha256Hex",
+    "AgentH2RExecutionParameters",
 ]
