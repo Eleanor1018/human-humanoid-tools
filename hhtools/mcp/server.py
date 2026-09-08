@@ -320,7 +320,7 @@ def _read_report[T](
 def _server_instructions(web_ui_url: str) -> str:
     return (
         "For every new H2R run: get capabilities, register/search and inspect assets, "
-        "preflight a smoke plan, start only a ready plan, poll by revision, then read "
+        "preflight a smoke plan, start only a ready plan, wait by revision, then read "
         "evaluation and manifest for human review. Persist each plan_id plus idempotency "
         "key before start; use lookup_job to recover an ambiguous submission without job "
         "enumeration. On human_action_required, stop and "
@@ -514,6 +514,23 @@ def create_mcp_server(
             lambda: _runtime(context).jobs.get_job(
                 job_id,
                 after_revision=after_revision,
+            )
+        )
+
+    @server.tool(annotations=_READ_ONLY)
+    def wait_job(
+        job_id: str,
+        after_revision: Annotated[int, Field(ge=0)],
+        context: Context[AgentRuntime, Any],
+        timeout: Annotated[float, Field(ge=0.0, le=60.0, allow_inf_nan=False)] = 30.0,
+    ) -> AgentJobView:
+        """Wait until one job advances beyond a known revision or becomes terminal."""
+
+        return _tool_call(
+            lambda: _runtime(context).jobs.wait_job(
+                job_id,
+                after_revision=after_revision,
+                timeout=timeout,
             )
         )
 

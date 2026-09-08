@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -581,6 +582,9 @@ class _SingleArtifactManager:
     def get_job(self, *args, **kwargs):
         raise AssertionError("not called")
 
+    def wait_job(self, *args, **kwargs):
+        raise AssertionError("not called")
+
     def lookup_job(self, *args, **kwargs):
         raise AssertionError("not called")
 
@@ -910,6 +914,105 @@ def test_agent_job_rest_lifecycle_idempotency_retry_and_canonical_artifacts(
             assert verified_descriptor.status_code == 409
             assert verified_descriptor.json()["code"] == "ARTIFACT_HASH_MISMATCH"
     finally:
+        assert scheduler.shutdown(wait=True, timeout=3.0)
+
+
+def test_agent_job_wait_blocks_for_revision_and_validates_timeout(
+    tmp_path: Path,
+) -> None:
+    spec = _job_spec("4")
+    started = threading.Event()
+    publish_progress = threading.Event()
+    release = threading.Event()
+
+    def execute(_spec: JobSpecV2, context: JobExecutionContext) -> JobExecutionResult:
+        started.set()
+        assert publish_progress.wait(timeout=3.0)
+        context.report_progress(
+            phase="ik_solve",
+            fraction=0.5,
+            message="Halfway",
+        )
+        assert release.wait(timeout=3.0)
+        return JobExecutionResult(outcome=JobOutcome.SUCCESS)
+
+    app, manager, _artifact_store, scheduler = _job_app(
+        tmp_path,
+        spec,
+        executor=execute,
+    )
+    wait_entered = threading.Event()
+    original_wait = manager.wait_job
+
+    def observed_wait(job_id: str, *, after_revision: int, timeout: float = 30.0):
+        wait_entered.set()
+        return original_wait(
+            job_id,
+            after_revision=after_revision,
+            timeout=timeout,
+        )
+
+    manager.wait_job = observed_wait  # type: ignore[method-assign]
+    try:
+        with TestClient(app) as client:
+            submitted = client.post(
+                "/api/agent/v1/jobs",
+                json={"plan_id": spec.plan_id, "idempotency_key": "rest-wait-1"},
+            )
+            job_id = submitted.json()["job_id"]
+            assert started.wait(timeout=2.0)
+            current = client.get(f"/api/agent/v1/jobs/{job_id}").json()
+
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                waiting = executor.submit(
+                    client.get,
+                    f"/api/agent/v1/jobs/{job_id}/wait",
+                    params={
+                        "after_revision": current["progress"]["revision"],
+                        "timeout": 1.0,
+                    },
+                )
+                assert wait_entered.wait(timeout=1.0)
+                publish_progress.set()
+                changed = waiting.result(timeout=2.0)
+
+            assert changed.status_code == 200
+            changed_document = changed.json()
+            assert changed_document["progress"]["revision"] > current["progress"]["revision"]
+            assert changed_document["progress"]["message"] == "Halfway"
+
+            unchanged = client.get(
+                f"/api/agent/v1/jobs/{job_id}/wait",
+                params={
+                    "after_revision": changed_document["progress"]["revision"],
+                    "timeout": 0,
+                },
+            )
+            assert unchanged.status_code == 200
+            assert unchanged.json()["progress"]["revision"] == changed_document["progress"][
+                "revision"
+            ]
+
+            invalid_timeout = client.get(
+                f"/api/agent/v1/jobs/{job_id}/wait",
+                params={"after_revision": 0, "timeout": 60.1},
+            )
+            assert invalid_timeout.status_code == 422
+            assert invalid_timeout.json()["code"] == "INVALID_PARAMETER"
+
+            release.set()
+            terminal = client.get(
+                f"/api/agent/v1/jobs/{job_id}/wait",
+                params={
+                    "after_revision": changed_document["progress"]["revision"],
+                    "timeout": 2.0,
+                },
+            )
+            assert terminal.status_code == 200
+            assert terminal.json()["state"] == "completed"
+    finally:
+        release.set()
+        publish_progress.set()
         assert scheduler.shutdown(wait=True, timeout=3.0)
 
 
@@ -1266,6 +1369,7 @@ def test_full_web_app_registers_agent_api_before_the_static_root(
     assert payload["features"]["persistent_jobs"] is True
     assert payload["features"]["idempotent_jobs"] is True
     assert payload["features"]["revision_polling"] is True
+    assert payload["features"]["revision_waiting"] is True
     assert payload["features"]["job_execution"] is True
     assert payload["features"]["job_cancellation"] is True
     assert payload["features"]["job_retry"] is True

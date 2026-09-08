@@ -195,6 +195,7 @@ def test_capabilities_is_one_contract_and_accepts_global_options_anywhere() -> N
         (["--help"], "hhtools agent", "job"),
         (["job", "--help"], "hhtools agent job", "start"),
         (["job", "start", "--help"], "hhtools agent job start", "--plan"),
+        (["job", "wait", "--help"], "hhtools agent job wait", "--after-revision"),
         (
             ["job", "lookup", "--help"],
             "hhtools agent job lookup",
@@ -245,6 +246,12 @@ def test_help_is_one_versioned_json_document_without_transport(
         (["job"], "MISSING_COMMAND", "hhtools agent job", "COMMAND"),
         (["job", "not-a-command"], "UNKNOWN_COMMAND", "hhtools agent job", "COMMAND"),
         (["job", "start"], "MISSING_ARGUMENT", "hhtools agent job start", "--plan"),
+        (
+            ["job", "wait", "job_cli"],
+            "MISSING_ARGUMENT",
+            "hhtools agent job wait",
+            "--after-revision",
+        ),
         (
             ["job", "start", "--plan", _PLAN_ID],
             "MISSING_ARGUMENT",
@@ -978,7 +985,9 @@ def test_valid_remote_success_contract_with_host_path_fails_closed_on_stdout() -
 
 
 def test_job_commands_use_public_requests_and_versioned_routes() -> None:
-    transport = FakeTransport([_job(), _job(), _job(), _job(), _job("job_retry")])
+    transport = FakeTransport(
+        [_job(), _job(), _job(), _job(), _job(), _job("job_retry")]
+    )
 
     start_code, _, _ = _invoke(
         ["job", "start", "--plan", _PLAN_ID, "--idempotency-key", "cli:start-1"],
@@ -998,13 +1007,27 @@ def test_job_commands_use_public_requests_and_versioned_routes() -> None:
         transport,
     )
     get_code, _, _ = _invoke(["job", "get", "job_cli", "--after-revision", "0"], transport)
+    wait_code, _, _ = _invoke(
+        [
+            "job",
+            "wait",
+            "job_cli",
+            "--after-revision",
+            "0",
+            "--wait-timeout",
+            "5",
+        ],
+        transport,
+    )
     cancel_code, _, _ = _invoke(["job", "cancel", "job_cli"], transport)
     retry_code, _, _ = _invoke(
         ["job", "retry", "job_cli", "--idempotency-key", "cli:retry-1"],
         transport,
     )
 
-    assert {start_code, lookup_code, get_code, cancel_code, retry_code} == {EXIT_SUCCESS}
+    assert {start_code, lookup_code, get_code, wait_code, cancel_code, retry_code} == {
+        EXIT_SUCCESS
+    }
     assert lookup_document["job_id"] == "job_cli"
     assert transport.requests == [
         (
@@ -1029,6 +1052,12 @@ def test_job_commands_use_public_requests_and_versioned_routes() -> None:
             },
         ),
         ("GET", "/jobs/job_cli", {"after_revision": 0}, None),
+        (
+            "GET",
+            "/jobs/job_cli/wait",
+            {"after_revision": 0, "timeout": 5.0},
+            None,
+        ),
         ("POST", "/jobs/job_cli/cancel", {}, {}),
         (
             "POST",
@@ -1068,6 +1097,48 @@ def test_job_lookup_omits_the_optional_revision_when_not_supplied() -> None:
             },
         )
     ]
+
+
+@pytest.mark.parametrize("wait_timeout", ["-0.1", "60.1", "nan", "inf"])
+def test_job_wait_rejects_invalid_timeout_without_transport(wait_timeout: str) -> None:
+    code, document, selected = _invoke(
+        [
+            "job",
+            "wait",
+            "job_cli",
+            "--after-revision",
+            "0",
+            "--wait-timeout",
+            wait_timeout,
+        ],
+        FakeTransport([]),
+    )
+
+    assert code == EXIT_PARAMETER_ERROR
+    assert document["details"]["argument"] == "--wait-timeout"
+    assert selected == []
+
+
+def test_job_wait_requires_request_timeout_longer_than_server_wait() -> None:
+    code, document, selected = _invoke(
+        [
+            "job",
+            "wait",
+            "job_cli",
+            "--after-revision",
+            "0",
+            "--wait-timeout",
+            "20",
+            "--timeout",
+            "20",
+        ],
+        FakeTransport([]),
+    )
+
+    assert code == EXIT_PARAMETER_ERROR
+    assert document["details"]["reason_code"] == "INVALID_COMBINATION"
+    assert document["details"]["argument"] == "--timeout"
+    assert selected == []
 
 
 def test_artifact_get_requires_job_membership_and_never_writes_bytes_to_json(
@@ -1252,6 +1323,16 @@ class _ParityJobManager:
         self.calls.append(("get", job_id, after_revision))
         return _job(job_id)
 
+    def wait_job(
+        self,
+        job_id: str,
+        *,
+        after_revision: int,
+        timeout: float = 30.0,
+    ) -> AgentJobView:
+        self.calls.append(("wait", job_id, after_revision, timeout))
+        return _job(job_id)
+
     def lookup_job(
         self,
         plan_id: str,
@@ -1378,6 +1459,30 @@ def test_cli_rest_service_parity_for_jobs_and_artifact_membership() -> None:
     assert get_code == EXIT_SUCCESS
     assert get_document == direct_get.json()
     assert manager.calls == [("get", "job_cli", 0), ("get", "job_cli", 0)]
+
+    manager.calls.clear()
+    wait_code, wait_document, _ = _invoke(
+        [
+            "job",
+            "wait",
+            "job_cli",
+            "--after-revision",
+            "7",
+            "--wait-timeout",
+            "5",
+        ],
+        transport,
+    )
+    direct_wait = client.get(
+        "/api/agent/v1/jobs/job_cli/wait",
+        params={"after_revision": 7, "timeout": 5},
+    )
+    assert wait_code == EXIT_SUCCESS
+    assert wait_document == direct_wait.json()
+    assert manager.calls == [
+        ("wait", "job_cli", 7, 5.0),
+        ("wait", "job_cli", 7, 5.0),
+    ]
 
     manager.calls.clear()
     list_code, list_document, _ = _invoke(

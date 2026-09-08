@@ -433,6 +433,7 @@ class CapabilitiesService:
                 "persistent_jobs": self._job_manager_available,
                 "preflight": self._preflight_available,
                 "revision_polling": self._job_manager_available,
+                "revision_waiting": self._job_manager_available,
             },
         )
 

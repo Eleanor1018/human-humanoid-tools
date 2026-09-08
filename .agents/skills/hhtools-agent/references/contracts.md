@@ -20,7 +20,7 @@ Installation and supported boundaries are documented in the public
 | `preflight_retarget` | [retarget preflight request](../../../../docs/schemas/agent/v1/retarget-preflight-request.schema.json) | [preflight response](../../../../docs/schemas/agent/v1/preflight-response.schema.json) |
 | `start_retarget` | [job start request](../../../../docs/schemas/agent/v1/job-start-request.schema.json) | [agent job view](../../../../docs/schemas/agent/v1/agent-job-view.schema.json) |
 | `lookup_job` | [job lookup request](../../../../docs/schemas/agent/v1/job-lookup-request.schema.json) | [agent job view](../../../../docs/schemas/agent/v1/agent-job-view.schema.json) |
-| `get_job` / `cancel_job` | Scalar job identity and live tool fields | [agent job view](../../../../docs/schemas/agent/v1/agent-job-view.schema.json) |
+| `get_job` / `wait_job` / `cancel_job` | Scalar job identity and live tool fields | [agent job view](../../../../docs/schemas/agent/v1/agent-job-view.schema.json) |
 | `retry_job` | [job retry request](../../../../docs/schemas/agent/v1/job-retry-request.schema.json) | [agent job view](../../../../docs/schemas/agent/v1/agent-job-view.schema.json) |
 | `list_job_artifacts` | `job_id`, `limit`, and `offset` | [artifact list response](../../../../docs/schemas/agent/v1/artifact-list-response.schema.json) |
 | `export_artifact` | Scalar `job_id` and `artifact_id` | [artifact export receipt](../../../../docs/schemas/agent/v1/artifact-export-receipt.schema.json) |

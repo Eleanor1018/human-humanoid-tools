@@ -72,6 +72,7 @@ def test_capabilities_report_unlimited_defaults_and_backend_specific_dependencie
         "persistent_jobs": False,
         "preflight": False,
         "revision_polling": False,
+        "revision_waiting": False,
     }
     backends = {backend.backend_id: backend for backend in response.backends}
     assert backends["interaction_mesh"].available is True
@@ -152,6 +153,7 @@ def test_job_features_distinguish_durable_services_from_trusted_execution() -> N
     assert durable_only.features["persistent_jobs"] is True
     assert durable_only.features["idempotent_jobs"] is True
     assert durable_only.features["revision_polling"] is True
+    assert durable_only.features["revision_waiting"] is True
     assert durable_only.features["job_execution"] is False
     assert durable_only.features["job_cancellation"] is False
     assert durable_only.features["job_retry"] is False

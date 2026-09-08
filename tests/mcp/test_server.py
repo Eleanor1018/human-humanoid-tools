@@ -55,6 +55,7 @@ _EXPECTED_TOOLS = {
     "preflight_retarget",
     "start_retarget",
     "get_job",
+    "wait_job",
     "lookup_job",
     "cancel_job",
     "retry_job",
@@ -256,6 +257,7 @@ class _Jobs:
     def __init__(self) -> None:
         self.start_calls: list[tuple[str, str]] = []
         self.get_calls: list[tuple[str, int | None]] = []
+        self.wait_calls: list[tuple[str, int, float]] = []
         self.lookup_calls: list[tuple[str, str, int | None]] = []
         self.list_calls: list[tuple[str, int, int]] = []
         self.artifact_calls: list[tuple[str, str, bool]] = []
@@ -290,6 +292,16 @@ class _Jobs:
                 )
             )
         return _job()
+
+    def wait_job(
+        self,
+        job_id: str,
+        *,
+        after_revision: int,
+        timeout: float = 30.0,
+    ) -> AgentJobView:
+        self.wait_calls.append((job_id, after_revision, timeout))
+        return self.get_job(job_id, after_revision=after_revision)
 
     def cancel_job(self, job_id: str) -> AgentJobView:
         return self.get_job(job_id)
@@ -645,6 +657,12 @@ async def test_mcp_tool_schemas_are_generated_from_public_pydantic_contracts() -
     }
     assert "run_mode" not in json.dumps(start.input_schema)
 
+    wait = _tool_by_name(tools, "wait_job")
+    assert set(wait.input_schema["required"]) == {"job_id", "after_revision"}
+    assert wait.input_schema["properties"]["after_revision"]["minimum"] == 0
+    assert wait.input_schema["properties"]["timeout"]["minimum"] == 0.0
+    assert wait.input_schema["properties"]["timeout"]["maximum"] == 60.0
+
     capabilities = _tool_by_name(tools, "get_capabilities")
     assert capabilities.output_schema["title"] == "CapabilityResponse"
     assert "features" in capabilities.output_schema["properties"]
@@ -728,6 +746,21 @@ async def test_revision_polling_forwards_after_revision_and_stays_compact() -> N
     serialized = json.dumps(result.structured_content).casefold()
     assert "trajectory" not in serialized
     assert "base64" not in serialized
+
+
+@pytest.mark.anyio
+async def test_revision_wait_forwards_revision_and_bounded_timeout() -> None:
+    fixture = _Fixture()
+
+    async with Client(fixture.server(), raise_exceptions=True) as client:
+        result = await client.call_tool(
+            "wait_job",
+            {"job_id": _JOB_ID, "after_revision": 7, "timeout": 12.5},
+        )
+
+    assert result.is_error is False
+    assert result.structured_content["progress"]["revision"] == 7
+    assert fixture.jobs.wait_calls == [(_JOB_ID, 7, 12.5)]
 
 
 @pytest.mark.anyio

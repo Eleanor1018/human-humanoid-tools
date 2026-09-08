@@ -141,6 +141,21 @@ _AFTER_REVISION_ARGUMENT = _CliArgumentSpec(
     expected="A non-negative integer revision.",
     value_kind="int",
 )
+_WAIT_AFTER_REVISION_ARGUMENT = _CliArgumentSpec(
+    "--after-revision",
+    "Wait until the job advances beyond this observed revision.",
+    value_name="INTEGER",
+    required=True,
+    expected="A non-negative integer revision returned by start, get, lookup, or wait.",
+    value_kind="int",
+)
+_WAIT_TIMEOUT_ARGUMENT = _CliArgumentSpec(
+    "--wait-timeout",
+    "Wait this many seconds for a job revision change.",
+    value_name="SECONDS",
+    expected="A finite number from 0 through 60.",
+    value_kind="float",
+)
 
 _COMMAND_SPECS: dict[tuple[str, ...], _CliCommandSpec] = {
     (): _CliCommandSpec((), "Call the versioned Agent API with strict JSON input and output."),
@@ -223,7 +238,10 @@ _COMMAND_SPECS: dict[tuple[str, ...], _CliCommandSpec] = {
         "Validate one retarget request and freeze an immutable plan.",
         options=(_REQUEST_ARGUMENT,),
     ),
-    ("job",): _CliCommandSpec(("job",), "Start, recover, inspect, cancel, or retry jobs."),
+    ("job",): _CliCommandSpec(
+        ("job",),
+        "Start, wait for, recover, inspect, cancel, or retry jobs.",
+    ),
     ("job", "start"): _CliCommandSpec(
         ("job", "start"),
         "Submit one immutable preflight plan.",
@@ -234,6 +252,12 @@ _COMMAND_SPECS: dict[tuple[str, ...], _CliCommandSpec] = {
         "Return one compact revision-aware job snapshot.",
         positionals=(_JOB_ID_ARGUMENT,),
         options=(_AFTER_REVISION_ARGUMENT,),
+    ),
+    ("job", "wait"): _CliCommandSpec(
+        ("job", "wait"),
+        "Wait for one job to advance beyond a known revision.",
+        positionals=(_JOB_ID_ARGUMENT,),
+        options=(_WAIT_AFTER_REVISION_ARGUMENT, _WAIT_TIMEOUT_ARGUMENT),
     ),
     ("job", "lookup"): _CliCommandSpec(
         ("job", "lookup"),
@@ -656,6 +680,11 @@ def _parser() -> _JsonArgumentParser:
     get_job.add_argument("job_id")
     get_job.add_argument("--after-revision", type=int)
     get_job.set_defaults(operation="job_get")
+    wait_job = job_commands.add_parser("wait", add_help=False)
+    wait_job.add_argument("job_id")
+    wait_job.add_argument("--after-revision", type=int, required=True)
+    wait_job.add_argument("--wait-timeout", type=float, default=20.0)
+    wait_job.set_defaults(operation="job_wait")
     lookup_job = job_commands.add_parser("lookup", add_help=False)
     lookup_job.add_argument("--plan", required=True)
     lookup_job.add_argument("--idempotency-key", required=True)
@@ -992,6 +1021,29 @@ def _execute(  # noqa: PLR0911 - one explicit branch per public CLI operation
             AgentJobView,
             transport.request_json("GET", path, query={"after_revision": namespace.after_revision}),
         )
+    if operation == "job_wait":
+        if (
+            isinstance(namespace.wait_timeout, bool)
+            or not math.isfinite(namespace.wait_timeout)
+            or not 0 <= namespace.wait_timeout <= 60
+        ):
+            raise _ArgumentError(
+                "INVALID_VALUE",
+                argument=_WAIT_TIMEOUT_ARGUMENT.name,
+                expected=_WAIT_TIMEOUT_ARGUMENT.expected,
+            )
+        path = f"/jobs/{_path_segment(namespace.job_id)}/wait"
+        return _response(
+            AgentJobView,
+            transport.request_json(
+                "GET",
+                path,
+                query={
+                    "after_revision": namespace.after_revision,
+                    "timeout": namespace.wait_timeout,
+                },
+            ),
+        )
     if operation == "job_lookup":
         try:
             lookup_request = JobLookupRequest(
@@ -1197,6 +1249,22 @@ def run(
             return EXIT_SUCCESS if safe else EXIT_INTERNAL_ERROR
         arguments, base_url, timeout = _normalize_argv(raw_arguments)
         namespace = _parser().parse_args(arguments)
+        if namespace.operation == "job_wait":
+            if not math.isfinite(namespace.wait_timeout) or not 0 <= namespace.wait_timeout <= 60:
+                raise _ArgumentError(
+                    "INVALID_VALUE",
+                    argument=_WAIT_TIMEOUT_ARGUMENT.name,
+                    expected=_WAIT_TIMEOUT_ARGUMENT.expected,
+                )
+            if timeout <= namespace.wait_timeout:
+                raise _ArgumentError(
+                    "INVALID_COMBINATION",
+                    argument="--timeout",
+                    expected=(
+                        "Set the Agent request --timeout higher than --wait-timeout "
+                        "so the server can return its wait response."
+                    ),
+                )
         factory = transport_factory or _default_transport_factory
         transport = factory(base_url, timeout)
         result = _execute(namespace, transport, stdin=input_stream)
@@ -1331,6 +1399,11 @@ def job_start_command(ctx: typer.Context) -> None:
 @job_app.command("get", context_settings=_PASSTHROUGH_CONTEXT)
 def job_get_command(ctx: typer.Context) -> None:
     _passthrough(["job", "get"], ctx)
+
+
+@job_app.command("wait", context_settings=_PASSTHROUGH_CONTEXT)
+def job_wait_command(ctx: typer.Context) -> None:
+    _passthrough(["job", "wait"], ctx)
 
 
 @job_app.command("lookup", context_settings=_PASSTHROUGH_CONTEXT)

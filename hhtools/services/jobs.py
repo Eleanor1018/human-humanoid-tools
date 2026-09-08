@@ -547,6 +547,25 @@ class JobManager:
             raise _wrap_service_error(exc.api_error) from exc
         return self._project_polled_job(stored, after_revision=after_revision)
 
+    def wait_job(
+        self,
+        job_id: str,
+        *,
+        after_revision: int,
+        timeout: float = 30.0,
+    ) -> AgentJobView:
+        """Wait for a revision change or terminal state and return a compact view."""
+
+        try:
+            stored = self._job_store.wait_for_revision(
+                job_id,
+                after_revision=after_revision,
+                timeout=timeout,
+            )
+        except JobStoreError as exc:
+            raise _wrap_service_error(exc.api_error) from exc
+        return self._project_polled_job(stored, after_revision=after_revision)
+
     def lookup_job(
         self,
         plan_id: str,

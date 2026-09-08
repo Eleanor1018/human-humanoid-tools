@@ -66,9 +66,10 @@ token.
    contains only the ready plan identity and key. Persist the exact pair before submission. If the
    transport result is ambiguous, call `lookup_job` with that pair before replaying the exact same
    start request; never enumerate jobs or create a replacement key.
-6. Poll with `get_job(job_id, after_revision=<last revision>)`. Respect `poll_after_ms`; do not
-   busy-poll. Treat `queued` and `running` as nonterminal, and report queue/progress changes
-   without requesting large trajectories.
+6. Wait with `wait_job(job_id, after_revision=<last revision>, timeout=30)`. Treat `queued` and
+   `running` as nonterminal, retain the returned revision, and wait again without busy-polling.
+   Use `get_job` only for an immediate snapshot when no wait is appropriate. Report
+   queue/progress changes without requesting large trajectories.
 7. At terminal state, use `list_job_artifacts(job_id, ...)` for canonical membership, then read
    `hhtools://jobs/{job_id}/artifacts/{artifact_id}` when one descriptor needs verification. Read
    `hhtools://jobs/{job_id}/evaluation`, `/manifest`, and `/failures` only when relevant.

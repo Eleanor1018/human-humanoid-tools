@@ -19,6 +19,8 @@ import json
 import math
 import re
 import sqlite3
+import threading
+import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -43,6 +45,7 @@ from hhtools.contracts import (
 _IDEMPOTENCY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._~:-]{0,255}$")
 _JOB_ID_PATTERN = re.compile(r"^job:[A-Za-z0-9][A-Za-z0-9._~-]{0,251}$")
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+_MAX_JOB_WAIT_SECONDS = 60.0
 _TERMINAL_STATES = frozenset({JobState.COMPLETED, JobState.FAILED, JobState.CANCELLED})
 _ALLOWED_TRANSITIONS: dict[JobState, frozenset[JobState]] = {
     JobState.QUEUED: frozenset({JobState.RUNNING, JobState.FAILED, JobState.CANCELLED}),
@@ -307,6 +310,22 @@ def _normalize_revision(value: int) -> int:
     return value
 
 
+def _normalize_wait_timeout(value: float) -> float:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int | float)
+        or not math.isfinite(value)
+        or value < 0
+        or value > _MAX_JOB_WAIT_SECONDS
+    ):
+        raise _error(
+            "INVALID_PARAMETER",
+            "The job wait timeout must be a finite number from 0 through 60 seconds.",
+            stage=ErrorStage.REQUEST,
+        )
+    return float(value)
+
+
 def _normalize_poll_after_ms(value: int | None) -> int | None:
     if value is None:
         return None
@@ -480,6 +499,7 @@ class JobStore:
         self._database_path = self._data_dir / "jobs.sqlite3"
         self._clock = clock or (lambda: datetime.now(UTC))
         self._job_id_provider = job_id_provider or (lambda: f"job:{uuid.uuid4().hex}")
+        self._changes = threading.Condition()
         try:
             self._data_dir.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
@@ -496,6 +516,12 @@ class JobStore:
         """Return the SQLite path for deployment diagnostics."""
 
         return self._database_path
+
+    def _notify_change(self) -> None:
+        """Wake in-process revision waiters after a durable row mutation."""
+
+        with self._changes:
+            self._changes.notify_all()
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self._database_path, timeout=30.0)
@@ -975,7 +1001,9 @@ class JobStore:
                 stage=ErrorStage.INTERNAL,
                 retryable=True,
             )
-        return self._decode_row(row, created=True)
+        created = self._decode_row(row, created=True)
+        self._notify_change()
+        return created
 
     def get(self, job_id: str) -> StoredJob:
         """Load one fresh, fully validated job snapshot by id."""
@@ -1030,6 +1058,44 @@ class JobStore:
                 "No agent job has the requested idempotency key.",
             )
         return self._decode_row(row)
+
+    def wait_for_revision(
+        self,
+        job_id: str,
+        *,
+        after_revision: int,
+        timeout: float,
+    ) -> StoredJob:
+        """Wait until a job advances beyond a caller-observed revision.
+
+        Runtime ownership guarantees one process-local writer for this store.
+        Holding the condition across the durable read and wait prevents a
+        revision update from being missed between those two operations.
+        """
+
+        normalized_id = _normalize_job_id(job_id)
+        observed_revision = _normalize_revision(after_revision)
+        wait_seconds = _normalize_wait_timeout(timeout)
+        deadline = time.monotonic() + wait_seconds
+        with self._changes:
+            while True:
+                current = self.get(normalized_id)
+                if observed_revision > current.revision:
+                    raise _error(
+                        "INVALID_PARAMETER",
+                        "after_revision must be between zero and the current revision.",
+                        stage=ErrorStage.REQUEST,
+                        details={"current_revision": current.revision},
+                    )
+                if (
+                    current.view.state in _TERMINAL_STATES
+                    or current.revision > observed_revision
+                ):
+                    return current
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return current
+                self._changes.wait(timeout=remaining)
 
     def list_active(self) -> list[StoredJob]:
         """Return queued and running jobs in deterministic submission order."""
@@ -1417,7 +1483,9 @@ class JobStore:
                 "The job disappeared after its state update.",
                 stage=ErrorStage.INTERNAL,
             )
-        return self._decode_row(updated_row)
+        updated = self._decode_row(updated_row)
+        self._notify_change()
+        return updated
 
     def update_progress(
         self,
@@ -1495,7 +1563,9 @@ class JobStore:
                 "The job disappeared after its progress update.",
                 stage=ErrorStage.INTERNAL,
             )
-        return self._decode_row(updated_row)
+        updated = self._decode_row(updated_row)
+        self._notify_change()
+        return updated
 
     def attach_artifacts(
         self,
@@ -1577,7 +1647,9 @@ class JobStore:
                 "The job disappeared after its artifact update.",
                 stage=ErrorStage.INTERNAL,
             )
-        return self._decode_row(updated_row)
+        updated = self._decode_row(updated_row)
+        self._notify_change()
+        return updated
 
     def request_cancel(
         self,
@@ -1662,7 +1734,9 @@ class JobStore:
                 "The job disappeared after its cancellation request.",
                 stage=ErrorStage.INTERNAL,
             )
-        return self._decode_row(updated_row)
+        updated = self._decode_row(updated_row)
+        self._notify_change()
+        return updated
 
 
 __all__ = [

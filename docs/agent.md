@@ -11,7 +11,7 @@ agent should discover and call tools directly.
 
 The current Agent surface supports plain human-to-robot (H2R) retargeting:
 capability and robot discovery, allowlisted asset registration and inspection,
-preflight, jobs, verified artifacts, and export. R2R, Batch, Video2Motion,
+preflight, jobs, revision-aware waiting, verified artifacts, and export. R2R, Batch, Video2Motion,
 Analysis, Interaction-Mesh, remote service access, and robot deployment are not
 part of this interface.
 
@@ -38,6 +38,7 @@ then query it from another terminal:
 uv run hhtools web
 uv run hhtools agent capabilities
 uv run hhtools agent --help
+uv run hhtools agent job wait JOB_ID --after-revision REVISION --wait-timeout 20
 ```
 
 Use `hhtools agent asset catalog` to discover registerable Motion Library and
@@ -54,7 +55,7 @@ an interactive terminal. Its available options can be inspected with
 For a new run, discover capabilities, resolve and inspect both assets, and call
 preflight with `run_mode: smoke`. Start only the immutable plan returned with
 `status: ready`; retain its `plan_id` and the caller-owned idempotency key.
-Poll by revision and review the evaluation and manifest before considering a
+Wait by revision and review the evaluation and manifest before considering a
 full run. Calibration and final motion quality remain human decisions.
 
 Only one local runtime may own a `save-dir`. MCP normally owns its directory

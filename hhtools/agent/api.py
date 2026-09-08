@@ -369,6 +369,14 @@ class _JobProvider(Protocol):
         after_revision: int | None = None,
     ) -> AgentJobView: ...
 
+    def wait_job(
+        self,
+        job_id: str,
+        *,
+        after_revision: int,
+        timeout: float = 30.0,
+    ) -> AgentJobView: ...
+
     def lookup_job(
         self,
         plan_id: str,
@@ -436,6 +444,7 @@ def _job_manager(request: Request) -> _JobProvider:
     required = (
         "start_retarget",
         "get_job",
+        "wait_job",
         "lookup_job",
         "cancel_job",
         "retry_job",
@@ -665,6 +674,26 @@ def get_retarget_job(
     return _job_manager(request).get_job(
         job_id,
         after_revision=after_revision,
+    )
+
+
+@router.get(
+    "/jobs/{job_id}/wait",
+    response_model=AgentJobView,
+    response_model_exclude_none=True,
+)
+def wait_for_retarget_job(
+    request: Request,
+    job_id: str,
+    after_revision: int = Query(ge=0),
+    timeout: float = Query(default=30.0, ge=0.0, le=60.0, allow_inf_nan=False),
+) -> AgentJobView:
+    """Wait for one job revision change without cancelling the underlying job."""
+
+    return _job_manager(request).wait_job(
+        job_id,
+        after_revision=after_revision,
+        timeout=timeout,
     )
 
 
