@@ -77,7 +77,7 @@ desktop/playwright-report/
 
 # Frontend dependencies (compiled assets are packaged by Python).
 hhtools/web/frontend/node_modules/
-hhtools/web/frontend-old/node_modules/
+hhtools/web/frontend-old/
 
 # NVIDIA Warp / Newton kernel cache (auto-generated, machine-specific)
 .warp_cache/
