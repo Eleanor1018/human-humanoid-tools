@@ -1,7 +1,7 @@
 interface:
   display_name: "HHTools Agent"
-  short_description: "Run safe HHTools H2R, R2R, and bounded Batch jobs"
-  default_prompt: "Use $hhtools-agent to preflight a local H2R, scene-free R2R, or bounded Batch smoke run and stop for review before any full job."
+  short_description: "Run safe HHTools H2R, R2R, and scalable Batch jobs"
+  default_prompt: "Use $hhtools-agent to preflight a local H2R, scene-free R2R, or Batch smoke run and stop for review before any full job."
 dependencies:
   tools:
     - type: "mcp"

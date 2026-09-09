@@ -1,4 +1,4 @@
-"""Sequential bounded batch orchestration over existing single-item executors."""
+"""Sequential scalable batch orchestration over existing single-item executors."""
 
 from __future__ import annotations
 
@@ -119,7 +119,7 @@ class BatchJobExecutor:
         ):
             raise _execution_error(
                 "INVALID_PARAMETER",
-                "The batch executor requires one bounded batch JobSpec.",
+                "The batch executor requires one validated batch JobSpec.",
             )
         try:
             workflow = BatchWorkflow(spec.effective_parameters["workflow"])

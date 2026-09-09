@@ -744,7 +744,6 @@
               "items": {
                 "$ref": "#/$defs/JobSpecBatchItem"
               },
-              "maxItems": 32,
               "type": "array"
             },
             {
@@ -931,7 +930,6 @@
       "items": {
         "$ref": "#/$defs/ArtifactDescriptor"
       },
-      "maxItems": 10000,
       "title": "Artifacts",
       "type": "array"
     },

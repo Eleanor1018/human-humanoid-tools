@@ -60,6 +60,22 @@ def launch(
             "Waiting jobs when concurrency is limited; 0 means an unlimited queue."
         ),
     ),
+    max_batch_items: int | None = typer.Option(
+        None,
+        "--max-batch-items",
+        min=0,
+        envvar="HHTOOLS_MAX_BATCH_ITEMS",
+        show_envvar=True,
+        help="Maximum items in one Agent batch; 0 selects unlimited mode.",
+    ),
+    max_batch_total_frames: int | None = typer.Option(
+        None,
+        "--max-batch-total-frames",
+        min=0,
+        envvar="HHTOOLS_MAX_BATCH_TOTAL_FRAMES",
+        show_envvar=True,
+        help="Maximum estimated frames in one Agent batch; 0 selects unlimited mode.",
+    ),
 ) -> None:
     """Start the web UI on ``host:port`` and open a browser."""
     if ctx.invoked_subcommand is not None:
@@ -75,6 +91,8 @@ def launch(
             port=port,
             max_running_jobs=max_running_jobs,
             max_queued_jobs=max_queued_jobs,
+            max_batch_items=max_batch_items,
+            max_batch_total_frames=max_batch_total_frames,
         )
     except MissingWebDependenciesError as exc:
         typer.echo(str(exc), err=True)

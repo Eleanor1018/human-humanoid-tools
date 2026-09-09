@@ -1,4 +1,4 @@
-"""Bounded H2R/R2R batch preflight plans and result reports."""
+"""Scalable H2R/R2R batch preflight plans and result reports."""
 
 from __future__ import annotations
 
@@ -21,8 +21,8 @@ from .common import (
 from .jobs import JobOutcome
 from .preflight import OutputPolicy, PreflightCheck, PreflightStatus
 
-MAX_BATCH_ITEMS = 32
-MAX_BATCH_TOTAL_FRAMES = 100_000
+DEFAULT_MAX_BATCH_ITEMS = 0
+DEFAULT_MAX_BATCH_TOTAL_FRAMES = 0
 
 
 class BatchWorkflow(StrEnum):
@@ -31,11 +31,11 @@ class BatchWorkflow(StrEnum):
 
 
 class BatchPreflightRequest(ContractModel):
-    """Ordered ready single-item plans to freeze into one bounded batch."""
+    """Ordered ready single-item plans to freeze into one batch."""
 
     schema_version: SchemaVersion = SchemaVersion.V1
     workflow: BatchWorkflow
-    item_plan_ids: Annotated[list[PlanId], Field(min_length=1, max_length=MAX_BATCH_ITEMS)]
+    item_plan_ids: Annotated[list[PlanId], Field(min_length=1)]
     output_policy: OutputPolicy = OutputPolicy.CREATE_NEW
 
     @model_validator(mode="after")
@@ -46,22 +46,20 @@ class BatchPreflightRequest(ContractModel):
 
 
 class BatchResourceLimits(ContractModel):
-    """Service-owned ceilings frozen into an immutable batch plan."""
+    """Optional service caps frozen into a plan; zero means unlimited."""
 
-    max_items: Annotated[int, Field(ge=1, le=MAX_BATCH_ITEMS)] = MAX_BATCH_ITEMS
-    max_total_frames: Annotated[int, Field(ge=1, le=MAX_BATCH_TOTAL_FRAMES)] = (
-        MAX_BATCH_TOTAL_FRAMES
-    )
-    item_count: Annotated[int, Field(ge=1, le=MAX_BATCH_ITEMS)]
-    estimated_total_frames: Annotated[int, Field(ge=1, le=MAX_BATCH_TOTAL_FRAMES)]
+    max_items: Annotated[int, Field(ge=0)] = DEFAULT_MAX_BATCH_ITEMS
+    max_total_frames: Annotated[int, Field(ge=0)] = DEFAULT_MAX_BATCH_TOTAL_FRAMES
+    item_count: Annotated[int, Field(ge=1)]
+    estimated_total_frames: Annotated[int, Field(ge=1)]
     execution_concurrency: Literal[1] = 1
-    failure_limit: Annotated[int, Field(ge=1, le=MAX_BATCH_ITEMS)] = MAX_BATCH_ITEMS
+    failure_limit: Annotated[int, Field(ge=0)] = 0
 
     @model_validator(mode="after")
     def validate_estimate(self) -> BatchResourceLimits:
-        if self.item_count > self.max_items:
+        if self.max_items and self.item_count > self.max_items:
             raise ValueError("batch item count exceeds its frozen limit")
-        if self.estimated_total_frames > self.max_total_frames:
+        if self.max_total_frames and self.estimated_total_frames > self.max_total_frames:
             raise ValueError("batch frame estimate exceeds its frozen limit")
         return self
 
@@ -69,10 +67,10 @@ class BatchResourceLimits(ContractModel):
 class BatchPlanItem(ContractModel):
     """Public projection of one immutable child plan in execution order."""
 
-    index: Annotated[int, Field(ge=0, lt=MAX_BATCH_ITEMS)]
+    index: Annotated[int, Field(ge=0)]
     item_id: Annotated[
         str,
-        Field(min_length=1, max_length=128, pattern=r"^item-[0-9]{4}-[0-9a-f]{12}$"),
+        Field(min_length=1, max_length=128, pattern=r"^item-[0-9]+-[0-9a-f]{12}$"),
     ]
     workflow: BatchWorkflow
     plan_id: PlanId
@@ -88,7 +86,7 @@ class BatchPlanItem(ContractModel):
     calibration_id: CalibrationId | None = None
     calibration_digest: Sha256Hex | None = None
     output_format: Annotated[str, Field(min_length=1, max_length=32)]
-    estimated_frames: Annotated[int, Field(ge=1, le=MAX_BATCH_TOTAL_FRAMES)]
+    estimated_frames: Annotated[int, Field(ge=1)]
     job_spec_sha256: Sha256Hex
 
     @model_validator(mode="after")
@@ -123,7 +121,7 @@ class BatchPlan(ContractModel):
     expires_at: AwareDatetime | None = None
     workflow: BatchWorkflow
     run_mode: Literal["smoke", "full"]
-    items: Annotated[list[BatchPlanItem], Field(min_length=1, max_length=MAX_BATCH_ITEMS)]
+    items: Annotated[list[BatchPlanItem], Field(min_length=1)]
     target_robot_id: Annotated[str, Field(min_length=1, max_length=256)]
     target_robot_asset_id: AssetId
     target_robot_digest: Sha256Hex
@@ -215,7 +213,7 @@ class BatchPreflightResponse(ContractModel):
 
 
 class BatchReportItem(ContractModel):
-    index: Annotated[int, Field(ge=0, lt=MAX_BATCH_ITEMS)]
+    index: Annotated[int, Field(ge=0)]
     item_id: Annotated[str, Field(min_length=1, max_length=128)]
     plan_id: PlanId
     input_asset_id: AssetId
@@ -241,11 +239,11 @@ class BatchReport(ContractModel):
     job_id: Annotated[str, Field(min_length=1, max_length=256)]
     workflow: BatchWorkflow
     outcome: JobOutcome
-    total_items: Annotated[int, Field(ge=1, le=MAX_BATCH_ITEMS)]
-    completed_items: Annotated[int, Field(ge=0, le=MAX_BATCH_ITEMS)]
-    succeeded_items: Annotated[int, Field(ge=0, le=MAX_BATCH_ITEMS)]
-    failed_items: Annotated[int, Field(ge=0, le=MAX_BATCH_ITEMS)]
-    items: Annotated[list[BatchReportItem], Field(min_length=1, max_length=MAX_BATCH_ITEMS)]
+    total_items: Annotated[int, Field(ge=1)]
+    completed_items: Annotated[int, Field(ge=0)]
+    succeeded_items: Annotated[int, Field(ge=0)]
+    failed_items: Annotated[int, Field(ge=0)]
+    items: Annotated[list[BatchReportItem], Field(min_length=1)]
 
     @model_validator(mode="after")
     def validate_counts(self) -> BatchReport:
@@ -267,6 +265,6 @@ __all__ = [
     "BatchReportItem",
     "BatchResourceLimits",
     "BatchWorkflow",
-    "MAX_BATCH_ITEMS",
-    "MAX_BATCH_TOTAL_FRAMES",
+    "DEFAULT_MAX_BATCH_ITEMS",
+    "DEFAULT_MAX_BATCH_TOTAL_FRAMES",
 ]

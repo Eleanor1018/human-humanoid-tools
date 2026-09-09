@@ -23,6 +23,7 @@ from hhtools.contracts import (
     PreflightStatus,
     SchedulerCapability,
 )
+from hhtools.services.batch_limits import BatchLimitSnapshot
 from hhtools.services.batch_preflight import BatchPreflightService
 from hhtools.services.batch_retarget import BatchRetargetService
 from hhtools.services.plans import PlanStore, PlanStoreError
@@ -38,21 +39,27 @@ def _spec(
     frames: int | None = 10,
     run_mode: str = "smoke",
 ) -> JobSpecV2:
+    def digest(value: str) -> str:
+        return value if len(value) == 64 else value * 64
+
     input_marker = input_marker or marker
+    plan_digest = digest(marker)
+    input_digest = digest(input_marker)
+    target_digest = digest(target_marker)
     r2r = workflow is BatchWorkflow.R2R
     return JobSpecV2(
         kind=JobSpecKind.R2R_RETARGET if r2r else JobSpecKind.RETARGET,
-        plan_id=f"plan:sha256:{marker * 64}",
+        plan_id=f"plan:sha256:{plan_digest}",
         inputs=[
             JobSpecInput(
-                asset_id=f"asset:sha256:{input_marker * 64}",
-                sha256=input_marker * 64,
+                asset_id=f"asset:sha256:{input_digest}",
+                sha256=input_digest,
             )
         ],
         robot=JobSpecRobot(
             robot_id="target_bot",
-            asset_id=f"asset:sha256:{target_marker * 64}",
-            config_sha256=target_marker * 64,
+            asset_id=f"asset:sha256:{target_digest}",
+            config_sha256=target_digest,
         ),
         source_robot=(
             JobSpecRobot(
@@ -132,6 +139,7 @@ def _service(
     tmp_path: Path,
     *specs: JobSpecV2,
     frame_counts: dict[str, int] | None = None,
+    batch_limits: BatchLimitSnapshot | None = None,
 ):
     plans = PlanStore(tmp_path / "state")
     children = _ChildSpecs(*specs)
@@ -148,6 +156,7 @@ def _service(
                 mode="limited",
             ),
         ),
+        limits_provider=lambda: batch_limits or BatchLimitSnapshot(),
         request_id_provider=lambda: "req_batch_test",
     )
     return service, plans, children
@@ -179,6 +188,8 @@ def test_batch_preflight_freezes_ordered_child_specs_and_resource_limits(
     assert response.plan.resource_limits.item_count == 2
     assert response.plan.resource_limits.estimated_total_frames == 20
     assert response.plan.resource_limits.execution_concurrency == 1
+    assert response.plan.resource_limits.max_items == 0
+    assert response.plan.resource_limits.max_total_frames == 0
     assert plans.get_payload(response.plan.plan_id)["semantics"] == "hhtools.batch.plan.v1"
 
     projector = BatchRetargetService(
@@ -282,6 +293,7 @@ def test_batch_preflight_rejects_mixed_modes_and_total_frame_overflow(
         full_a,
         full_b,
         frame_counts=frame_counts,
+        batch_limits=BatchLimitSnapshot(max_batch_total_frames=100_000),
     )
 
     mixed = service.preflight_batch(
@@ -301,3 +313,58 @@ def test_batch_preflight_rejects_mixed_modes_and_total_frame_overflow(
     assert mixed.error is not None and mixed.error.code == "BATCH_RUN_MODE_MISMATCH"
     assert oversized.status is PreflightStatus.REJECTED
     assert oversized.error is not None and oversized.error.code == "BATCH_RESOURCE_LIMIT_EXCEEDED"
+
+    unlimited_service, _unlimited_plans, _unlimited_children = _service(
+        tmp_path / "unlimited",
+        full_a,
+        full_b,
+        frame_counts=frame_counts,
+    )
+    unlimited = unlimited_service.preflight_batch(
+        BatchPreflightRequest(
+            workflow="h2r",
+            item_plan_ids=[full_a.plan_id, full_b.plan_id],
+        )
+    )
+    assert unlimited.status is PreflightStatus.READY
+    assert unlimited.plan is not None
+    assert unlimited.plan.resource_limits.max_items == 0
+    assert unlimited.plan.resource_limits.max_total_frames == 0
+    assert unlimited.plan.resource_limits.estimated_total_frames == 120_000
+
+    item_limited_service, _limited_plans, _limited_children = _service(
+        tmp_path / "item-limited",
+        smoke,
+        full_a,
+        frame_counts=frame_counts,
+        batch_limits=BatchLimitSnapshot(max_batch_items=1),
+    )
+    item_limited = item_limited_service.preflight_batch(
+        BatchPreflightRequest(
+            workflow="h2r",
+            item_plan_ids=[smoke.plan_id, full_a.plan_id],
+        )
+    )
+    assert item_limited.status is PreflightStatus.REJECTED
+    assert (
+        item_limited.error is not None
+        and item_limited.error.code == "BATCH_RESOURCE_LIMIT_EXCEEDED"
+    )
+
+
+def test_default_batch_policy_accepts_more_than_the_legacy_item_cap(tmp_path: Path) -> None:
+    specs = tuple(_spec(f"{index:064x}") for index in range(1, 41))
+    service, _plans, _children = _service(tmp_path, *specs)
+
+    response = service.preflight_batch(
+        BatchPreflightRequest(
+            workflow="h2r",
+            item_plan_ids=[spec.plan_id for spec in specs],
+        )
+    )
+
+    assert response.status is PreflightStatus.READY
+    assert response.plan is not None
+    assert response.plan.resource_limits.max_items == 0
+    assert response.plan.resource_limits.item_count == 40
+    assert response.plan.resource_limits.estimated_total_frames == 400

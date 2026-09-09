@@ -86,7 +86,6 @@
           "type": "object"
         },
         "index": {
-          "exclusiveMaximum": 32,
           "minimum": 0,
           "title": "Index",
           "type": "integer"
@@ -271,13 +270,11 @@
   "additionalProperties": false,
   "properties": {
     "completed_items": {
-      "maximum": 32,
       "minimum": 0,
       "title": "Completed Items",
       "type": "integer"
     },
     "failed_items": {
-      "maximum": 32,
       "minimum": 0,
       "title": "Failed Items",
       "type": "integer"
@@ -286,7 +283,6 @@
       "items": {
         "$ref": "#/$defs/BatchReportItem"
       },
-      "maxItems": 32,
       "minItems": 1,
       "title": "Items",
       "type": "array"
@@ -305,13 +301,11 @@
       "default": "1.0"
     },
     "succeeded_items": {
-      "maximum": 32,
       "minimum": 0,
       "title": "Succeeded Items",
       "type": "integer"
     },
     "total_items": {
-      "maximum": 32,
       "minimum": 1,
       "title": "Total Items",
       "type": "integer"

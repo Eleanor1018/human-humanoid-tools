@@ -39,13 +39,11 @@
           "title": "Calibration Id"
         },
         "estimated_frames": {
-          "maximum": 100000,
           "minimum": 1,
           "title": "Estimated Frames",
           "type": "integer"
         },
         "index": {
-          "exclusiveMaximum": 32,
           "minimum": 0,
           "title": "Index",
           "type": "integer"
@@ -65,7 +63,7 @@
         "item_id": {
           "maxLength": 128,
           "minLength": 1,
-          "pattern": "^item-[0-9]{4}-[0-9a-f]{12}$",
+          "pattern": "^item-[0-9]+-[0-9a-f]{12}$",
           "title": "Item Id",
           "type": "string"
         },
@@ -171,10 +169,9 @@
     },
     "BatchResourceLimits": {
       "additionalProperties": false,
-      "description": "Service-owned ceilings frozen into an immutable batch plan.",
+      "description": "Optional service caps frozen into a plan; zero means unlimited.",
       "properties": {
         "estimated_total_frames": {
-          "maximum": 100000,
           "minimum": 1,
           "title": "Estimated Total Frames",
           "type": "integer"
@@ -186,29 +183,25 @@
           "type": "integer"
         },
         "failure_limit": {
-          "default": 32,
-          "maximum": 32,
-          "minimum": 1,
+          "default": 0,
+          "minimum": 0,
           "title": "Failure Limit",
           "type": "integer"
         },
         "item_count": {
-          "maximum": 32,
           "minimum": 1,
           "title": "Item Count",
           "type": "integer"
         },
         "max_items": {
-          "default": 32,
-          "maximum": 32,
-          "minimum": 1,
+          "default": 0,
+          "minimum": 0,
           "title": "Max Items",
           "type": "integer"
         },
         "max_total_frames": {
-          "default": 100000,
-          "maximum": 100000,
-          "minimum": 1,
+          "default": 0,
+          "minimum": 0,
           "title": "Max Total Frames",
           "type": "integer"
         }
@@ -271,7 +264,6 @@
       "items": {
         "$ref": "#/$defs/BatchPlanItem"
       },
-      "maxItems": 32,
       "minItems": 1,
       "title": "Items",
       "type": "array"

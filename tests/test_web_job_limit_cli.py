@@ -19,6 +19,8 @@ def test_web_cli_defers_default_job_settings_to_persistent_backend_config(monkey
     assert result.exit_code == 0, result.output
     assert captured["max_running_jobs"] is None
     assert captured["max_queued_jobs"] is None
+    assert captured["max_batch_items"] is None
+    assert captured["max_batch_total_frames"] is None
 
 
 def test_web_cli_reads_env_and_explicit_options_override_it(monkeypatch) -> None:
@@ -31,12 +33,16 @@ def test_web_cli_reads_env_and_explicit_options_override_it(monkeypatch) -> None
         env={
             "HHTOOLS_MAX_RUNNING_JOBS": "7",
             "HHTOOLS_MAX_QUEUED_JOBS": "24",
+            "HHTOOLS_MAX_BATCH_ITEMS": "5000",
+            "HHTOOLS_MAX_BATCH_TOTAL_FRAMES": "0",
         },
     )
 
     assert result.exit_code == 0, result.output
     assert captured["max_running_jobs"] == 3
     assert captured["max_queued_jobs"] == 24
+    assert captured["max_batch_items"] == 5000
+    assert captured["max_batch_total_frames"] == 0
 
 
 def test_web_cli_reads_packaged_runtime_paths_from_environment(monkeypatch) -> None:
@@ -101,6 +107,8 @@ def test_desktop_sidecar_reads_job_limits_from_environment(
     captured: dict = {}
     monkeypatch.setenv("HHTOOLS_MAX_RUNNING_JOBS", "2")
     monkeypatch.setenv("HHTOOLS_MAX_QUEUED_JOBS", "32")
+    monkeypatch.setenv("HHTOOLS_MAX_BATCH_ITEMS", "0")
+    monkeypatch.setenv("HHTOOLS_MAX_BATCH_TOTAL_FRAMES", "2500000")
     monkeypatch.setattr(
         server,
         "run_desktop_sidecar",
@@ -111,6 +119,8 @@ def test_desktop_sidecar_reads_job_limits_from_environment(
 
     assert captured["max_running_jobs"] == 2
     assert captured["max_queued_jobs"] == 32
+    assert captured["max_batch_items"] == 0
+    assert captured["max_batch_total_frames"] == 2_500_000
 
 
 def test_desktop_sidecar_explicit_limit_overrides_environment(

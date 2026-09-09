@@ -288,6 +288,12 @@ def _read_report[T](
     model: type[T],
 ) -> T:
     descriptor = _find_report(runtime, job_id, kind)
+    if descriptor.size_bytes is not None and descriptor.size_bytes > _REPORT_LIMIT_BYTES:
+        raise _job_error(
+            "REPORT_TOO_LARGE",
+            "The verified report is too large for inline model context; export its artifact.",
+            job_id=job_id,
+        )
     stored = runtime.jobs.get_artifact(job_id, descriptor.artifact_id, verify=False)
     try:
         with stored.path.open("rb") as stream:
@@ -324,7 +330,7 @@ def _read_report[T](
 
 def _server_instructions(web_ui_url: str) -> str:
     return (
-        "For every new H2R, R2R, or bounded batch run: get capabilities, register/search "
+        "For every new H2R, R2R, or batch run: get capabilities, register/search "
         "and inspect assets, "
         "preflight a smoke plan, start only a ready plan, wait by revision, then read "
         "evaluation and manifest for human review. Persist each plan_id plus idempotency "
@@ -510,7 +516,7 @@ def create_mcp_server(
         request: BatchPreflightRequest,
         context: Context[AgentRuntime, Any],
     ) -> BatchPreflightResponse:
-        """Freeze an ordered list of ready H2R or R2R plans into one bounded batch."""
+        """Freeze an ordered list of ready H2R or R2R plans into one batch."""
 
         return _tool_call(lambda: _runtime(context).batch_preflight.preflight_batch(request))
 
@@ -795,7 +801,7 @@ def create_mcp_server(
     @server.resource(
         "hhtools://jobs/{job_id}/batch",
         name="hhtools-job-batch-report",
-        description="Verified bounded per-item result report for one batch job.",
+        description="Verified per-item result report for one batch job.",
         mime_type="application/json",
     )
     async def batch_resource(
@@ -861,6 +867,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--job-settings", type=Path, default=None)
     parser.add_argument("--max-running-jobs", type=int, default=None)
     parser.add_argument("--max-queued-jobs", type=int, default=None)
+    parser.add_argument("--max-batch-items", type=int, default=None)
+    parser.add_argument("--max-batch-total-frames", type=int, default=None)
     parser.add_argument("--web-ui-url", default="http://127.0.0.1:8009")
     return parser
 
@@ -910,7 +918,12 @@ def main(argv: Sequence[str] | None = None) -> None:
     """Console entry point. stdout remains exclusively owned by MCP framing."""
 
     arguments = _parser().parse_args(argv)
-    for name in ("max_running_jobs", "max_queued_jobs"):
+    for name in (
+        "max_running_jobs",
+        "max_queued_jobs",
+        "max_batch_items",
+        "max_batch_total_frames",
+    ):
         value = getattr(arguments, name)
         if value is not None and value < 0:
             _parser().error(f"--{name.replace('_', '-')} must be non-negative")
@@ -920,6 +933,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         cache_dir=arguments.cache,
         max_running_jobs=arguments.max_running_jobs,
         max_queued_jobs=arguments.max_queued_jobs,
+        max_batch_items=arguments.max_batch_items,
+        max_batch_total_frames=arguments.max_batch_total_frames,
         job_settings_path=arguments.job_settings,
         web_ui_url=arguments.web_ui_url,
     )

@@ -23,6 +23,8 @@ def run_web(
     port: int = 8009,
     max_running_jobs: int | None = None,
     max_queued_jobs: int | None = None,
+    max_batch_items: int | None = None,
+    max_batch_total_frames: int | None = None,
     job_settings_path: Path | None = None,
 ) -> None:
     """Launch the uvicorn server (blocking)."""
@@ -32,6 +34,8 @@ def run_web(
     job_settings, resolved_settings_path = effective_job_admission_settings(
         max_running_jobs=max_running_jobs,
         max_queued_jobs=max_queued_jobs,
+        max_batch_items=max_batch_items,
+        max_batch_total_frames=max_batch_total_frames,
         job_settings_path=job_settings_path,
     )
     app = create_app(
@@ -40,6 +44,8 @@ def run_web(
         cache_dir=cache_dir,
         max_running_jobs=job_settings.max_running_jobs,
         max_queued_jobs=job_settings.max_queued_jobs,
+        max_batch_items=job_settings.max_batch_items,
+        max_batch_total_frames=job_settings.max_batch_total_frames,
         job_settings_path=resolved_settings_path,
     )
     url = f"http://{host}:{port}"
@@ -85,6 +91,8 @@ def run_desktop_sidecar(
     session_secret: str,
     max_running_jobs: int | None = None,
     max_queued_jobs: int | None = None,
+    max_batch_items: int | None = None,
+    max_batch_total_frames: int | None = None,
     job_settings_path: Path | None = None,
 ) -> None:
     """Run the secured localhost server without opening a browser."""
@@ -99,6 +107,8 @@ def run_desktop_sidecar(
     job_settings, resolved_settings_path = effective_job_admission_settings(
         max_running_jobs=max_running_jobs,
         max_queued_jobs=max_queued_jobs,
+        max_batch_items=max_batch_items,
+        max_batch_total_frames=max_batch_total_frames,
         job_settings_path=job_settings_path,
     )
     allowed_host = f"{host}:{port}"
@@ -112,6 +122,8 @@ def run_desktop_sidecar(
         desktop_allowed_origin=origin,
         max_running_jobs=job_settings.max_running_jobs,
         max_queued_jobs=job_settings.max_queued_jobs,
+        max_batch_items=job_settings.max_batch_items,
+        max_batch_total_frames=job_settings.max_batch_total_frames,
         job_settings_path=resolved_settings_path,
     )
     _log.info("Starting hhtools desktop sidecar on %s", origin)

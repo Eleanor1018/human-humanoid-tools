@@ -16,8 +16,6 @@ from typing import TYPE_CHECKING, Any
 
 from hhtools._version import __version__
 from hhtools.contracts import (
-    MAX_BATCH_ITEMS,
-    MAX_BATCH_TOTAL_FRAMES,
     AssetCategory,
     BackendCapability,
     CapabilityResponse,
@@ -26,6 +24,8 @@ from hhtools.contracts import (
     SchedulerCapability,
     SchedulerMode,
 )
+
+from .batch_limits import BatchLimitSnapshot
 
 if TYPE_CHECKING:
     from hhtools.robot.base import RobotPreset
@@ -286,7 +286,10 @@ def _robot_capabilities(presets: Iterable[RobotPreset]) -> list[RobotCapability]
     return robots
 
 
-def _backend_capabilities(devices: list[DeviceCapability]) -> list[BackendCapability]:
+def _backend_capabilities(
+    devices: list[DeviceCapability],
+    batch_limits: BatchLimitSnapshot,
+) -> list[BackendCapability]:
     cuda_available = any(device.kind.value == "cuda" and device.available for device in devices)
 
     definitions = (
@@ -316,8 +319,8 @@ def _backend_capabilities(devices: list[DeviceCapability]) -> list[BackendCapabi
                 "max_retarget_fps": 1_000.0,
                 "max_retarget_frames": 100_000,
                 "max_human_height": 10.0,
-                "max_batch_items": MAX_BATCH_ITEMS,
-                "max_batch_total_frames": MAX_BATCH_TOTAL_FRAMES,
+                "max_batch_items": batch_limits.max_batch_items,
+                "max_batch_total_frames": batch_limits.max_batch_total_frames,
             },
         ),
         (
@@ -336,8 +339,8 @@ def _backend_capabilities(devices: list[DeviceCapability]) -> list[BackendCapabi
                 "max_retarget_fps": 1_000.0,
                 "max_retarget_frames": 100_000,
                 "max_human_height": 10.0,
-                "max_batch_items": MAX_BATCH_ITEMS,
-                "max_batch_total_frames": MAX_BATCH_TOTAL_FRAMES,
+                "max_batch_items": batch_limits.max_batch_items,
+                "max_batch_total_frames": batch_limits.max_batch_total_frames,
             },
         ),
     )
@@ -373,6 +376,7 @@ class CapabilitiesService:
         robot_provider: Callable[[], Iterable[RobotPreset]] | None = None,
         device_probe: Callable[[], list[DeviceCapability]] = _detect_devices,
         asset_root_provider: Callable[[], Iterable[str]] | None = None,
+        batch_limits_provider: Callable[[], BatchLimitSnapshot] = BatchLimitSnapshot,
         available_asset_catalog_available: bool = False,
         preflight_available: bool = False,
         artifact_store_available: bool = False,
@@ -390,6 +394,7 @@ class CapabilitiesService:
         self._robot_provider = robot_provider
         self._device_probe = device_probe
         self._asset_root_provider = asset_root_provider
+        self._batch_limits_provider = batch_limits_provider
         self._available_asset_catalog_available = bool(available_asset_catalog_available)
         self._preflight_available = bool(preflight_available)
         self._artifact_store_available = bool(artifact_store_available)
@@ -414,7 +419,7 @@ class CapabilitiesService:
         )
         return CapabilityResponse(
             service_version=__version__,
-            backends=_backend_capabilities(devices),
+            backends=_backend_capabilities(devices, self._batch_limits_provider()),
             devices=devices,
             robots=_robot_capabilities(self._robot_provider()),
             scheduler=_scheduler_capability(snapshot),

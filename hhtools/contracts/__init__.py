@@ -22,8 +22,8 @@ from .assets import (
     InspectionStatus,
 )
 from .batch import (
-    MAX_BATCH_ITEMS,
-    MAX_BATCH_TOTAL_FRAMES,
+    DEFAULT_MAX_BATCH_ITEMS,
+    DEFAULT_MAX_BATCH_TOTAL_FRAMES,
     BatchPlan,
     BatchPlanItem,
     BatchPreflightRequest,
@@ -179,8 +179,8 @@ __all__ = [
     "LegacyJobUpgradeRequest",
     "LegacyJobUpgradeResponse",
     "LegacyMigrationReceipt",
-    "MAX_BATCH_ITEMS",
-    "MAX_BATCH_TOTAL_FRAMES",
+    "DEFAULT_MAX_BATCH_ITEMS",
+    "DEFAULT_MAX_BATCH_TOTAL_FRAMES",
     "NextAction",
     "OutputPolicy",
     "PreflightCheck",

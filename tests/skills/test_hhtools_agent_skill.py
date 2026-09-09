@@ -197,7 +197,7 @@ def test_workflow_invariants_preserve_transport_and_execution_boundaries() -> No
         "ALLOWLISTED_ASSETS",
         "H2R_BACKEND_ROUTING",
         "R2R_INITIAL_SCOPE",
-        "BOUNDED_BATCH",
+        "SCALABLE_BATCH",
         "PREFLIGHT_OWNS_MODE",
         "OUTPUT_CREATE_NEW",
         "IDEMPOTENT_START",
@@ -226,13 +226,13 @@ def test_workflow_invariants_preserve_transport_and_execution_boundaries() -> No
         for term in ("scene-free", "source identity", "source robot")
     )
     assert all(
-        term in normalized["BOUNDED_BATCH"]
+        term in normalized["SCALABLE_BATCH"]
         for term in (
             "ordered ready child plans",
             "one workflow",
             "run mode",
-            "32 items",
-            "100,000 estimated frames",
+            "administrator caps",
+            "0 for unlimited",
             "whole-batch",
         )
     )

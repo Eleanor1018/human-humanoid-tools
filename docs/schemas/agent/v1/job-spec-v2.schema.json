@@ -298,7 +298,6 @@
           "items": {
             "$ref": "#/$defs/JobSpecBatchItem"
           },
-          "maxItems": 32,
           "type": "array"
         },
         {

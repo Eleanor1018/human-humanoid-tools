@@ -1,4 +1,4 @@
-"""Compose ready single-item plans into one bounded immutable batch plan."""
+"""Compose ready single-item plans into one scalable immutable batch plan."""
 
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 
 from hhtools.contracts import (
-    MAX_BATCH_TOTAL_FRAMES,
     AssetInspectionRequest,
     BatchPlan,
     BatchPlanItem,
@@ -30,6 +29,7 @@ from hhtools.contracts import (
 
 from .asset_service import AgentAssetService
 from .assets import AssetServiceError
+from .batch_limits import BatchLimitSnapshot
 from .plans import PlanStore, PlanStoreError, compute_plan_id
 from .preflight import _check, _fail, _PreflightFailureError, _scheduler_check
 from .retarget import RetargetServiceError
@@ -77,7 +77,7 @@ def _child_failure(
 
 
 class BatchPreflightService:
-    """Freeze ordered, already-ready H2R or R2R plans under fixed limits."""
+    """Freeze ordered ready H2R or R2R plans under the current optional policy."""
 
     def __init__(
         self,
@@ -86,6 +86,7 @@ class BatchPreflightService:
         child_specs,
         *,
         capabilities_provider: Callable[[], CapabilityResponse],
+        limits_provider: Callable[[], BatchLimitSnapshot] = BatchLimitSnapshot,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         request_id_provider: Callable[[], str] = lambda: f"req_{uuid.uuid4().hex}",
     ) -> None:
@@ -93,6 +94,7 @@ class BatchPreflightService:
         self._asset_service = asset_service
         self._child_specs = child_specs
         self._capabilities_provider = capabilities_provider
+        self._limits_provider = limits_provider
         self._clock = clock
         self._request_id_provider = request_id_provider
 
@@ -149,6 +151,16 @@ class BatchPreflightService:
                     "UNSUPPORTED_OUTPUT_POLICY",
                     "Managed Agent batches support only create_new output policy.",
                     details={"output_policy": request.output_policy.value},
+                )
+            configured_limits = self._limits_provider()
+            if (
+                configured_limits.max_batch_items
+                and len(request.item_plan_ids) > configured_limits.max_batch_items
+            ):
+                _fail(
+                    "BATCH_RESOURCE_LIMIT_EXCEEDED",
+                    "The batch item count exceeds the configured service limit.",
+                    details={"max_batch_items": configured_limits.max_batch_items},
                 )
             expected_kind = (
                 JobSpecKind.RETARGET
@@ -233,12 +245,17 @@ class BatchPreflightService:
                 seen_inputs.add(child_input.asset_id)
                 estimated_frames = self._estimated_frames(spec, index=index)
                 total_frames += estimated_frames
-                if total_frames > MAX_BATCH_TOTAL_FRAMES:
+                if (
+                    configured_limits.max_batch_total_frames
+                    and total_frames > configured_limits.max_batch_total_frames
+                ):
                     _fail(
                         "BATCH_RESOURCE_LIMIT_EXCEEDED",
-                        "The batch frame estimate exceeds the service limit.",
+                        "The batch frame estimate exceeds the configured service limit.",
                         details={
-                            "max_total_frames": MAX_BATCH_TOTAL_FRAMES,
+                            "max_batch_total_frames": (
+                                configured_limits.max_batch_total_frames
+                            ),
                             "item_index": index,
                         },
                     )
@@ -247,7 +264,7 @@ class BatchPreflightService:
                 items.append(
                     BatchPlanItem(
                         index=index,
-                        item_id=f"item-{index:04d}-{item_digest}",
+                        item_id=f"item-{index:08d}-{item_digest}",
                         workflow=request.workflow,
                         plan_id=spec.plan_id,
                         input_asset_id=child_input.asset_id,
@@ -282,8 +299,11 @@ class BatchPreflightService:
             assert target_robot is not None
             assert run_mode is not None
             limits = BatchResourceLimits(
+                max_items=configured_limits.max_batch_items,
+                max_total_frames=configured_limits.max_batch_total_frames,
                 item_count=len(items),
                 estimated_total_frames=total_frames,
+                failure_limit=configured_limits.max_batch_items,
             )
             checks.append(
                 _check(
@@ -299,9 +319,9 @@ class BatchPreflightService:
             )
             checks.append(
                 _check(
-                    "BATCH_RESOURCES_BOUNDED",
+                    "BATCH_RESOURCE_POLICY_ACCEPTED",
                     PreflightCheckLevel.PASS,
-                    "The ordered batch fits the fixed item and frame ceilings.",
+                    "The ordered batch satisfies the configured item and frame policy.",
                     details=limits.model_dump(mode="json"),
                 )
             )

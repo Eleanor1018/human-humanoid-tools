@@ -657,7 +657,7 @@ def preflight_batch(
     request: Request,
     preflight: BatchPreflightRequest,
 ) -> BatchPreflightResponse:
-    """Freeze an ordered list of ready child plans into one bounded batch."""
+    """Freeze an ordered list of ready child plans into one batch."""
 
     return _batch_preflight_service(request).preflight_batch(preflight)
 

@@ -38,6 +38,8 @@ def assemble_agent_services(
     agent_mcp_available: bool,
     agent_rest_available: bool,
     agent_json_cli_available: bool,
+    max_batch_items: int,
+    max_batch_total_frames: int,
 ) -> SimpleNamespace:
     services = SimpleNamespace()
 
@@ -81,6 +83,7 @@ def assemble_agent_services(
         AvailableAssetCatalogLimitError,
         AvailableAssetCatalogService,
         AvailableAssetProvider,
+        BatchLimitPolicy,
         BatchPreflightService,
         BatchRetargetService,
         CapabilitiesService,
@@ -100,6 +103,11 @@ def assemble_agent_services(
         is_catalog_motion_sidecar,
         iter_bounded_catalog_files,
         require_bounded_catalog_root,
+    )
+
+    services.agent_batch_limit_policy = BatchLimitPolicy(
+        max_batch_items=max_batch_items,
+        max_batch_total_frames=max_batch_total_frames,
     )
 
     agent_motion_roots: dict[str, Path | Callable[[], Path]] = {
@@ -891,6 +899,7 @@ def assemble_agent_services(
         mcp_available=agent_mcp_available,
         agent_rest_available=agent_rest_available,
         json_cli_available=agent_json_cli_available,
+        batch_limits_provider=services.agent_batch_limit_policy.snapshot,
     )
     services.agent_preflight_service = PreflightService(
         services.agent_asset_service,
@@ -909,6 +918,7 @@ def assemble_agent_services(
         services.agent_asset_service,
         services.agent_single_retarget_service,
         capabilities_provider=services.agent_capabilities_service.get_capabilities,
+        limits_provider=services.agent_batch_limit_policy.snapshot,
     )
     # Phase 4's REST/JSON-CLI adapters call this exact transport-neutral
     # service instance; they do not reimplement path migration or construct

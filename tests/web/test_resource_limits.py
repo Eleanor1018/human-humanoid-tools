@@ -208,21 +208,34 @@ def test_job_admission_settings_patch_applies_without_restart_and_persists(
         before = client.get("/api/settings/job-admission")
         response = client.patch(
             "/api/settings/job-admission",
-            json={"max_running_jobs": 2, "max_queued_jobs": 32},
+            json={
+                "max_running_jobs": 2,
+                "max_queued_jobs": 32,
+                "max_batch_items": 500,
+                "max_batch_total_frames": 0,
+            },
         )
         health = client.get("/api/health")
 
     assert before.status_code == 200
     assert before.json()["max_running_jobs"] == 0
+    assert before.json()["max_batch_items"] == 0
+    assert before.json()["max_batch_total_frames"] == 0
     assert before.json()["editable"] is True
     assert response.status_code == 200
     assert response.json()["max_running_jobs"] == 2
     assert response.json()["max_queued_jobs"] == 32
+    assert response.json()["max_batch_items"] == 500
+    assert response.json()["max_batch_total_frames"] == 0
     assert health.json()["job_scheduler"]["max_running_jobs"] == 2
     assert id(app.state.job_scheduler) == scheduler_identity
+    assert app.state.agent_batch_limit_policy.snapshot().max_batch_items == 500
+    assert app.state.agent_batch_limit_policy.snapshot().max_batch_total_frames == 0
     assert app.state.job_settings_store.load().as_payload() == {
         "max_running_jobs": 2,
         "max_queued_jobs": 32,
+        "max_batch_items": 500,
+        "max_batch_total_frames": 0,
     }
 
 
@@ -234,6 +247,8 @@ def test_job_admission_settings_patch_applies_without_restart_and_persists(
         {"max_running_jobs": 1.5},
         {"max_running_jobs": True},
         {"max_queued_jobs": "32"},
+        {"max_batch_items": -1},
+        {"max_batch_total_frames": 1.5},
         {"unexpected": 1},
     ],
 )

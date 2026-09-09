@@ -9,6 +9,7 @@ from hhtools.contracts import DeviceCapability, SchedulerMode
 from hhtools.robot import registry as robot_registry
 from hhtools.robot.base import RobotPreset
 from hhtools.services import capabilities as capabilities_module
+from hhtools.services.batch_limits import BatchLimitSnapshot
 from hhtools.services.capabilities import CapabilitiesService
 
 
@@ -82,7 +83,7 @@ def test_capabilities_report_unlimited_defaults_and_backend_specific_dependencie
     assert backends["interaction_mesh"].available is True
     assert backends["interaction_mesh"].limits["requires_cuda"] is False
     assert backends["interaction_mesh"].features["batch"] is True
-    assert backends["interaction_mesh"].limits["max_batch_items"] == 32
+    assert backends["interaction_mesh"].limits["max_batch_items"] == 0
     assert backends["newton"].available is False
     assert "newton, warp" in (backends["newton"].unavailable_reason or "")
     assert backends["newton"].features["cpu_fallback"] is True
@@ -108,6 +109,10 @@ def test_capabilities_normalize_live_scheduler_and_available_gpu_backends(
         robot_provider=lambda: [],
         device_probe=_cuda_devices,
         asset_root_provider=lambda: ["source", "motion-library", "source"],
+        batch_limits_provider=lambda: BatchLimitSnapshot(
+            max_batch_items=250,
+            max_batch_total_frames=2_000_000,
+        ),
     )
 
     response = service.get_capabilities()
@@ -128,6 +133,8 @@ def test_capabilities_normalize_live_scheduler_and_available_gpu_backends(
         "plain_motion",
         "robot_trajectory",
     ]
+    assert newton.limits["max_batch_items"] == 250
+    assert newton.limits["max_batch_total_frames"] == 2_000_000
 
 
 def test_scheduler_reports_effective_unlimited_mode_when_queue_limit_is_ignored() -> None:

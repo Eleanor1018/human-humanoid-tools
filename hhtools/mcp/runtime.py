@@ -31,6 +31,8 @@ class LocalRuntimeConfig:
     cache_dir: Path | None = None
     max_running_jobs: int | None = None
     max_queued_jobs: int | None = None
+    max_batch_items: int | None = None
+    max_batch_total_frames: int | None = None
     job_settings_path: Path | None = None
     web_ui_url: str = "http://127.0.0.1:8009"
     paths: ApplicationPaths | None = None
@@ -104,12 +106,16 @@ async def local_agent_runtime(
         settings, settings_path = effective_job_admission_settings(
             max_running_jobs=config.max_running_jobs,
             max_queued_jobs=config.max_queued_jobs,
+            max_batch_items=config.max_batch_items,
+            max_batch_total_frames=config.max_batch_total_frames,
             job_settings_path=paths.job_settings_path,
         )
         runtime = build_application_runtime(
             replace(paths, job_settings_path=settings_path),
             max_running_jobs=settings.max_running_jobs,
             max_queued_jobs=settings.max_queued_jobs,
+            max_batch_items=settings.max_batch_items,
+            max_batch_total_frames=settings.max_batch_total_frames,
             agent_mcp_available=True,
             agent_rest_available=False,
             agent_json_cli_available=False,

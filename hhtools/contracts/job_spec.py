@@ -103,7 +103,7 @@ class JobSpecV2(ContractModel):
     robot: JobSpecRobot
     source_robot: JobSpecRobot | None = None
     calibration: JobSpecCalibration | None = None
-    batch_items: Annotated[list[JobSpecBatchItem] | None, Field(default=None, max_length=32)]
+    batch_items: list[JobSpecBatchItem] | None = None
     backend: Annotated[str, Field(min_length=1, max_length=128)]
     effective_parameters: dict[str, Any] = Field(default_factory=dict)
     output_policy: OutputPolicy

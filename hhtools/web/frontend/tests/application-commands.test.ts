@@ -178,6 +178,8 @@ test("job-admission settings use the typed GET and PATCH contracts", async () =>
       mode: "queued",
       max_running_jobs: 2,
       max_queued_jobs: 16,
+      max_batch_items: 0,
+      max_batch_total_frames: 0,
       running_jobs: 1,
       queued_jobs: 3,
       reserved_jobs: 0,
@@ -189,7 +191,12 @@ test("job-admission settings use the typed GET and PATCH contracts", async () =>
 
   const before = await getJobAdmissionSettings({ fetcher });
   const after = await updateJobAdmissionSettings(
-    { max_running_jobs: 2, max_queued_jobs: 16 },
+    {
+      max_running_jobs: 2,
+      max_queued_jobs: 16,
+      max_batch_items: 0,
+      max_batch_total_frames: 0,
+    },
     { fetcher },
   );
 
@@ -202,5 +209,7 @@ test("job-admission settings use the typed GET and PATCH contracts", async () =>
   assert.deepEqual(JSON.parse(String(calls[1].init?.body)), {
     max_running_jobs: 2,
     max_queued_jobs: 16,
+    max_batch_items: 0,
+    max_batch_total_frames: 0,
   });
 });

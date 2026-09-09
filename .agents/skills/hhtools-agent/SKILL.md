@@ -1,6 +1,6 @@
 ---
 name: hhtools-agent
-description: "Run local HHTools H2R, scene-free R2R, and bounded H2R/R2R batches through the versioned MCP Agent interface: route H2R through Newton or Interaction-Mesh, inspect allowlisted assets, preflight immutable smoke/full plans, pause for calibration, manage jobs, and review verified artifacts. Use for HHTools H2R/R2R/Batch execution, status, cancellation, retry, or result requests. Do not use for UI or solver-code edits, scene-bearing R2R, arbitrary filesystem access, remote service setup, or real-robot deployment."
+description: "Run local HHTools H2R, scene-free R2R, and scalable H2R/R2R batches through the versioned MCP Agent interface: route H2R through Newton or Interaction-Mesh, inspect allowlisted assets, preflight immutable smoke/full plans, pause for calibration, manage jobs, and review verified artifacts. Use for HHTools H2R/R2R/Batch execution, status, cancellation, retry, or result requests. Do not use for UI or solver-code edits, scene-bearing R2R, arbitrary filesystem access, remote service setup, or real-robot deployment."
 ---
 
 # HHTools Agent
@@ -14,7 +14,7 @@ claims.
 - For a new H2R run, follow the smoke-first workflow below.
 - For a new scene-free R2R run, follow the R2R-specific identity checks below, then use the
   same job and artifact lifecycle.
-- For a new H2R or scene-free R2R batch, preflight every item first, then follow the bounded
+- For a new H2R or scene-free R2R batch, preflight every item first, then follow the scalable
   batch workflow below.
 - For an asset-only request, discover or register the asset, inspect it, and report the
   structured inspection without starting a job.
@@ -107,14 +107,15 @@ token.
 5. Submit a ready plan with `start_job`; then follow H2R steps 6–9 for revision-aware waiting,
    artifact verification, human quality review, and a separately approved full plan.
 
-## Run a bounded H2R or R2R batch
+## Run an H2R or R2R batch
 
 1. Create a ready smoke child plan for every requested item with `preflight_retarget` or
    `preflight_r2r`. Keep the user's order. Every child must use a unique input, the same workflow,
    the same run mode, and the same target robot; R2R children must also use the same source robot.
 2. Call `preflight_batch` with `schema_version: "1.0"`, `workflow: h2r` or `r2r`, the ordered
    `item_plan_ids`, and `output_policy: create_new`. Do not pass asset paths or rebuild child
-   identities. The service limit is 32 items and 100,000 estimated frames, executed serially.
+   identities. Batch item/frame caps are administrator settings where `0` means unlimited; the
+   default is unlimited. Items execute serially within the job.
 3. Start only a `ready` batch plan with `start_job`. During `wait_job`, report
    `completed_items / total_items`; never expect an unbounded per-item array in job status.
 4. Cancellation is cooperative for the current child and prevents every not-yet-started child.
@@ -145,7 +146,7 @@ not validate against the live tool schema, stop and present the contract error.
 | `ALLOWLISTED_ASSETS` | Asset registration accepts only a capability-advertised `root_id` plus normalized `relative_path`, never an arbitrary or absolute path. |
 | `H2R_BACKEND_ROUTING` | Use `newton` only for inspected `plain_motion`; use `interaction_mesh` only for inspected object interaction or terrain scenes, and never bypass isolated content validation. |
 | `R2R_INITIAL_SCOPE` | R2R accepts only semantically inspected, scene-free robot trajectories whose declared source identity matches the selected source robot. |
-| `BOUNDED_BATCH` | Batch accepts only ordered ready child plans from one workflow and run mode, with common robot identities, unique inputs, at most 32 items and 100,000 estimated frames; retry remains whole-batch. |
+| `SCALABLE_BATCH` | Batch accepts only ordered ready child plans from one workflow and run mode, with common robot identities and unique inputs; optional administrator caps use 0 for unlimited, while retry remains whole-batch. |
 | `PREFLIGHT_OWNS_MODE` | `run_mode` belongs in preflight `request.parameters`; `start_job` accepts only `plan_id` and `idempotency_key`. |
 | `OUTPUT_CREATE_NEW` | Use `output_policy: create_new`; other output policies are unsupported in the current Agent service. |
 | `IDEMPOTENT_START` | Persist the exact plan and idempotency key, recover with `lookup_job`, and replay an ambiguous start only with that same plan and idempotency key; never create a second key for the same logical submission. |

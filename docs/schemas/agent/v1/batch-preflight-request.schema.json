@@ -27,7 +27,7 @@
     }
   },
   "additionalProperties": false,
-  "description": "Ordered ready single-item plans to freeze into one bounded batch.",
+  "description": "Ordered ready single-item plans to freeze into one batch.",
   "properties": {
     "item_plan_ids": {
       "items": {
@@ -35,7 +35,6 @@
         "pattern": "^plan:sha256:[0-9a-f]{64}$",
         "type": "string"
       },
-      "maxItems": 32,
       "minItems": 1,
       "title": "Item Plan Ids",
       "type": "array"

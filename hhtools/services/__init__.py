@@ -25,6 +25,7 @@ from .available_assets import (
     iter_bounded_catalog_files,
     require_bounded_catalog_root,
 )
+from .batch_limits import BatchLimitPolicy, BatchLimitSnapshot
 from .batch_preflight import BatchPreflightService
 from .batch_retarget import BatchRetargetService, ExecutionPlanService
 from .capabilities import CapabilitiesService
@@ -68,6 +69,8 @@ __all__ = [
     "AvailableAssetCatalogService",
     "AvailableAssetProvider",
     "BatchPreflightService",
+    "BatchLimitPolicy",
+    "BatchLimitSnapshot",
     "BatchRetargetService",
     "CapabilitiesService",
     "JobCancelledError",

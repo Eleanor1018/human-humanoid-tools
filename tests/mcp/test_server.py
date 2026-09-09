@@ -701,7 +701,7 @@ async def test_mcp_tool_schemas_are_generated_from_public_pydantic_contracts() -
 
     batch = _tool_by_name(tools, "preflight_batch")
     batch_request = batch.input_schema["$defs"]["BatchPreflightRequest"]
-    assert batch_request["properties"]["item_plan_ids"]["maxItems"] == 32
+    assert "maxItems" not in batch_request["properties"]["item_plan_ids"]
     assert batch_request["additionalProperties"] is False
 
     capabilities = _tool_by_name(tools, "get_capabilities")
@@ -975,6 +975,40 @@ async def test_report_hash_covers_the_exact_payload_returned(tmp_path: Path) -> 
     # second pass that a concurrent writer could swap underneath it.
     assert mutating_path.seek_calls == 0
     assert report_file.read_bytes() == original
+
+
+@pytest.mark.anyio
+async def test_oversized_batch_report_remains_exportable_instead_of_looking_corrupt() -> None:
+    fixture = _Fixture()
+    descriptor = ArtifactDescriptor(
+        artifact_id="artifact:batch_report:mcp-test",
+        job_id=_JOB_ID,
+        kind="batch_report",
+        format="json",
+        resource_uri=f"hhtools://jobs/{_JOB_ID}/artifacts/batch-report",
+        media_type="application/json",
+        size_bytes=2 * 1024 * 1024 + 1,
+        sha256=_DIGEST,
+    )
+
+    class _OversizedReportJobs:
+        def get_job(self, _job_id: str) -> Any:
+            return SimpleNamespace(artifact_count=1)
+
+        def list_artifacts(self, _job_id: str, *, offset: int, limit: int) -> list[Any]:
+            return [descriptor][offset : offset + limit]
+
+        def get_artifact(self, *_args: Any, **_kwargs: Any) -> Any:
+            raise AssertionError("oversized reports must not be loaded into model context")
+
+    fixture.replace_jobs(_OversizedReportJobs())
+    async with Client(fixture.server(), raise_exceptions=True) as client:
+        with pytest.raises(MCPError) as raised:
+            await client.read_resource(f"hhtools://jobs/{_JOB_ID}/batch")
+
+    error = json.loads(raised.value.message)
+    assert error["code"] == "REPORT_TOO_LARGE"
+    assert error["stage"] == "artifact"
 
 
 @pytest.mark.anyio

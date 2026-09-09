@@ -1,4 +1,4 @@
-"""Persistent, validated settings for Web-job admission control.
+"""Persistent, validated settings for scheduler and Agent-batch admission.
 
 The renderer is deliberately not the source of truth for these values.  Keeping
 them beside the Python service means every browser connected to one backend sees
@@ -23,10 +23,12 @@ JOB_ADMISSION_SETTINGS_SCHEMA_VERSION = 1
 
 @dataclass(frozen=True)
 class JobAdmissionSettings:
-    """Maximum running and waiting Web jobs; zero means unlimited."""
+    """Optional scheduler and batch caps; zero means unlimited."""
 
     max_running_jobs: int = 0
     max_queued_jobs: int = 0
+    max_batch_items: int = 0
+    max_batch_total_frames: int = 0
 
     def as_payload(self) -> dict[str, int]:
         return asdict(self)
@@ -41,6 +43,8 @@ def _non_negative_integer(value: object, *, name: str) -> int:
 def validate_job_admission_settings(
     max_running_jobs: object,
     max_queued_jobs: object,
+    max_batch_items: object = 0,
+    max_batch_total_frames: object = 0,
 ) -> JobAdmissionSettings:
     """Return a strict settings value or raise a user-facing ``ValueError``."""
 
@@ -53,6 +57,14 @@ def validate_job_admission_settings(
             max_queued_jobs,
             name="max_queued_jobs",
         ),
+        max_batch_items=_non_negative_integer(
+            max_batch_items,
+            name="max_batch_items",
+        ),
+        max_batch_total_frames=_non_negative_integer(
+            max_batch_total_frames,
+            name="max_batch_total_frames",
+        ),
     )
 
 
@@ -64,7 +76,12 @@ def updated_job_admission_settings(
 
     if not isinstance(patch, dict):
         raise ValueError("job admission settings must be a JSON object")
-    allowed = {"max_running_jobs", "max_queued_jobs"}
+    allowed = {
+        "max_running_jobs",
+        "max_queued_jobs",
+        "max_batch_items",
+        "max_batch_total_frames",
+    }
     unknown = sorted(str(key) for key in patch if key not in allowed)
     if unknown:
         raise ValueError(f"unknown job admission setting: {', '.join(unknown)}")
@@ -73,6 +90,8 @@ def updated_job_admission_settings(
     return validate_job_admission_settings(
         patch.get("max_running_jobs", current.max_running_jobs),
         patch.get("max_queued_jobs", current.max_queued_jobs),
+        patch.get("max_batch_items", current.max_batch_items),
+        patch.get("max_batch_total_frames", current.max_batch_total_frames),
     )
 
 
@@ -98,6 +117,8 @@ class JobAdmissionSettingsStore:
                 return validate_job_admission_settings(
                     payload.get("max_running_jobs"),
                     payload.get("max_queued_jobs"),
+                    payload.get("max_batch_items", 0),
+                    payload.get("max_batch_total_frames", 0),
                 )
             except (OSError, ValueError, json.JSONDecodeError):
                 _log.warning(

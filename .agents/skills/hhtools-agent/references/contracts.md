@@ -92,8 +92,9 @@ binary content.
   preflight.
 - Batch takes only ordered ready child plan IDs and returns an immutable
   [batch plan](../../../../docs/schemas/agent/v1/batch-plan.schema.json). Its
-  [batch report](../../../../docs/schemas/agent/v1/batch-report.schema.json) contains the bounded
-  per-item results; routine job status exposes only compact completed/total counts.
+  [batch report](../../../../docs/schemas/agent/v1/batch-report.schema.json) contains the complete
+  per-item results; routine job status exposes only compact completed/total counts. A report too
+  large for inline MCP context remains available as a verified exportable artifact.
 - `run_mode` belongs to the workflow preflight request's `parameters`. It is frozen in the returned
   plan. [Job start](../../../../docs/schemas/agent/v1/job-start-request.schema.json) has no override.
 - Use `output_policy: create_new`. The current PreflightService rejects `overwrite` and

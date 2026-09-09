@@ -1,6 +1,6 @@
 # Agent interfaces
 
-HHTools exposes the same versioned H2R, scene-free R2R, and bounded Batch Agent contracts
+HHTools exposes the same versioned H2R, scene-free R2R, and scalable Batch Agent contracts
 through two local adapters. Use the JSON CLI from scripts and use MCP when a compatible coding
 agent should discover and call tools directly.
 
@@ -11,8 +11,8 @@ agent should discover and call tools directly.
 
 The current Agent surface supports human-to-robot (H2R) retargeting—plain motion through Newton
 and safely inspectable object-interaction or terrain-scene bundles through Interaction-Mesh—and
-scene-free robot-to-robot (R2R) trajectories through Newton, plus ordered H2R/R2R batches of at
-most 32 ready child plans and 100,000 estimated frames. It includes capability and robot
+scene-free robot-to-robot (R2R) trajectories through Newton, plus ordered H2R/R2R batches. It
+includes capability and robot
 discovery, allowlisted asset registration and inspection, workflow-specific preflight, jobs,
 revision-aware waiting, verified artifacts, and export. Scene-bearing R2R, Video2Motion, Analysis,
 remote service access, and robot deployment are not part of this interface. Code-capable
@@ -53,7 +53,10 @@ allowlisted `root_id` and portable `relative_path`, never a host path.
 
 `hhtools-mcp` is a stdio server, so start it through an MCP client rather than
 an interactive terminal. Its available options can be inspected with
-`uv run --extra mcp hhtools-mcp --help`.
+`uv run --extra mcp hhtools-mcp --help`. Batch caps default to `0` (unlimited); server
+administrators may opt into positive `--max-batch-items` and
+`--max-batch-total-frames` values. Web, desktop-sidecar, and MCP startup all load the same
+persisted setting fields unless an explicit CLI or environment value overrides them.
 
 ## Safe H2R, R2R, and Batch workflows
 
@@ -66,11 +69,13 @@ full run. Calibration and final motion quality remain human decisions.
 
 Batch composition happens only after every single item already has a ready H2R or R2R plan.
 Call `preflight_batch` with one workflow and the ordered child `plan_id` list. The service rejects
-mixed run modes, mixed robot identities, duplicate inputs, more than 32 items, or more than
-100,000 estimated frames. Execution is serial so cancellation can stop the current child and
+mixed run modes, mixed robot identities, and duplicate inputs. Batch item/frame settings use
+`0` for unlimited and default to unlimited; positive administrator-selected values become
+content-bound plan limits. Execution is serial so cancellation can stop the current child and
 guarantee later children never start. Job status carries only `completed_items / total_items`;
-the verified `hhtools://jobs/{job_id}/batch` resource contains bounded per-item results, and the
-`batch_archive` artifact provides one portable ZIP. A retry always creates a new whole-batch
+the complete per-item report and portable ZIP are stored as `batch_report` and `batch_archive`
+artifacts. The MCP report resource is intended for model-sized reports; if it exceeds the inline
+context budget, export the verified artifact instead. A retry always creates a new whole-batch
 attempt rather than silently selecting failed items.
 
 Only one local runtime may own a `save-dir`. MCP normally owns its directory

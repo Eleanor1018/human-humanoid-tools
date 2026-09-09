@@ -91,7 +91,6 @@
       "items": {
         "$ref": "#/$defs/FailureItem"
       },
-      "maxItems": 10000,
       "minItems": 1,
       "title": "Failures",
       "type": "array"

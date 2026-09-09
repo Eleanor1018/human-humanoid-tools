@@ -36,6 +36,18 @@ def _parser() -> argparse.ArgumentParser:
         default=os.environ.get("HHTOOLS_MAX_QUEUED_JOBS"),
         help="Waiting jobs under a concurrency cap; 0 means unlimited.",
     )
+    parser.add_argument(
+        "--max-batch-items",
+        type=_non_negative_int,
+        default=os.environ.get("HHTOOLS_MAX_BATCH_ITEMS"),
+        help="Items in one Agent batch; 0 means unlimited.",
+    )
+    parser.add_argument(
+        "--max-batch-total-frames",
+        type=_non_negative_int,
+        default=os.environ.get("HHTOOLS_MAX_BATCH_TOTAL_FRAMES"),
+        help="Estimated frames in one Agent batch; 0 means unlimited.",
+    )
     return parser
 
 
@@ -65,6 +77,8 @@ def main(argv: list[str] | None = None) -> None:
             session_secret=session_secret,
             max_running_jobs=args.max_running_jobs,
             max_queued_jobs=args.max_queued_jobs,
+            max_batch_items=args.max_batch_items,
+            max_batch_total_frames=args.max_batch_total_frames,
         )
     except MissingWebDependenciesError as exc:
         parser.exit(status=1, message=f"{exc}\n")

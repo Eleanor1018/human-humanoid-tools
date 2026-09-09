@@ -18,7 +18,7 @@ Video-to-Motion 和 Analysis 暂不进入本轮实现。
 - [x] 阶段 1：revision-aware `wait_job`（service、REST、MCP、JSON CLI、Agent skill）
 - [x] 阶段 2：H2R Interaction-Mesh 正式验收（terrain 与 object 自包含 E2E）
 - [x] 阶段 3：scene-free R2R（不可变 robot pair identity 与自包含 MCP E2E）
-- [x] 阶段 4：有界 H2R / R2R Batch（共享生命周期与真实双工作流 E2E）
+- [x] 阶段 4：可配置 H2R / R2R Batch（默认不限，共享生命周期与双工作流 E2E）
 - [ ] 阶段 5：标定辅助
 
 ## 设计原则
@@ -151,13 +151,14 @@ JSON CLI 的既有 `--timeout` 表示整个 HTTP 请求超时，因此等待时�
 ## 阶段 4：Batch
 
 - [x] 首版只覆盖 H2R 与 scene-free R2R Batch；
-- [x] `preflight_batch` 冻结有序 child plan、每项 hash、机器人、标定、backend、输出策略和资源上限；
+- [x] `preflight_batch` 冻结有序 child plan、每项 hash、机器人、标定、backend、输出策略和可选资源策略；
 - [x] 明确 `success / partial / review_required / rejected` 聚合语义；
 - [x] JobProgress 提供 `completed_items / total_items`，默认响应不包含无界逐项数组；
 - [x] 完整逐项结果写入 `batch_report`，失败同步进入 failure report，输出汇总为 portable ZIP；
 - [x] 取消停止未启动条目，并在当前 child 的安全边界协作取消；
 - [x] retry 创建新的 whole-batch child attempt，不修改原批任务或隐式选择失败子集；
 - [x] MCP、REST、JSON CLI 与 H2R/R2R 自包含 E2E 完成验收；
+- [x] Batch 条目/总帧设置默认 `0 = 不限`；正数限制可持久化并在运行中热更新；
 - [ ] 人类 CLI 的 `hhtools batch h2r` / `hhtools batch r2r` 留在第 6 个提交统一完成。
 
 ## 阶段 5：标定辅助
@@ -195,7 +196,7 @@ Open
 1. `feat(agent): add revision-aware job waiting`
 2. `test(agent): verify interaction-mesh execution`
 3. `feat(agent): add robot-to-robot workflow`
-4. `feat(agent): add bounded batch workflows`
+4. `feat(agent): add preflighted batch workflows`
 5. `feat(agent): add calibration proposals`
 6. `feat(cli): expose r2r and batch workflows`
 

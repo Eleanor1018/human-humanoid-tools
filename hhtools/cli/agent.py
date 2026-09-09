@@ -247,7 +247,7 @@ _COMMAND_SPECS: dict[tuple[str, ...], _CliCommandSpec] = {
     ),
     ("preflight", "batch"): _CliCommandSpec(
         ("preflight", "batch"),
-        "Freeze ordered ready child plans into one bounded H2R or R2R batch.",
+        "Freeze ordered ready child plans into one H2R or R2R batch.",
         options=(_REQUEST_ARGUMENT,),
     ),
     ("job",): _CliCommandSpec(
