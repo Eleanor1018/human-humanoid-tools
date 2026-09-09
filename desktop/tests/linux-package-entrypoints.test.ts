@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 
@@ -58,6 +59,26 @@ describe('Linux package entry points', () => {
     expect(packageMetadata.build.win.extraResources).toEqual([
       { from: '.runtime', to: 'runtime', filter: ['**/*'] }
     ])
+  })
+
+  it('embeds an explicitly selected fork as the release download source', () => {
+    const result = spawnSync(
+      process.execPath,
+      [join(desktopRoot, 'scripts', 'prepare-bootstrap.mjs')],
+      {
+        cwd: desktopRoot,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          HHTOOLS_DESKTOP_RELEASE_REPOSITORY: 'Eleanor1018/human-humanoid-tools'
+        }
+      }
+    )
+
+    expect(result.status).toBe(0)
+    expect(readFileSync(join(desktopRoot, '.bootstrap', 'install.sh'), 'utf8')).toContain(
+      "embedded_repository='Eleanor1018/human-humanoid-tools'"
+    )
   })
 
   it('migrates only the exact legacy GUI alternative and explains dpkg recovery', () => {

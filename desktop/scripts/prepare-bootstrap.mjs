@@ -18,7 +18,12 @@ const packageJson = JSON.parse(readFileSync(join(desktopRoot, 'package.json'), '
 const repositoryUrl = String(packageJson.repository?.url ?? '')
 const repositoryMatch = repositoryUrl.match(/^https:\/\/github\.com\/([^/]+\/[^/]+?)(?:\.git)?$/)
 if (!repositoryMatch) throw new Error(`unsupported desktop repository URL: ${repositoryUrl}`)
-const repository = repositoryMatch[1]
+const repository = String(
+  process.env.HHTOOLS_DESKTOP_RELEASE_REPOSITORY ?? repositoryMatch[1]
+).trim()
+if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
+  throw new Error(`invalid desktop release repository: ${repository}`)
+}
 const version = String(process.env.HHTOOLS_DESKTOP_RELEASE_VERSION ?? packageJson.version)
 if (!/^[0-9A-Za-z._+-]+$/.test(version)) throw new Error(`invalid desktop version: ${version}`)
 
