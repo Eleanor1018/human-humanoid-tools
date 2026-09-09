@@ -38,7 +38,7 @@ function assertSafeTargets() {
 
 function readVirtualEnvironmentConfiguration() {
   const path = join(repositoryRoot, '.venv', 'pyvenv.cfg')
-  if (!existsSync(path)) fail(`missing ${path}; run uv sync --all-extras --no-dev before packaging`)
+  if (!existsSync(path)) fail(`missing ${path}; run uv sync --extra all --no-dev before packaging`)
   const values = {}
   for (const line of readFileSync(path, 'utf8').split(/\r?\n/)) {
     const match = line.match(/^\s*([^#=]+?)\s*=\s*(.*?)\s*$/)

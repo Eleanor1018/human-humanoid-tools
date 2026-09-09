@@ -42,70 +42,48 @@ hhtools 有三种交互式运行方式，另提供一个 Agent 自动化接口�
 |------|----------|----------|
 | **终端（CLI/TUI 工作流）** | 批处理、服务器、SSH 与自动化 | `uv run hhtools ...` |
 | **WebUI** | 浏览器中的可视化与交互工作流 | `uv run hhtools web` |
-| **桌面 GUI（`.deb`）** | 复用已安装源码环境的桌面壳 | 应用菜单或 `hhtools-desktop` |
+| **桌面 GUI** | Windows 独立应用或 Linux 首次启动安装 | 应用菜单或 `hhtools-desktop` |
 | **Agent（JSON CLI / MCP）** | 带版本契约的 H2R、无场景 R2R 与可扩展 Batch 自动化 | [`hhtools agent` / `hhtools-mcp`](docs/agent.md) |
 
-### Linux 一行安装
+### 推荐：使用 uv 安装源码环境
 
-带 tag 的 Release 会提供 POSIX `sh` 安装器，一次安装完整的 Python、WebUI、
-重映射和 Agent 运行环境：
-
-```bash
-curl --proto '=https' --tlsv1.2 -fsSL \
-  https://github.com/Roboparty/human-humanoid-tools/releases/latest/download/install.sh | sh
-hhtools web
-```
-
-默认安装到当前用户的独立数据目录，不需要 `sudo`。安装器使用锁定的 `all` 依赖集，
-但不会下载 GVHMR、SMPL 系列权重、机器人模型归档或 NVIDIA 驱动。隔离的全套环境当前
-会选择 Python 3.12 或 3.13，因为完整二进制依赖已在这两个版本验证；这不会改变源码包
-支持 Python 3.12+ 的约定。全局安装必须显式执行：
-
-```bash
-curl --proto '=https' --tlsv1.2 -fsSL \
-  https://github.com/Roboparty/human-humanoid-tools/releases/latest/download/install.sh \
-  | sudo sh -s -- --system
-```
-
-原生 Windows 默认没有 `sh`，后续会单独提供 PowerShell 安装器。Git Bash 虽然附带
-Shell，但仍是 Windows 运行环境，因此本 Linux 安装器会拒绝它；WSL 可以正常使用。
-
-### 源码安装：终端或 WebUI
-
-克隆仓库，并使用任意兼容的 Python 3.12 或更高版本。`uv` 会优先选择本机已安装的
-兼容解释器，也可以在缺少解释器时安装一个：
+先按照 [`uv` 官方说明](https://docs.astral.sh/uv/getting-started/installation/)安装 uv，再克隆
+仓库。HHTools 支持 Python 3.12 或更高版本；uv 会选择兼容解释器，也可以在本机缺少时安装一个：
 
 ```bash
 git clone https://github.com/Roboparty/human-humanoid-tools.git
 cd human-humanoid-tools
-curl -LsSf https://astral.sh/uv/install.sh | sh   # 若未安装
-# 本机没有 Python >=3.12 时才需要：
+# 仅在本机没有兼容 Python 时需要：
 uv python install 3.12
 ```
 
-只使用终端命令时：
+需要格式、机器人、重映射、WebUI 与 Agent/MCP 全部功能时，使用项目维护的 `all` extra：
+
+```bash
+uv sync --locked --extra all
+uv run hhtools --help
+uv run hhtools web
+```
+
+浏览器打开 `http://127.0.0.1:8009`。GVHMR 与受单独许可约束的 SMPL 系模型权重仍由用户
+独立准备；`all` 安装的是对应 Python 集成库，不包含这些模型文件。
+
+如果希望环境更小，可以只安装实际工作流。核心终端命令不需要 extra：
 
 ```bash
 uv sync --locked
 uv run hhtools --help
 ```
 
-请按实际工作流安装额外依赖。如果需要全部格式、机器人、重映射、Web 与 Agent 集成，使用：
-
-```bash
-uv sync --locked --extra all
-```
-
-使用浏览器 WebUI 时：
+需要 WebUI 预览和 Newton 重映射时：
 
 ```bash
 uv sync --locked --extra web --extra retarget
 uv run hhtools web
 ```
 
-浏览器打开 `http://127.0.0.1:8009`。如果只需要预览、不使用 Newton IK，可省略
-`--extra retarget`。缺少 WebUI 必需包时，启动程序会列出缺失包及准确的修复命令，不再直接显示
-Python import traceback。
+如果只需要预览，可省略 `--extra retarget`。缺少必需包时，启动程序会列出缺失包及准确的
+修复命令，不再直接显示 Python import traceback。
 
 ### Agent 与 MCP
 
@@ -115,17 +93,19 @@ HHTools 提供供脚本使用的严格 JSON CLI，以及供兼容 Agent 使用�
 尚未覆盖 WebUI 的全部功能。安装方式、能力边界、smoke-first 流程、
 运行时目录所有权和仓库自带的 Codex 项目配置见 [Agent interfaces](docs/agent.md)。
 
-### Ubuntu 桌面 GUI（`.deb`）
+### 桌面 GUI
 
-Debian 包沿用最初 Desktop Alpha 的薄壳方案：只包含 Electron 和本机提供的 SMPL-X Neutral
-模型，复用已有源码 checkout 与 `.venv`，不重复打包 Python、Torch、CUDA 和 Newton：
+Debian 包包含 Electron、精选内置动作与机器人。首次启动页使用同一 deb 内置的 HHTools wheel、
+锁定依赖清单、uv 配置和 uv 二进制安装独立运行环境；推荐的当前用户安装不需要管理员密码，
+所有用户安装则使用操作系统认证窗口：
 
 ```bash
 sudo apt install ./hhtools-0.1.0-amd64.deb
 hhtools-desktop
 ```
 
-安装后的桌面壳需要设置 `HHTOOLS_REPO_ROOT`，必要时再设置 `HHTOOLS_PYTHON`。构建说明见
+Windows 安装程序会直接打包 Python runtime 与应用源码，不需要目标机器另行准备 checkout 或
+系统 Python。两端都不默认打包 GVHMR 和受单独许可约束的 SMPL 系权重。构建说明见
 [`desktop/README.md`](desktop/README.md#desktop-packages)。
 
 ### 前端开发

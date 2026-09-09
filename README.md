@@ -45,50 +45,48 @@ robot, and retargeting core, but their installation and launch paths are intenti
 | **Desktop GUI** | Windows standalone app or Linux first-run setup | Application menu or `hhtools-desktop` |
 | **Agent (JSON CLI / MCP)** | Versioned H2R, scene-free R2R, and scalable Batch automation | [`hhtools agent` / `hhtools-mcp`](docs/agent.md) |
 
-### Planned one-line Linux release install
+### Recommended: source checkout with uv
 
-The POSIX `sh` release installer is reserved for a future tagged release that publishes its wheel,
-dependency lock, uv configuration, and checksums. Until those assets exist, do not direct users to
-an unpublished `releases/latest/download/install.sh` URL; use the source-checkout instructions or
-the Debian desktop package below.
-
-### Source checkout: Terminal or WebUI
-
-Clone the repository and use any compatible Python 3.12 or newer. `uv` will
-select an installed compatible interpreter (and can install one when needed):
+Install [`uv`](https://docs.astral.sh/uv/getting-started/installation/), then clone the repository.
+HHTools supports Python 3.12 or newer; uv selects a compatible interpreter and can install one when
+needed:
 
 ```bash
 git clone https://github.com/Roboparty/human-humanoid-tools.git
 cd human-humanoid-tools
-curl -LsSf https://astral.sh/uv/install.sh | sh   # if needed
-# Optional when no Python >=3.12 is installed:
+# Only needed when no compatible Python is installed:
 uv python install 3.12
 ```
 
-For the terminal command set:
+For the complete HHTools environment—formats, robots, retargeting, WebUI, and Agent/MCP—use the
+project-maintained `all` extra:
+
+```bash
+uv sync --locked --extra all
+uv run hhtools --help
+uv run hhtools web
+```
+
+Open `http://127.0.0.1:8009`. GVHMR and separately licensed SMPL-family model weights remain
+external; the `all` extra installs their Python integration libraries, not those model files.
+
+For a smaller environment, install only the workflow you need. The core terminal commands require
+no extra:
 
 ```bash
 uv sync --locked
 uv run hhtools --help
 ```
 
-Install only the extras required by your workflow. To provision every optional
-format, robot, retargeting, Web, and Agent integration, use:
-
-```bash
-uv sync --locked --extra all
-```
-
-For the browser WebUI:
+For WebUI preview and Newton retargeting:
 
 ```bash
 uv sync --locked --extra web --extra retarget
 uv run hhtools web
 ```
 
-Open `http://127.0.0.1:8009`. For a preview-only WebUI without Newton IK, omit `--extra retarget`.
-If a required WebUI package is absent, startup exits with the missing package names and the exact
-recovery command instead of a Python import traceback.
+For a preview-only WebUI, omit `--extra retarget`. If a required package is absent, startup exits
+with the missing package names and the exact recovery command instead of an import traceback.
 
 ### Agent and MCP
 
