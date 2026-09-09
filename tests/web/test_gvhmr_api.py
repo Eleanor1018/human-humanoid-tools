@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -103,3 +104,60 @@ def test_video_upload_records_official_weights_for_the_job(
         job = app.state.session_state.jobs[response.json()["job_id"]]
         assert job.request["weights"] == "official"
         assert "checkpoint_name" not in job.request
+
+
+def test_completed_video_publishes_only_the_final_motion(
+    tmp_path: Path,
+    monkeypatch,
+    synthetic_terrain_motion,
+) -> None:
+    from hhtools.services import upload_resolve
+
+    library_root = tmp_path / "motion-library"
+    monkeypatch.setenv("HHTOOLS_MOTION_LIBRARY_ROOT", str(library_root))
+    monkeypatch.setattr(gvhmr, "gvhmr_status", lambda: _status(ready=True))
+
+    def fake_run(_video_path: Path, job_root: Path, **_kwargs) -> Path:
+        output = job_root / "output" / "source"
+        preprocess = output / "preprocess"
+        preprocess.mkdir(parents=True)
+        (preprocess / "bbx.pt").write_bytes(b"detector-cache")
+        (preprocess / "vitpose.pt").write_bytes(b"pose-cache")
+        result = output / "hmr4d_results.pt"
+        result.write_bytes(b"motion")
+        return result
+
+    monkeypatch.setattr(gvhmr, "run_gvhmr", fake_run)
+    monkeypatch.setattr(
+        upload_resolve,
+        "load_clip_at_path",
+        lambda *_args, **_kwargs: (synthetic_terrain_motion, "gvhmr"),
+    )
+    app = _create_test_app(tmp_path, monkeypatch)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/video-to-motion/upload",
+            files=[("files", ("clip.mp4", b"video", "video/mp4"))],
+        )
+        assert response.status_code == 200
+        job_id = response.json()["job_id"]
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            job = client.get(f"/api/job/{job_id}").json()
+            if job["status"] in {"done", "error"}:
+                break
+            time.sleep(0.01)
+
+        assert job["status"] == "done", job.get("error")
+        entries = [
+            entry
+            for entry in client.get("/api/library").json()["entries"]
+            if entry.get("folder_label") == "gvhmr-clip"
+        ]
+
+    assert [path.name for path in (library_root / "gvhmr-clip").iterdir()] == [
+        "hmr4d_results.pt"
+    ]
+    assert len(entries) == 1
+    assert entries[0]["sequence_id"] == "hmr4d_results.pt"

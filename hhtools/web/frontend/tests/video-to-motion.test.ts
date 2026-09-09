@@ -24,6 +24,7 @@ const {
   startVideoToMotion,
   summarizeMotionResult,
   toStageMotionPayload,
+  visibleGvhmrFailure,
   visibleGvhmrMissing,
   waitForVideoToMotion,
 } = await import("../src/features/video-to-motion/api.ts");
@@ -141,6 +142,25 @@ test("replaces only the path-heavy SMPL-X missing detail", () => {
       missing: ["another runtime problem"],
     }),
     ["another runtime problem"],
+  );
+});
+
+test("keeps GVHMR tracebacks in Tasks and returns a concise workflow error", () => {
+  const translate = (english: string) => english;
+  const visible = visibleGvhmrFailure(
+    new Error(
+      "GVHMR local runtime exited with code 1.\nTraceback (most recent call last):\n" +
+        "ModuleNotFoundError: No module named 'hydra'",
+    ),
+    translate,
+  );
+
+  assert.match(visible, /missing “hydra”/);
+  assert.match(visible, /Technical details remain in Tasks/);
+  assert.doesNotMatch(visible, /Traceback|ModuleNotFoundError/);
+  assert.equal(
+    visibleGvhmrFailure(new Error("Upload rejected."), translate),
+    "Upload rejected.",
   );
 });
 

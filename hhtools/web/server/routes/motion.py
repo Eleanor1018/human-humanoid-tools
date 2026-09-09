@@ -320,7 +320,7 @@ def register_motion_routes(
         """Convert one uploaded video with the isolated official GVHMR runtime."""
 
         from hhtools.integrations.gvhmr import GvhmrConfig, run_gvhmr
-        from hhtools.services.motion_library_links import materialize_drop
+        from hhtools.services.motion_library_links import materialize_upload_tree
         from hhtools.services.motion_progress import MotionLoadProgress
         from hhtools.services.upload_resolve import load_clip_at_path
 
@@ -359,7 +359,6 @@ def register_motion_routes(
                 progress=load_progress,
             )
 
-            relative_result = result_path.resolve().relative_to(drop.resolve())
             folder_label_hint = _safe_upload_directory_name(
                 f"gvhmr-{video_path.stem}",
                 default=f"gvhmr-{job.id}",
@@ -367,17 +366,20 @@ def register_motion_routes(
             job.progress = 0.87
             job.message = "正在发布到 Motion Library…"
             with motion_library_publish_lock:
-                lib_dir, folder_label, materialize_mode = materialize_drop(
-                    [relative_result.as_posix()],
-                    folder_label=folder_label_hint,
-                    upload_drop=drop,
+                # Publish only the reusable trajectory. GVHMR's output tree also
+                # contains detector/pose feature ``.pt`` files which the generic
+                # scanner would otherwise misclassify as independent motions.
+                publication_drop = drop / ".hhtools-motion-publication"
+                publication_drop.mkdir(parents=True, exist_ok=False)
+                publication_result = publication_drop / result_path.name
+                shutil.copy2(result_path, publication_result)
+                lib_dir = materialize_upload_tree(
+                    publication_drop,
+                    folder_label_hint,
                 )
-                library_picked = _matching_materialized_clip(
-                    lib_dir,
-                    snapshot_root=drop,
-                    snapshot_picked=result_path,
-                    profile="mimic",
-                )
+                folder_label = lib_dir.name
+                materialize_mode = "copy"
+                library_picked = lib_dir / result_path.name
                 library_entry = _library_entry_from_link(
                     folder_label,
                     lib_dir,

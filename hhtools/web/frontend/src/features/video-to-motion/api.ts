@@ -122,6 +122,30 @@ type Fetcher = (
   init?: RequestInit,
 ) => Promise<Response>;
 
+type LocaleText = (english: string, chinese: string) => string;
+
+/** Keep technical tracebacks in Tasks while presenting an actionable workflow error. */
+export function visibleGvhmrFailure(
+  error: unknown,
+  text: LocaleText,
+): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  const missingModule = raw.match(/ModuleNotFoundError:\s+No module named ['"]([^'"]+)['"]/);
+  if (missingModule) {
+    return text(
+      `The configured GVHMR Python environment is missing “${missingModule[1]}”. Reopen Set up and choose or repair the GVHMR environment. Technical details remain in Tasks.`,
+      `所选 GVHMR Python 环境缺少“${missingModule[1]}”。请重新打开“配置”，选择或修复 GVHMR 环境；技术详情保留在任务列表中。`,
+    );
+  }
+  if (/Traceback \(most recent call last\):|runtime exited with code/i.test(raw)) {
+    return text(
+      "The GVHMR runtime failed. Recheck its Python environment and optional component setup. Technical details remain in Tasks.",
+      "GVHMR 运行失败。请重新检查其 Python 环境与可选组件配置；技术详情保留在任务列表中。",
+    );
+  }
+  return raw;
+}
+
 function finiteNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }

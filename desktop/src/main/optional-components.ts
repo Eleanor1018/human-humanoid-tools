@@ -18,6 +18,7 @@ interface OptionalComponentConfiguration {
     requested?: boolean
     root?: string
     python?: string
+    bodyModels?: string
   }
 }
 
@@ -66,11 +67,20 @@ export class OptionalComponentStore {
     const configuredRoot = this.configuration.gvhmr?.root
     const environmentRoot = env.HHTOOLS_GVHMR_ROOT
     const conventionalRoot = this.platform === 'win32' ? 'C:\\GVHMR' : join(env.HOME ?? '', 'GVHMR')
-    const root = [environmentRoot, configuredRoot, conventionalRoot]
+    const resolvedEnvironmentRoot = environmentRoot ? resolve(environmentRoot) : undefined
+    const root = [resolvedEnvironmentRoot, configuredRoot, conventionalRoot]
       .filter((candidate): candidate is string => Boolean(candidate))
       .map((candidate) => resolve(candidate))
       .find(isGvhmrCheckout)
-    const python = this.resolveGvhmrPython(root, env)
+    const environmentRootSelected = root !== undefined && root === resolvedEnvironmentRoot
+    const python = this.resolveGvhmrPython(root, env, !environmentRootSelected)
+    const bodyModels = root
+      ? resolve(
+          env.HHTOOLS_GVHMR_BODY_MODELS
+            ?? (environmentRootSelected ? undefined : this.configuration.gvhmr?.bodyModels)
+            ?? join(root, 'inputs', 'checkpoints', 'body_models')
+        )
+      : undefined
     const runtime = this.platform === 'linux' ? 'local' : 'docker'
 
     return {
@@ -79,6 +89,7 @@ export class OptionalComponentStore {
         configured: root !== undefined && (runtime === 'docker' || python !== undefined),
         root,
         python,
+        bodyModels,
         runtime,
         guideUrl: GVHMR_GUIDE_URL,
         estimatedAdditionalBytes: GVHMR_ESTIMATED_ADDITIONAL_BYTES,
@@ -95,25 +106,38 @@ export class OptionalComponentStore {
     if (state.python && env.HHTOOLS_GVHMR_PYTHON === undefined) {
       result.HHTOOLS_GVHMR_PYTHON = state.python
     }
+    if (state.bodyModels && env.HHTOOLS_GVHMR_BODY_MODELS === undefined) {
+      result.HHTOOLS_GVHMR_BODY_MODELS = state.bodyModels
+    }
     return result
   }
 
-  configureGvhmr(root: string, python?: string): GvhmrOptionalComponentState {
+  configureGvhmr(
+    root: string,
+    python?: string,
+    bodyModels?: string
+  ): GvhmrOptionalComponentState {
     const resolved = resolve(root)
     if (!isGvhmrCheckout(resolved)) {
       throw new Error(`This folder is not an official GVHMR checkout: ${resolved}`)
     }
-    const resolvedPython = python ? resolve(python) : this.resolveGvhmrPython(resolved, {})
+    const resolvedPython = python
+      ? resolve(python)
+      : this.resolveGvhmrPython(resolved, {}, false)
     if (this.platform === 'linux' && !resolvedPython) {
       throw new Error('Choose the Python executable from the installed GVHMR environment')
     }
     if (resolvedPython && !existsSync(resolvedPython)) {
       throw new Error(`The GVHMR Python executable does not exist: ${resolvedPython}`)
     }
+    const resolvedBodyModels = resolve(
+      bodyModels ?? join(resolved, 'inputs', 'checkpoints', 'body_models')
+    )
     this.configuration.gvhmr = {
       requested: false,
       root: resolved,
       ...(resolvedPython ? { python: resolvedPython } : {}),
+      bodyModels: resolvedBodyModels,
     }
     this.save()
     return this.getState().gvhmr
@@ -122,12 +146,13 @@ export class OptionalComponentStore {
   private resolveGvhmrPython(
     root: string | undefined,
     env: NodeJS.ProcessEnv,
+    usePersisted = true,
   ): string | undefined {
     if (this.platform !== 'linux') return undefined
     const home = env.HOME
     const candidates = [
       env.HHTOOLS_GVHMR_PYTHON,
-      this.configuration.gvhmr?.python,
+      usePersisted ? this.configuration.gvhmr?.python : undefined,
       root ? join(root, '.venv', 'bin', 'python') : undefined,
       root ? join(root, 'venv', 'bin', 'python') : undefined,
       home ? join(home, '.conda', 'envs', 'gvhmr', 'bin', 'python') : undefined,
@@ -200,9 +225,37 @@ export async function runGvhmrSetup(options: {
     }
   }
 
+  const defaultBodyModels = join(root, 'inputs', 'checkpoints', 'body_models')
+  const bodyModelsDecision = await dialog.showMessageBox(options.mainWindow, {
+    type: 'info',
+    title: 'GVHMR body models',
+    message: 'Choose where GVHMR reads its licensed body models',
+    detail: 'Use the default checkpoint folder, or choose another directory containing the smplx folder. HHTools does not download or copy licensed model files.',
+    buttons: ['Use default location', 'Choose another folder', 'Cancel'],
+    defaultId: 0,
+    cancelId: 2,
+  })
+  if (bodyModelsDecision.response === 2) {
+    return { action: 'cancelled', state: options.store.getState().gvhmr }
+  }
+
+  let bodyModels = defaultBodyModels
+  if (bodyModelsDecision.response === 1) {
+    const bodyModelsSelection = await dialog.showOpenDialog(options.mainWindow, {
+      title: 'Choose the directory containing the smplx folder',
+      defaultPath: current.bodyModels ?? defaultBodyModels,
+      properties: ['openDirectory'],
+    })
+    const selectedBodyModels = bodyModelsSelection.filePaths[0]
+    if (bodyModelsSelection.canceled || selectedBodyModels === undefined) {
+      return { action: 'cancelled', state: options.store.getState().gvhmr }
+    }
+    bodyModels = selectedBodyModels
+  }
+
   let state: GvhmrOptionalComponentState
   try {
-    state = options.store.configureGvhmr(root, python)
+    state = options.store.configureGvhmr(root, python, bodyModels)
   } catch (reason) {
     await dialog.showMessageBox(options.mainWindow, {
       type: 'error',

@@ -42,7 +42,10 @@ import {
 import { BatchView } from "./features/batch/BatchView";
 import { HumanToRobotView } from "./features/h2r/HumanToRobotView";
 import { MotionView } from "./features/motion/MotionView";
-import type { MotionLibraryEntry } from "./features/motion/api";
+import {
+  invalidateMotionLibrary,
+  type MotionLibraryEntry,
+} from "./features/motion/api";
 import { RobotToRobotView } from "./features/r2r/RobotToRobotView";
 import { RobotView } from "./features/robot/RobotView";
 import {
@@ -255,6 +258,10 @@ export function App() {
     useState<ComparisonPreset>(() =>
       storedComparisonPreset(window.localStorage, "r2r"),
     );
+  const noteMotionLibraryChanged = useCallback(() => {
+    invalidateMotionLibrary();
+    setMotionLibraryRevision((revision) => revision + 1);
+  }, []);
 
   useLayoutEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -698,6 +705,7 @@ export function App() {
             <Suspense fallback={<VideoWorkspaceLoading />}>
               <VideoToMotionView
                 onMotionLoaded={publishMotion}
+                onMotionLibraryChange={noteMotionLibraryChanged}
                 importRequest={importRequest}
                 runtimeRevision={gvhmrRevision}
               />
@@ -762,6 +770,7 @@ export function App() {
             runtimeRevision={gvhmrRevision}
             humanEntries={humanBatchEntries}
             onHumanEntriesChange={setHumanBatchEntries}
+            onMotionLibraryChange={noteMotionLibraryChanged}
           />
         </div>
         <div className={activeView === "dataset-viz" ? "h-full" : "hidden"}>
@@ -794,9 +803,7 @@ export function App() {
           setLayout((current) => ({ ...current, inspectorHidden: hidden }))
         }
         onForceAnalysisChange={setForceAnalysis}
-        onMotionLibraryChange={() =>
-          setMotionLibraryRevision((revision) => revision + 1)
-        }
+        onMotionLibraryChange={noteMotionLibraryChanged}
         onGvhmrChange={() =>
           setGvhmrRevision((revision) => revision + 1)
         }

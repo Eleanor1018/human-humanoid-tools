@@ -41,25 +41,30 @@ describe('OptionalComponentStore', () => {
     const userData = join(root, 'user-data')
     const checkout = createGvhmrCheckout(root)
     const python = join(root, 'gvhmr-env', 'bin', 'python')
+    const bodyModels = join(root, 'licensed-models')
     mkdirSync(join(root, 'gvhmr-env', 'bin'), { recursive: true })
+    mkdirSync(bodyModels, { recursive: true })
     writeFileSync(python, '', 'utf8')
     const store = new OptionalComponentStore({ userData, env: {}, platform: 'linux' })
 
-    expect(store.configureGvhmr(checkout, python)).toMatchObject({
+    expect(store.configureGvhmr(checkout, python, bodyModels)).toMatchObject({
       configured: true,
       requested: false,
       root: checkout,
       python,
+      bodyModels,
       runtime: 'local',
     })
     expect(store.sidecarEnvironment({})).toEqual({
       HHTOOLS_GVHMR_ROOT: checkout,
       HHTOOLS_GVHMR_PYTHON: python,
+      HHTOOLS_GVHMR_BODY_MODELS: bodyModels,
     })
 
     const restored = new OptionalComponentStore({ userData, env: {}, platform: 'linux' })
     expect(restored.getState({}).gvhmr.root).toBe(checkout)
     expect(restored.getState({}).gvhmr.python).toBe(python)
+    expect(restored.getState({}).gvhmr.bodyModels).toBe(bodyModels)
   })
 
   it('keeps the Windows Docker setup independent from a Python path', () => {
@@ -76,7 +81,34 @@ describe('OptionalComponentStore', () => {
       root: checkout,
       runtime: 'docker',
     })
-    expect(store.sidecarEnvironment({})).toEqual({ HHTOOLS_GVHMR_ROOT: checkout })
+    expect(store.sidecarEnvironment({})).toEqual({
+      HHTOOLS_GVHMR_ROOT: checkout,
+      HHTOOLS_GVHMR_BODY_MODELS: join(checkout, 'inputs', 'checkpoints', 'body_models'),
+    })
+  })
+
+  it('lets an explicit environment override persisted GVHMR paths', () => {
+    const root = mkdtempSync(join(tmpdir(), 'hhtools-components-override-'))
+    const userData = join(root, 'user-data')
+    const checkout = createGvhmrCheckout(root)
+    const configuredPython = join(root, 'configured-env', 'bin', 'python')
+    const overridePython = join(root, 'override-env', 'bin', 'python')
+    mkdirSync(join(root, 'configured-env', 'bin'), { recursive: true })
+    mkdirSync(join(root, 'override-env', 'bin'), { recursive: true })
+    writeFileSync(configuredPython, '', 'utf8')
+    writeFileSync(overridePython, '', 'utf8')
+    const store = new OptionalComponentStore({ userData, env: {}, platform: 'linux' })
+    store.configureGvhmr(checkout, configuredPython, join(root, 'configured-models'))
+
+    expect(store.getState({
+      HHTOOLS_GVHMR_ROOT: checkout,
+      HHTOOLS_GVHMR_PYTHON: overridePython,
+      HHTOOLS_GVHMR_BODY_MODELS: join(root, 'override-models'),
+    }).gvhmr).toMatchObject({
+      root: checkout,
+      python: overridePython,
+      bodyModels: join(root, 'override-models'),
+    })
   })
 
   it('rejects a folder that is not an official GVHMR checkout', () => {

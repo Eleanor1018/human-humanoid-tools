@@ -14,6 +14,7 @@ import {
   setupGvhmrInDesktop,
   startVideoToMotion,
   summarizeMotionResult,
+  visibleGvhmrFailure,
   waitForVideoToMotion,
   type GvhmrRuntimeStatus,
   type MotionResultSummary,
@@ -241,7 +242,7 @@ export function VideoBatchView({
           patchVideo(item.id, {
             status: "error",
             progress: 0,
-            message: errorMessage(reason),
+            message: visibleGvhmrFailure(reason, text),
           });
         }
         setNotice(

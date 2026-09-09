@@ -165,16 +165,23 @@ thread, so it is admission control rather than a process-wide GPU concurrency gu
 ### GVHMR video-to-motion
 
 Install [GVHMR](https://github.com/zju3dv/GVHMR) separately using its upstream instructions. hhtools
-does not bundle its source, official checkpoints, or Python environment. A local desktop build can
-include `SMPLX_NEUTRAL.npz`; source and WebUI installs continue to use a local model directory.
+does not bundle its source, official checkpoints, Python environment, or licensed body models in
+the default DEB/EXE. An explicitly authorized local build can stage `SMPLX_NEUTRAL.npz`; source and
+WebUI installs continue to use a local model directory.
 The **Video → Motion** view runs inference with the official released weights and publishes the
-generated `hmr4d_results.pt` to the Motion Library. Custom checkpoints and training are not exposed.
+generated `hmr4d_results.pt` to the Motion Library. Preprocessing caches stay outside the Library,
+and uploaded video is normalized to the 30 FPS timeline expected by GVHMR. Custom checkpoints and
+training are not exposed.
 
-On Linux, hhtools launches the installed GVHMR environment as an isolated subprocess:
+On Linux, use **Set up** in the desktop Video → Motion view to select the official checkout, that
+installation's Python executable, and (when stored separately) the directory containing `smplx/`.
+The paths are saved in desktop user data and passed only to the isolated GVHMR subprocess. The same
+configuration can be supplied when launching from a terminal:
 
 ```bash
 export HHTOOLS_GVHMR_ROOT=/path/to/GVHMR
 export HHTOOLS_GVHMR_PYTHON=/path/to/gvhmr/environment/bin/python
+export HHTOOLS_GVHMR_BODY_MODELS=/path/to/body_models
 uv run hhtools web
 ```
 
