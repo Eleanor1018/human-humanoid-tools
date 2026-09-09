@@ -12,8 +12,8 @@ agent should discover and call tools directly.
 The current Agent surface supports human-to-robot (H2R) retargeting—plain motion through Newton
 and safely inspectable object-interaction or terrain-scene bundles through Interaction-Mesh—and
 scene-free robot-to-robot (R2R) trajectories through Newton, plus ordered H2R/R2R batches. It
-includes content-bound H2R calibration status, constrained proposals, deterministic validation,
-front/side visual previews, validated silent save, capability and robot
+includes content-bound H2R and R2R pair-calibration status, constrained proposals, deterministic
+validation, front/side visual previews, validated silent save, capability and robot
 discovery, allowlisted asset registration and inspection, workflow-specific preflight, jobs,
 revision-aware waiting, verified artifacts, and export. Scene-bearing R2R, Video2Motion, Analysis,
 remote service access, and robot deployment are not part of this interface. Code-capable
@@ -48,6 +48,10 @@ uv run hhtools agent calibration status --request calibration-status.json
 uv run hhtools agent calibration propose --request calibration-proposal.json
 uv run hhtools agent calibration validate --request calibration-validation.json
 uv run hhtools agent calibration save --request calibration-save.json
+uv run hhtools agent calibration r2r status --request r2r-calibration-status.json
+uv run hhtools agent calibration r2r propose --request r2r-calibration-proposal.json
+uv run hhtools agent calibration r2r validate --request r2r-calibration-validation.json
+uv run hhtools agent calibration r2r save --request r2r-calibration-save.json
 uv run hhtools agent job wait JOB_ID --after-revision REVISION --wait-timeout 20
 ```
 
@@ -70,8 +74,8 @@ R2R binds one scene-free robot trajectory, its declared source robot, the target
 pair calibration. Call the matching preflight with `run_mode: smoke`, then submit only an immutable
 plan returned with `status: ready` through `start_job`; retain its `plan_id` and caller-owned key.
 Wait by revision and review the evaluation and manifest before considering a
-full run. Validated H2R calibration may be saved automatically; final motion quality and full-run
-approval remain human decisions.
+full run. Validated H2R and R2R pair calibrations may be saved automatically; final motion quality
+and full-run approval remain human decisions.
 
 H2R calibration assistance is available before preflight or after a
 `CALIBRATION_REQUIRED` response. Bind every request to the exact registered robot bundle and
@@ -93,8 +97,14 @@ does not authorize a full retarget or physical robot deployment. After saving, a
 and preflight again so the new
 calibration digest is bound into a fresh plan.
 
-This Stage 5 automation covers H2R robot/reference rest-pose calibration. R2R pair calibration
-remains a separate human-reviewed workflow in the current release.
+R2R calibration uses the parallel `get_r2r_calibration_status`, `propose_r2r_calibration`,
+`validate_r2r_calibration`, `preview_r2r_calibration`, and `save_r2r_calibration` tools. Every
+request binds both registered robot bundles. The source robot's zero-configuration FK becomes the
+semantic reference skeleton, while the candidate contains only the target robot's joint pose.
+Candidates cannot be reused with another pair. The same deterministic checks, bounded GPT visual
+review, stale-baseline rejection, previous-version archive, idempotent replay, user-overlay write,
+audit-note persistence, and fresh-preflight requirement apply. R2R preflight returns an exact
+`get_r2r_calibration_status` Agent action when the pair calibration is missing.
 
 Batch composition happens only after every single item already has a ready H2R or R2R plan.
 Call `preflight_batch` with one workflow and the ordered child `plan_id` list. The service rejects
@@ -108,8 +118,8 @@ context budget, export the verified artifact instead. A retry always creates a n
 attempt rather than silently selecting failed items.
 
 Only one local runtime may own a `save-dir`. MCP normally owns its directory
-for its entire stdio connection. H2R automatic calibration runs inside that owner and therefore
-does not require a WebUI handoff. If a proposal cannot pass after bounded revisions, or a workflow
+for its entire stdio connection. H2R and R2R automatic calibration run inside that owner and
+therefore do not require a WebUI handoff. If a proposal cannot pass after bounded revisions, or a workflow
 still requires human-only calibration, disconnect MCP before opening the WebUI against the same
 directory; close WebUI before reconnecting. Never run both concurrently.
 
@@ -126,8 +136,8 @@ The checked-in launcher uses `uv run --frozen --no-sync`, so opening Codex never
 changes the repository environment. Run the explicit `uv sync --extra mcp`
 installation command again after dependency updates.
 
-Codex should normally use the in-process calibration tools. For a human-only fallback, first
-disconnect the MCP server and run:
+Codex should normally use the in-process H2R or R2R calibration tools. For a human-only fallback,
+first disconnect the MCP server and run:
 
 ```bash
 HHTOOLS_WEB_SETTINGS_PATH=.hhtools/agent/job-settings.json \

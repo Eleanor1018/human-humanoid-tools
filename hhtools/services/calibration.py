@@ -236,11 +236,11 @@ class CalibrationService:
                     else PreflightCheckLevel.PASS
                 ),
                 message=(
-                    "Critical human-to-robot semantic mappings are missing."
+                    "Critical calibration semantic mappings are missing."
                     if mapping_error
                     else "One or more endpoint mappings have actuated descendants."
                     if mapping_warning
-                    else "Critical human-to-robot semantic mappings resolve."
+                    else "Critical calibration semantic mappings resolve."
                 ),
                 details={
                     "mapped_slots": assessment.mapped_slots,

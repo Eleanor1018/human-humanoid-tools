@@ -12,7 +12,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from hhtools.contracts import CalibrationCandidate
+from hhtools.contracts import CalibrationCandidate, R2RCalibrationCandidate
 
 
 class CalibrationCandidateStoreError(RuntimeError):
@@ -48,7 +48,9 @@ def compute_calibration_candidate_id(payload: Mapping[str, Any]) -> str:
     return f"cal-candidate:sha256:{digest}"
 
 
-def calibration_candidate_payload(candidate: CalibrationCandidate) -> dict[str, Any]:
+def calibration_candidate_payload(
+    candidate: CalibrationCandidate | R2RCalibrationCandidate,
+) -> dict[str, Any]:
     return candidate.model_dump(mode="json", exclude={"candidate_id"})
 
 
@@ -71,7 +73,10 @@ class CalibrationCandidateStore:
             raise CalibrationCandidateStoreError("candidate id is invalid")
         return self._root / f"{digest}.json"
 
-    def put(self, candidate: CalibrationCandidate) -> CalibrationCandidate:
+    def _put(
+        self,
+        candidate: CalibrationCandidate | R2RCalibrationCandidate,
+    ) -> CalibrationCandidate | R2RCalibrationCandidate:
         payload = calibration_candidate_payload(candidate)
         expected = compute_calibration_candidate_id(payload)
         if candidate.candidate_id != expected:
@@ -88,6 +93,8 @@ class CalibrationCandidateStore:
                     raise CalibrationCandidateStoreError(
                         "candidate identity conflicts with storage"
                     )
+                if isinstance(candidate, R2RCalibrationCandidate):
+                    return self.get_r2r(candidate.candidate_id)
                 return self.get(candidate.candidate_id)
             temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
             try:
@@ -99,7 +106,23 @@ class CalibrationCandidateStore:
                 temporary.unlink(missing_ok=True)
         return candidate
 
-    def get(self, candidate_id: str) -> CalibrationCandidate:
+    def put(self, candidate: CalibrationCandidate) -> CalibrationCandidate:
+        stored = self._put(candidate)
+        if not isinstance(stored, CalibrationCandidate):  # pragma: no cover - typing guard
+            raise CalibrationCandidateStoreError("stored candidate has the wrong workflow")
+        return stored
+
+    def put_r2r(self, candidate: R2RCalibrationCandidate) -> R2RCalibrationCandidate:
+        stored = self._put(candidate)
+        if not isinstance(stored, R2RCalibrationCandidate):  # pragma: no cover - typing guard
+            raise CalibrationCandidateStoreError("stored candidate has the wrong workflow")
+        return stored
+
+    def _get(
+        self,
+        candidate_id: str,
+        model: type[CalibrationCandidate] | type[R2RCalibrationCandidate],
+    ) -> CalibrationCandidate | R2RCalibrationCandidate:
         path = self._path(candidate_id)
         with self._lock:
             try:
@@ -110,7 +133,7 @@ class CalibrationCandidateStore:
                 raise CalibrationCandidateStoreError("candidate could not be read") from error
         try:
             document = json.loads(encoded)
-            candidate = CalibrationCandidate.model_validate(document)
+            candidate = model.model_validate(document)
         except (json.JSONDecodeError, TypeError, ValueError, ValidationError) as error:
             raise CalibrationCandidateStoreError("stored candidate is invalid") from error
         canonical, _document = _canonical_payload(candidate.model_dump(mode="json"))
@@ -121,6 +144,18 @@ class CalibrationCandidateStore:
             or expected != candidate_id
         ):
             raise CalibrationCandidateStoreError("stored candidate identity is invalid")
+        return candidate
+
+    def get(self, candidate_id: str) -> CalibrationCandidate:
+        candidate = self._get(candidate_id, CalibrationCandidate)
+        if not isinstance(candidate, CalibrationCandidate):  # pragma: no cover - typing guard
+            raise CalibrationCandidateStoreError("stored candidate has the wrong workflow")
+        return candidate
+
+    def get_r2r(self, candidate_id: str) -> R2RCalibrationCandidate:
+        candidate = self._get(candidate_id, R2RCalibrationCandidate)
+        if not isinstance(candidate, R2RCalibrationCandidate):  # pragma: no cover - typing guard
+            raise CalibrationCandidateStoreError("stored candidate has the wrong workflow")
         return candidate
 
     def archive_calibration(self, calibration_id: str, payload: bytes) -> None:

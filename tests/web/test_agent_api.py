@@ -51,6 +51,11 @@ from hhtools.contracts import (
     OutputPolicy,
     PreflightCheck,
     PreflightResponse,
+    R2RCalibrationCandidate,
+    R2RCalibrationPreview,
+    R2RCalibrationProposalResponse,
+    R2RCalibrationSaveReceipt,
+    R2RCalibrationStatusResponse,
     R2RPreflightRequest,
     R2RPreflightResponse,
     RetargetPlan,
@@ -73,6 +78,7 @@ from hhtools.web.server import state as server_state
 
 _DIGEST = "a" * 64
 _ASSET_ID = f"asset:sha256:{_DIGEST}"
+_R2R_TARGET_ASSET_ID = f"asset:sha256:{'b' * 64}"
 _CALIBRATION_CANDIDATE_ID = f"cal-candidate:sha256:{'c' * 64}"
 
 
@@ -320,6 +326,71 @@ class _FakeCalibration:
         )
 
 
+class _FakeR2RCalibration:
+    def status(self, request) -> R2RCalibrationStatusResponse:
+        return R2RCalibrationStatusResponse(
+            request_id="req_r2r_calibration_rest",
+            state="missing",
+            source_robot_id=request.source_robot_id,
+            source_robot_asset_id=request.source_robot_asset_id,
+            source_robot_digest=request.source_robot_asset_id.rsplit(":", 1)[-1],
+            target_robot_id=request.target_robot_id,
+            target_robot_asset_id=request.target_robot_asset_id,
+            target_robot_digest=request.target_robot_asset_id.rsplit(":", 1)[-1],
+            storage="none",
+            joint_count=0,
+            source_mapped_slots=16,
+            target_mapped_slots=16,
+            can_propose=True,
+            can_silent_save=True,
+        )
+
+    def propose(self, request) -> R2RCalibrationProposalResponse:
+        return R2RCalibrationProposalResponse(
+            candidate=R2RCalibrationCandidate(
+                candidate_id=_CALIBRATION_CANDIDATE_ID,
+                source_robot_id=request.source_robot_id,
+                source_robot_asset_id=request.source_robot_asset_id,
+                source_robot_digest=request.source_robot_asset_id.rsplit(":", 1)[-1],
+                target_robot_id=request.target_robot_id,
+                target_robot_asset_id=request.target_robot_asset_id,
+                target_robot_digest=request.target_robot_asset_id.rsplit(":", 1)[-1],
+                baseline="urdf_zero",
+                joint_q={"left_shoulder_roll_joint": 1.2},
+            ),
+            validation=_calibration_validation(),
+        )
+
+    def validate(self, _request) -> CalibrationValidationReport:
+        return _calibration_validation()
+
+    def preview(self, _request) -> tuple[R2RCalibrationPreview, bytes]:
+        payload = b"\x89PNG\r\n\x1a\nr2r-rest-test"
+        return (
+            R2RCalibrationPreview(
+                candidate_id=_CALIBRATION_CANDIDATE_ID,
+                sha256=hashlib.sha256(payload).hexdigest(),
+                width=1200,
+                height=700,
+                validation=_calibration_validation(),
+            ),
+            payload,
+        )
+
+    def save(self, request) -> R2RCalibrationSaveReceipt:
+        digest = "e" * 64
+        return R2RCalibrationSaveReceipt(
+            candidate_id=request.candidate_id,
+            calibration_id=f"cal:sha256:{digest}",
+            calibration_digest=digest,
+            source_robot_id="source_bot",
+            target_robot_id="target_bot",
+            save_mode=request.save_mode,
+            validation=_calibration_validation(),
+            visual_review=request.visual_review,
+        )
+
+
 def _agent_app() -> FastAPI:
     app = FastAPI()
     app.state.agent_capabilities_service = _FakeCapabilities()
@@ -329,6 +400,7 @@ def _agent_app() -> FastAPI:
     app.state.agent_r2r_preflight_service = _FakeR2RPreflight()
     app.state.agent_batch_preflight_service = _FakeBatchPreflight()
     app.state.agent_calibration_service = _FakeCalibration()
+    app.state.agent_r2r_calibration_service = _FakeR2RCalibration()
     app.include_router(router)
     return app
 
@@ -481,6 +553,39 @@ def test_agent_router_exposes_calibration_assistance_and_png_preview() -> None:
     assert preview.headers["x-hhtools-calibration-candidate"] == candidate_id
     assert saved.status_code == 200
     assert saved.json()["saved"] is True
+
+
+def test_agent_router_exposes_r2r_calibration_assistance_and_png_preview() -> None:
+    client = TestClient(_agent_app())
+    identity = {
+        "schema_version": "1.0",
+        "source_robot_id": "source_bot",
+        "source_robot_asset_id": _ASSET_ID,
+        "target_robot_id": "target_bot",
+        "target_robot_asset_id": _R2R_TARGET_ASSET_ID,
+    }
+
+    status = client.post("/api/agent/v1/calibrations/r2r/status", json=identity)
+    proposal = client.post("/api/agent/v1/calibrations/r2r/proposals", json=identity)
+    candidate_id = proposal.json()["candidate"]["candidate_id"]
+    candidate = {"schema_version": "1.0", "candidate_id": candidate_id}
+    validation = client.post("/api/agent/v1/calibrations/r2r/validate", json=candidate)
+    preview = client.post("/api/agent/v1/calibrations/r2r/preview", json=candidate)
+    saved = client.post(
+        "/api/agent/v1/calibrations/r2r/save",
+        json={**candidate, "save_mode": "validated_silent"},
+    )
+
+    assert status.status_code == 200
+    assert status.json()["state"] == "missing"
+    assert proposal.status_code == 200
+    assert validation.json()["valid"] is True
+    assert preview.status_code == 200
+    assert preview.headers["content-type"] == "image/png"
+    assert preview.content.startswith(b"\x89PNG")
+    assert saved.status_code == 200
+    assert saved.json()["saved"] is True
+    assert preview.headers["x-hhtools-calibration-candidate"] == candidate_id
 
 
 def test_agent_router_lists_available_assets_without_route_shadowing() -> None:
@@ -1371,6 +1476,11 @@ def test_agent_phase5_routes_and_examples_are_visible_in_openapi() -> None:
         "/api/agent/v1/calibrations/validate",
         "/api/agent/v1/calibrations/preview",
         "/api/agent/v1/calibrations/save",
+        "/api/agent/v1/calibrations/r2r/status",
+        "/api/agent/v1/calibrations/r2r/proposals",
+        "/api/agent/v1/calibrations/r2r/validate",
+        "/api/agent/v1/calibrations/r2r/preview",
+        "/api/agent/v1/calibrations/r2r/save",
         "/api/agent/v1/jobs",
         "/api/agent/v1/jobs/lookup",
         "/api/agent/v1/jobs/{job_id}",

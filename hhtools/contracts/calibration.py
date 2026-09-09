@@ -379,6 +379,230 @@ class CalibrationSaveReceipt(ContractModel):
         return self
 
 
+class R2RCalibrationStatusRequest(ContractModel):
+    """Identify one exact source/target robot pair calibration."""
+
+    schema_version: SchemaVersion = SchemaVersion.V1
+    source_robot_id: Annotated[
+        str,
+        Field(min_length=1, max_length=256, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$"),
+    ]
+    source_robot_asset_id: AssetId
+    target_robot_id: Annotated[
+        str,
+        Field(min_length=1, max_length=256, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$"),
+    ]
+    target_robot_asset_id: AssetId
+
+    @model_validator(mode="after")
+    def validate_pair(self) -> R2RCalibrationStatusRequest:
+        if self.source_robot_id == self.target_robot_id:
+            raise ValueError("R2R calibration requires different source and target robots")
+        if self.source_robot_asset_id == self.target_robot_asset_id:
+            raise ValueError("R2R calibration requires different source and target assets")
+        return self
+
+
+class R2RCalibrationProposalRequest(R2RCalibrationStatusRequest):
+    """Create or revise one immutable target-pose candidate for a robot pair."""
+
+    base_candidate_id: CalibrationCandidateId | None = None
+    joint_q_overrides: dict[str, float] = Field(default_factory=dict)
+    locked_joints: list[Annotated[str, Field(min_length=1, max_length=256)]] = Field(
+        default_factory=list,
+        max_length=_MAX_CALIBRATION_JOINTS,
+    )
+
+    @field_validator("joint_q_overrides", mode="before")
+    @classmethod
+    def validate_joint_q_overrides(cls, value: object) -> dict[str, float]:
+        return _joint_values(value)
+
+    @field_validator("locked_joints")
+    @classmethod
+    def validate_locked_joints(cls, value: list[str]) -> list[str]:
+        if len(value) != len(set(value)) or any(
+            _JOINT_NAME.fullmatch(name) is None for name in value
+        ):
+            raise ValueError("locked joints must be unique valid joint names")
+        return value
+
+
+class R2RCalibrationCandidate(ContractModel):
+    """Content-bound target pose for one exact source/target robot pair."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        str_strip_whitespace=True,
+        validate_assignment=True,
+        frozen=True,
+    )
+
+    schema_version: SchemaVersion = SchemaVersion.V1
+    workflow: Literal["r2r"] = "r2r"
+    candidate_id: CalibrationCandidateId
+    source_robot_id: Annotated[
+        str,
+        Field(min_length=1, max_length=256, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$"),
+    ]
+    source_robot_asset_id: AssetId
+    source_robot_digest: Sha256Hex
+    target_robot_id: Annotated[
+        str,
+        Field(min_length=1, max_length=256, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$"),
+    ]
+    target_robot_asset_id: AssetId
+    target_robot_digest: Sha256Hex
+    algorithm: Literal["hhtools.r2r-calibration.kinematic.v1"] = (
+        "hhtools.r2r-calibration.kinematic.v1"
+    )
+    baseline: Literal["urdf_zero", "saved_calibration", "candidate"]
+    baseline_calibration_id: CalibrationId | None = None
+    parent_candidate_id: CalibrationCandidateId | None = None
+    joint_q: dict[str, float]
+    locked_joints: list[Annotated[str, Field(min_length=1, max_length=256)]] = Field(
+        default_factory=list,
+        max_length=_MAX_CALIBRATION_JOINTS,
+    )
+
+    @field_validator("joint_q", mode="before")
+    @classmethod
+    def validate_joint_q(cls, value: object) -> dict[str, float]:
+        normalized = _joint_values(value)
+        if not normalized:
+            raise ValueError("an R2R calibration candidate must contain target joints")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_identity(self) -> R2RCalibrationCandidate:
+        if self.source_robot_id == self.target_robot_id:
+            raise ValueError("R2R candidates require different source and target robots")
+        if self.source_robot_asset_id == self.target_robot_asset_id:
+            raise ValueError("R2R candidates require different source and target assets")
+        if len(self.locked_joints) != len(set(self.locked_joints)):
+            raise ValueError("candidate locked joints must be unique")
+        if any(name not in self.joint_q for name in self.locked_joints):
+            raise ValueError("candidate locked joints must exist in joint_q")
+        if self.baseline == "saved_calibration" and self.baseline_calibration_id is None:
+            raise ValueError("saved-calibration candidates must bind their baseline identity")
+        if self.baseline == "urdf_zero" and self.baseline_calibration_id is not None:
+            raise ValueError("URDF-zero candidates cannot bind a saved calibration")
+        if (self.baseline == "candidate") != (self.parent_candidate_id is not None):
+            raise ValueError("candidate revisions require exactly one parent candidate")
+        return self
+
+
+class R2RCalibrationStatusResponse(ContractModel):
+    schema_version: SchemaVersion = SchemaVersion.V1
+    request_id: Annotated[str, Field(min_length=1, max_length=256)]
+    state: CalibrationState
+    source_robot_id: Annotated[str, Field(min_length=1, max_length=256)]
+    source_robot_asset_id: AssetId
+    source_robot_digest: Sha256Hex
+    target_robot_id: Annotated[str, Field(min_length=1, max_length=256)]
+    target_robot_asset_id: AssetId
+    target_robot_digest: Sha256Hex
+    storage: Literal["none", "user_calibration", "robot_bundle"]
+    calibration_id: CalibrationId | None = None
+    calibration_digest: Sha256Hex | None = None
+    joint_q: dict[str, float] = Field(default_factory=dict)
+    joint_count: Annotated[int, Field(ge=0, le=_MAX_CALIBRATION_JOINTS)]
+    joint_limits: list[CalibrationJointLimit] = Field(
+        default_factory=list,
+        max_length=_MAX_CALIBRATION_JOINTS,
+    )
+    source_mapped_slots: Annotated[int, Field(ge=0, le=17)]
+    target_mapped_slots: Annotated[int, Field(ge=0, le=17)]
+    source_missing_slots: list[str] = Field(default_factory=list, max_length=17)
+    target_missing_slots: list[str] = Field(default_factory=list, max_length=17)
+    can_propose: bool
+    can_silent_save: bool
+    current_validation: CalibrationValidationReport | None = None
+
+    @field_validator("joint_q", mode="before")
+    @classmethod
+    def validate_joint_q(cls, value: object) -> dict[str, float]:
+        return _joint_values(value)
+
+    @model_validator(mode="after")
+    def validate_state(self) -> R2RCalibrationStatusResponse:
+        if self.state is CalibrationState.MISSING:
+            if (
+                self.storage != "none"
+                or self.calibration_id is not None
+                or self.calibration_digest is not None
+                or self.current_validation is not None
+            ):
+                raise ValueError("missing R2R calibration status cannot expose a calibration")
+        elif self.state not in {CalibrationState.VALID, CalibrationState.INVALID}:
+            raise ValueError("R2R calibration status does not support bundled-scaler state")
+        elif (
+            self.storage not in {"user_calibration", "robot_bundle"}
+            or self.calibration_id is None
+            or self.calibration_digest is None
+            or self.current_validation is None
+        ):
+            raise ValueError("saved R2R calibration status requires identity and validation")
+        if self.joint_count != len(self.joint_limits):
+            raise ValueError("R2R target joint count must match its limits")
+        return self
+
+
+class R2RCalibrationProposalResponse(ContractModel):
+    schema_version: SchemaVersion = SchemaVersion.V1
+    candidate: R2RCalibrationCandidate
+    validation: CalibrationValidationReport
+
+    @model_validator(mode="after")
+    def validate_identity(self) -> R2RCalibrationProposalResponse:
+        if self.validation.candidate_id != self.candidate.candidate_id:
+            raise ValueError("R2R proposal candidate and validation ids must match")
+        return self
+
+
+class R2RCalibrationValidationRequest(CalibrationValidationRequest):
+    pass
+
+
+class R2RCalibrationPreviewRequest(R2RCalibrationValidationRequest):
+    pass
+
+
+class R2RCalibrationPreview(CalibrationPreview):
+    pass
+
+
+class R2RCalibrationSaveRequest(CalibrationSaveRequest):
+    pass
+
+
+class R2RCalibrationSaveReceipt(ContractModel):
+    schema_version: SchemaVersion = SchemaVersion.V1
+    candidate_id: CalibrationCandidateId
+    calibration_id: CalibrationId
+    calibration_digest: Sha256Hex
+    previous_calibration_id: CalibrationId | None = None
+    previous_calibration_archived: bool = False
+    source_robot_id: Annotated[str, Field(min_length=1, max_length=256)]
+    target_robot_id: Annotated[str, Field(min_length=1, max_length=256)]
+    save_mode: Literal["validated_silent", "gpt_vision_silent"]
+    validation: CalibrationValidationReport
+    visual_review: CalibrationVisualReview | None = None
+    saved: Literal[True] = True
+
+    @model_validator(mode="after")
+    def validate_saved_candidate(self) -> R2RCalibrationSaveReceipt:
+        if not self.validation.valid or self.validation.candidate_id != self.candidate_id:
+            raise ValueError("saved R2R calibration requires matching valid evidence")
+        if self.save_mode == "gpt_vision_silent" and (
+            self.visual_review is None
+            or self.visual_review.reviewer != "gpt_vision"
+            or self.visual_review.verdict is not CalibrationVisualVerdict.PASS
+        ):
+            raise ValueError("R2R GPT vision save receipt requires a passing visual review")
+        return self
+
+
 __all__ = [
     "CalibrationCandidate",
     "CalibrationCandidateId",
@@ -397,4 +621,14 @@ __all__ = [
     "CalibrationValidationRequest",
     "CalibrationVisualReview",
     "CalibrationVisualVerdict",
+    "R2RCalibrationCandidate",
+    "R2RCalibrationPreview",
+    "R2RCalibrationPreviewRequest",
+    "R2RCalibrationProposalRequest",
+    "R2RCalibrationProposalResponse",
+    "R2RCalibrationSaveReceipt",
+    "R2RCalibrationSaveRequest",
+    "R2RCalibrationStatusRequest",
+    "R2RCalibrationStatusResponse",
+    "R2RCalibrationValidationRequest",
 ]

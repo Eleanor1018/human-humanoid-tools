@@ -218,7 +218,7 @@ def test_r2r_preflight_freezes_trajectory_robot_pair_and_calibration(
     assert str(tmp_path) not in response.model_dump_json()
 
 
-def test_missing_pair_calibration_requires_human_action(
+def test_missing_pair_calibration_returns_exact_agent_action(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     grounding_robot_pair,
@@ -234,9 +234,18 @@ def test_missing_pair_calibration_requires_human_action(
 
     assert response.status is PreflightStatus.HUMAN_ACTION_REQUIRED
     assert response.plan is None
-    assert response.required_actions[0].actor == "human"
-    assert response.required_actions[0].action == "open_calibration_ui"
-    assert "panel=r2r" in str(response.required_actions[0].url)
+    action = response.required_actions[0]
+    assert action.actor == "agent"
+    assert action.action == "get_r2r_calibration_status"
+    assert action.parameters == {
+        "request": {
+            "schema_version": "1.0",
+            "source_robot_id": request.source_robot_id,
+            "source_robot_asset_id": request.source_robot_asset_id,
+            "target_robot_id": request.target_robot_id,
+            "target_robot_asset_id": request.target_robot_asset_id,
+        }
+    }
 
 
 def test_declared_source_robot_mismatch_is_rejected_before_execution(

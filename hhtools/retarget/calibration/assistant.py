@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from hhtools.robot.loader import URDFRobotModel
 
 CALIBRATION_ALGORITHM = "hhtools.calibration.kinematic.v1"
+R2R_CALIBRATION_ALGORITHM = "hhtools.r2r-calibration.kinematic.v1"
 CALIBRATION_PREVIEW_WIDTH = 1200
 CALIBRATION_PREVIEW_HEIGHT = 700
 
@@ -259,6 +260,7 @@ def assess_calibration_pose(
     joint_q: Mapping[str, float],
     *,
     reference_motion: Motion | None = None,
+    reference_pose: HumanReferencePose | None = None,
 ) -> CalibrationAssessment:
     """Evaluate hard limits and geometry without trusting a visual verdict."""
 
@@ -267,7 +269,10 @@ def assess_calibration_pose(
         joint_q,
         clamp=False,
     )
-    ref = _reference_pose_for_calibration(reference, motion=reference_motion)
+    ref = reference_pose or _reference_pose_for_calibration(
+        reference,
+        motion=reference_motion,
+    )
     try:
         geometry = _aligned_geometry(model, ref, normalized)
     finally:
@@ -541,6 +546,7 @@ def propose_calibration_pose(
     *,
     locked_joints: frozenset[str] = frozenset(),
     reference_motion: Motion | None = None,
+    reference_pose: HumanReferencePose | None = None,
 ) -> tuple[dict[str, float], CalibrationAssessment]:
     """Find a small, limit-constrained pose adjustment for canonical chains."""
 
@@ -554,7 +560,10 @@ def propose_calibration_pose(
     unknown_locks = locked_joints.difference(joint_q)
     if unknown_locks:
         raise ValueError("locked calibration joints are outside the robot DOF order")
-    ref = _reference_pose_for_calibration(reference, motion=reference_motion)
+    ref = reference_pose or _reference_pose_for_calibration(
+        reference,
+        motion=reference_motion,
+    )
     try:
         for group in ("left_arm", "right_arm", "left_leg", "right_leg"):
             geometry = _aligned_geometry(model, ref, joint_q)
@@ -580,6 +589,7 @@ def propose_calibration_pose(
         reference,
         joint_q,
         reference_motion=reference_motion,
+        reference_pose=ref,
     )
     return joint_q, assessment
 
@@ -611,12 +621,16 @@ def render_calibration_preview_png(
     assessment: CalibrationAssessment,
     *,
     reference_motion: Motion | None = None,
+    reference_pose: HumanReferencePose | None = None,
 ) -> bytes:
     """Render deterministic front/side landmark overlays for a vision model."""
 
     from PIL import Image, ImageDraw, ImageFont
 
-    ref = _reference_pose_for_calibration(reference, motion=reference_motion)
+    ref = reference_pose or _reference_pose_for_calibration(
+        reference,
+        motion=reference_motion,
+    )
     try:
         geometry = _aligned_geometry(model, ref, joint_q)
     finally:
@@ -758,6 +772,7 @@ __all__ = [
     "CALIBRATION_ALGORITHM",
     "CALIBRATION_PREVIEW_HEIGHT",
     "CALIBRATION_PREVIEW_WIDTH",
+    "R2R_CALIBRATION_ALGORITHM",
     "CalibrationAssessment",
     "assess_calibration_pose",
     "normalized_joint_q",

@@ -84,6 +84,11 @@ propose_calibration(request)
 validate_calibration(request)
 preview_calibration(request)
 save_calibration(request)
+get_r2r_calibration_status(request)
+propose_r2r_calibration(request)
+validate_r2r_calibration(request)
+preview_r2r_calibration(request)
+save_r2r_calibration(request)
 ```
 
 `propose_calibration` 只生成可审查候选，不写入正式 calibration。候选包含输入资产
@@ -167,7 +172,7 @@ JSON CLI 的既有 `--timeout` 表示整个 HTTP 请求超时，因此等待时�
 - [x] Batch 条目/总帧设置默认 `0 = 不限`；正数限制可持久化并在运行中热更新；
 - [ ] 人类 CLI 的 `hhtools batch h2r` / `hhtools batch r2r` 留在第 6 个提交统一完成。
 
-## 阶段 5：H2R 标定辅助
+## 阶段 5：H2R / R2R 标定辅助
 
 - [x] `get_calibration_status`：只读返回 reference、来源、hash、映射与当前质量；
 - [x] `propose_calibration`：通过 URDF 拓扑、参考姿态与关节限位生成可修订候选；
@@ -181,6 +186,12 @@ JSON CLI 的既有 `--timeout` 表示整个 HTTP 请求超时，因此等待时�
   重新 preflight；
 - [x] GUI 能生成候选并在现有 3D 标定编辑器中继续人工微调与保存；
 - [x] 自动标定不授权 full run 或真实机器人部署。
+- [x] R2R 标定绑定 source/target 两个 robot bundle，以 source 零位 FK 作为参考骨架，候选只
+  修改 target joint pose；独立 MCP 工具提供 status/propose/validate/preview/save 闭环；
+- [x] 缺少 pair calibration 时 `preflight_r2r` 返回精确的
+  `get_r2r_calibration_status` Agent action；保存后必须重新 preflight；
+- [x] R2R 静默保存固定写入 target 用户 overlay，并继承内容寻址候选、旧版本归档、并发
+  baseline 拒绝、幂等重放与 GPT 视觉审查约束。
 
 ## CLI 首页目标
 

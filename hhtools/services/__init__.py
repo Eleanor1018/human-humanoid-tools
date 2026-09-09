@@ -51,6 +51,7 @@ from .legacy_job_upgrade import (
 from .plans import PlanStore, PlanStoreError, compute_plan_id
 from .preflight import PreflightService
 from .r2r_asset_inspection import R2RTrajectoryInspector
+from .r2r_calibration import R2RCalibrationService
 from .r2r_preflight import R2RPreflightService
 from .r2r_retarget import R2RRetargetService, WorkflowRetargetService
 from .retarget import RetargetService, RetargetServiceError
@@ -97,6 +98,7 @@ __all__ = [
     "PlanStoreError",
     "PreflightService",
     "R2RPreflightService",
+    "R2RCalibrationService",
     "R2RRetargetService",
     "R2RTrajectoryInspector",
     "RetargetService",

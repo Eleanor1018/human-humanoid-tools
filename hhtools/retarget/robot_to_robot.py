@@ -68,6 +68,7 @@ __all__ = [
     "build_source_reference_pose",
     "load_r2r_calibration",
     "load_r2r_calibration_file",
+    "load_r2r_calibration_record_file",
     "load_source_trajectory",
     "r2r_calibration_path",
     "r2r_user_calibration_path",
@@ -950,7 +951,7 @@ def _validated_r2r_payload(
     source_robot: str,
     target_robot: str | None,
     path: Path,
-) -> tuple[str, dict[str, float]]:
+) -> tuple[str, dict[str, float], str]:
     if not isinstance(value, Mapping):
         raise ValueError(f"{path}: calibration yaml root must be a mapping")
     if value.get("kind") != _R2R_CALIBRATION_KIND:
@@ -973,7 +974,13 @@ def _validated_r2r_payload(
             f"{path}: calibration target {stored_target!r} does not match "
             f"requested target {target_robot!r}"
         )
-    return stored_target, _validated_joint_q(value.get("calibrated_joint_q"), path=path)
+    notes = value.get("notes", "")
+    if not isinstance(notes, str) or len(notes) > 8_192:
+        raise ValueError(f"{path}: calibration notes must be a bounded string")
+    return stored_target, _validated_joint_q(
+        value.get("calibrated_joint_q"),
+        path=path,
+    ), notes
 
 
 def _read_r2r_payload(
@@ -981,7 +988,7 @@ def _read_r2r_payload(
     *,
     source_robot: str,
     target_robot: str | None,
-) -> tuple[str, dict[str, float]]:
+) -> tuple[str, dict[str, float], str]:
     import yaml
 
     try:
@@ -1060,7 +1067,7 @@ def _resolve_r2r_calibration(
     # A canonical user override is authoritative.  If it exists but is invalid,
     # surface that error rather than silently falling back to a bundled default.
     if user_path.exists() or user_path.is_symlink():
-        _stored_target, joint_q = _read_r2r_payload(
+        _stored_target, joint_q, _notes = _read_r2r_payload(
             user_path,
             source_robot=source,
             target_robot=expected_target,
@@ -1073,7 +1080,7 @@ def _resolve_r2r_calibration(
         and user_legacy_path != user_path
         and (user_legacy_path.exists() or user_legacy_path.is_symlink())
     ):
-        _stored_target, joint_q = _read_r2r_payload(
+        _stored_target, joint_q, _notes = _read_r2r_payload(
             user_legacy_path,
             source_robot=source,
             target_robot=expected_target,
@@ -1083,7 +1090,7 @@ def _resolve_r2r_calibration(
     user_legacy: list[tuple[Path, dict[str, float]]] = []
     for candidate in _legacy_r2r_candidates(user_path.parent, canonical=user_path):
         try:
-            _stored_target, joint_q = _read_r2r_payload(
+            _stored_target, joint_q, _notes = _read_r2r_payload(
                 candidate,
                 source_robot=source,
                 target_robot=expected_target,
@@ -1099,7 +1106,7 @@ def _resolve_r2r_calibration(
         return user_legacy[0]
 
     if bundled_path.exists() or bundled_path.is_symlink():
-        _stored_target, joint_q = _read_r2r_payload(
+        _stored_target, joint_q, _notes = _read_r2r_payload(
             bundled_path,
             source_robot=source,
             target_robot=expected_target,
@@ -1112,7 +1119,7 @@ def _resolve_r2r_calibration(
         and bundled_legacy_path != bundled_path
         and (bundled_legacy_path.exists() or bundled_legacy_path.is_symlink())
     ):
-        _stored_target, joint_q = _read_r2r_payload(
+        _stored_target, joint_q, _notes = _read_r2r_payload(
             bundled_legacy_path,
             source_robot=source,
             target_robot=expected_target,
@@ -1122,7 +1129,7 @@ def _resolve_r2r_calibration(
     bundled_legacy: list[tuple[Path, dict[str, float]]] = []
     for candidate in _legacy_r2r_candidates(target_path, canonical=bundled_path):
         try:
-            _stored_target, joint_q = _read_r2r_payload(
+            _stored_target, joint_q, _notes = _read_r2r_payload(
                 candidate,
                 source_robot=source,
                 target_robot=expected_target,
@@ -1163,12 +1170,28 @@ def load_r2r_calibration_file(
 ) -> dict[str, float]:
     """Load one exact pair-calibration file without performing path discovery."""
 
-    _stored_target, joint_q = _read_r2r_payload(
+    _stored_target, joint_q, _notes = _read_r2r_payload(
         Path(path),
         source_robot=_validated_robot_identity(source_robot, field="source_robot"),
         target_robot=_validated_robot_identity(target_robot, field="target_robot"),
     )
     return dict(joint_q)
+
+
+def load_r2r_calibration_record_file(
+    path: str | Path,
+    *,
+    source_robot: str,
+    target_robot: str,
+) -> tuple[dict[str, float], str]:
+    """Load one exact pair pose together with its optional audit note."""
+
+    _stored_target, joint_q, notes = _read_r2r_payload(
+        Path(path),
+        source_robot=_validated_robot_identity(source_robot, field="source_robot"),
+        target_robot=_validated_robot_identity(target_robot, field="target_robot"),
+    )
+    return dict(joint_q), notes
 
 
 def _atomic_write_r2r_payload(path: Path, payload: Mapping[str, object]) -> None:
@@ -1222,23 +1245,31 @@ def save_r2r_calibration(
     source_robot: str,
     calibrated_joint_q: dict[str, float],
     user_root: str | Path | None = None,
+    prefer_user_overlay: bool = False,
+    notes: str = "",
 ) -> Path:
+    """Atomically save a pair pose, optionally forcing managed user storage."""
+
     target = _validated_robot_identity(target_robot, field="target_robot")
     source = _validated_robot_identity(source_robot, field="source_robot")
     joint_q = _validated_joint_q(calibrated_joint_q)
+    if not isinstance(notes, str) or len(notes) > 8_192:
+        raise ValueError("calibration notes must be a bounded string")
     payload = {
         "kind": _R2R_CALIBRATION_KIND,
         "target_robot": target,
         "source_robot": source,
         "calibrated_joint_q": {k: joint_q[k] for k in sorted(joint_q)},
     }
+    if notes:
+        payload["notes"] = notes
     sibling = r2r_calibration_path(target_dir, source)
     user_path = r2r_user_calibration_path(target, source, user_root=user_root)
 
     # Once a user override exists it remains authoritative, even in a source
     # checkout whose sibling directory becomes writable again.
     same_storage_path = sibling.resolve(strict=False) == user_path.resolve(strict=False)
-    if _user_r2r_override_exists(user_path) or same_storage_path:
+    if prefer_user_overlay or _user_r2r_override_exists(user_path) or same_storage_path:
         _atomic_write_r2r_payload(user_path, payload)
         return user_path
 

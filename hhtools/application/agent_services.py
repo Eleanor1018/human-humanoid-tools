@@ -97,6 +97,7 @@ def assemble_agent_services(
         LegacyJobUpgradeService,
         PlanStore,
         PreflightService,
+        R2RCalibrationService,
         R2RPreflightService,
         R2RRetargetService,
         RetargetService,
@@ -912,6 +913,13 @@ def assemble_agent_services(
         materialize_robot=_agent_materialize_calibration_robot,
         release_robot=_agent_release_robot_model,
         motion_loader=_agent_load_calibration_motion,
+    )
+    services.agent_r2r_calibration_service = R2RCalibrationService(
+        services.agent_asset_service,
+        services.agent_calibration_candidate_store,
+        robot_provider=_agent_robot_provider,
+        materialize_robot=_agent_materialize_calibration_robot,
+        release_robot=_agent_release_robot_model,
     )
     services.agent_capabilities_service = CapabilitiesService(
         scheduler_snapshot=scheduler.snapshot,

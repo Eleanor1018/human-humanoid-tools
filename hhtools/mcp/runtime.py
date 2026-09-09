@@ -19,6 +19,7 @@ from hhtools.services import (
     JobManager,
     PlanStore,
     PreflightService,
+    R2RCalibrationService,
     R2RPreflightService,
 )
 
@@ -53,6 +54,7 @@ class AgentRuntime:
     jobs: JobManager
     exports: ArtifactExportService
     calibration: CalibrationService | None = None
+    r2r_calibration: R2RCalibrationService | None = None
 
     @classmethod
     def from_application(cls, app: Any) -> AgentRuntime:
@@ -70,6 +72,7 @@ class AgentRuntime:
             r2r_preflight=services.agent_r2r_preflight_service,
             batch_preflight=services.agent_batch_preflight_service,
             calibration=services.agent_calibration_service,
+            r2r_calibration=services.agent_r2r_calibration_service,
             plans=services.agent_plan_store,
             jobs=services.agent_job_manager,
             exports=services.agent_artifact_export_service,

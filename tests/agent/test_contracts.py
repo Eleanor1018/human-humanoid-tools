@@ -72,6 +72,7 @@ from hhtools.contracts import (
     PreflightCheckLevel,
     PreflightResponse,
     PreflightStatus,
+    R2RCalibrationStatusRequest,
     RetargetPlan,
     RetargetPreflightRequest,
     RobotCapability,
@@ -865,3 +866,28 @@ def test_gpt_silent_calibration_requires_a_portable_passing_visual_review() -> N
     )
     assert request.visual_review is not None
     assert request.visual_review.verdict.value == "pass"
+
+
+def test_r2r_calibration_identity_requires_a_distinct_robot_pair() -> None:
+    valid = R2RCalibrationStatusRequest(
+        source_robot_id="source_bot",
+        source_robot_asset_id=ASSET_MOTION,
+        target_robot_id="target_bot",
+        target_robot_asset_id=ASSET_ROBOT,
+    )
+    assert valid.source_robot_id != valid.target_robot_id
+
+    with pytest.raises(ValidationError):
+        R2RCalibrationStatusRequest(
+            source_robot_id="same_bot",
+            source_robot_asset_id=ASSET_MOTION,
+            target_robot_id="same_bot",
+            target_robot_asset_id=ASSET_ROBOT,
+        )
+    with pytest.raises(ValidationError):
+        R2RCalibrationStatusRequest(
+            source_robot_id="source_bot",
+            source_robot_asset_id=ASSET_ROBOT,
+            target_robot_id="target_bot",
+            target_robot_asset_id=ASSET_ROBOT,
+        )

@@ -1,6 +1,6 @@
 ---
 name: hhtools-agent
-description: "Run local HHTools H2R through Newton or Interaction-Mesh, scene-free R2R, scalable H2R/R2R batches, and validated robot calibration through the versioned MCP Agent interface: inspect allowlisted assets, generate content-bound calibration candidates, review front/side previews with GPT vision, silently save only validated poses, preflight immutable smoke/full plans, manage jobs, and review verified artifacts. Use for HHTools H2R/R2R/Batch/calibration execution, status, cancellation, retry, or result requests. Do not use for UI or solver-code edits, scene-bearing R2R, arbitrary filesystem access, remote service setup, or real-robot deployment."
+description: "Run local HHTools H2R through Newton or Interaction-Mesh, scene-free R2R, scalable H2R/R2R batches, and validated H2R or robot-pair calibration through the versioned MCP Agent interface: inspect allowlisted assets, generate content-bound calibration candidates, review front/side previews with GPT vision, silently save only validated poses, preflight immutable smoke/full plans, manage jobs, and review verified artifacts. Use for HHTools H2R/R2R/Batch/calibration execution, status, cancellation, retry, or result requests. Do not use for UI or solver-code edits, scene-bearing R2R, arbitrary filesystem access, remote service setup, or real-robot deployment."
 ---
 
 # HHTools Agent
@@ -13,8 +13,8 @@ claims.
 
 - For a new H2R run, follow the smoke-first workflow below, including automatic calibration when
   the selected robot/reference profile is missing or invalid.
-- For a new scene-free R2R run, follow the R2R-specific identity checks below, then use the
-  same job and artifact lifecycle.
+- For a new scene-free R2R run, follow the R2R-specific identity and pair-calibration checks below,
+  then use the same job and artifact lifecycle.
 - For a new H2R or scene-free R2R batch, preflight every item first, then follow the scalable
   batch workflow below.
 - For an asset-only request, discover or register the asset, inspect it, and report the
@@ -125,6 +125,25 @@ human-only action and must never run concurrently or expose its session token.
 7. Keep the save receipt, then rerun `get_calibration_status` and `preflight_retarget`. Silent save
    authorizes only the calibration file; it never authorizes a full run or physical deployment.
 
+## Auto-calibrate an R2R robot pair
+
+1. Confirm all five `r2r_calibration_*` capability flags. Bind every request to the exact inspected
+   source and target robot IDs and asset IDs; never substitute either member of the pair.
+2. Call `get_r2r_calibration_status`. For `missing` or `invalid`, call
+   `propose_r2r_calibration` with that same pair. The service derives the semantic reference from
+   source-robot zero-configuration FK and proposes only target-robot joint values.
+3. Retain the immutable R2R `candidate_id`. Revise only through `propose_r2r_calibration` with its
+   `base_candidate_id`, explicit overrides, and locked joints. Never pass an H2R candidate to an
+   R2R tool or reuse a candidate with another robot pair.
+4. Call `validate_r2r_calibration`; continue only on `valid: true`. When image input is available,
+   call `preview_r2r_calibration` and inspect both views under the same three-round limit used for
+   H2R. Blue is the source reference and orange is the target pose.
+5. Save with `save_r2r_calibration` under the same `validated_silent` or
+   `gpt_vision_silent` rules as H2R. The service writes a target user overlay, archives a previous
+   pair file, rejects a changed baseline, and makes an exact replay idempotent.
+6. Rerun `get_r2r_calibration_status`, then perform a fresh `preflight_r2r` so the exact new pair
+   calibration digest is frozen into the plan. This save grants no full-run or deployment approval.
+
 ## Run a new scene-free R2R job
 
 1. Confirm `r2r_preflight` and `r2r_execution` in capabilities and select the advertised backend.
@@ -132,12 +151,14 @@ human-only action and must never run concurrently or expose its session token.
    the target robot. Require `category: robot_trajectory`, successful semantic parsing, a
    scene-free `mimic` trajectory profile, and an exact match between the trajectory's declared
    source robot and the selected source robot. Object or terrain sidecars are a stop condition.
-3. Call `preflight_r2r` with the trajectory asset ID, source robot ID and asset ID, target robot ID
-   and asset ID, `output_policy: create_new`, and `parameters.run_mode: smoke`. Retain the returned
-   immutable R2R plan, which binds all three assets and the pair-calibration digest.
-4. Handle `human_action_required` by performing the same exclusive-runtime WebUI handoff for the
-   exact source/target calibration pair. On `rejected`, do not switch robots, strip scene files, or
-   override the trajectory's source identity.
+3. Call `get_r2r_calibration_status` before preflight. For `missing` or `invalid`, complete the
+   automatic pair-calibration workflow above. Then call `preflight_r2r` with the trajectory asset
+   ID, source robot ID and asset ID, target robot ID and asset ID, `output_policy: create_new`, and
+   `parameters.run_mode: smoke`. Retain the immutable R2R plan, which binds all three assets and
+   the pair-calibration digest.
+4. On `human_action_required` with `R2R_CALIBRATION_REQUIRED`, pass the exact returned Agent action
+   into the automatic pair-calibration flow and rerun preflight. On `rejected`, do not switch
+   robots, strip scene files, or override the trajectory's source identity.
 5. Submit a ready plan with `start_job`; then follow H2R steps 6–9 for revision-aware waiting,
    artifact verification, human quality review, and a separately approved full plan.
 
@@ -168,6 +189,7 @@ The automatic preflight recovery mappings are:
 |---|---|---|
 | `actor: agent`, `action: register_asset_bundle` | `register_asset_bundle` | Pass `next_action.parameters` unchanged as the tool arguments. It must contain exactly one `request` matching `AssetRegistrationRequest`. Inspect the returned robot bundle, replace `robot_asset_id` with its `asset_id`, and perform a new preflight. |
 | `actor: agent`, `action: get_calibration_status` | `get_calibration_status` | Pass `next_action.parameters` unchanged. Continue through the automatic calibration workflow only for the exact returned robot bundle and reference. |
+| `actor: agent`, `action: get_r2r_calibration_status` | `get_r2r_calibration_status` | Pass `next_action.parameters` unchanged. Continue only with the exact returned source and target robot bundles. |
 
 Do not translate semantic action names, derive a host path, enumerate directories, or repair a
 malformed action. If the action name, wrapper shape, `root_id`, or portable `relative_path` does
@@ -188,7 +210,7 @@ not validate against the live tool schema, stop and present the contract error.
 | `IDEMPOTENT_RETRY` | Replay an ambiguous retry with the exact same parent job and retry idempotency key; never create a second child attempt. |
 | `NEW_FULL_PLAN` | A full run requires explicit approval, a new full preflight, a new plan, and a new idempotency key. |
 | `JOB_SCOPED_ARTIFACTS` | List, resolve, or export an artifact with both `job_id` and `artifact_id`; never trust or expose an unbound artifact identity. |
-| `CONTROLLED_MEDIA_CONTEXT` | Keep binary motion, meshes, video, trajectories, and Base64 out of arguments and text; only `preview_calibration` may return an MCP image block, while files use `export_artifact`. |
+| `CONTROLLED_MEDIA_CONTEXT` | Keep binary motion, meshes, video, trajectories, and Base64 out of arguments and text; only `preview_calibration` and `preview_r2r_calibration` may return an MCP image block, while files use `export_artifact`. |
 | `VALIDATED_CALIBRATION` | Never fabricate or edit a candidate id; save only a currently valid candidate, require a passing image review for `gpt_vision_silent`, record warnings, and run fresh preflight afterward. |
 | `SILENT_SAVE_SCOPE` | An automatic-calibration request permits validated calibration save without another prompt, but does not approve a full job, motion quality, or real-robot deployment. |
 | `COOPERATIVE_CANCEL` | Running cancellation is a request checked at safe points; do not claim cancellation until the returned job state is terminal. |

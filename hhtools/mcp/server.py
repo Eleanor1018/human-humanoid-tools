@@ -69,6 +69,15 @@ from hhtools.contracts import (
     JobRetryRequest,
     JobStartRequest,
     PreflightResponse,
+    R2RCalibrationPreview,
+    R2RCalibrationPreviewRequest,
+    R2RCalibrationProposalRequest,
+    R2RCalibrationProposalResponse,
+    R2RCalibrationSaveReceipt,
+    R2RCalibrationSaveRequest,
+    R2RCalibrationStatusRequest,
+    R2RCalibrationStatusResponse,
+    R2RCalibrationValidationRequest,
     R2RPreflightRequest,
     R2RPreflightResponse,
     RetargetPreflightRequest,
@@ -246,16 +255,16 @@ def _tool_call[T](call: Callable[[], T]) -> T:
         return cast(T, _error_result(document))
 
 
-def _calibration_preview_call(
-    call: Callable[[], tuple[CalibrationPreview, bytes]],
-) -> CalibrationPreview:
+def _calibration_preview_call[T: CalibrationPreview](
+    call: Callable[[], tuple[T, bytes]],
+) -> T:
     """Return typed metadata plus an actual image block for vision-capable clients."""
 
     try:
         preview, payload = call()
         document = _model_document(preview)
         return cast(
-            CalibrationPreview,
+            T,
             CallToolResult(
                 content=[
                     TextContent(
@@ -273,7 +282,7 @@ def _calibration_preview_call(
         )
     except Exception as exception:  # noqa: BLE001 - protocol boundary
         _error_value, document = _safe_error_document(exception)
-        return cast(CalibrationPreview, _error_result(document))
+        return cast(T, _error_result(document))
 
 
 def _resource_call[T](call: Callable[[], T]) -> T:
@@ -303,6 +312,13 @@ def _calibration_runtime(context: Context[AgentRuntime, Any]):
     service = _runtime(context).calibration
     if service is None:
         raise RuntimeError("the calibration service is not configured")
+    return service
+
+
+def _r2r_calibration_runtime(context: Context[AgentRuntime, Any]):
+    service = _runtime(context).r2r_calibration
+    if service is None:
+        raise RuntimeError("the R2R calibration service is not configured")
     return service
 
 
@@ -391,12 +407,14 @@ def _read_report[T](
 def _server_instructions(web_ui_url: str) -> str:
     return (
         "For every new H2R, R2R, or batch run: get capabilities, register/search and inspect "
-        "assets. Before H2R preflight, check the exact robot/reference calibration status and "
-        "replace missing or invalid calibration through the validated proposal flow. Then "
+        "assets. Before H2R preflight, check the exact robot/reference calibration status; before "
+        "R2R preflight, check the exact source/target pair calibration status. Replace missing or "
+        "invalid calibration through the matching validated proposal flow. Then "
         "preflight a smoke plan, start only a ready plan, wait by revision, then read "
         "evaluation and manifest for human review. Persist each plan_id plus idempotency "
         "key before start; use lookup_job to recover an ambiguous submission without job "
-        "enumeration. On CALIBRATION_REQUIRED human_action_required, use calibration status, "
+        "enumeration. On CALIBRATION_REQUIRED or R2R_CALIBRATION_REQUIRED, use the matching "
+        "calibration status, "
         "proposal, deterministic validation, and preview tools; stop and present every other "
         "human action. A "
         "vision-capable GPT client should inspect the preview image before using "
@@ -407,8 +425,8 @@ def _server_instructions(web_ui_url: str) -> str:
         "run mode. Batch retry always retries the whole plan. "
         "Full execution requires a new full preflight plus explicit user approval. Completed "
         "does not mean quality-approved. Never use host paths, put Base64 in tool arguments or "
-        "text, or deploy to a real robot. preview_calibration is the sole image-content "
-        "exception. For user-requested files, export only by job_id and "
+        "text, or deploy to a real robot. preview_calibration and preview_r2r_calibration are the "
+        "only image-content exceptions. For user-requested files, export only by job_id and "
         "artifact_id and return the portable agent-exports receipt. Cancellation is "
         "cooperative while native code runs. "
         "Only one local runtime may own a save directory. The WebUI fallback remains available "
@@ -607,6 +625,53 @@ def create_mcp_server(
         """Silently save only a currently valid candidate under an explicit save mode."""
 
         return _tool_call(lambda: _calibration_runtime(context).save(request))
+
+    @server.tool(annotations=_READ_ONLY)
+    def get_r2r_calibration_status(
+        request: R2RCalibrationStatusRequest,
+        context: Context[AgentRuntime, Any],
+    ) -> R2RCalibrationStatusResponse:
+        """Inspect one content-bound source/target robot pair calibration."""
+
+        return _tool_call(lambda: _r2r_calibration_runtime(context).status(request))
+
+    @server.tool(annotations=_SAFE_WRITE)
+    def propose_r2r_calibration(
+        request: R2RCalibrationProposalRequest,
+        context: Context[AgentRuntime, Any],
+    ) -> R2RCalibrationProposalResponse:
+        """Generate or revise a target-pose candidate against the source robot rest pose."""
+
+        return _tool_call(lambda: _r2r_calibration_runtime(context).propose(request))
+
+    @server.tool(annotations=_READ_ONLY)
+    def validate_r2r_calibration(
+        request: R2RCalibrationValidationRequest,
+        context: Context[AgentRuntime, Any],
+    ) -> CalibrationValidationReport:
+        """Recompute deterministic pair mapping, limits, alignment, symmetry, and foot checks."""
+
+        return _tool_call(lambda: _r2r_calibration_runtime(context).validate(request))
+
+    @server.tool(annotations=_READ_ONLY)
+    def preview_r2r_calibration(
+        request: R2RCalibrationPreviewRequest,
+        context: Context[AgentRuntime, Any],
+    ) -> R2RCalibrationPreview:
+        """Return source-reference and target-pose front/side PNG overlays for visual review."""
+
+        return _calibration_preview_call(
+            lambda: _r2r_calibration_runtime(context).preview(request)
+        )
+
+    @server.tool(annotations=_CALIBRATION_SAVE)
+    def save_r2r_calibration(
+        request: R2RCalibrationSaveRequest,
+        context: Context[AgentRuntime, Any],
+    ) -> R2RCalibrationSaveReceipt:
+        """Silently save a valid pair candidate to the target robot's user overlay."""
+
+        return _tool_call(lambda: _r2r_calibration_runtime(context).save(request))
 
     @server.tool(annotations=_SAFE_WRITE)
     def preflight_retarget(

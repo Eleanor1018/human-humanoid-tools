@@ -57,20 +57,25 @@ _CALIBRATION_CANDIDATE_ID = f"cal-candidate:sha256:{'c' * 64}"
 _EXPECTED_TOOLS = {
     "get_capabilities",
     "get_calibration_status",
+    "get_r2r_calibration_status",
     "register_asset_bundle",
     "search_assets",
     "list_available_assets",
     "inspect_asset_bundle",
     "list_robots",
     "preview_calibration",
+    "preview_r2r_calibration",
     "preflight_retarget",
     "preflight_r2r",
     "propose_calibration",
+    "propose_r2r_calibration",
     "save_calibration",
+    "save_r2r_calibration",
     "preflight_batch",
     "start_job",
     "start_retarget",
     "validate_calibration",
+    "validate_r2r_calibration",
     "get_job",
     "wait_job",
     "lookup_job",
@@ -815,6 +820,17 @@ async def test_mcp_tool_schemas_are_generated_from_public_pydantic_contracts() -
     assert preview.output_schema["title"] == "CalibrationPreview"
     save_calibration = _tool_by_name(tools, "save_calibration")
     assert save_calibration.annotations.destructive_hint is False
+    r2r_calibration = _tool_by_name(tools, "propose_r2r_calibration")
+    r2r_request = r2r_calibration.input_schema["$defs"]["R2RCalibrationProposalRequest"]
+    assert r2r_request["additionalProperties"] is False
+    assert {
+        "source_robot_asset_id",
+        "target_robot_asset_id",
+    } <= set(r2r_request["required"])
+    r2r_preview = _tool_by_name(tools, "preview_r2r_calibration")
+    assert r2r_preview.output_schema["title"] == "R2RCalibrationPreview"
+    r2r_save = _tool_by_name(tools, "save_r2r_calibration")
+    assert r2r_save.annotations.destructive_hint is False
 
     capabilities = _tool_by_name(tools, "get_capabilities")
     assert capabilities.output_schema["title"] == "CapabilityResponse"

@@ -51,12 +51,17 @@ from hhtools.contracts import (
     JobProgress,
     PreflightCheck,
     PreflightResponse,
+    R2RCalibrationCandidate,
+    R2RCalibrationProposalResponse,
+    R2RCalibrationSaveReceipt,
+    R2RCalibrationStatusResponse,
     R2RPreflightResponse,
     SchedulerCapability,
 )
 
 _DIGEST = "a" * 64
 _ASSET_ID = f"asset:sha256:{_DIGEST}"
+_R2R_TARGET_ASSET_ID = f"asset:sha256:{'b' * 64}"
 _PLAN_ID = f"plan:sha256:{_DIGEST}"
 _ARTIFACT_ID = "artifact:retargeted_motion:cli-test"
 _NOW = datetime(2026, 8, 31, tzinfo=UTC)
@@ -246,6 +251,16 @@ def test_capabilities_is_one_contract_and_accepts_global_options_anywhere() -> N
         (
             ["calibration", "save", "--help"],
             "hhtools agent calibration save",
+            "--request",
+        ),
+        (
+            ["calibration", "r2r", "--help"],
+            "hhtools agent calibration r2r",
+            "status",
+        ),
+        (
+            ["calibration", "r2r", "status", "--help"],
+            "hhtools agent calibration r2r status",
             "--request",
         ),
     ],
@@ -1092,6 +1107,95 @@ def test_calibration_commands_share_the_strict_request_contract() -> None:
     ]
 
 
+def test_r2r_calibration_commands_use_pair_contracts_and_routes() -> None:
+    identity = {
+        "schema_version": "1.0",
+        "source_robot_id": "source_bot",
+        "source_robot_asset_id": _ASSET_ID,
+        "target_robot_id": "target_bot",
+        "target_robot_asset_id": _R2R_TARGET_ASSET_ID,
+    }
+    candidate = R2RCalibrationCandidate(
+        candidate_id=_CALIBRATION_CANDIDATE_ID,
+        source_robot_id="source_bot",
+        source_robot_asset_id=_ASSET_ID,
+        source_robot_digest=_DIGEST,
+        target_robot_id="target_bot",
+        target_robot_asset_id=_R2R_TARGET_ASSET_ID,
+        target_robot_digest="b" * 64,
+        baseline="urdf_zero",
+        joint_q={"left_shoulder_roll_joint": 1.2},
+    )
+    validation = _calibration_validation()
+    responses = [
+        R2RCalibrationStatusResponse(
+            request_id="req_r2r_calibration_cli",
+            state="missing",
+            source_robot_id="source_bot",
+            source_robot_asset_id=_ASSET_ID,
+            source_robot_digest=_DIGEST,
+            target_robot_id="target_bot",
+            target_robot_asset_id=_R2R_TARGET_ASSET_ID,
+            target_robot_digest="b" * 64,
+            storage="none",
+            joint_count=0,
+            source_mapped_slots=16,
+            target_mapped_slots=16,
+            can_propose=True,
+            can_silent_save=True,
+        ),
+        R2RCalibrationProposalResponse(candidate=candidate, validation=validation),
+        validation,
+        R2RCalibrationSaveReceipt(
+            candidate_id=_CALIBRATION_CANDIDATE_ID,
+            calibration_id=f"cal:sha256:{'e' * 64}",
+            calibration_digest="e" * 64,
+            source_robot_id="source_bot",
+            target_robot_id="target_bot",
+            save_mode="validated_silent",
+            validation=validation,
+        ),
+    ]
+    transport = FakeTransport(responses)
+
+    status_code, status, _ = _invoke(
+        ["calibration", "r2r", "status", "--request", "-"],
+        transport,
+        stdin=json.dumps(identity),
+    )
+    proposal_code, proposal, _ = _invoke(
+        ["calibration", "r2r", "propose", "--request", "-"],
+        transport,
+        stdin=json.dumps(identity),
+    )
+    candidate_request = {
+        "schema_version": "1.0",
+        "candidate_id": _CALIBRATION_CANDIDATE_ID,
+    }
+    validation_code, checked, _ = _invoke(
+        ["calibration", "r2r", "validate", "--request", "-"],
+        transport,
+        stdin=json.dumps(candidate_request),
+    )
+    save_code, saved, _ = _invoke(
+        ["calibration", "r2r", "save", "--request", "-"],
+        transport,
+        stdin=json.dumps(candidate_request | {"save_mode": "validated_silent"}),
+    )
+
+    assert [status_code, proposal_code, validation_code, save_code] == [0, 0, 0, 0]
+    assert status["state"] == "missing"
+    assert proposal["candidate"]["workflow"] == "r2r"
+    assert checked["valid"] is True
+    assert saved["saved"] is True
+    assert [request[1] for request in transport.requests] == [
+        "/calibrations/r2r/status",
+        "/calibrations/r2r/proposals",
+        "/calibrations/r2r/validate",
+        "/calibrations/r2r/save",
+    ]
+
+
 @pytest.mark.parametrize(
     ("stage", "expected"),
     [
@@ -1405,6 +1509,10 @@ def test_installed_hhtools_agent_group_keeps_success_and_parse_errors_json(
 
     success = runner.invoke(hhtools_app, ["agent", "capabilities", "--json"])
     help_result = runner.invoke(hhtools_app, ["agent", "job", "start", "--help"])
+    r2r_help = runner.invoke(
+        hhtools_app,
+        ["agent", "calibration", "r2r", "--help"],
+    )
     failure = runner.invoke(hhtools_app, ["agent", "job", "start", "--json"])
 
     assert success.exit_code == EXIT_SUCCESS
@@ -1415,6 +1523,16 @@ def test_installed_hhtools_agent_group_keeps_success_and_parse_errors_json(
     assert json.loads(help_result.stdout)["command"] == "hhtools agent job start"
     assert help_result.stdout.count("\n") == 1
     assert help_result.stderr == ""
+    assert r2r_help.exit_code == EXIT_SUCCESS
+    r2r_help_document = AgentCliHelp.model_validate_json(r2r_help.stdout)
+    assert r2r_help_document.command == "hhtools agent calibration r2r"
+    assert {item.name for item in r2r_help_document.subcommands} == {
+        "status",
+        "propose",
+        "validate",
+        "save",
+    }
+    assert r2r_help.stderr == ""
     assert failure.exit_code == EXIT_PARAMETER_ERROR
     assert json.loads(failure.stdout)["code"] == "INVALID_PARAMETER"
     assert failure.stdout.count("\n") == 1
