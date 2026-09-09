@@ -196,10 +196,7 @@ def register_h2r_routes(app, *, state, jobs) -> H2RRouteOperations:
             if record is not None:
                 motion = record["motion"]
         try:
-            seed = {
-                str(name): float(value)
-                for name, value in (body.get("joint_q") or {}).items()
-            }
+            seed = {str(name): float(value) for name, value in (body.get("joint_q") or {}).items()}
             locked = frozenset(str(name) for name in (body.get("locked_joints") or []))
             joint_q, assessment = propose_calibration_pose(
                 model,
