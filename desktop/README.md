@@ -104,7 +104,7 @@ npm run dist:linux   # release/hhtools-0.1.0-amd64.deb
 npm run dist:win     # release/hhtools-0.1.0-x64-setup.exe
 ```
 
-`npm run dist:win` must run on Windows after `uv sync --all-extras --no-dev`; the runtime stager
+`npm run dist:win` must run on Windows after `uv sync --extra all --no-dev`; the runtime stager
 rejects another host platform and excludes untracked files, development packages, caches, model
 weights, and source-map files. `npm run dist:linux` never stages that runtime.
 
