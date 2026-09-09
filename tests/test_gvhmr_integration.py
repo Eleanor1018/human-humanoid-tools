@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -208,13 +209,19 @@ def test_local_status_probes_python_and_cuda(tmp_path: Path, monkeypatch) -> Non
     assert "docker_engine" not in status["checks"]
 
 
-def test_local_command_uses_external_python_and_packaged_worker(tmp_path: Path) -> None:
+def test_local_command_preserves_virtual_environment_python_symlink(tmp_path: Path) -> None:
     root = tmp_path / "GVHMR"
     body_models = root / "inputs" / "checkpoints" / "body_models"
     _runtime_tree(root, body_models)
+    base_python = tmp_path / "python-build" / "bin" / "python3.10"
+    base_python.parent.mkdir(parents=True)
+    base_python.touch()
     python = tmp_path / "gvhmr env" / "bin" / "python"
     python.parent.mkdir(parents=True)
-    python.touch()
+    try:
+        python.symlink_to(base_python)
+    except OSError:
+        pytest.skip("file symlinks are not available on this host")
     job_root = tmp_path / "job"
     job_root.mkdir()
     video = job_root / "source clip.mp4"
@@ -233,7 +240,8 @@ def test_local_command_uses_external_python_and_packaged_worker(tmp_path: Path) 
         f_mm=35,
     )
 
-    assert command[0] == str(python.resolve())
+    assert command[0] == os.path.abspath(python)
+    assert command[0] != str(base_python.resolve())
     assert command[1].endswith("hhtools/integrations/gvhmr_worker.py")
     assert command[command.index("--video") + 1] == str(video.resolve())
     assert command[command.index("--output-root") + 1] == str(job_root / "output")

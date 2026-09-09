@@ -57,6 +57,10 @@ export function robotTrajectoryEntries(
 
 const motionLibraryCache = createRequestCache<MotionLibraryResponse>(1_000);
 
+export function invalidateMotionLibrary(): void {
+  motionLibraryCache.invalidate();
+}
+
 /** Full result emitted by `/api/motion/load_library` or `/api/motion/upload`. */
 export interface MotionPayload extends StageMotionPayload {
   readonly name: string;

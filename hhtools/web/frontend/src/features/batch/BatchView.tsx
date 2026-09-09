@@ -48,11 +48,13 @@ export function BatchView({
   runtimeRevision = 0,
   humanEntries,
   onHumanEntriesChange,
+  onMotionLibraryChange,
 }: {
   active?: boolean;
   runtimeRevision?: number;
   humanEntries: readonly MotionLibraryEntry[];
   onHumanEntriesChange(entries: readonly MotionLibraryEntry[]): void;
+  onMotionLibraryChange?: () => void;
 }) {
   const text = useLocaleText();
   const [mode, setMode] = useState<BatchMode>("h2r");
@@ -110,6 +112,7 @@ export function BatchView({
     const next = appendUniqueEntries(humanEntriesRef.current, [entry]);
     humanEntriesRef.current = next;
     onHumanEntriesChange(next);
+    onMotionLibraryChange?.();
     refreshCatalogs();
   }
 

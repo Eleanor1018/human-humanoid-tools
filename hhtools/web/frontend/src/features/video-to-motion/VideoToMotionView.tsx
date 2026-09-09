@@ -26,6 +26,7 @@ import {
   startVideoToMotion,
   summarizeMotionResult,
   toStageMotionPayload,
+  visibleGvhmrFailure,
   waitForVideoToMotion,
   type GvhmrRuntimeStatus,
   type MotionResultSummary,
@@ -55,10 +56,12 @@ function formatMetric(value: number | null, suffix = ""): string {
 
 export function VideoToMotionView({
   onMotionLoaded,
+  onMotionLibraryChange,
   importRequest,
   runtimeRevision = 0,
 }: {
   onMotionLoaded?: (motion: StageMotionPayload | null) => void;
+  onMotionLibraryChange?: () => void;
   /** App-owned File-menu intent; this mounted view owns its input element. */
   importRequest?: ApplicationImportRequest | null;
   /** Settings increments this after configuring the shared GVHMR runtime. */
@@ -220,12 +223,13 @@ export function VideoToMotionView({
       }
       setResult(summarizeMotionResult(motion, video.file.name));
       onMotionLoaded?.(stageMotion);
+      onMotionLibraryChange?.();
       setWorkflowPhase("done");
     } catch (error) {
       if (request.signal.aborted) return;
       setWorkflowPhase("error");
       setWorkflowErrorOwner("generation");
-      setWorkflowError(errorMessage(error));
+      setWorkflowError(visibleGvhmrFailure(error, text));
     } finally {
       if (operation.current === request) operation.current = null;
     }

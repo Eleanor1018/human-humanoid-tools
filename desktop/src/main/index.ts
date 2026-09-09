@@ -217,7 +217,6 @@ async function startDesktop(): Promise<void> {
   })
 
   const sidecarEnvironment = (): NodeJS.ProcessEnv => ({
-    ...optionalComponents?.sidecarEnvironment(),
     ...buildSidecarEnvironment(
       runtime!.repoRoot,
       process.env,
@@ -225,6 +224,8 @@ async function startDesktop(): Promise<void> {
       runtime!.bundledRobotRoot,
       runtime!.kind === 'checkout'
     ),
+    // A user-selected optional-component path must win over checkout defaults.
+    ...optionalComponents?.sidecarEnvironment(),
   })
 
   const port = await findAvailablePort()

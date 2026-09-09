@@ -42,6 +42,7 @@ export interface GvhmrOptionalComponentState {
   readonly configured: boolean;
   readonly root?: string;
   readonly python?: string;
+  readonly bodyModels?: string;
   readonly runtime: "local" | "docker";
   readonly guideUrl: string;
   readonly estimatedAdditionalBytes: number;

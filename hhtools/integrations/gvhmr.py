@@ -145,11 +145,24 @@ def _local_environment(config: GvhmrConfig) -> dict[str, str]:
     if config.python_executable is not None:
         current_path = environment.get("PATH", "")
         environment["PATH"] = os.pathsep.join(
-            part for part in (str(config.python_executable.parent), current_path) if part
+            part
+            for part in (str(Path(_local_python_command(config)).parent), current_path)
+            if part
         )
     if config.cuda_visible_devices:
         environment["CUDA_VISIBLE_DEVICES"] = config.cuda_visible_devices
     return environment
+
+
+def _local_python_command(config: GvhmrConfig) -> str:
+    """Return an absolute interpreter path without dereferencing a venv symlink."""
+
+    python = config.python_executable
+    if python is None:
+        raise RuntimeError(f"{GVHMR_PYTHON_ENV} is not configured")
+    # ``Path.resolve()`` follows ``.venv/bin/python`` to the base uv/CPython
+    # executable and therefore bypasses that environment's site-packages.
+    return os.path.abspath(os.fspath(python.expanduser()))
 
 
 def _run_probe(
@@ -213,8 +226,11 @@ def gvhmr_status(
 
     if cfg.runtime == "local":
         python = cfg.python_executable
+        python_command = _local_python_command(cfg) if python is not None else None
         local_environment = _local_environment(cfg)
-        checks["python_executable"] = python is not None and python.is_file()
+        checks["python_executable"] = (
+            python_command is not None and Path(python_command).is_file()
+        )
         checks["ffmpeg"] = shutil.which("ffmpeg", path=local_environment.get("PATH")) is not None
         if not checks["ffmpeg"]:
             missing.append("ffmpeg executable in the GVHMR environment PATH")
@@ -232,7 +248,7 @@ def gvhmr_status(
                 "json.dumps({'cuda': bool(torch.cuda.is_available())}))"
             )
             environment_ready, output = _run_probe(
-                [str(python), "-c", probe],
+                [python_command, "-c", probe],
                 timeout=30,
                 cwd=cfg.root,
                 env=local_environment,
@@ -283,7 +299,11 @@ def gvhmr_status(
         "root": str(cfg.root),
         "body_models_root": str(cfg.body_models_root),
         "image": cfg.image,
-        "python": str(cfg.python_executable) if cfg.python_executable else None,
+        "python": (
+            _local_python_command(cfg)
+            if cfg.runtime == "local" and cfg.python_executable is not None
+            else None
+        ),
         "runtime": cfg.runtime,
         "cuda_visible_devices": cfg.cuda_visible_devices,
         "uses_official_weights": True,
@@ -432,9 +452,7 @@ def _build_local_gvhmr_command(
     static_cam: bool = True,
     f_mm: int | None = None,
 ) -> list[str]:
-    python = config.python_executable
-    if python is None:
-        raise RuntimeError(f"{GVHMR_PYTHON_ENV} is not configured")
+    python_command = _local_python_command(config)
     video = video_path.resolve()
     work = job_root.resolve()
     video.relative_to(work)
@@ -446,7 +464,7 @@ def _build_local_gvhmr_command(
     if not worker.is_file():
         raise RuntimeError(f"GVHMR worker is missing: {worker}")
     command = [
-        str(python.resolve()),
+        python_command,
         str(worker),
         "--video",
         str(video),

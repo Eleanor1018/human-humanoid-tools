@@ -12,6 +12,8 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import types
@@ -48,6 +50,53 @@ def _hydra_safe_video_alias(video: Path, output_root: Path) -> Path:
         raise FileExistsError(f"refusing to replace GVHMR input alias: {alias}")
     alias.symlink_to(video.resolve())
     return alias
+
+
+def _normalize_video_framerate(video: Path, output_root: Path) -> Path:
+    """Create the 30 FPS input assumed by the official GVHMR demo."""
+
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        raise FileNotFoundError("ffmpeg is required to normalize the GVHMR input video")
+    digest = hashlib.sha256(str(video).encode("utf-8")).hexdigest()[:16]
+    normalized = output_root.parent / ".hhtools-gvhmr-input" / f"normalized_{digest}.mp4"
+    normalized.parent.mkdir(parents=True, exist_ok=True)
+    completed = subprocess.run(
+        [
+            ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(video),
+            "-map",
+            "0:v:0",
+            "-vf",
+            "fps=30",
+            "-an",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "fast",
+            "-crf",
+            "18",
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
+            str(normalized),
+        ],
+        capture_output=True,
+        check=False,
+        encoding="utf-8",
+        errors="replace",
+        timeout=10 * 60,
+    )
+    if completed.returncode != 0 or not normalized.is_file() or normalized.stat().st_size == 0:
+        diagnostic = (completed.stderr or completed.stdout or "unknown ffmpeg error").strip()
+        raise RuntimeError(f"failed to normalize GVHMR input video to 30 FPS: {diagnostic}")
+    return normalized
 
 
 def _link_directory_contents(source: Path, destination: Path, *, skip: set[str]) -> None:
@@ -161,7 +210,9 @@ def main() -> int:
     if not video.is_file():
         raise FileNotFoundError(f"input video does not exist: {video}")
     output_root.mkdir(parents=True, exist_ok=True)
-    safe_video = _hydra_safe_video_alias(video, output_root)
+    source_alias = _hydra_safe_video_alias(video, output_root)
+    _progress(0.005, "normalizing input video to 30 FPS")
+    safe_video = _normalize_video_framerate(source_alias, output_root)
 
     # Executing this worker by absolute path makes Python use the worker's
     # directory as sys.path[0]. Register the mounted official checkout
