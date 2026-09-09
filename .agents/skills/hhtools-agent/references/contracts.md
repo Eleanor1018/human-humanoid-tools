@@ -20,6 +20,11 @@ Installation and supported boundaries are documented in the public
 | `preflight_retarget` | [retarget preflight request](../../../../docs/schemas/agent/v1/retarget-preflight-request.schema.json) | [preflight response](../../../../docs/schemas/agent/v1/preflight-response.schema.json) |
 | `preflight_r2r` | [R2R preflight request](../../../../docs/schemas/agent/v1/r2r-preflight-request.schema.json) | [R2R preflight response](../../../../docs/schemas/agent/v1/r2r-preflight-response.schema.json) |
 | `preflight_batch` | [batch preflight request](../../../../docs/schemas/agent/v1/batch-preflight-request.schema.json) | [batch preflight response](../../../../docs/schemas/agent/v1/batch-preflight-response.schema.json) |
+| `get_calibration_status` | [calibration status request](../../../../docs/schemas/agent/v1/calibration-status-request.schema.json) | [calibration status response](../../../../docs/schemas/agent/v1/calibration-status-response.schema.json) |
+| `propose_calibration` | [calibration proposal request](../../../../docs/schemas/agent/v1/calibration-proposal-request.schema.json) | [calibration proposal response](../../../../docs/schemas/agent/v1/calibration-proposal-response.schema.json) |
+| `validate_calibration` | [calibration validation request](../../../../docs/schemas/agent/v1/calibration-validation-request.schema.json) | [calibration validation report](../../../../docs/schemas/agent/v1/calibration-validation-report.schema.json) |
+| `preview_calibration` | [calibration preview request](../../../../docs/schemas/agent/v1/calibration-preview-request.schema.json) | [calibration preview metadata](../../../../docs/schemas/agent/v1/calibration-preview.schema.json) plus one MCP image block |
+| `save_calibration` | [calibration save request](../../../../docs/schemas/agent/v1/calibration-save-request.schema.json) | [calibration save receipt](../../../../docs/schemas/agent/v1/calibration-save-receipt.schema.json) |
 | `start_job` / `start_retarget` | [job start request](../../../../docs/schemas/agent/v1/job-start-request.schema.json) | [agent job view](../../../../docs/schemas/agent/v1/agent-job-view.schema.json) |
 | `lookup_job` | [job lookup request](../../../../docs/schemas/agent/v1/job-lookup-request.schema.json) | [agent job view](../../../../docs/schemas/agent/v1/agent-job-view.schema.json) |
 | `get_job` / `wait_job` / `cancel_job` | Scalar job identity and live tool fields | [agent job view](../../../../docs/schemas/agent/v1/agent-job-view.schema.json) |
@@ -38,6 +43,7 @@ contract rather than a prose-only exception. Inspect `code`, `retryable`, `stage
 | `actor` | `action` | Tool | Parameter contract |
 |---|---|---|---|
 | `agent` | `register_asset_bundle` | `register_asset_bundle` | `parameters` is the complete tool argument object: `{"request": <AssetRegistrationRequest>}`. Pass it unchanged. |
+| `agent` | `get_calibration_status` | `get_calibration_status` | `parameters` is the complete tool argument object: `{"request": <CalibrationStatusRequest>}`. Pass it unchanged, then follow candidate validation before saving. |
 
 The returned request contains only a capability-advertised `root_id` and normalized
 `relative_path`; it never contains the installed preset's host path. After registration, inspect
@@ -86,6 +92,9 @@ binary content.
   constructing an `AssetRegistrationRequest`; do not infer another path from display text.
 - `asset_id`, `plan_id`, `job_id`, and `artifact_id` are distinct identities. Never derive one
   from a display name or host path.
+- A [calibration candidate](../../../../docs/schemas/agent/v1/calibration-candidate.schema.json)
+  is an immutable content-addressed pose bound to one robot bundle and reference. Revision creates
+  a new candidate with `parent_candidate_id`; it never mutates the original.
 - H2R returns its motion/robot plan through `preflight_retarget`. Scene-free R2R returns an
   immutable [R2R plan](../../../../docs/schemas/agent/v1/r2r-plan.schema.json) binding the
   trajectory, source robot, target robot, and pair calibration. Do not exchange either robot after
@@ -125,11 +134,11 @@ the CLI or manufacture a v2 document inside this skill.
 ## Current boundary
 
 The MCP stdio process assembles the same transport-neutral application services directly; it is
-not a REST client and does not need `hhtools web` running. A given `save_dir` has exactly one
-local runtime owner. A returned loopback WebUI URL is solely for human calibration: disconnect
-the stdio MCP owner, let the human run the WebUI against that same `save_dir`, close the WebUI
-after calibration, reconnect MCP, and preflight again. Never request a WebUI session token or run
-MCP and Web concurrently against the same directory. There is no authenticated remote MCP
+not a REST client and does not need `hhtools web` running. H2R calibration status, proposals,
+validation, visual preview, and validated silent save run inside this same owner. The model hint
+and visual-review declaration are audit metadata, not proof of client identity. A given `save_dir`
+still has exactly one local runtime owner; never request a WebUI session token or run MCP and Web
+concurrently against the same directory. There is no authenticated remote MCP
 transport, multi-user authorization, cross-process native-worker resume, or guaranteed actual-GPU
 provenance in this phase. `lookup_job` can recover the persisted identity and truthful status of a
 known submission; it cannot resume interrupted native execution.

@@ -210,7 +210,7 @@ def _scheduler_capability(snapshot: object | None) -> SchedulerCapability:
 def _reference_readiness(preset: RobotPreset) -> tuple[list[str], list[str]]:
     """Return independently validated calibration and scaler references.
 
-    A bundled Newton scaler is not equivalent to a human-reviewed robot pose
+    A bundled Newton scaler is not equivalent to a validated robot pose
     calibration: notably, Interaction-Mesh still requires the latter.  Keep
     both facts separate so clients can make backend-specific decisions.
     """
@@ -385,6 +385,8 @@ class CapabilitiesService:
         mcp_available: bool = False,
         agent_rest_available: bool = True,
         json_cli_available: bool = True,
+        calibration_assistance_available: bool = False,
+        calibration_visual_preview_available: bool = False,
     ) -> None:
         if robot_provider is None:
             from hhtools.robot.registry import list_presets_readonly
@@ -406,6 +408,10 @@ class CapabilitiesService:
         self._mcp_available = bool(mcp_available)
         self._agent_rest_available = bool(agent_rest_available)
         self._json_cli_available = bool(json_cli_available)
+        self._calibration_assistance_available = bool(calibration_assistance_available)
+        self._calibration_visual_preview_available = bool(
+            calibration_assistance_available and calibration_visual_preview_available
+        )
 
     def get_capabilities(self) -> CapabilityResponse:
         """Return a compact snapshot; no solver, queue slot, or asset is created."""
@@ -433,6 +439,11 @@ class CapabilitiesService:
                 "available_asset_catalog": self._available_asset_catalog_available,
                 "batch_execution": self._job_execution_available,
                 "batch_preflight": self._preflight_available,
+                "calibration_proposals": self._calibration_assistance_available,
+                "calibration_silent_save": self._calibration_assistance_available,
+                "calibration_status": self._calibration_assistance_available,
+                "calibration_validation": self._calibration_assistance_available,
+                "calibration_visual_preview": self._calibration_visual_preview_available,
                 "artifact_store": self._artifact_store_available,
                 "idempotent_jobs": self._job_manager_available,
                 "job_cancellation": self._job_execution_available,

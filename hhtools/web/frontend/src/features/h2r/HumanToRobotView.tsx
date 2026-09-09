@@ -47,18 +47,26 @@ import {
   getCalibrationStatus,
   loadScaledPreview,
   previewCalibrationPose,
+  proposeCalibration,
   retarget,
   retargetExportUrl,
   saveCalibration,
   startCalibrationSession,
   type CalibrationSession,
   type CalibrationPose,
+  type CalibrationProposal,
   type CalibrationStatus,
   type RetargetResult,
   type ScaledPreviewResult,
 } from "./api";
 
-type Action = "motion" | "robot" | "calibration" | "save" | "retarget";
+type Action =
+  | "motion"
+  | "robot"
+  | "calibration"
+  | "proposal"
+  | "save"
+  | "retarget";
 type Backend = "newton" | "interaction_mesh";
 
 interface StepStatus {
@@ -219,6 +227,9 @@ export function HumanToRobotView({
   const [calibrationBaseline, setCalibrationBaseline] = useState<
     Record<string, number>
   >({});
+  const [proposalValidation, setProposalValidation] = useState<
+    CalibrationProposal["validation"] | null
+  >(null);
   const [localCalibrationDisplay, setLocalCalibrationDisplay] = useState(
     DEFAULT_CALIBRATION_DISPLAY,
   );
@@ -321,6 +332,7 @@ export function HumanToRobotView({
     setJointGeometry(null);
     setSelectedCalibrationJoint(null);
     setCalibrationBaseline({});
+    setProposalValidation(null);
     setResult(null);
     setProgress(0);
     setError(null);
@@ -432,6 +444,7 @@ export function HumanToRobotView({
       selectedJoint: selectedCalibrationJoint,
       disabled: Boolean(busy),
       onJointChange: (name, value) => {
+        setProposalValidation(null);
         setJointQ((current) =>
           setCalibrationJointValue(session.joint_limits, current, name, value),
         );
@@ -568,6 +581,7 @@ export function HumanToRobotView({
         groundOffsetZ: value.ground_offset_z,
       });
       setCalibrationBaseline(initial);
+      setProposalValidation(null);
       referenceCallback.current?.(value.reference);
       setStatus(
         text(
@@ -584,9 +598,42 @@ export function HumanToRobotView({
     setJointGeometry(null);
     setSelectedCalibrationJoint(null);
     setCalibrationBaseline({});
+    setProposalValidation(null);
     referenceCallback.current?.(null);
     poseCallback.current?.(null);
     if (cancelled) setStatus(text("Calibration cancelled.", "标定已取消。"));
+  }
+
+  function suggestCalibration() {
+    if (!robot || !reference || !session || busy) return;
+    void runAction("proposal", async (signal) => {
+      setStatus(text("Generating calibration proposal…", "正在生成标定建议…"));
+      const proposal = await proposeCalibration(
+        {
+          robot: robot.name,
+          reference,
+          joint_q: jointQ,
+          ...(motion?.token ? { motion_token: motion.token } : {}),
+        },
+        { signal },
+      );
+      if (signal.aborted) return;
+      setJointQ(
+        normalizeCalibrationValues(session.joint_limits, proposal.joint_q),
+      );
+      setProposalValidation(proposal.validation);
+      setStatus(
+        proposal.validation.valid
+          ? text(
+              `Calibration proposal ready · score ${proposal.validation.score.toFixed(2)}. Review and save it.`,
+              `标定建议已生成 · 评分 ${proposal.validation.score.toFixed(2)}。请检查后保存。`,
+            )
+          : text(
+              "The proposal still needs adjustment; review highlighted joints.",
+              "建议姿态仍需调整，请检查高亮关节。",
+            ),
+      );
+    });
   }
 
   function persistCalibration() {
@@ -684,25 +731,29 @@ export function HumanToRobotView({
         : { label: text("Not loaded", "未加载"), tone: "neutral" };
   const calibrationStep: StepStatus = busy === "calibration"
     ? { label: text("Opening…", "打开中…"), tone: "info" }
-    : busy === "save"
-      ? { label: text("Saving…", "保存中…"), tone: "info" }
-      : errorOwner === "calibration" || errorOwner === "save"
-        ? { label: text("Calibration failed", "标定失败"), tone: "danger" }
-        : session
-          ? { label: text("Editing…", "编辑中…"), tone: "info" }
-          : checking
-            ? { label: text("Checking…", "检查中…"), tone: "info" }
-            : calibration?.calibrated
-              ? {
-                  label: calibration.bundled && !calibration.path
-                    ? text("Built-in", "内置")
-                    : text("Calibrated", "已标定"),
-                  tone: "success",
-                }
-              : {
-                  label: text("Not calibrated", "未标定"),
-                  tone: motion && robot && reference ? "warning" : "neutral",
-                };
+    : busy === "proposal"
+      ? { label: text("Proposing…", "生成建议中…"), tone: "info" }
+      : busy === "save"
+        ? { label: text("Saving…", "保存中…"), tone: "info" }
+        : errorOwner === "calibration" ||
+            errorOwner === "proposal" ||
+            errorOwner === "save"
+          ? { label: text("Calibration failed", "标定失败"), tone: "danger" }
+          : session
+            ? { label: text("Editing…", "编辑中…"), tone: "info" }
+            : checking
+              ? { label: text("Checking…", "检查中…"), tone: "info" }
+              : calibration?.calibrated
+                ? {
+                    label: calibration.bundled && !calibration.path
+                      ? text("Built-in", "内置")
+                      : text("Calibrated", "已标定"),
+                    tone: "success",
+                  }
+                : {
+                    label: text("Not calibrated", "未标定"),
+                    tone: motion && robot && reference ? "warning" : "neutral",
+                  };
   const resultStep: StepStatus = busy === "retarget"
     ? { label: text("Retargeting…", "重定向中…"), tone: "info" }
     : errorOwner === "retarget"
@@ -834,11 +885,17 @@ export function HumanToRobotView({
                 selectedJoint={selectedCalibrationJoint}
                 disabled={Boolean(busy)}
                 saving={busy === "save"}
-                onChange={setJointQ}
+                suggesting={busy === "proposal"}
+                assistantValidation={proposalValidation}
+                onChange={(value) => {
+                  setProposalValidation(null);
+                  setJointQ(value);
+                }}
                 onDisplayChange={publishCalibrationDisplay}
                 onAngleUnitChange={setAngleUnit}
                 onJointSelected={setSelectedCalibrationJoint}
                 onCancel={() => closeCalibration(true)}
+                onSuggest={suggestCalibration}
                 onSave={persistCalibration}
               />
             )}

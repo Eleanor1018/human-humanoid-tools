@@ -114,8 +114,9 @@ recovery command instead of a Python import traceback.
 ### Agent and MCP
 
 HHTools provides a strict JSON CLI for scripts and a local stdio MCP server for compatible agents.
-The current Agent interface covers safe, preflighted H2R, scene-free R2R, and scalable H2R/R2R
-Batch jobs with verified artifact export; it does not yet expose the full WebUI feature set. See
+The current Agent interface covers safe, preflighted H2R, scene-free R2R, scalable H2R/R2R
+Batch jobs, and content-bound calibration assistance with GPT-visible front/side previews and
+validated silent save. It does not yet expose the full WebUI feature set. See
 [Agent interfaces](docs/agent.md) for installation, scope, the smoke-first workflow, runtime
 ownership, and the included Codex project configuration.
 

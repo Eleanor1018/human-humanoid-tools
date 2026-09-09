@@ -69,6 +69,7 @@ def assemble_agent_services(
         AssetKind,
         ErrorStage,
         InspectionStatus,
+        JobSpecRobot,
         JobSpecV2,
         NextAction,
     )
@@ -86,6 +87,8 @@ def assemble_agent_services(
         BatchLimitPolicy,
         BatchPreflightService,
         BatchRetargetService,
+        CalibrationCandidateStore,
+        CalibrationService,
         CapabilitiesService,
         DynamicRootLocator,
         ExecutionPlanService,
@@ -887,6 +890,29 @@ def assemble_agent_services(
         services.agent_job_manager,
         state.save_dir / "agent-exports",
     )
+
+    def _agent_materialize_calibration_robot(robot_id: str, asset_id: str) -> Any:
+        return _agent_materialize_robot(
+            JobSpecRobot(
+                robot_id=robot_id,
+                asset_id=asset_id,
+                config_sha256=asset_id.rsplit(":", 1)[-1],
+            ),
+            compile_mjcf=False,
+        )
+
+    def _agent_load_calibration_motion(asset_id: str) -> Any:
+        return _agent_load_motion(_agent_resolve_motion(asset_id))
+
+    services.agent_calibration_candidate_store = CalibrationCandidateStore(agent_data_dir)
+    services.agent_calibration_service = CalibrationService(
+        services.agent_asset_service,
+        services.agent_calibration_candidate_store,
+        robot_provider=_agent_robot_provider,
+        materialize_robot=_agent_materialize_calibration_robot,
+        release_robot=_agent_release_robot_model,
+        motion_loader=_agent_load_calibration_motion,
+    )
     services.agent_capabilities_service = CapabilitiesService(
         scheduler_snapshot=scheduler.snapshot,
         robot_provider=_agent_robot_provider,
@@ -900,6 +926,8 @@ def assemble_agent_services(
         agent_rest_available=agent_rest_available,
         json_cli_available=agent_json_cli_available,
         batch_limits_provider=services.agent_batch_limit_policy.snapshot,
+        calibration_assistance_available=True,
+        calibration_visual_preview_available=(agent_mcp_available or agent_rest_available),
     )
     services.agent_preflight_service = PreflightService(
         services.agent_asset_service,

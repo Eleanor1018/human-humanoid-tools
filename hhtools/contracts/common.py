@@ -152,6 +152,7 @@ class ErrorStage(StrEnum):
     REQUEST = "request"
     ASSET_REGISTRATION = "asset_registration"
     ASSET_INSPECTION = "asset_inspection"
+    CALIBRATION = "calibration"
     PREFLIGHT = "preflight"
     ADMISSION = "admission"
     EXECUTION = "execution"

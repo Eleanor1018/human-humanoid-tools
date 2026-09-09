@@ -28,6 +28,8 @@ from .available_assets import (
 from .batch_limits import BatchLimitPolicy, BatchLimitSnapshot
 from .batch_preflight import BatchPreflightService
 from .batch_retarget import BatchRetargetService, ExecutionPlanService
+from .calibration import CalibrationService, CalibrationServiceError
+from .calibration_candidates import CalibrationCandidateStore
 from .capabilities import CapabilitiesService
 from .job_store import JobStore, JobStoreError, StoredJob, compute_request_fingerprint
 from .jobs import (
@@ -72,6 +74,9 @@ __all__ = [
     "BatchLimitPolicy",
     "BatchLimitSnapshot",
     "BatchRetargetService",
+    "CalibrationCandidateStore",
+    "CalibrationService",
+    "CalibrationServiceError",
     "CapabilitiesService",
     "JobCancelledError",
     "JobExecutionContext",

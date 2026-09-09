@@ -434,7 +434,7 @@ def test_generic_csv_requires_a_workflow_schema_before_execution(
     assert response.error.code == "CONTENT_REQUIRES_WORKFLOW_SCHEMA"
 
 
-def test_missing_calibration_returns_human_action_instead_of_guessing(
+def test_missing_calibration_returns_an_exact_agent_calibration_action(
     tmp_path: Path,
 ) -> None:
     service, motion_id, robot_id, _ = _setup(tmp_path, calibration=False)
@@ -444,9 +444,17 @@ def test_missing_calibration_returns_human_action_instead_of_guessing(
     assert response.status is PreflightStatus.HUMAN_ACTION_REQUIRED
     assert response.plan is None
     assert response.error is None
-    assert response.required_actions[0].actor == "human"
-    assert response.required_actions[0].action == "open_calibration_ui"
-    assert "calibrate=smpl" in str(response.required_actions[0].url)
+    assert response.required_actions[0].actor == "agent"
+    assert response.required_actions[0].action == "get_calibration_status"
+    assert response.required_actions[0].url is None
+    assert response.required_actions[0].parameters == {
+        "request": {
+            "schema_version": "1.0",
+            "robot_id": "test_robot",
+            "robot_asset_id": robot_id,
+            "reference": "smpl",
+        }
+    }
 
 
 def test_newton_accepts_a_manifest_bound_scaler_without_manual_calibration(

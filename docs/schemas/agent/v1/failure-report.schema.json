@@ -6,6 +6,7 @@
         "request",
         "asset_registration",
         "asset_inspection",
+        "calibration",
         "preflight",
         "admission",
         "execution",

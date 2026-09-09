@@ -2,7 +2,7 @@
 
 Treat structured status, `ApiError.code`, `retryable`, and `next_action` as the decision inputs.
 Messages are explanations, not control flow. Never bypass a stop by changing solver parameters,
-editing calibration, reading host files, or switching transports.
+editing a candidate document, reading host files, or switching transports.
 
 ## Stop and recovery matrix
 
@@ -11,9 +11,11 @@ editing calibration, reading host files, or switching transports.
 | `MCP unavailable` | Stop and explain that the local HHTools MCP integration must be configured. | Do not invoke shell, JSON CLI, REST, or direct Python services as a fallback. |
 | `RUNTIME_ALREADY_ACTIVE` | Stop and explain that another local runtime owns the same `save_dir`; have the human close that owner before reconnecting the intended runtime. | Do not bypass the lease, start MCP and Web together, or switch directories to hide the conflict. |
 | `RUNTIME_LEASE_UNAVAILABLE` | Stop and present the runtime lease/storage error for human investigation. | Do not delete the lease file, disable locking, or continue without exclusive ownership. |
-| `human_action_required` | Pause, present all `required_actions`, disconnect the stdio MCP owner, and ask the human to run the WebUI with the same `save_dir`; after calibration, close WebUI, reconnect MCP, and perform a new preflight. | Do not call `start_job` or `start_retarget`, run MCP and Web against the same directory, guess calibration values, or request a WebUI session token. |
-| `CALIBRATION_REQUIRED` | Follow the actual human `required_actions` using the exclusive-runtime WebUI handoff, then reconnect MCP and preflight again. | Do not patch calibration, keep MCP and Web open together on one `save_dir`, or invent an action. |
-| `CALIBRATION_MISMATCH` | Treat the preflight as rejected: stop and present the structured mismatch; follow `next_action` only if one is actually present. | Do not assume a human action exists, silently choose another reference, or automatically preflight again. |
+| `human_action_required` | Do not start a job. For `CALIBRATION_REQUIRED` with advertised calibration tools, use the in-process automatic flow below; otherwise pause and present every `required_action`. | Do not call `start_job`, invent an action, run MCP and Web against the same directory, or request a WebUI session token. |
+| `CALIBRATION_REQUIRED` | Call status → propose → validate → optional GPT preview → validated silent save, then perform a new preflight. | Do not guess joint values, edit a candidate id, save an invalid candidate, or treat calibration save as full-run approval. |
+| `CALIBRATION_VALIDATION_FAILED` | Inspect error checks, revise from the exact parent candidate with bounded overrides, and revalidate; stop after three visual iterations. | Do not weaken limits, fabricate a passing visual review, or save the rejected pose through another transport. |
+| `CALIBRATION_CANDIDATE_STALE` / `CALIBRATION_CANDIDATE_MISMATCH` | Discard the candidate, resolve the current robot/motion identities, and propose again. | Do not reuse the stale id, exchange its robot/reference, or rewrite stored candidate JSON. |
+| `CALIBRATION_MISMATCH` | Treat malformed or identity-mismatched saved calibration as rejected; request status and propose a new candidate only when automatic calibration was requested. | Do not silently choose another reference, reuse the malformed file, or claim it was repaired in place. |
 | `ROBOT_ASSET_REQUIRED` / `ROBOT_BUNDLE_MISMATCH` with `actor: agent`, `action: register_asset_bundle` | Pass the returned `parameters` unchanged to the same-named MCP tool, inspect the registered bundle, use its `asset_id`, and perform a new preflight. | Do not derive a host path, search arbitrary directories, rename the action, or execute malformed/unmapped parameters. |
 | `rejected` | Stop and explain the preflight checks and structured error. | Do not start a job or weaken validation to force a plan. |
 | `PLAN_STALE` | Inspect the reason, resolve changed inputs, and perform a new preflight that yields a new plan and new start key. | Do not reuse the old plan or mutate its frozen parameters. |

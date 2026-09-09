@@ -21,6 +21,19 @@ from .assets import (
     AvailableAssetCatalogResponse,
 )
 from .batch import BatchPlan, BatchPreflightRequest, BatchPreflightResponse, BatchReport
+from .calibration import (
+    CalibrationCandidate,
+    CalibrationPreview,
+    CalibrationPreviewRequest,
+    CalibrationProposalRequest,
+    CalibrationProposalResponse,
+    CalibrationSaveReceipt,
+    CalibrationSaveRequest,
+    CalibrationStatusRequest,
+    CalibrationStatusResponse,
+    CalibrationValidationReport,
+    CalibrationValidationRequest,
+)
 from .capabilities import CapabilityResponse, RobotListResponse
 from .common import ApiError
 from .job_spec import JobSpecV2
@@ -62,6 +75,17 @@ PUBLIC_AGENT_SCHEMAS: MappingProxyType[str, type[BaseModel]] = MappingProxyType(
         "batch-preflight-request": BatchPreflightRequest,
         "batch-preflight-response": BatchPreflightResponse,
         "batch-report": BatchReport,
+        "calibration-candidate": CalibrationCandidate,
+        "calibration-preview": CalibrationPreview,
+        "calibration-preview-request": CalibrationPreviewRequest,
+        "calibration-proposal-request": CalibrationProposalRequest,
+        "calibration-proposal-response": CalibrationProposalResponse,
+        "calibration-save-receipt": CalibrationSaveReceipt,
+        "calibration-save-request": CalibrationSaveRequest,
+        "calibration-status-request": CalibrationStatusRequest,
+        "calibration-status-response": CalibrationStatusResponse,
+        "calibration-validation-report": CalibrationValidationReport,
+        "calibration-validation-request": CalibrationValidationRequest,
         "capabilities": CapabilityResponse,
         "evaluation-report": EvaluationReport,
         "failure-report": FailureReport,

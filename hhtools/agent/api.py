@@ -37,6 +37,15 @@ from hhtools.contracts import (
     AvailableAssetCatalogResponse,
     BatchPreflightRequest,
     BatchPreflightResponse,
+    CalibrationPreviewRequest,
+    CalibrationProposalRequest,
+    CalibrationProposalResponse,
+    CalibrationSaveReceipt,
+    CalibrationSaveRequest,
+    CalibrationStatusRequest,
+    CalibrationStatusResponse,
+    CalibrationValidationReport,
+    CalibrationValidationRequest,
     CapabilityResponse,
     ErrorStage,
     JobLookupRequest,
@@ -63,6 +72,7 @@ from hhtools.contracts.portability import (
 )
 from hhtools.services.artifacts import StoredArtifact
 from hhtools.services.assets import AssetServiceError
+from hhtools.services.calibration import CalibrationServiceError
 from hhtools.services.jobs import JobManagerError
 from hhtools.services.legacy_job_upgrade import LegacyJobUpgradeError
 
@@ -82,6 +92,9 @@ _ERROR_STATUS_BY_CODE = {
     "AVAILABLE_ASSET_CATALOG_LIMIT_EXCEEDED": 422,
     "BACKEND_UNAVAILABLE": 503,
     "BUNDLE_AMBIGUOUS": 409,
+    "CALIBRATION_CANDIDATE_MISMATCH": 409,
+    "CALIBRATION_CANDIDATE_NOT_FOUND": 404,
+    "CALIBRATION_CANDIDATE_STALE": 409,
     "INTERNAL_ERROR": 500,
     "INVALID_JOB_TRANSITION": 409,
     "INVALID_JOB_SPEC": 400,
@@ -302,7 +315,7 @@ class _AgentRoute(APIRoute):
                 )
             except AssetServiceError as exc:
                 response = _error_response(exc.api_error)
-            except (JobManagerError, LegacyJobUpgradeError) as exc:
+            except (CalibrationServiceError, JobManagerError, LegacyJobUpgradeError) as exc:
                 response = _error_response(exc.api_error)
             except Exception:  # noqa: BLE001 - REST must not expose internals
                 _log.exception("unexpected Agent REST failure")
@@ -369,6 +382,18 @@ class _BatchPreflightProvider(Protocol):
         self,
         request: BatchPreflightRequest,
     ) -> BatchPreflightResponse: ...
+
+
+class _CalibrationProvider(Protocol):
+    def status(self, request: CalibrationStatusRequest) -> CalibrationStatusResponse: ...
+
+    def propose(self, request: CalibrationProposalRequest) -> CalibrationProposalResponse: ...
+
+    def validate(self, request: CalibrationValidationRequest) -> CalibrationValidationReport: ...
+
+    def preview(self, request: CalibrationPreviewRequest) -> tuple[Any, bytes]: ...
+
+    def save(self, request: CalibrationSaveRequest) -> CalibrationSaveReceipt: ...
 
 
 class _JobProvider(Protocol):
@@ -477,6 +502,14 @@ def _batch_preflight_service(request: Request) -> _BatchPreflightProvider:
     if service is None or not callable(getattr(service, "preflight_batch", None)):
         raise RuntimeError("agent batch preflight service is not configured")
     return cast("_BatchPreflightProvider", service)
+
+
+def _calibration_service(request: Request) -> _CalibrationProvider:
+    service = getattr(request.app.state, "agent_calibration_service", None)
+    required = ("status", "propose", "validate", "preview", "save")
+    if service is None or any(not callable(getattr(service, name, None)) for name in required):
+        raise RuntimeError("agent calibration service is not configured")
+    return cast("_CalibrationProvider", service)
 
 
 def _job_manager(request: Request) -> _JobProvider:
@@ -660,6 +693,82 @@ def preflight_batch(
     """Freeze an ordered list of ready child plans into one batch."""
 
     return _batch_preflight_service(request).preflight_batch(preflight)
+
+
+@router.post(
+    "/calibrations/status",
+    response_model=CalibrationStatusResponse,
+    response_model_exclude_none=True,
+)
+def calibration_status(
+    request: Request,
+    calibration: CalibrationStatusRequest,
+) -> CalibrationStatusResponse:
+    """Inspect one exact robot/reference calibration and deterministic quality report."""
+
+    return _calibration_service(request).status(calibration)
+
+
+@router.post(
+    "/calibrations/proposals",
+    response_model=CalibrationProposalResponse,
+    response_model_exclude_none=True,
+)
+def propose_calibration(
+    request: Request,
+    calibration: CalibrationProposalRequest,
+) -> CalibrationProposalResponse:
+    """Create or revise an immutable, limit-constrained calibration candidate."""
+
+    return _calibration_service(request).propose(calibration)
+
+
+@router.post(
+    "/calibrations/validate",
+    response_model=CalibrationValidationReport,
+    response_model_exclude_none=True,
+)
+def validate_calibration(
+    request: Request,
+    calibration: CalibrationValidationRequest,
+) -> CalibrationValidationReport:
+    """Revalidate a stored candidate against the current content-bound robot."""
+
+    return _calibration_service(request).validate(calibration)
+
+
+@router.post("/calibrations/preview")
+def preview_calibration(
+    request: Request,
+    calibration: CalibrationPreviewRequest,
+) -> Response:
+    """Render a deterministic front/side PNG for a vision-capable Agent."""
+
+    preview, payload = _calibration_service(request).preview(calibration)
+    return Response(
+        content=payload,
+        media_type=preview.media_type,
+        headers={
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+            "X-HHTools-Calibration-Candidate": preview.candidate_id,
+            "X-HHTools-Content-SHA256": preview.sha256,
+        },
+    )
+
+
+@router.post(
+    "/calibrations/save",
+    response_model=CalibrationSaveReceipt,
+    response_model_exclude_none=True,
+)
+def save_calibration(
+    request: Request,
+    calibration: CalibrationSaveRequest,
+) -> CalibrationSaveReceipt:
+    """Persist only a valid candidate under an explicit silent-save mode."""
+
+    return _calibration_service(request).save(calibration)
 
 
 @router.post(

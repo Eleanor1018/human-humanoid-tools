@@ -1,6 +1,6 @@
 ---
 name: hhtools-agent
-description: "Run local HHTools H2R, scene-free R2R, and scalable H2R/R2R batches through the versioned MCP Agent interface: route H2R through Newton or Interaction-Mesh, inspect allowlisted assets, preflight immutable smoke/full plans, pause for calibration, manage jobs, and review verified artifacts. Use for HHTools H2R/R2R/Batch execution, status, cancellation, retry, or result requests. Do not use for UI or solver-code edits, scene-bearing R2R, arbitrary filesystem access, remote service setup, or real-robot deployment."
+description: "Run local HHTools H2R through Newton or Interaction-Mesh, scene-free R2R, scalable H2R/R2R batches, and validated robot calibration through the versioned MCP Agent interface: inspect allowlisted assets, generate content-bound calibration candidates, review front/side previews with GPT vision, silently save only validated poses, preflight immutable smoke/full plans, manage jobs, and review verified artifacts. Use for HHTools H2R/R2R/Batch/calibration execution, status, cancellation, retry, or result requests. Do not use for UI or solver-code edits, scene-bearing R2R, arbitrary filesystem access, remote service setup, or real-robot deployment."
 ---
 
 # HHTools Agent
@@ -11,7 +11,8 @@ claims.
 
 ## Choose the workflow
 
-- For a new H2R run, follow the smoke-first workflow below.
+- For a new H2R run, follow the smoke-first workflow below, including automatic calibration when
+  the selected robot/reference profile is missing or invalid.
 - For a new scene-free R2R run, follow the R2R-specific identity checks below, then use the
   same job and artifact lifecycle.
 - For a new H2R or scene-free R2R batch, preflight every item first, then follow the scalable
@@ -28,9 +29,9 @@ claims.
 If the HHTools MCP tools are unavailable, stop and explain that the local MCP integration must
 be configured. Never substitute shell commands, the JSON CLI, REST calls, or direct filesystem
 reads. The stdio server owns its service runtime and does not require `hhtools web` to be
-running. Only one local runtime may own a given `save_dir`. The separate WebUI is used only
-when a returned human `next_action` requests calibration; never request or read its session
-token.
+running. Only one local runtime may own a given `save_dir`. Calibration tools run inside that
+same owner; do not start a second WebUI merely to calibrate. The WebUI remains a fallback for a
+human-only action and must never run concurrently or expose its session token.
 
 ## Run a new H2R job
 
@@ -53,17 +54,18 @@ token.
      do not decode a rejected code-capable source format yourself.
    - Select a supported `robot_id` from `list_robots` or the capability snapshot and pair it with
      the inspected robot bundle's `asset_id`. Do not guess either identity.
+   - Use the motion inspection's exact reference to call `get_calibration_status` before
+     preflight. For `missing` or `invalid`, complete the automatic calibration workflow below;
+     do not let mere calibration-file existence stand in for quality validation.
 3. Call `preflight_retarget` with a versioned `RetargetPreflightRequest`. Put
    `run_mode: smoke` in `request.parameters`, use the currently supported
    `output_policy: create_new`, and include the registered motion and robot asset IDs. Other
    output policies are rejected in this phase.
 4. Branch on the preflight `status`.
    - `ready`: retain the returned immutable smoke `plan_id` and continue.
-   - `human_action_required`: pause and present every entry in `required_actions`. Stop or
-     disconnect the current stdio MCP runtime, ask the human to start the WebUI with the same
-     `save_dir`, and present the loopback calibration URL when supplied. After calibration, the
-     human must close the WebUI before MCP reconnects; then call capabilities again and perform
-     a new preflight.
+   - `human_action_required` with `CALIBRATION_REQUIRED`: when calibration capabilities are
+     advertised, follow the automatic calibration workflow below inside the current MCP runtime,
+     then perform a new preflight. For another human action, pause and present it unchanged.
    - `rejected`: inspect the structured error and checks. Execute an `actor: agent` action only
      when it matches the allowlisted action mapping below; otherwise stop and explain it.
 5. Generate one caller-owned idempotency key for this logical submission. Call
@@ -90,6 +92,38 @@ token.
 9. Start a full run only after explicit user approval of the smoke evidence. Perform a new
    preflight with `request.parameters.run_mode: full`, receive a different immutable full plan,
    and submit it with a new idempotency key. Never promote or mutate the smoke plan.
+
+## Auto-calibrate H2R with deterministic checks and GPT vision
+
+1. Confirm `calibration_status`, `calibration_proposals`, `calibration_validation`, and
+   `calibration_silent_save` in capabilities. Use the exact inspected `robot_id`,
+   `robot_asset_id`, and reference family. Include `motion_asset_id` only for a clip-specific
+   `glb` reference.
+2. Call `get_calibration_status`. A `valid` manual calibration or `bundled` scaler may proceed to
+   fresh preflight. For `missing` or `invalid`, call `propose_calibration` with the same identity.
+   A request to run automatic calibration authorizes a validated silent save; a status-only
+   request does not.
+3. Retain the complete returned candidate and its content-addressed `candidate_id`. Never edit a
+   candidate document or invent an id. To revise it, call `propose_calibration` again with
+   `base_candidate_id`, explicit `joint_q_overrides`, and any joints that must remain fixed in
+   `locked_joints`.
+4. Call `validate_calibration`. Continue only when `valid: true`; an error-level mapping, limit,
+   limb-alignment, or foot check blocks saving. Warnings must be included in the final audit.
+5. If `calibration_visual_preview` is available and the current model can see images, call
+   `preview_calibration`. Inspect the returned MCP image block directly—never copy its Base64 into
+   text or arguments. Check both front and side views for coherent limbs, bilateral symmetry,
+   upright trunk, level feet, and obvious semantic-target mistakes. Perform at most three
+   candidate-revision rounds; stop and ask the user if no candidate passes.
+6. After deterministic validation and a passing visual inspection, call `save_calibration` with
+   `save_mode: gpt_vision_silent` and a concise `visual_review` whose reviewer is `gpt_vision`,
+   verdict is `pass`, and `model_hint` names the active model when known. The declaration is audit
+   metadata, not authentication; never claim the server verified model identity. A client without
+   image capability may use `validated_silent` only when automatic calibration was requested. If
+   the save response is ambiguous, replay the exact same candidate, mode, and review; the write is
+   deterministic, archives the previous calibration when one exists, and refuses a changed
+   baseline.
+7. Keep the save receipt, then rerun `get_calibration_status` and `preflight_retarget`. Silent save
+   authorizes only the calibration file; it never authorizes a full run or physical deployment.
 
 ## Run a new scene-free R2R job
 
@@ -128,11 +162,12 @@ token.
 
 ## Execute allowlisted agent actions
 
-The only automatic preflight recovery mapping is:
+The automatic preflight recovery mappings are:
 
 | Returned action | MCP operation | Required behavior |
 |---|---|---|
 | `actor: agent`, `action: register_asset_bundle` | `register_asset_bundle` | Pass `next_action.parameters` unchanged as the tool arguments. It must contain exactly one `request` matching `AssetRegistrationRequest`. Inspect the returned robot bundle, replace `robot_asset_id` with its `asset_id`, and perform a new preflight. |
+| `actor: agent`, `action: get_calibration_status` | `get_calibration_status` | Pass `next_action.parameters` unchanged. Continue through the automatic calibration workflow only for the exact returned robot bundle and reference. |
 
 Do not translate semantic action names, derive a host path, enumerate directories, or repair a
 malformed action. If the action name, wrapper shape, `root_id`, or portable `relative_path` does
@@ -153,11 +188,12 @@ not validate against the live tool schema, stop and present the contract error.
 | `IDEMPOTENT_RETRY` | Replay an ambiguous retry with the exact same parent job and retry idempotency key; never create a second child attempt. |
 | `NEW_FULL_PLAN` | A full run requires explicit approval, a new full preflight, a new plan, and a new idempotency key. |
 | `JOB_SCOPED_ARTIFACTS` | List, resolve, or export an artifact with both `job_id` and `artifact_id`; never trust or expose an unbound artifact identity. |
-| `NO_BINARY_CONTEXT` | Keep binary motion, meshes, video, trajectories, and Base64 payloads out of tool arguments and model context; use `export_artifact` and its portable receipt for file delivery. |
-| `HUMAN_GATES` | Pause for calibration and quality review; never guess calibration or equate `completed` with accepted motion quality. |
+| `CONTROLLED_MEDIA_CONTEXT` | Keep binary motion, meshes, video, trajectories, and Base64 out of arguments and text; only `preview_calibration` may return an MCP image block, while files use `export_artifact`. |
+| `VALIDATED_CALIBRATION` | Never fabricate or edit a candidate id; save only a currently valid candidate, require a passing image review for `gpt_vision_silent`, record warnings, and run fresh preflight afterward. |
+| `SILENT_SAVE_SCOPE` | An automatic-calibration request permits validated calibration save without another prompt, but does not approve a full job, motion quality, or real-robot deployment. |
 | `COOPERATIVE_CANCEL` | Running cancellation is a request checked at safe points; do not claim cancellation until the returned job state is terminal. |
 | `HONEST_PROVENANCE` | Report only device and execution provenance present in capabilities or the manifest; never infer actual GPU use. |
-| `SINGLE_RUNTIME_OWNER` | One local runtime may own a `save_dir`: disconnect stdio MCP before same-directory WebUI calibration, close WebUI before reconnecting MCP, then preflight again. |
+| `SINGLE_RUNTIME_OWNER` | One local runtime may own a `save_dir`; use in-process calibration tools while MCP owns it, and never start a same-directory WebUI concurrently. |
 | `LOCAL_BOUNDARY` | This skill covers local stdio only, with a loopback calibration UI. It provides no remote auth, multi-user isolation, worker resume, or real-robot deployment. |
 
 ## Load references progressively
@@ -171,7 +207,7 @@ not validate against the live tool schema, stop and present the contract error.
 
 Return a compact audit trail: selected input and robot asset IDs (including both R2R robots), run
 mode and plan ID, job ID and lineage, final state/outcome, evaluation verdict, artifact IDs with hashes when
-available, batch counts/report when applicable, any artifact export receipt requested by the user,
-and any remaining human action.
+available, calibration candidate/validation/save receipt when applicable, batch counts/report, any
+artifact export receipt requested by the user, and any remaining human action.
 Explicitly label unverified quality, unavailable actual-device provenance, and unsupported remote
 or real-robot steps.

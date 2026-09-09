@@ -41,9 +41,15 @@ from hhtools.contracts import (
     AvailableAssetCatalogEntry,
     AvailableAssetCatalogResponse,
     BatchPreflightResponse,
+    CalibrationCandidate,
+    CalibrationProposalResponse,
+    CalibrationSaveReceipt,
+    CalibrationStatusResponse,
+    CalibrationValidationReport,
     CapabilityResponse,
     ErrorStage,
     JobProgress,
+    PreflightCheck,
     PreflightResponse,
     R2RPreflightResponse,
     SchedulerCapability,
@@ -54,6 +60,7 @@ _ASSET_ID = f"asset:sha256:{_DIGEST}"
 _PLAN_ID = f"plan:sha256:{_DIGEST}"
 _ARTIFACT_ID = "artifact:retargeted_motion:cli-test"
 _NOW = datetime(2026, 8, 31, tzinfo=UTC)
+_CALIBRATION_CANDIDATE_ID = f"cal-candidate:sha256:{'c' * 64}"
 
 
 class FakeTransport:
@@ -146,6 +153,24 @@ def _available_catalog() -> AvailableAssetCatalogResponse:
     )
 
 
+def _calibration_validation() -> CalibrationValidationReport:
+    return CalibrationValidationReport(
+        candidate_id=_CALIBRATION_CANDIDATE_ID,
+        valid=True,
+        score=0.95,
+        changed_joint_count=2,
+        mapped_slots=16,
+        edge_errors_deg={"left_upper_arm": 4.0},
+        checks=[
+            PreflightCheck(
+                code="CALIBRATION_POSE_ALIGNED",
+                level="pass",
+                message="Calibration pose is aligned.",
+            )
+        ],
+    )
+
+
 def _invoke(arguments: list[str], transport: Any, *, stdin: str = ""):
     stdout = io.StringIO()
     stderr = io.StringIO()
@@ -217,6 +242,11 @@ def test_capabilities_is_one_contract_and_accepts_global_options_anywhere() -> N
             ["asset", "catalog", "--help"],
             "hhtools agent asset catalog",
             "--root-id",
+        ),
+        (
+            ["calibration", "save", "--help"],
+            "hhtools agent calibration save",
+            "--request",
         ),
     ],
 )
@@ -978,10 +1008,95 @@ def test_batch_preflight_preserves_ordered_child_plan_ids() -> None:
     assert transport.requests[0][3]["output_policy"] == "create_new"
 
 
+def test_calibration_commands_share_the_strict_request_contract() -> None:
+    identity = {
+        "schema_version": "1.0",
+        "robot_id": "g1_29dof",
+        "robot_asset_id": _ASSET_ID,
+        "reference": "smplx",
+    }
+    candidate = CalibrationCandidate(
+        candidate_id=_CALIBRATION_CANDIDATE_ID,
+        robot_id="g1_29dof",
+        robot_asset_id=_ASSET_ID,
+        robot_digest=_DIGEST,
+        reference="smplx",
+        baseline="urdf_zero",
+        joint_q={"left_shoulder_roll_joint": 1.2},
+    )
+    validation = _calibration_validation()
+    responses = [
+        CalibrationStatusResponse(
+            request_id="req_calibration_cli",
+            state="missing",
+            robot_id="g1_29dof",
+            robot_asset_id=_ASSET_ID,
+            robot_digest=_DIGEST,
+            reference="smplx",
+            source="none",
+            joint_count=0,
+            mapped_slots=16,
+            can_propose=True,
+            can_silent_save=True,
+        ),
+        CalibrationProposalResponse(candidate=candidate, validation=validation),
+        validation,
+        CalibrationSaveReceipt(
+            candidate_id=_CALIBRATION_CANDIDATE_ID,
+            calibration_id=f"cal:sha256:{'d' * 64}",
+            calibration_digest="d" * 64,
+            robot_id="g1_29dof",
+            reference="smplx",
+            save_mode="validated_silent",
+            validation=validation,
+        ),
+    ]
+    transport = FakeTransport(responses)
+
+    status_code, status, _selected = _invoke(
+        ["calibration", "status", "--request", "-"],
+        transport,
+        stdin=json.dumps(identity),
+    )
+    proposal_code, proposal, _selected = _invoke(
+        ["calibration", "propose", "--request", "-"],
+        transport,
+        stdin=json.dumps(identity),
+    )
+    candidate_request = {
+        "schema_version": "1.0",
+        "candidate_id": _CALIBRATION_CANDIDATE_ID,
+    }
+    validation_code, checked, _selected = _invoke(
+        ["calibration", "validate", "--request", "-"],
+        transport,
+        stdin=json.dumps(candidate_request),
+    )
+    save_request = candidate_request | {"save_mode": "validated_silent"}
+    save_code, saved, _selected = _invoke(
+        ["calibration", "save", "--request", "-"],
+        transport,
+        stdin=json.dumps(save_request),
+    )
+
+    assert [status_code, proposal_code, validation_code, save_code] == [0, 0, 0, 0]
+    assert status["state"] == "missing"
+    assert proposal["candidate"]["candidate_id"] == _CALIBRATION_CANDIDATE_ID
+    assert checked["valid"] is True
+    assert saved["saved"] is True
+    assert [request[1] for request in transport.requests] == [
+        "/calibrations/status",
+        "/calibrations/proposals",
+        "/calibrations/validate",
+        "/calibrations/save",
+    ]
+
+
 @pytest.mark.parametrize(
     ("stage", "expected"),
     [
         (ErrorStage.REQUEST, EXIT_PARAMETER_ERROR),
+        (ErrorStage.CALIBRATION, EXIT_PREFLIGHT_ERROR),
         (ErrorStage.PREFLIGHT, EXIT_PREFLIGHT_ERROR),
         (ErrorStage.ADMISSION, EXIT_JOB_ERROR),
         (ErrorStage.ARTIFACT, EXIT_JOB_ERROR),

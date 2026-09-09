@@ -38,6 +38,14 @@ from hhtools.contracts import (
     AvailableAssetCatalogResponse,
     BatchPreflightRequest,
     BatchPreflightResponse,
+    CalibrationProposalRequest,
+    CalibrationProposalResponse,
+    CalibrationSaveReceipt,
+    CalibrationSaveRequest,
+    CalibrationStatusRequest,
+    CalibrationStatusResponse,
+    CalibrationValidationReport,
+    CalibrationValidationRequest,
     CapabilityResponse,
     ErrorStage,
     JobLookupRequest,
@@ -248,6 +256,30 @@ _COMMAND_SPECS: dict[tuple[str, ...], _CliCommandSpec] = {
     ("preflight", "batch"): _CliCommandSpec(
         ("preflight", "batch"),
         "Freeze ordered ready child plans into one H2R or R2R batch.",
+        options=(_REQUEST_ARGUMENT,),
+    ),
+    ("calibration",): _CliCommandSpec(
+        ("calibration",),
+        "Inspect, propose, validate, or save robot calibration candidates.",
+    ),
+    ("calibration", "status"): _CliCommandSpec(
+        ("calibration", "status"),
+        "Inspect one content-bound robot/reference calibration.",
+        options=(_REQUEST_ARGUMENT,),
+    ),
+    ("calibration", "propose"): _CliCommandSpec(
+        ("calibration", "propose"),
+        "Generate or revise a constrained calibration candidate.",
+        options=(_REQUEST_ARGUMENT,),
+    ),
+    ("calibration", "validate"): _CliCommandSpec(
+        ("calibration", "validate"),
+        "Revalidate a persisted calibration candidate.",
+        options=(_REQUEST_ARGUMENT,),
+    ),
+    ("calibration", "save"): _CliCommandSpec(
+        ("calibration", "save"),
+        "Silently save a candidate only after deterministic validation.",
         options=(_REQUEST_ARGUMENT,),
     ),
     ("job",): _CliCommandSpec(
@@ -688,6 +720,24 @@ def _parser() -> _JsonArgumentParser:
     batch.add_argument("--request", required=True)
     batch.set_defaults(operation="preflight_batch")
 
+    calibration = commands.add_parser("calibration", add_help=False)
+    calibration_commands = calibration.add_subparsers(
+        dest="calibration_command",
+        required=True,
+    )
+    calibration_status = calibration_commands.add_parser("status", add_help=False)
+    calibration_status.add_argument("--request", required=True)
+    calibration_status.set_defaults(operation="calibration_status")
+    calibration_propose = calibration_commands.add_parser("propose", add_help=False)
+    calibration_propose.add_argument("--request", required=True)
+    calibration_propose.set_defaults(operation="calibration_propose")
+    calibration_validate = calibration_commands.add_parser("validate", add_help=False)
+    calibration_validate.add_argument("--request", required=True)
+    calibration_validate.set_defaults(operation="calibration_validate")
+    calibration_save = calibration_commands.add_parser("save", add_help=False)
+    calibration_save.add_argument("--request", required=True)
+    calibration_save.set_defaults(operation="calibration_save")
+
     job = commands.add_parser("job", add_help=False)
     job_commands = job.add_subparsers(dest="job_command", required=True)
     start = job_commands.add_parser("start", add_help=False)
@@ -1033,6 +1083,63 @@ def _execute(  # noqa: PLR0911 - one explicit branch per public CLI operation
             ),
         )
 
+    if operation == "calibration_status":
+        calibration_request = _validated_request(
+            CalibrationStatusRequest,
+            namespace.request,
+            stdin,
+        )
+        return _response(
+            CalibrationStatusResponse,
+            transport.request_json(
+                "POST",
+                "/calibrations/status",
+                document=calibration_request.model_dump(mode="json", exclude_none=True),
+            ),
+        )
+    if operation == "calibration_propose":
+        calibration_request = _validated_request(
+            CalibrationProposalRequest,
+            namespace.request,
+            stdin,
+        )
+        return _response(
+            CalibrationProposalResponse,
+            transport.request_json(
+                "POST",
+                "/calibrations/proposals",
+                document=calibration_request.model_dump(mode="json", exclude_none=True),
+            ),
+        )
+    if operation == "calibration_validate":
+        calibration_request = _validated_request(
+            CalibrationValidationRequest,
+            namespace.request,
+            stdin,
+        )
+        return _response(
+            CalibrationValidationReport,
+            transport.request_json(
+                "POST",
+                "/calibrations/validate",
+                document=calibration_request.model_dump(mode="json", exclude_none=True),
+            ),
+        )
+    if operation == "calibration_save":
+        calibration_request = _validated_request(
+            CalibrationSaveRequest,
+            namespace.request,
+            stdin,
+        )
+        return _response(
+            CalibrationSaveReceipt,
+            transport.request_json(
+                "POST",
+                "/calibrations/save",
+                document=calibration_request.model_dump(mode="json", exclude_none=True),
+            ),
+        )
+
     if operation == "job_start":
         try:
             start_request = JobStartRequest(
@@ -1209,7 +1316,7 @@ def _error_exit_code(error: ApiError) -> int:
         ErrorStage.ASSET_INSPECTION,
     }:
         return EXIT_PARAMETER_ERROR
-    if error.stage is ErrorStage.PREFLIGHT:
+    if error.stage in {ErrorStage.CALIBRATION, ErrorStage.PREFLIGHT}:
         return EXIT_PREFLIGHT_ERROR
     if error.stage in {
         ErrorStage.ADMISSION,
@@ -1224,6 +1331,10 @@ def _error_exit_code(error: ApiError) -> int:
 def _result_exit_code(result: BaseModel) -> int:
     if isinstance(result, PreflightResponse | R2RPreflightResponse | BatchPreflightResponse):
         return EXIT_SUCCESS if result.status is PreflightStatus.READY else EXIT_PREFLIGHT_ERROR
+    if isinstance(result, CalibrationProposalResponse):
+        return EXIT_SUCCESS if result.validation.valid else EXIT_PREFLIGHT_ERROR
+    if isinstance(result, CalibrationValidationReport):
+        return EXIT_SUCCESS if result.valid else EXIT_PREFLIGHT_ERROR
     if isinstance(result, LegacyJobUpgradeResponse):
         return (
             EXIT_SUCCESS
@@ -1425,6 +1536,40 @@ def preflight_r2r_command(ctx: typer.Context) -> None:
 @preflight_app.command("batch", context_settings=_PASSTHROUGH_CONTEXT)
 def preflight_batch_command(ctx: typer.Context) -> None:
     _passthrough(["preflight", "batch"], ctx)
+
+
+calibration_app = typer.Typer(
+    add_completion=False,
+    no_args_is_help=False,
+    context_settings=_PASSTHROUGH_CONTEXT,
+)
+app.add_typer(calibration_app, name="calibration")
+
+
+@calibration_app.callback(invoke_without_command=True)
+def calibration_group(ctx: typer.Context) -> None:
+    if ctx.invoked_subcommand is None:
+        _passthrough(["calibration"], ctx)
+
+
+@calibration_app.command("status", context_settings=_PASSTHROUGH_CONTEXT)
+def calibration_status_command(ctx: typer.Context) -> None:
+    _passthrough(["calibration", "status"], ctx)
+
+
+@calibration_app.command("propose", context_settings=_PASSTHROUGH_CONTEXT)
+def calibration_propose_command(ctx: typer.Context) -> None:
+    _passthrough(["calibration", "propose"], ctx)
+
+
+@calibration_app.command("validate", context_settings=_PASSTHROUGH_CONTEXT)
+def calibration_validate_command(ctx: typer.Context) -> None:
+    _passthrough(["calibration", "validate"], ctx)
+
+
+@calibration_app.command("save", context_settings=_PASSTHROUGH_CONTEXT)
+def calibration_save_command(ctx: typer.Context) -> None:
+    _passthrough(["calibration", "save"], ctx)
 
 
 job_app = typer.Typer(

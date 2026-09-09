@@ -110,8 +110,9 @@ Python import traceback。
 ### Agent 与 MCP
 
 HHTools 提供供脚本使用的严格 JSON CLI，以及供兼容 Agent 使用的本机 stdio MCP server。
-当前 Agent 接口覆盖经过 preflight 的安全 H2R、无场景 R2R、可扩展 H2R/R2R Batch 任务和
-校验后的产物导出，尚未覆盖 WebUI 的全部功能。安装方式、能力边界、smoke-first 流程、
+当前 Agent 接口覆盖经过 preflight 的安全 H2R、无场景 R2R、可扩展 H2R/R2R Batch 任务、
+内容寻址的标定辅助、供 GPT 视觉检查的前/侧视预览，以及验证后的静默保存和产物导出，
+尚未覆盖 WebUI 的全部功能。安装方式、能力边界、smoke-first 流程、
 运行时目录所有权和仓库自带的 Codex 项目配置见 [Agent interfaces](docs/agent.md)。
 
 ### Ubuntu 桌面 GUI（`.deb`）

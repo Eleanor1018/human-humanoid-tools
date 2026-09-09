@@ -9,7 +9,7 @@
 - H2R Interaction-Mesh 正式验收；
 - Robot-to-Robot（R2R）；
 - H2R / R2R Batch；
-- 标定状态检查与候选建议。
+- H2R 标定状态、候选、验证、视觉预览与静默保存。
 
 Video-to-Motion 和 Analysis 暂不进入本轮实现。
 
@@ -19,7 +19,7 @@ Video-to-Motion 和 Analysis 暂不进入本轮实现。
 - [x] 阶段 2：H2R Interaction-Mesh 正式验收（terrain 与 object 自包含 E2E）
 - [x] 阶段 3：scene-free R2R（不可变 robot pair identity 与自包含 MCP E2E）
 - [x] 阶段 4：可配置 H2R / R2R Batch（默认不限，共享生命周期与双工作流 E2E）
-- [ ] 阶段 5：标定辅助
+- [x] 阶段 5：H2R 标定辅助与 GPT 视觉自动标定
 
 ## 设计原则
 
@@ -27,8 +27,9 @@ Video-to-Motion 和 Analysis 暂不进入本轮实现。
    `start / wait / get / cancel / retry / artifacts`。
 2. **先计划后执行**：任何求解或批处理都必须由不可变 plan 启动，并使用调用方提供的
    idempotency key。
-3. **人机边界明确**：Agent 可以检查标定、生成候选并验证候选；正式保存或用于 full run
-   仍需人类确认。
+3. **人机边界明确**：Agent 可以检查标定、生成候选并验证候选；确定性验证通过后允许
+   静默保存。GPT 视觉模式额外审查前/侧视图并记录声明，但模型名称不是鉴权凭据；full run
+   与真实机器人部署仍保留独立的人类确认。
 4. **接口兼容**：现有 `preflight_retarget`、`start_retarget`、REST 路径和 JSON CLI
    在 v1 生命周期内保留。
 5. **结果可移植**：默认响应保持紧凑，不嵌入轨迹、视频、网格或宿主机绝对路径；大内容
@@ -43,10 +44,10 @@ Video-to-Motion 和 Analysis 暂不进入本轮实现。
 | H2R / Newton | 已支持 | 保持兼容 |
 | H2R / Interaction-Mesh | 底层部分接通，缺少正式 E2E 与文档 | 正式验收 |
 | R2R | Web 支持，Agent 未暴露 | 增加 Agent preflight 与执行 |
-| H2R / R2R Batch | Web 支持，Agent 未暴露 | 增加有界批处理计划与聚合结果 |
+| H2R / R2R Batch | Web 支持，Agent 未暴露 | 增加默认不限、可配置的批处理计划与聚合结果 |
 | Video-to-Motion | 仅 Web / 独立 GVHMR 环境 | 暂缓 |
 | Analysis | Web 支持 | 暂缓 |
-| 自动标定 | 仅人工 GUI 标定 | 增加状态检查、候选与验证；保留人工保存 |
+| 自动标定 | 仅人工 GUI 标定 | 增加状态、候选、验证、视觉预览与经验证的静默保存 |
 
 ## 目标接口
 
@@ -81,10 +82,15 @@ preflight_batch(request)
 get_calibration_status(request)
 propose_calibration(request)
 validate_calibration(request)
+preview_calibration(request)
+save_calibration(request)
 ```
 
-`propose_calibration` 只生成可审查候选，不写入正式 calibration。候选必须包含输入资产
-identity、算法版本、约束、警告和验证结果。正式保存继续通过 GUI 或未来带明确人类确认的接口完成。
+`propose_calibration` 只生成可审查候选，不写入正式 calibration。候选包含输入资产
+identity、算法版本、锁定关节和验证结果。`preview_calibration` 返回可供 GPT 视觉模型直接检查
+的前/侧视 PNG。`save_calibration` 仅接受当前仍通过确定性验证的候选；
+`gpt_vision_silent` 还要求一份通过的视觉审查声明，并将候选与审查来源写入标定记录。
+客户端自报的模型名称只作为审计提示，不作为权限或真实性判断。
 
 ## 阶段 1：`wait_job`
 
@@ -161,14 +167,20 @@ JSON CLI 的既有 `--timeout` 表示整个 HTTP 请求超时，因此等待时�
 - [x] Batch 条目/总帧设置默认 `0 = 不限`；正数限制可持久化并在运行中热更新；
 - [ ] 人类 CLI 的 `hhtools batch h2r` / `hhtools batch r2r` 留在第 6 个提交统一完成。
 
-## 阶段 5：标定辅助
+## 阶段 5：H2R 标定辅助
 
-- `get_calibration_status`：只读返回 reference、来源、hash、约束与缺失项；
-- `propose_calibration`：通过拓扑推断与参考姿态生成候选；
-- `validate_calibration`：计算关节限制、关键点映射、足底、对称性和可达性检查；
-- 候选不得静默保存，不得直接触发 full run；
-- preflight 继续在缺少已确认标定时返回 `human_action_required`；
-- GUI 能读取候选、显示差异并由人类确认保存。
+- [x] `get_calibration_status`：只读返回 reference、来源、hash、映射与当前质量；
+- [x] `propose_calibration`：通过 URDF 拓扑、参考姿态与关节限位生成可修订候选；
+- [x] `validate_calibration`：计算关节限制、关键肢段方向、足底与左右对称检查；
+- [x] `preview_calibration`：以 MCP image content 返回确定性的前/侧视 PNG；
+- [x] `save_calibration`：确定性验证通过后允许 `validated_silent`；GPT 视觉审查通过后允许
+  `gpt_vision_silent`，并始终写入用户 overlay；覆盖前归档旧版本、拒绝变化过的 baseline，
+  避免改变已登记 robot bundle 或静默丢失并发修改；
+- [x] 候选以内容寻址方式持久化，可通过 parent candidate、关节覆盖和锁定关节迭代；
+- [x] preflight 缺少标定时仍返回 `human_action_required`，支持自动标定的 Agent 完成后必须
+  重新 preflight；
+- [x] GUI 能生成候选并在现有 3D 标定编辑器中继续人工微调与保存；
+- [x] 自动标定不授权 full run 或真实机器人部署。
 
 ## CLI 首页目标
 
