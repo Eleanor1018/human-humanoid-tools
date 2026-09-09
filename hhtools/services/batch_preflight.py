@@ -253,9 +253,7 @@ class BatchPreflightService:
                         "BATCH_RESOURCE_LIMIT_EXCEEDED",
                         "The batch frame estimate exceeds the configured service limit.",
                         details={
-                            "max_batch_total_frames": (
-                                configured_limits.max_batch_total_frames
-                            ),
+                            "max_batch_total_frames": (configured_limits.max_batch_total_frames),
                             "item_index": index,
                         },
                     )
