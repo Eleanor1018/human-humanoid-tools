@@ -42,6 +42,8 @@ describe('Linux package entry points', () => {
   })
 
   it('packages the installer bootstrap without embedding a Linux Python runtime', () => {
+    expect(packageMetadata.scripts.postinstall).toBe('npm run prepare:electron')
+    expect(packageMetadata.scripts['dist:linux']).toContain('npm run prepare:electron')
     expect(packageMetadata.scripts['dist:linux']).not.toContain('npm run prepare:models')
     expect(packageMetadata.scripts['dist:linux']).toContain('npm run prepare:builtin')
     expect(packageMetadata.scripts['dist:linux']).toContain('npm run prepare:bootstrap')
