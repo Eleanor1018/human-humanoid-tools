@@ -5,6 +5,7 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
 import {
   cameraFrame,
+  cameraFrameKey,
   combinedVisibleBounds,
   visibleObjectBounds,
 } from "./camera";
@@ -31,7 +32,7 @@ export function StageCameraController({
 }: StageCameraControllerProps) {
   const { camera, gl } = useThree();
   const controlsRef = useRef<OrbitControls | null>(null);
-  const framedRevision = useRef(-1);
+  const framedKey = useRef<string | null>(null);
   const manualUntil = useRef(0);
   const focus = useRef(new THREE.Vector3());
 
@@ -92,10 +93,12 @@ export function StageCameraController({
     const controls = controlsRef.current;
     if (!controls) return;
 
-    if (framedRevision.current !== frameRevision) {
+    const focusObjects = focusTargets.map((target) => target.current);
+    const nextFrameKey = cameraFrameKey(frameRevision, focusObjects);
+    if (framedKey.current !== nextFrameKey) {
       const targetBounds = calibration
         ? visibleObjectBounds(content.current)
-        : combinedVisibleBounds(focusTargets.map((target) => target.current));
+        : combinedVisibleBounds(focusObjects);
       const bounds = targetBounds ?? visibleObjectBounds(content.current);
       if (bounds) {
         // The old workbench fits robots and calibration precisely, but keeps
@@ -113,7 +116,7 @@ export function StageCameraController({
         controls.minDistance = calibration ? Math.max(0.28, frame.span * 0.12) : 0;
         controls.maxDistance = calibration ? Math.max(frame.span * 6, 18) : Infinity;
         controls.update();
-        framedRevision.current = frameRevision;
+        framedKey.current = nextFrameKey;
       }
     }
 

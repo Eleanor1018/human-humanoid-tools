@@ -16,6 +16,7 @@ import {
 } from "../src/stage/capsuleBody.ts";
 import {
   cameraFrame,
+  cameraFrameKey,
   combinedVisibleBounds,
   DEFAULT_CAMERA_OFFSET,
   visibleObjectBounds,
@@ -323,6 +324,16 @@ test("frames only visible Stage geometry", () => {
     combinedVisibleBounds([shown, hidden])?.getCenter(new THREE.Vector3()).toArray(),
     [4, 0, 0],
   );
+});
+
+test("reframes when an asynchronously loaded focus object is replaced", () => {
+  const first = new THREE.Group();
+  const second = new THREE.Group();
+
+  assert.notEqual(cameraFrameKey(3, [null]), cameraFrameKey(3, [first]));
+  assert.notEqual(cameraFrameKey(3, [first]), cameraFrameKey(3, [second]));
+  assert.notEqual(cameraFrameKey(3, [first]), cameraFrameKey(4, [first]));
+  assert.equal(cameraFrameKey(3, [first]), cameraFrameKey(3, [first]));
 });
 
 test("fits tall robot bounds within the limiting camera field of view", () => {
