@@ -62,6 +62,21 @@ def build_analysis_entries(source_root: Path) -> list[dict[str, Any]]:
             }
         )
 
+    # A robot export can also look like a generic ``.pkl`` motion bundle to the
+    # permissive upload scanner (for example, it used to be claimed as OMOMO).
+    # Apply the stricter, structure-aware R2R detector first so the shared
+    # ``seen`` boundary cannot relabel a valid robot trajectory as human motion.
+    for reference in enumerate_r2r_clips(root, profile="auto"):
+        path = reference.path.resolve()
+        folder_label = _clip_folder_label(root, path) or "robot"
+        stem = _clip_stem(root, path)
+        append(
+            source_path=path,
+            clip_id=f"{folder_label}/{stem}" if folder_label else stem,
+            dataset="robot",
+            folder_label=folder_label,
+        )
+
     for reference in enumerate_upload_clips(root, profile="auto"):
         folder_label = _clip_folder_label(root, reference.path)
         stem = _clip_stem(root, reference.path)
@@ -78,17 +93,6 @@ def build_analysis_entries(source_root: Path) -> list[dict[str, Any]]:
             clip_id=f"{entry.folder_label}/{entry.stem}",
             dataset=entry.dataset,
             folder_label=entry.folder_label,
-        )
-
-    for reference in enumerate_r2r_clips(root, profile="auto"):
-        path = reference.path.resolve()
-        folder_label = _clip_folder_label(root, path) or "robot"
-        stem = _clip_stem(root, path)
-        append(
-            source_path=path,
-            clip_id=f"{folder_label}/{stem}" if folder_label else stem,
-            dataset="robot",
-            folder_label=folder_label,
         )
 
     entries.sort(key=lambda item: (item["folder_label"].lower(), item["clip_id"].lower()))

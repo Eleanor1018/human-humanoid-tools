@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import pickle
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -334,3 +336,77 @@ def test_library_api_exposes_robot_trajectory_asset_boundary(
 
     assert response.status_code == 200
     assert response.json()["entries"][0]["asset_kind"] == "robot_trajectory"
+
+
+def test_r2r_library_discovers_and_loads_robot_pkl_before_human_fallback(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from hhtools.web.server.routes import r2r as r2r_routes
+
+    def complete_source_job(
+        job,
+        _drop,
+        source_robot,
+        _profile,
+        _state,
+        _source_fps=None,
+        selected_path=None,
+    ) -> None:
+        job.result = {
+            "token": "source-token",
+            "source_robot": source_robot,
+            "name": Path(selected_path).stem,
+        }
+        job.mark_terminal("done")
+
+    monkeypatch.setattr(
+        r2r_routes,
+        "_run_r2r_source_upload_job",
+        complete_source_job,
+    )
+    app = _create_app(tmp_path, monkeypatch)
+    selected_root = tmp_path / "managed-motion-library"
+
+    with _local_client(app) as client:
+        switched = client.patch(
+            "/api/settings/motion-library",
+            json={"root": str(selected_root)},
+        )
+        assert switched.status_code == 200
+
+        clip = selected_root / "G1 exports" / "walk.pkl"
+        clip.parent.mkdir(parents=True)
+        with clip.open("wb") as stream:
+            pickle.dump(
+                {
+                    "hhtools_export": "r2r_v1",
+                    "robot": {"joint_q": [[0.0] * 8]},
+                },
+                stream,
+            )
+
+        library = client.get("/api/library")
+        assert library.status_code == 200
+        entries = library.json()["entries"]
+        assert len(entries) == 1
+        entry = entries[0]
+        assert entry["dataset"] == "robot"
+        assert entry["asset_kind"] == "robot_trajectory"
+        assert entry["motion_category"] == "motion"
+
+        started = client.post(
+            "/api/r2r/source/library",
+            json={**entry, "source_robot": "g1_29dof"},
+        )
+        assert started.status_code == 200
+        job_id = started.json()["job_id"]
+        for _ in range(100):
+            completed = client.get(f"/api/job/{job_id}").json()
+            if completed["status"] in {"done", "error"}:
+                break
+            time.sleep(0.01)
+
+    assert completed["status"] == "done"
+    assert completed["kind"] == "r2r_source_library"
+    assert completed["result"]["name"] == "walk"
