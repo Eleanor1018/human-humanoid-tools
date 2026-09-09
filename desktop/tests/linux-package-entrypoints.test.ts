@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest'
 
 interface DesktopPackage {
   desktopName: string
+  license: string
   scripts: Record<string, string>
   build: {
     productName: string
@@ -29,6 +30,7 @@ const packageMetadata = JSON.parse(
 
 describe('Linux package entry points', () => {
   it('keeps the desktop identity while separating GUI and CLI commands', () => {
+    expect(packageMetadata.license).toBe('Apache-2.0')
     expect(packageMetadata.desktopName).toBe('hhtools')
     expect(packageMetadata.build.productName).toBe('Human-Humanoid Tools')
     expect(packageMetadata.build.linux.executableName).toBe('hhtools-desktop')

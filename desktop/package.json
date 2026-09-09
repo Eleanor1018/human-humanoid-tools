@@ -2,6 +2,7 @@
   "name": "hhtools-desktop",
   "version": "0.1.0",
   "private": true,
+  "license": "Apache-2.0",
   "description": "Desktop GUI shell for human-humanoid-tools",
   "desktopName": "hhtools",
   "author": "hhtools contributors",
