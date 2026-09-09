@@ -1,5 +1,5 @@
 import { useFrame } from "@react-three/fiber";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import * as THREE from "three";
 
@@ -476,7 +476,9 @@ function RobotObject({
     return () => onPoseReaderChange?.(null);
   }, [onPoseReaderChange, poseReader]);
 
-  useEffect(() => {
+  // Pose the root before the first rendered frame so camera bounds already
+  // include ground_offset_z when the asynchronously loaded object appears.
+  useLayoutEffect(() => {
     if (!group.current) return;
     lastFrame.current = null;
     if (trajectory?.frames.length) {

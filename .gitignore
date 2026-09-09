@@ -73,6 +73,7 @@ desktop/.runtime/
 desktop/.runtime.staging-*/
 desktop/.models/
 desktop/.bootstrap/
+desktop/.bootstrap.staging-*/
 desktop/.builtin/
 desktop/.builtin.staging-*/
 desktop/.vite/

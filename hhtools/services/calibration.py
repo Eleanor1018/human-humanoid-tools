@@ -172,10 +172,14 @@ class CalibrationService:
                 error.api_error.model_copy(update={"stage": ErrorStage.CALIBRATION})
             ) from error
         if inspection.status is InspectionStatus.INVALID:
-            public = inspection.errors[0] if inspection.errors else ApiError(
-                code="ASSET_INSPECTION_FAILED",
-                message="The calibration motion did not pass content inspection.",
-                stage=ErrorStage.CALIBRATION,
+            public = (
+                inspection.errors[0]
+                if inspection.errors
+                else ApiError(
+                    code="ASSET_INSPECTION_FAILED",
+                    message="The calibration motion did not pass content inspection.",
+                    stage=ErrorStage.CALIBRATION,
+                )
             )
             raise CalibrationServiceError(
                 public.model_copy(update={"stage": ErrorStage.CALIBRATION})
@@ -210,20 +214,16 @@ class CalibrationService:
         mapping_error = bool(assessment.missing_slots)
         mapping_warning = bool(assessment.non_distal_targets)
         limit_error = bool(
-            assessment.unknown_joints
-            or assessment.missing_joints
-            or assessment.limit_violations
+            assessment.unknown_joints or assessment.missing_joints or assessment.limit_violations
         )
         alignment_error = bool(assessment.alignment_errors)
         alignment_warning = bool(assessment.alignment_warnings)
         symmetry_warning = any(value > 20.0 for value in assessment.symmetry_errors_deg.values())
         feet_error = (
-            assessment.foot_height_delta_m is not None
-            and assessment.foot_height_delta_m > 0.08
+            assessment.foot_height_delta_m is not None and assessment.foot_height_delta_m > 0.08
         )
         feet_warning = (
-            assessment.foot_height_delta_m is not None
-            and assessment.foot_height_delta_m > 0.03
+            assessment.foot_height_delta_m is not None and assessment.foot_height_delta_m > 0.03
         )
         return [
             PreflightCheck(
@@ -287,9 +287,7 @@ class CalibrationService:
             PreflightCheck(
                 code="CALIBRATION_BILATERAL_SYMMETRY",
                 level=(
-                    PreflightCheckLevel.WARNING
-                    if symmetry_warning
-                    else PreflightCheckLevel.PASS
+                    PreflightCheckLevel.WARNING if symmetry_warning else PreflightCheckLevel.PASS
                 ),
                 message=(
                     "The proposed left and right limb directions are visibly asymmetric."

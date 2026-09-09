@@ -24,6 +24,8 @@ export interface ResolveRuntimeOptions {
   isPackaged?: boolean
   resourcesPath?: string
   appVersion?: string
+  /** Override the conventional system runtime root in deterministic tests. */
+  systemInstallRoot?: string | null
   env?: NodeJS.ProcessEnv
   /** Override the host platform in deterministic resolver tests. */
   platform?: NodeJS.Platform
@@ -107,12 +109,16 @@ function bundledRuntime(
   return { repoRoot, pythonExecutable, runtimeRoot }
 }
 
-function managedRuntimeRoots(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string[] {
+function managedRuntimeRoots(
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+  systemInstallRoot: string | null = '/opt/hhtools'
+): string[] {
   if (platform !== 'linux') return []
   const roots = [env.HHTOOLS_INSTALL_ROOT]
   if (env.XDG_DATA_HOME) roots.push(join(env.XDG_DATA_HOME, 'hhtools'))
   else if (env.HOME) roots.push(join(env.HOME, '.local', 'share', 'hhtools'))
-  roots.push('/opt/hhtools')
+  if (systemInstallRoot) roots.push(systemInstallRoot)
   return [
     ...new Set(
       roots.filter((root): root is string => Boolean(root)).map((root) => resolve(root))
@@ -123,9 +129,10 @@ function managedRuntimeRoots(env: NodeJS.ProcessEnv, platform: NodeJS.Platform):
 function managedRuntime(
   env: NodeJS.ProcessEnv,
   platform: NodeJS.Platform,
-  expectedVersion?: string
+  expectedVersion?: string,
+  systemInstallRoot?: string | null
 ): { root: string; pythonExecutable: string } | undefined {
-  for (const root of managedRuntimeRoots(env, platform)) {
+  for (const root of managedRuntimeRoots(env, platform, systemInstallRoot)) {
     const marker = join(root, 'runtime-version')
     const pythonExecutable = join(root, 'tools', 'hhtools', 'bin', 'python')
     if (!existsSync(marker) || !existsSync(pythonExecutable)) continue
@@ -150,13 +157,31 @@ function packagedResource(options: ResolveRuntimeOptions, ...parts: string[]): s
   return existsSync(candidate) ? candidate : undefined
 }
 
+function packagedRuntimeIdentity(options: ResolveRuntimeOptions): string | undefined {
+  const identityPath = packagedResource(options, 'bootstrap', 'RUNTIME_ID')
+  if (!identityPath) return undefined
+  let identity: string
+  try {
+    identity = readFileSync(identityPath, 'utf8').trim()
+  } catch (error) {
+    throw new Error(`Cannot read the packaged runtime identity: ${String(error)}`)
+  }
+  if (!/^[0-9A-Za-z._+-]{1,128}$/.test(identity)) {
+    throw new Error(`The packaged runtime identity is invalid: ${identityPath}`)
+  }
+  return identity
+}
+
 export function resolveRuntime(options: ResolveRuntimeOptions): RuntimeConfig {
   const env = options.env ?? process.env
   const platform = options.platform ?? process.platform
   const explicitRepoRoot = configuredRepositoryRoot(env)
   const packaged = explicitRepoRoot === undefined ? bundledRuntime(options, platform) : undefined
+  const expectedManagedIdentity = explicitRepoRoot === undefined && packaged === undefined
+    ? packagedRuntimeIdentity(options) ?? options.appVersion
+    : options.appVersion
   const managed = explicitRepoRoot === undefined && packaged === undefined && options.isPackaged
-    ? managedRuntime(env, platform, options.appVersion)
+    ? managedRuntime(env, platform, expectedManagedIdentity, options.systemInstallRoot)
     : undefined
   const repoRoot = explicitRepoRoot
     ?? packaged?.repoRoot

@@ -130,10 +130,10 @@ hhtools = "hhtools.cli.main:app"
 hhtools-mcp = "hhtools.mcp.server:main"
 
 [project.urls]
-Homepage = "https://github.com/REPLACE_ORG/human-humanoid-tools"
-Repository = "https://github.com/REPLACE_ORG/human-humanoid-tools"
-Issues = "https://github.com/REPLACE_ORG/human-humanoid-tools/issues"
-Documentation = "https://github.com/REPLACE_ORG/human-humanoid-tools/blob/main/framework.md"
+Homepage = "https://github.com/Roboparty/human-humanoid-tools"
+Repository = "https://github.com/Roboparty/human-humanoid-tools"
+Issues = "https://github.com/Roboparty/human-humanoid-tools/issues"
+Documentation = "https://github.com/Roboparty/human-humanoid-tools/blob/main/framework.md"
 
 [tool.uv]
 # chumpy 0.70's legacy setup.py imports `pip` at build time but doesn't declare

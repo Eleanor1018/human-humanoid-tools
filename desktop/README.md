@@ -83,9 +83,10 @@ The two desktop targets use different runtime delivery models:
 - Windows stages the current all-extras `.venv` and tracked HHTools application files into the
   installer, so the installed EXE does not require a checkout or system Python.
 - Linux keeps Python outside the Debian package. On first launch, a native setup page installs the
-  version-matched GitHub Release runtime either for the current user (recommended) or under
-  `/opt/hhtools`. System installation uses the operating system's `pkexec` authentication dialog;
-  HHTools never reads or forwards the password.
+  bundled HHTools wheel and its explicitly locked dependencies either for the current user
+  (recommended) or under `/opt/hhtools`. The package also carries the pinned uv executable, so this
+  path does not depend on an unpublished GitHub Release bootstrap. System installation uses the
+  operating system's `pkexec` authentication dialog; HHTools never reads or forwards the password.
 
 Both packages include only the 30 motions and six robot bundles selected by
 `configs/builtin-assets.json`. Before packaging, install the pinned robot bundles and point the
@@ -101,13 +102,6 @@ Then invoke electron-builder through the package scripts:
 ```bash
 npm run dist:linux   # release/hhtools-0.1.0-amd64.deb
 npm run dist:win     # release/hhtools-0.1.0-x64-setup.exe
-```
-
-Fork releases should select their own GitHub download source at build time without changing the
-canonical project metadata:
-
-```bash
-HHTOOLS_DESKTOP_RELEASE_REPOSITORY=Eleanor1018/human-humanoid-tools npm run dist:linux
 ```
 
 `npm run dist:win` must run on Windows after `uv sync --all-extras --no-dev`; the runtime stager
@@ -126,9 +120,10 @@ grant redistribution rights for a model file.
 
 Install the Linux package with `sudo apt install ./release/hhtools-0.1.0-amd64.deb`, then launch
 `hhtools-desktop`. The first-run setup may download several gigabytes, shows live output, verifies
-the release checksums, and restarts the app only after `hhtools doctor` succeeds. The Debian package
-does not install or replace the separate `hhtools` CLI command. GVHMR remains optional: use its
-dedicated setup from the Video to Motion view after the core application starts.
+the bundled checksums, and restarts the app only after `hhtools doctor` succeeds. Network access is
+still required for uv to acquire Python and the third-party packages named by the bundled lock. The
+Debian package does not install or replace the separate `hhtools` CLI command. GVHMR remains
+optional: use its dedicated setup from the Video to Motion view after the core application starts.
 
 ## Runtime model
 

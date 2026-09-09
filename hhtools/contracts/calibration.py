@@ -158,9 +158,7 @@ class CalibrationCandidate(ContractModel):
     reference: CalibrationReference
     motion_asset_id: AssetId | None = None
     motion_digest: Sha256Hex | None = None
-    algorithm: Literal["hhtools.calibration.kinematic.v1"] = (
-        "hhtools.calibration.kinematic.v1"
-    )
+    algorithm: Literal["hhtools.calibration.kinematic.v1"] = "hhtools.calibration.kinematic.v1"
     baseline: Literal["urdf_zero", "saved_calibration", "candidate"]
     baseline_calibration_id: CalibrationId | None = None
     parent_candidate_id: CalibrationCandidateId | None = None

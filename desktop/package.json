@@ -2,6 +2,7 @@
   "name": "hhtools-desktop",
   "version": "0.1.0",
   "private": true,
+  "license": "Apache-2.0",
   "description": "Desktop GUI shell for human-humanoid-tools",
   "desktopName": "hhtools",
   "author": "hhtools contributors",
@@ -25,7 +26,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run --config vitest.config.ts",
     "test:e2e": "npm run build && playwright test --config playwright.config.ts",
-    "dist:win": "npm run prepare:electron && npm run build && npm run prepare:runtime && npm run prepare:builtin && npm run prepare:bootstrap && electron-builder --win nsis",
+    "dist:win": "npm run prepare:electron && npm run build && npm run prepare:runtime && npm run prepare:builtin && electron-builder --win nsis",
     "dist:linux": "npm run prepare:electron && npm run build && npm run prepare:builtin && npm run prepare:bootstrap && electron-builder --linux deb --x64"
   },
   "devDependencies": {
@@ -55,13 +56,6 @@
     ],
     "extraResources": [
       {
-        "from": ".bootstrap",
-        "to": "bootstrap",
-        "filter": [
-          "install.sh"
-        ]
-      },
-      {
         "from": ".builtin",
         "to": "builtin",
         "filter": [
@@ -88,6 +82,15 @@
       "artifactName": "hhtools-${version}-${arch}.${ext}",
       "category": "Science",
       "executableName": "hhtools-desktop",
+      "extraResources": [
+        {
+          "from": ".bootstrap",
+          "to": "bootstrap",
+          "filter": [
+            "**/*"
+          ]
+        }
+      ],
       "icon": "resources/icon.png",
       "syncDesktopName": true,
       "target": [
@@ -113,7 +116,6 @@
         "libgbm1",
         "libasound2",
         "ca-certificates",
-        "curl",
         "policykit-1"
       ],
       "fpm": [

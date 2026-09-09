@@ -482,9 +482,7 @@ def create_mcp_server(
     server: MCPServer[AgentRuntime] = _HHToolsMCPServer(
         "hhtools",
         title="HHTools Agent",
-        description=(
-            "Safe local H2R, scene-free R2R, batch, and validated calibration services."
-        ),
+        description=("Safe local H2R, scene-free R2R, batch, and validated calibration services."),
         instructions=_server_instructions(web_ui_url),
         version=__version__,
         lifespan=lifespan,
@@ -613,9 +611,7 @@ def create_mcp_server(
     ) -> CalibrationPreview:
         """Return front/side PNG overlays for a vision-capable GPT calibration review."""
 
-        return _calibration_preview_call(
-            lambda: _calibration_runtime(context).preview(request)
-        )
+        return _calibration_preview_call(lambda: _calibration_runtime(context).preview(request))
 
     @server.tool(annotations=_CALIBRATION_SAVE)
     def save_calibration(
@@ -660,9 +656,7 @@ def create_mcp_server(
     ) -> R2RCalibrationPreview:
         """Return source-reference and target-pose front/side PNG overlays for visual review."""
 
-        return _calibration_preview_call(
-            lambda: _r2r_calibration_runtime(context).preview(request)
-        )
+        return _calibration_preview_call(lambda: _r2r_calibration_runtime(context).preview(request))
 
     @server.tool(annotations=_CALIBRATION_SAVE)
     def save_r2r_calibration(

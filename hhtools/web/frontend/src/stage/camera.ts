@@ -37,6 +37,14 @@ export function combinedVisibleBounds(
   return combined;
 }
 
+/** Reframe when an asynchronously loaded focus object is actually replaced. */
+export function cameraFrameKey(
+  revision: number,
+  roots: readonly (THREE.Object3D | null)[],
+): string {
+  return `${revision}:${roots.map((root) => root?.uuid ?? "pending").join("|")}`;
+}
+
 export function cameraFrame(
   bounds: THREE.Box3 | null,
   fitBounds = true,
