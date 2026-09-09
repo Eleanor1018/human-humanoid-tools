@@ -35,6 +35,9 @@ jobs:
       - name: Sync locked application dependencies
         run: uv sync --all-extras --dev
 
+      - name: Check Linux installer POSIX syntax
+        run: dash -n install.sh
+
       - name: Reject critical Python errors
         run: uv run --no-sync ruff check hhtools tests --select E9,F63,F7,F82
 

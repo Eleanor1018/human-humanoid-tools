@@ -45,6 +45,8 @@ from hhtools.contracts import (
     LegacyJobUpgradeResponse,
     PreflightResponse,
     PreflightStatus,
+    R2RPreflightRequest,
+    R2RPreflightResponse,
     RetargetPreflightRequest,
 )
 from hhtools.contracts.cli import (
@@ -141,15 +143,28 @@ _AFTER_REVISION_ARGUMENT = _CliArgumentSpec(
     expected="A non-negative integer revision.",
     value_kind="int",
 )
+_WAIT_AFTER_REVISION_ARGUMENT = _CliArgumentSpec(
+    "--after-revision",
+    "Wait until the job advances beyond this observed revision.",
+    value_name="INTEGER",
+    required=True,
+    expected="A non-negative integer revision returned by start, get, lookup, or wait.",
+    value_kind="int",
+)
+_WAIT_TIMEOUT_ARGUMENT = _CliArgumentSpec(
+    "--wait-timeout",
+    "Wait this many seconds for a job revision change.",
+    value_name="SECONDS",
+    expected="A finite number from 0 through 60.",
+    value_kind="float",
+)
 
 _COMMAND_SPECS: dict[tuple[str, ...], _CliCommandSpec] = {
     (): _CliCommandSpec((), "Call the versioned Agent API with strict JSON input and output."),
     ("capabilities",): _CliCommandSpec(
         ("capabilities",), "Return the live Agent capability document."
     ),
-    ("asset",): _CliCommandSpec(
-        ("asset",), "Catalog, register, inspect, get, or search assets."
-    ),
+    ("asset",): _CliCommandSpec(("asset",), "Catalog, register, inspect, get, or search assets."),
     ("asset", "catalog"): _CliCommandSpec(
         ("asset", "catalog"),
         "List registerable assets below configured allowlisted roots.",
@@ -223,7 +238,15 @@ _COMMAND_SPECS: dict[tuple[str, ...], _CliCommandSpec] = {
         "Validate one retarget request and freeze an immutable plan.",
         options=(_REQUEST_ARGUMENT,),
     ),
-    ("job",): _CliCommandSpec(("job",), "Start, recover, inspect, cancel, or retry jobs."),
+    ("preflight", "r2r"): _CliCommandSpec(
+        ("preflight", "r2r"),
+        "Validate one robot-to-robot request and freeze both robot identities.",
+        options=(_REQUEST_ARGUMENT,),
+    ),
+    ("job",): _CliCommandSpec(
+        ("job",),
+        "Start, wait for, recover, inspect, cancel, or retry jobs.",
+    ),
     ("job", "start"): _CliCommandSpec(
         ("job", "start"),
         "Submit one immutable preflight plan.",
@@ -234,6 +257,12 @@ _COMMAND_SPECS: dict[tuple[str, ...], _CliCommandSpec] = {
         "Return one compact revision-aware job snapshot.",
         positionals=(_JOB_ID_ARGUMENT,),
         options=(_AFTER_REVISION_ARGUMENT,),
+    ),
+    ("job", "wait"): _CliCommandSpec(
+        ("job", "wait"),
+        "Wait for one job to advance beyond a known revision.",
+        positionals=(_JOB_ID_ARGUMENT,),
+        options=(_WAIT_AFTER_REVISION_ARGUMENT, _WAIT_TIMEOUT_ARGUMENT),
     ),
     ("job", "lookup"): _CliCommandSpec(
         ("job", "lookup"),
@@ -645,6 +674,9 @@ def _parser() -> _JsonArgumentParser:
     retarget = preflight_commands.add_parser("retarget", add_help=False)
     retarget.add_argument("--request", required=True)
     retarget.set_defaults(operation="preflight_retarget")
+    r2r = preflight_commands.add_parser("r2r", add_help=False)
+    r2r.add_argument("--request", required=True)
+    r2r.set_defaults(operation="preflight_r2r")
 
     job = commands.add_parser("job", add_help=False)
     job_commands = job.add_subparsers(dest="job_command", required=True)
@@ -656,6 +688,11 @@ def _parser() -> _JsonArgumentParser:
     get_job.add_argument("job_id")
     get_job.add_argument("--after-revision", type=int)
     get_job.set_defaults(operation="job_get")
+    wait_job = job_commands.add_parser("wait", add_help=False)
+    wait_job.add_argument("job_id")
+    wait_job.add_argument("--after-revision", type=int, required=True)
+    wait_job.add_argument("--wait-timeout", type=float, default=20.0)
+    wait_job.set_defaults(operation="job_wait")
     lookup_job = job_commands.add_parser("lookup", add_help=False)
     lookup_job.add_argument("--plan", required=True)
     lookup_job.add_argument("--idempotency-key", required=True)
@@ -964,6 +1001,17 @@ def _execute(  # noqa: PLR0911 - one explicit branch per public CLI operation
             ),
         )
 
+    if operation == "preflight_r2r":
+        preflight_request = _validated_request(R2RPreflightRequest, namespace.request, stdin)
+        return _response(
+            R2RPreflightResponse,
+            transport.request_json(
+                "POST",
+                "/preflight/r2r",
+                document=preflight_request.model_dump(mode="json", exclude_none=True),
+            ),
+        )
+
     if operation == "job_start":
         try:
             start_request = JobStartRequest(
@@ -991,6 +1039,29 @@ def _execute(  # noqa: PLR0911 - one explicit branch per public CLI operation
         return _response(
             AgentJobView,
             transport.request_json("GET", path, query={"after_revision": namespace.after_revision}),
+        )
+    if operation == "job_wait":
+        if (
+            isinstance(namespace.wait_timeout, bool)
+            or not math.isfinite(namespace.wait_timeout)
+            or not 0 <= namespace.wait_timeout <= 60
+        ):
+            raise _ArgumentError(
+                "INVALID_VALUE",
+                argument=_WAIT_TIMEOUT_ARGUMENT.name,
+                expected=_WAIT_TIMEOUT_ARGUMENT.expected,
+            )
+        path = f"/jobs/{_path_segment(namespace.job_id)}/wait"
+        return _response(
+            AgentJobView,
+            transport.request_json(
+                "GET",
+                path,
+                query={
+                    "after_revision": namespace.after_revision,
+                    "timeout": namespace.wait_timeout,
+                },
+            ),
         )
     if operation == "job_lookup":
         try:
@@ -1130,7 +1201,7 @@ def _error_exit_code(error: ApiError) -> int:
 
 
 def _result_exit_code(result: BaseModel) -> int:
-    if isinstance(result, PreflightResponse):
+    if isinstance(result, PreflightResponse | R2RPreflightResponse):
         return EXIT_SUCCESS if result.status is PreflightStatus.READY else EXIT_PREFLIGHT_ERROR
     if isinstance(result, LegacyJobUpgradeResponse):
         return (
@@ -1197,6 +1268,22 @@ def run(
             return EXIT_SUCCESS if safe else EXIT_INTERNAL_ERROR
         arguments, base_url, timeout = _normalize_argv(raw_arguments)
         namespace = _parser().parse_args(arguments)
+        if namespace.operation == "job_wait":
+            if not math.isfinite(namespace.wait_timeout) or not 0 <= namespace.wait_timeout <= 60:
+                raise _ArgumentError(
+                    "INVALID_VALUE",
+                    argument=_WAIT_TIMEOUT_ARGUMENT.name,
+                    expected=_WAIT_TIMEOUT_ARGUMENT.expected,
+                )
+            if timeout <= namespace.wait_timeout:
+                raise _ArgumentError(
+                    "INVALID_COMBINATION",
+                    argument="--timeout",
+                    expected=(
+                        "Set the Agent request --timeout higher than --wait-timeout "
+                        "so the server can return its wait response."
+                    ),
+                )
         factory = transport_factory or _default_transport_factory
         transport = factory(base_url, timeout)
         result = _execute(namespace, transport, stdin=input_stream)
@@ -1309,6 +1396,11 @@ def preflight_retarget_command(ctx: typer.Context) -> None:
     _passthrough(["preflight", "retarget"], ctx)
 
 
+@preflight_app.command("r2r", context_settings=_PASSTHROUGH_CONTEXT)
+def preflight_r2r_command(ctx: typer.Context) -> None:
+    _passthrough(["preflight", "r2r"], ctx)
+
+
 job_app = typer.Typer(
     add_completion=False,
     no_args_is_help=False,
@@ -1331,6 +1423,11 @@ def job_start_command(ctx: typer.Context) -> None:
 @job_app.command("get", context_settings=_PASSTHROUGH_CONTEXT)
 def job_get_command(ctx: typer.Context) -> None:
     _passthrough(["job", "get"], ctx)
+
+
+@job_app.command("wait", context_settings=_PASSTHROUGH_CONTEXT)
+def job_wait_command(ctx: typer.Context) -> None:
+    _passthrough(["job", "wait"], ctx)
 
 
 @job_app.command("lookup", context_settings=_PASSTHROUGH_CONTEXT)

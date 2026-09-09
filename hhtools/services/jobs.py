@@ -379,14 +379,14 @@ class JobManager:
             )
         return stored
 
-    def start_retarget(
+    def start_job(
         self,
         plan_id: str,
         *,
         idempotency_key: str,
         parent_job_id: str | None = None,
     ) -> AgentJobView:
-        """Create at most one admitted job for one immutable plan request."""
+        """Create at most one admitted job for one immutable workflow plan."""
 
         with self._submission_lock:
             existing = self._existing_submission(
@@ -508,6 +508,21 @@ class JobManager:
                 if not submitted:
                     reservation.cancel()
 
+    def start_retarget(
+        self,
+        plan_id: str,
+        *,
+        idempotency_key: str,
+        parent_job_id: str | None = None,
+    ) -> AgentJobView:
+        """Compatibility alias for clients created before generic job start."""
+
+        return self.start_job(
+            plan_id,
+            idempotency_key=idempotency_key,
+            parent_job_id=parent_job_id,
+        )
+
     def _project_polled_job(
         self,
         stored: StoredJob,
@@ -543,6 +558,25 @@ class JobManager:
 
         try:
             stored = self._job_store.get(job_id)
+        except JobStoreError as exc:
+            raise _wrap_service_error(exc.api_error) from exc
+        return self._project_polled_job(stored, after_revision=after_revision)
+
+    def wait_job(
+        self,
+        job_id: str,
+        *,
+        after_revision: int,
+        timeout: float = 30.0,
+    ) -> AgentJobView:
+        """Wait for a revision change or terminal state and return a compact view."""
+
+        try:
+            stored = self._job_store.wait_for_revision(
+                job_id,
+                after_revision=after_revision,
+                timeout=timeout,
+            )
         except JobStoreError as exc:
             raise _wrap_service_error(exc.api_error) from exc
         return self._project_polled_job(stored, after_revision=after_revision)
@@ -670,7 +704,7 @@ class JobManager:
                 "Only a terminal job can be retried.",
                 details={"job_id": parent.job_id, "state": parent.view.state.value},
             )
-        return self.start_retarget(
+        return self.start_job(
             parent.spec.plan_id,
             idempotency_key=idempotency_key,
             parent_job_id=parent.job_id,

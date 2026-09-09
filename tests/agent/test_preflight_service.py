@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from hhtools.contracts import (
+    AssetCategory,
     AssetRegistrationRequest,
     BackendCapability,
     CapabilityResponse,
@@ -523,6 +524,42 @@ def test_robot_asset_is_required_and_backend_cannot_override_routing(
     assert wrong_backend.status is PreflightStatus.REJECTED
     assert wrong_backend.error is not None
     assert wrong_backend.error.code == "BACKEND_INCOMPATIBLE"
+
+
+def test_terrain_scene_preflight_freezes_interaction_mesh_without_newton_options(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, motion_id, robot_id, calibration_id = _setup(tmp_path)
+    assets = service._asset_service  # noqa: SLF001 - focused routing fixture
+    original_inspect = assets.inspect
+
+    def inspect(request):
+        result = original_inspect(request)
+        if request.asset_id != motion_id:
+            return result
+        return result.model_copy(
+            update={
+                "category": AssetCategory.TERRAIN_SCENE,
+                "has_terrain": True,
+                "metadata": {
+                    **result.metadata,
+                    "content_parsed": True,
+                    "recommended_backend": "interaction_mesh",
+                },
+            }
+        )
+
+    monkeypatch.setattr(assets, "inspect", inspect)
+
+    response = service.preflight_retarget(_request(motion_id, robot_id))
+
+    assert response.status is PreflightStatus.READY
+    assert response.plan is not None
+    assert response.plan.backend == "interaction_mesh"
+    assert response.plan.calibration_id == calibration_id
+    assert response.plan.parameters["run_mode"] == "smoke"
+    assert "ik_iterations" not in response.plan.parameters
 
 
 def test_missing_robot_asset_validates_the_installed_preset_before_suggesting_registration(

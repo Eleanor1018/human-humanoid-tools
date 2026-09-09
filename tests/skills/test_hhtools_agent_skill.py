@@ -84,13 +84,20 @@ def test_skill_has_minimal_repo_scoped_structure_and_trigger_metadata() -> None:
     metadata = _frontmatter(SKILL_FILE.read_text(encoding="utf-8"))
     assert metadata["name"] == SKILL_ROOT.name == "hhtools-agent"
     description = str(metadata["description"]).casefold()
-    for included_scope in ("h2r", "status", "cancellation", "retry", "result"):
+    for included_scope in (
+        "h2r",
+        "r2r",
+        "interaction-mesh",
+        "status",
+        "cancellation",
+        "retry",
+        "result",
+    ):
         assert included_scope in description
     for excluded_scope in (
         "solver-code edits",
-        "r2r",
+        "scene-bearing r2r",
         "batch",
-        "interaction-mesh",
         "remote service setup",
         "real-robot deployment",
     ):
@@ -105,7 +112,7 @@ def test_skill_has_minimal_repo_scoped_structure_and_trigger_metadata() -> None:
             {
                 "type": "mcp",
                 "value": "hhtools",
-                "description": "Local HHTools H2R Agent MCP server",
+                "description": "Local HHTools H2R/R2R Agent MCP server",
                 "transport": "stdio",
                 "command": "uv",
                 "args": [
@@ -188,7 +195,8 @@ def test_workflow_invariants_preserve_transport_and_execution_boundaries() -> No
     assert set(rules) == {
         "MCP_ONLY",
         "ALLOWLISTED_ASSETS",
-        "PLAIN_H2R_ONLY",
+        "H2R_BACKEND_ROUTING",
+        "R2R_INITIAL_SCOPE",
         "PREFLIGHT_OWNS_MODE",
         "OUTPUT_CREATE_NEW",
         "IDEMPOTENT_START",
@@ -209,8 +217,12 @@ def test_workflow_invariants_preserve_transport_and_execution_boundaries() -> No
         for term in ("root_id", "relative_path", "absolute path")
     )
     assert all(
-        term in normalized["PLAIN_H2R_ONLY"]
+        term in normalized["H2R_BACKEND_ROUTING"]
         for term in ("plain_motion", "interaction_mesh", "object interaction", "terrain scenes")
+    )
+    assert all(
+        term in normalized["R2R_INITIAL_SCOPE"]
+        for term in ("scene-free", "source identity", "source robot")
     )
     assert all(
         term in normalized["PREFLIGHT_OWNS_MODE"]
@@ -264,7 +276,7 @@ def test_stop_matrix_blocks_unsafe_continuation_and_duplicate_work() -> None:
             "new preflight",
         )
     )
-    assert "do not call `start_retarget`" in human_required
+    assert "do not call `start_job` or `start_retarget`" in human_required
     assert "run mcp and web against the same directory" in human_required
     assert "request a webui session token" in human_required
 
@@ -294,7 +306,7 @@ def test_stop_matrix_blocks_unsafe_continuation_and_duplicate_work() -> None:
             "exact recorded `plan_id`",
             "idempotency key",
             "`job_not_found`",
-            "replay `start_retarget`",
+            "replay the same start operation",
             "same pair",
         )
     )

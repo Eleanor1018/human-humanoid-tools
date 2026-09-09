@@ -10,7 +10,9 @@ registerHooks({
   },
 });
 
-const { canExportTaskResult } = await import("../src/features/tasks/api.ts");
+const { canExportTaskResult, isWorkflowResultTask } = await import(
+  "../src/features/tasks/api.ts"
+);
 
 test("only completed workflow tasks expose result export", () => {
   for (const kind of [
@@ -20,14 +22,13 @@ test("only completed workflow tasks expose result export", () => {
     "batch",
     "r2r_batch",
   ]) {
+    assert.equal(isWorkflowResultTask({ kind }), true);
     assert.equal(canExportTaskResult({ kind, can_download: true }), true);
+    assert.equal(canExportTaskResult({ kind, can_download: false }), false);
   }
 
   for (const kind of ["motion_load", "motion_link", "dataset_analyze"]) {
+    assert.equal(isWorkflowResultTask({ kind }), false);
     assert.equal(canExportTaskResult({ kind, can_download: true }), false);
   }
-  assert.equal(
-    canExportTaskResult({ kind: "retarget", can_download: false }),
-    false,
-  );
 });

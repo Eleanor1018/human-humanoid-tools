@@ -1,4 +1,4 @@
-"""Application service for registering and inspecting Agent motion assets.
+"""Application service for registering and inspecting Agent workflow assets.
 
 ``AssetRegistry`` owns filesystem authorization, immutable manifests, and
 persistence. ``MotionAssetInspector`` owns format discovery and read-only
@@ -34,6 +34,11 @@ from .assets import (
     AssetServiceError,
     DiscoveredAsset,
     DiscoveredAssetFile,
+)
+from .r2r_asset_inspection import (
+    R2RTrajectoryDiscoveryError,
+    R2RTrajectoryInspector,
+    discover_r2r_trajectory,
 )
 from .robot_asset_inspection import (
     RobotAssetDiscoveryError,
@@ -99,7 +104,11 @@ def _registration_kind(
     """Resolve an explicit or unambiguous motion/robot registration kind."""
 
     if request.kind is not None:
-        if request.kind not in {AssetKind.MOTION_BUNDLE, AssetKind.ROBOT_BUNDLE}:
+        if request.kind not in {
+            AssetKind.MOTION_BUNDLE,
+            AssetKind.ROBOT_BUNDLE,
+            AssetKind.ROBOT_TRAJECTORY_BUNDLE,
+        }:
             raise AssetServiceError(
                 ApiError(
                     code="UNSUPPORTED_ASSET_KIND",
@@ -109,6 +118,8 @@ def _registration_kind(
                 )
             )
         return request.kind
+    if request.category is AssetCategory.ROBOT_TRAJECTORY:
+        return AssetKind.ROBOT_TRAJECTORY_BUNDLE
     if request.category is AssetCategory.ROBOT_MODEL or candidate.suffix.casefold() == ".urdf":
         return AssetKind.ROBOT_BUNDLE
     if candidate.is_file():
@@ -138,10 +149,12 @@ class AgentAssetService:
         registry: AssetRegistry,
         inspector: MotionAssetInspector | None = None,
         robot_inspector: RobotAssetInspector | None = None,
+        r2r_inspector: R2RTrajectoryInspector | None = None,
     ) -> None:
         self._registry = registry
         self._inspector = inspector or MotionAssetInspector()
         self._robot_inspector = robot_inspector or RobotAssetInspector()
+        self._r2r_inspector = r2r_inspector or R2RTrajectoryInspector()
 
     @property
     def allowed_root_ids(self) -> tuple[str, ...]:
@@ -177,6 +190,33 @@ class AgentAssetService:
 
         candidate = self._registry.resolve_registration_path(request)
         kind = _registration_kind(request, candidate)
+        r2r_discovery = None
+        explicitly_r2r = (
+            kind is AssetKind.ROBOT_TRAJECTORY_BUNDLE
+            or request.category is AssetCategory.ROBOT_TRAJECTORY
+        )
+        if explicitly_r2r and (
+            request.category not in {None, AssetCategory.ROBOT_TRAJECTORY}
+            or request.kind not in {None, AssetKind.ROBOT_TRAJECTORY_BUNDLE}
+        ):
+            raise AssetServiceError(
+                ApiError(
+                    code="ASSET_KIND_MISMATCH",
+                    message="Robot trajectory bundles require the robot_trajectory category.",
+                    stage=ErrorStage.ASSET_REGISTRATION,
+                )
+            )
+        if explicitly_r2r or (request.kind is None and request.category is None):
+            try:
+                r2r_discovery = discover_r2r_trajectory(
+                    candidate,
+                    allow_code_capable=explicitly_r2r,
+                )
+            except R2RTrajectoryDiscoveryError as error:
+                if explicitly_r2r:
+                    raise _discovery_error(error) from error
+            else:
+                kind = AssetKind.ROBOT_TRAJECTORY_BUNDLE
         if kind is AssetKind.ROBOT_BUNDLE:
             try:
                 robot = discover_robot_bundle(candidate)
@@ -195,6 +235,34 @@ class AgentAssetService:
                 kind=AssetKind.ROBOT_BUNDLE,
                 category=AssetCategory.ROBOT_MODEL,
                 metadata=robot.metadata,
+            )
+        elif kind is AssetKind.ROBOT_TRAJECTORY_BUNDLE:
+            assert r2r_discovery is not None
+            files = [
+                DiscoveredAssetFile(
+                    path=r2r_discovery.primary_path,
+                    role=AssetFileRole.ROBOT_TRAJECTORY,
+                    required=True,
+                )
+            ]
+            for role, paths in sorted(
+                r2r_discovery.sidecars.items(),
+                key=lambda item: item[0].value,
+            ):
+                files.extend(
+                    DiscoveredAssetFile(path=path, role=role, required=True) for path in paths
+                )
+            discovery = DiscoveredAsset(
+                primary_file=r2r_discovery.primary_path,
+                files=tuple(files),
+                kind=AssetKind.ROBOT_TRAJECTORY_BUNDLE,
+                category=AssetCategory.ROBOT_TRAJECTORY,
+                detected=AssetDetected(
+                    dataset="robot_trajectory",
+                    recommended_backend="newton",
+                    source_robot_id=r2r_discovery.source_robot_id,
+                    trajectory_profile=r2r_discovery.profile,
+                ),
             )
         else:
             try:
@@ -312,9 +380,12 @@ class AgentAssetService:
         for _ in PurePosixPath(bundle.primary_file).parts:
             bundle_root = bundle_root.parent
 
-        inspector = (
-            self._robot_inspector if bundle.kind is AssetKind.ROBOT_BUNDLE else self._inspector
-        )
+        if bundle.kind is AssetKind.ROBOT_BUNDLE:
+            inspector = self._robot_inspector
+        elif bundle.kind is AssetKind.ROBOT_TRAJECTORY_BUNDLE:
+            inspector = self._r2r_inspector
+        else:
+            inspector = self._inspector
         return inspector.inspect(
             bundle,
             bundle_root,

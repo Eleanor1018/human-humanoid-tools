@@ -36,7 +36,13 @@ from .migration import (
     LegacyJobUpgradeResponse,
     LegacyMigrationReceipt,
 )
-from .preflight import PreflightResponse, RetargetPreflightRequest
+from .preflight import (
+    PreflightResponse,
+    R2RPlan,
+    R2RPreflightRequest,
+    R2RPreflightResponse,
+    RetargetPreflightRequest,
+)
 
 PUBLIC_AGENT_SCHEMAS: MappingProxyType[str, type[BaseModel]] = MappingProxyType(
     {
@@ -63,6 +69,9 @@ PUBLIC_AGENT_SCHEMAS: MappingProxyType[str, type[BaseModel]] = MappingProxyType(
         "legacy-job-upgrade-response": LegacyJobUpgradeResponse,
         "legacy-migration-receipt": LegacyMigrationReceipt,
         "preflight-response": PreflightResponse,
+        "r2r-plan": R2RPlan,
+        "r2r-preflight-request": R2RPreflightRequest,
+        "r2r-preflight-response": R2RPreflightResponse,
         "retarget-preflight-request": RetargetPreflightRequest,
         "robot-list-response": RobotListResponse,
     }

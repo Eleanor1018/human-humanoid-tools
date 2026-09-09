@@ -73,7 +73,7 @@ def _is_parc_ms_npz(path: Path) -> bool:
     return parent.name == stem
 
 
-def _is_omomo_pkl(path: Path) -> bool:
+def is_omomo_pkl(path: Path) -> bool:
     parent = path.parent
     stem = path.stem
     if (parent / f"{stem}_cleaned_simplified.obj").is_file():
@@ -81,7 +81,7 @@ def _is_omomo_pkl(path: Path) -> bool:
     return any(parent.glob("*_cleaned_simplified.obj"))
 
 
-def _is_parc_ms_pkl(path: Path) -> bool:
+def is_parc_ms_pkl(path: Path) -> bool:
     parent = path.parent
     stem = path.stem
     if (parent / f"{stem}_terrain.obj").is_file():
@@ -89,7 +89,7 @@ def _is_parc_ms_pkl(path: Path) -> bool:
     return parent.name == stem
 
 
-def sniff_npz_dataset(path: Path) -> str:
+def sniff_npz_dataset(path: Path) -> str:  # noqa: PLR0911 - schema routing
     """Classify an ``.npz`` without loading a full :class:`~hhtools.core.motion.Motion`."""
     import numpy as np
 
@@ -165,15 +165,15 @@ def sniff_pt_dataset(path: Path) -> str:
 
 def sniff_pkl_dataset(path: Path) -> str:
     """Classify standalone ``.pkl`` when not already routed to intermimic/meshmimic."""
-    if _is_omomo_pkl(path):
+    if is_omomo_pkl(path):
         return "omomo"
-    if _is_parc_ms_pkl(path):
+    if is_parc_ms_pkl(path):
         return "parc_ms"
     hint = path_dataset_hint(path)
     return hint or "omomo"
 
 
-def infer_mimic_dataset(
+def infer_mimic_dataset(  # noqa: PLR0911 - format routing
     path: str | Path,
     *,
     bone_names: tuple[str, ...] | list[str] | None = None,

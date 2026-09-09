@@ -12,7 +12,7 @@ from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from typing import Any
 
-from hhtools.application.export import _write_export
+from hhtools.application.export import _write_export, _write_r2r_export
 from hhtools.application.motions import (
     _ground_motion_for_web,
     _load_motion_file,
@@ -20,6 +20,7 @@ from hhtools.application.motions import (
 )
 from hhtools.application.previews import (
     _align_scaled_preview_to_robot_playback,
+    _compute_r2r_scaled_preview,
     _compute_scaled_preview,
     _compute_scaled_scene,
 )
@@ -49,6 +50,14 @@ def assemble_agent_services(
         H2RPreview,
         ResolvedMotion,
     )
+    from hhtools.agent.r2r_job_executor import (
+        PreparedR2RSource,
+        R2RExecutorBindings,
+        R2RJobExecutor,
+        R2RPreview,
+        ResolvedR2RTrajectory,
+    )
+    from hhtools.agent.workflow_job_executor import WorkflowJobExecutor
     from hhtools.contracts import (
         ApiError,
         AssetCategory,
@@ -78,8 +87,11 @@ def assemble_agent_services(
         LegacyJobUpgradeService,
         PlanStore,
         PreflightService,
+        R2RPreflightService,
+        R2RRetargetService,
         RetargetService,
         RetargetServiceError,
+        WorkflowRetargetService,
         classify_catalog_robot_trajectory,
         is_catalog_motion_sidecar,
         iter_bounded_catalog_files,
@@ -98,6 +110,21 @@ def assemble_agent_services(
         for child in workspace_robot_root.iterdir()
     ):
         agent_robot_roots["workspace-robots"] = workspace_robot_root
+
+    def _agent_robot_provider():
+        from hhtools.robot.registry import list_presets_in_root_readonly
+
+        presets = []
+        seen: set[str] = set()
+        for provider in agent_robot_roots.values():
+            root = _resolved_catalog_root(provider)
+            for preset in list_presets_in_root_readonly(root):
+                if preset.name in seen:
+                    continue
+                seen.add(preset.name)
+                presets.append(preset)
+        return presets
+
     services.agent_legacy_root_locator = DynamicRootLocator(
         motion_roots=agent_motion_roots,
         robot_roots=agent_robot_roots,
@@ -139,6 +166,38 @@ def assemble_agent_services(
                     path,
                     relative_path=PurePosixPath(relative.as_posix()),
                 )
+                if robot_trajectory is True:
+                    from hhtools.services.r2r_asset_inspection import (
+                        R2RTrajectoryDiscoveryError,
+                        discover_r2r_trajectory,
+                    )
+
+                    try:
+                        discovered_r2r = discover_r2r_trajectory(path)
+                    except (R2RTrajectoryDiscoveryError, OSError, TypeError, ValueError):
+                        continue
+                    folder = relative.parent.name if relative.parent != Path(".") else ""
+                    stem = path.stem
+                    display_name = f"{folder} · {stem}" if folder else stem
+                    required_paths = tuple(
+                        required_path
+                        for paths in discovered_r2r.sidecars.values()
+                        for required_path in paths
+                    )
+                    candidates.append(
+                        AvailableAssetCandidate(
+                            path=path,
+                            display_name=display_name,
+                            kind=AssetKind.ROBOT_TRAJECTORY_BUNDLE,
+                            category=AssetCategory.ROBOT_TRAJECTORY,
+                            dataset="robot_trajectory",
+                            reference=discovered_r2r.source_robot_id,
+                            required_paths=required_paths,
+                        )
+                    )
+                    if len(candidates) > MAX_AVAILABLE_ASSET_CANDIDATES:
+                        raise AvailableAssetCatalogLimitError
+                    continue
                 if robot_trajectory is not False:
                     continue
                 try:
@@ -228,9 +287,18 @@ def assemble_agent_services(
         ),
     )
     services.agent_plan_store = PlanStore(agent_data_dir)
-    services.agent_retarget_service = RetargetService(
+    services.agent_h2r_retarget_service = RetargetService(
         services.agent_plan_store,
         services.agent_asset_service,
+    )
+    services.agent_r2r_retarget_service = R2RRetargetService(
+        services.agent_plan_store,
+        services.agent_asset_service,
+    )
+    services.agent_retarget_service = WorkflowRetargetService(
+        services.agent_plan_store,
+        services.agent_h2r_retarget_service,
+        services.agent_r2r_retarget_service,
     )
     services.agent_artifact_store = ArtifactStore(agent_data_dir)
     services.agent_job_store = JobStore(agent_data_dir)
@@ -284,7 +352,12 @@ def assemble_agent_services(
         path = resolved.source_path
         dataset = resolved.dataset
         suffix = path.suffix.casefold()
-        if dataset in {"omomo", "omnicontact"}:
+        if suffix == ".npz" and dataset in {"omomo", "omnicontact", "parc_ms"}:
+            from hhtools.io.npz import load_npz
+
+            motion = load_npz(path)
+            loaded_dataset = dataset
+        elif dataset in {"omomo", "omnicontact"}:
             motion, loaded_dataset = _load_intermimic(path)
         elif dataset == "parc_ms":
             motion, loaded_dataset = _load_meshmimic(
@@ -317,8 +390,8 @@ def assemble_agent_services(
             raise ValueError("the motion loader returned a different dataset identity")
         return motion
 
-    def _agent_get_robot_model(spec: JobSpecV2) -> Any:
-        bundle = services.agent_asset_service.get(spec.robot.asset_id)
+    def _agent_materialize_robot(identity: Any, *, compile_mjcf: bool) -> Any:
+        bundle = services.agent_asset_service.get(identity.asset_id)
         inspection = services.agent_asset_service.inspect(
             AssetInspectionRequest(
                 asset_id=bundle.asset_id,
@@ -364,7 +437,7 @@ def assemble_agent_services(
         )
         workspace_root = Path(workspace.name).resolve(strict=True)
         try:
-            bundle_root = (workspace_root / spec.robot.robot_id).resolve()
+            bundle_root = (workspace_root / identity.robot_id).resolve()
             bundle_root.relative_to(workspace_root)
             bundle_root.mkdir(parents=True, exist_ok=False)
             for item in bundle.files:
@@ -386,7 +459,7 @@ def assemble_agent_services(
                 yaml_path = bundle_root.joinpath(*PurePosixPath(item.relative_path).parts).resolve()
                 yaml_path.relative_to(bundle_root)
                 preset = preset_from_yaml(yaml_path)
-                if preset.name == spec.robot.robot_id:
+                if preset.name == identity.robot_id:
                     if preset.urdf_path is None:
                         raise ValueError("the robot snapshot has no declared URDF")
                     resolved_urdf = preset.urdf_path.resolve(strict=True)
@@ -407,9 +480,9 @@ def assemble_agent_services(
             # This content identity is consumed only by internal
             # geometry/scaler caches.  It is never serialized and leaves
             # legacy Web presets intact.
-            matching[0].meta["_agent_asset_id"] = spec.robot.asset_id
+            matching[0].meta["_agent_asset_id"] = identity.asset_id
             with agent_robot_load_lock:
-                model = load_robot(matching[0], compile_mjcf=True)
+                model = load_robot(matching[0], compile_mjcf=compile_mjcf)
             model._agent_asset_workspace = workspace
             return model
         except Exception:
@@ -418,6 +491,17 @@ def assemble_agent_services(
             except OSError:
                 _log.warning("failed to clean Agent robot workspace", exc_info=True)
             raise
+
+    def _agent_get_robot_model(spec: JobSpecV2) -> Any:
+        return _agent_materialize_robot(spec.robot, compile_mjcf=True)
+
+    def _agent_get_r2r_source_model(spec: JobSpecV2) -> Any:
+        if spec.source_robot is None:
+            raise ValueError("the R2R JobSpec has no source robot")
+        return _agent_materialize_robot(spec.source_robot, compile_mjcf=False)
+
+    def _agent_get_r2r_target_model(spec: JobSpecV2) -> Any:
+        return _agent_materialize_robot(spec.robot, compile_mjcf=True)
 
     def _agent_release_robot_model(model: Any) -> None:
         workspace = getattr(model, "_agent_asset_workspace", None)
@@ -540,7 +624,198 @@ def assemble_agent_services(
             )
         )
 
-    agent_executor = H2RJobExecutor(
+    def _agent_resolve_r2r_trajectory(asset_id: str) -> ResolvedR2RTrajectory:
+        bundle = services.agent_asset_service.get(asset_id)
+        detected = bundle.detected
+        profile = detected.trajectory_profile if detected is not None else None
+        has_scene = any(
+            item.role
+            in {
+                AssetFileRole.OBJECT_MESH,
+                AssetFileRole.OBJECT_TRAJECTORY,
+                AssetFileRole.TERRAIN_MESH,
+            }
+            for item in bundle.files
+        )
+        if bundle.category is not AssetCategory.ROBOT_TRAJECTORY or profile is None:
+            raise ValueError("the verified asset is not an R2R trajectory")
+        return ResolvedR2RTrajectory(
+            asset_id=bundle.asset_id,
+            source_robot_id=detected.source_robot_id,
+            source_path=services.agent_asset_service.resolve_primary(asset_id),
+            stem=Path(bundle.primary_file).stem,
+            profile=profile,
+            has_scene=has_scene,
+        )
+
+    def _agent_prepare_r2r_source(
+        resolved: ResolvedR2RTrajectory,
+        source_model: Any,
+        *,
+        source_fps: float | None,
+        limit_frames: int | None,
+        progress_callback: Callable[[int, int], None],
+    ) -> PreparedR2RSource:
+        from dataclasses import replace
+
+        from hhtools.retarget import robot_to_robot as r2r
+
+        trajectory = r2r.load_source_trajectory(
+            resolved.source_path,
+            source_model=source_model,
+            source_fps=source_fps,
+        )
+        if limit_frames is not None and trajectory.joint_q.shape[0] > limit_frames:
+            trajectory = replace(
+                trajectory,
+                joint_q=trajectory.joint_q[:limit_frames].copy(),
+            )
+        motion = r2r.source_trajectory_to_motion(
+            source_model,
+            trajectory.joint_q,
+            trajectory.dof_names,
+            framerate=trajectory.framerate,
+            name=resolved.stem,
+            progress_callback=progress_callback,
+        )
+        playback = r2r.trajectory_to_retargeted_motion(
+            source_model,
+            trajectory,
+            name=resolved.stem,
+        )
+        return PreparedR2RSource(
+            motion=motion,
+            playback=playback,
+            source_fps=float(trajectory.framerate),
+            num_frames=int(trajectory.joint_q.shape[0]),
+        )
+
+    def _agent_load_r2r_calibration(
+        source_model: Any,
+        target_model: Any,
+    ) -> dict[str, float]:
+        from hhtools.retarget import robot_to_robot as r2r
+
+        calibration = r2r.load_r2r_calibration(
+            target_model.preset.urdf_path.parent,
+            source_model.preset.name,
+            target_robot=target_model.preset.name,
+        )
+        if not calibration:
+            raise ValueError("the exact R2R pair calibration is unavailable")
+        return calibration
+
+    def _agent_run_r2r(
+        source_model: Any,
+        target_model: Any,
+        motion: Any,
+        calibration: dict[str, float],
+        *,
+        backend: str,
+        ik_iterations: int,
+        progress_callback: Callable[[int, int], None],
+    ) -> Any:
+        from hhtools.retarget import robot_to_robot as r2r
+
+        return r2r.retarget_robot_to_robot(
+            source_model,
+            target_model,
+            calibrated_joint_q=calibration,
+            source_motion=motion,
+            backend=backend,
+            ik_iterations=ik_iterations,
+            progress_callback=progress_callback,
+        )
+
+    def _agent_build_r2r_preview(
+        source_model: Any,
+        target_model: Any,
+        source: PreparedR2RSource,
+        motion: Any,
+        calibration: dict[str, float],
+        retargeted: Any,
+    ) -> R2RPreview:
+        from hhtools.analysis.result_diagnostics import build_result_diagnostics
+        from hhtools.io.scene_serialize import (
+            _scaled_overlay_foot_z,
+            serialize_robot_trajectory,
+        )
+
+        scaled = _compute_r2r_scaled_preview(
+            source_model,
+            target_model,
+            motion,
+            calibration,
+        )
+        target_trajectory = serialize_robot_trajectory(
+            target_model,
+            retargeted,
+            scaled_preview=scaled,
+            max_frames=agent_preview_max_frames,
+            ground_follow=False,
+            yellow_align="ankle",
+        )
+        source_trajectory = serialize_robot_trajectory(
+            source_model,
+            source.playback,
+            max_frames=agent_preview_max_frames,
+            ground_follow=False,
+        )
+        diagnostics = build_result_diagnostics(
+            target_trajectory,
+            scaled,
+            ik_map=target_model.preset.ik_map,
+            feet=target_model.preset.feet,
+        )
+        return R2RPreview(
+            document={
+                "source_trajectory": source_trajectory,
+                "target_trajectory": target_trajectory,
+                "scaled_preview": scaled,
+                "diagnostics": diagnostics,
+            },
+            diagnostics=diagnostics,
+            yellow_foot_z=_scaled_overlay_foot_z(scaled, 0),
+        )
+
+    def _agent_write_r2r_export(
+        retargeted: Any,
+        source_model: Any,
+        target_model: Any,
+        source_motion: Any,
+        calibration: dict[str, float],
+        resolved: ResolvedR2RTrajectory,
+        output_root: Path,
+        *,
+        output_format: str,
+        backend: str,
+        yellow_foot_z: float | None,
+    ) -> Path:
+        entry = {
+            "source_path": str(resolved.source_path),
+            "clip_dir": str(resolved.source_path.parent),
+            "stem": resolved.stem,
+            "has_scene": False,
+            "upload_profile": "mimic",
+        }
+        return Path(
+            _write_r2r_export(
+                retargeted,
+                target_model,
+                source_motion,
+                output_root,
+                source_model=source_model,
+                calibrated_joint_q=calibration,
+                entry=entry,
+                stem=resolved.stem,
+                fps=None,
+                fmt=output_format,
+                csv_header=True,
+                yellow_foot_z=yellow_foot_z,
+            )
+        )
+
+    h2r_executor = H2RJobExecutor(
         H2RExecutorBindings(
             validate_spec=_agent_validate_spec,
             resolve_motion=_agent_resolve_motion,
@@ -555,6 +830,25 @@ def assemble_agent_services(
         ),
         temporary_root=agent_data_dir / "temporary",
     )
+    r2r_executor = R2RJobExecutor(
+        R2RExecutorBindings(
+            validate_spec=_agent_validate_spec,
+            resolve_trajectory=_agent_resolve_r2r_trajectory,
+            get_source_model=_agent_get_r2r_source_model,
+            get_target_model=_agent_get_r2r_target_model,
+            prepare_source=_agent_prepare_r2r_source,
+            load_pair_calibration=_agent_load_r2r_calibration,
+            prepare_motion=_motion_for_retarget,
+            run_r2r=_agent_run_r2r,
+            build_preview=_agent_build_r2r_preview,
+            write_export=_agent_write_r2r_export,
+            release_robot_model=_agent_release_robot_model,
+        ),
+        temporary_root=agent_data_dir / "temporary",
+    )
+
+    agent_executor = WorkflowJobExecutor(h2r_executor, r2r_executor)
+
     services.agent_job_manager = JobManager(
         services.agent_job_store,
         services.agent_artifact_store,
@@ -568,6 +862,7 @@ def assemble_agent_services(
     )
     services.agent_capabilities_service = CapabilitiesService(
         scheduler_snapshot=scheduler.snapshot,
+        robot_provider=_agent_robot_provider,
         asset_root_provider=lambda: services.agent_asset_service.allowed_root_ids,
         available_asset_catalog_available=True,
         preflight_available=True,
@@ -582,6 +877,13 @@ def assemble_agent_services(
         services.agent_asset_service,
         services.agent_plan_store,
         capabilities_provider=services.agent_capabilities_service.get_capabilities,
+        robot_provider=_agent_robot_provider,
+    )
+    services.agent_r2r_preflight_service = R2RPreflightService(
+        services.agent_asset_service,
+        services.agent_plan_store,
+        capabilities_provider=services.agent_capabilities_service.get_capabilities,
+        robot_provider=_agent_robot_provider,
     )
     # Phase 4's REST/JSON-CLI adapters call this exact transport-neutral
     # service instance; they do not reimplement path migration or construct

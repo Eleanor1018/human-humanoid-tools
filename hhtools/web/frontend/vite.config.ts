@@ -23,8 +23,8 @@ export default defineConfig({
     // FastAPI and Electron both load this one renderer build.
     outDir: "../static",
     emptyOutDir: true,
-    // The measured 944 kB Three/R3F vendor chunk is intentionally cache-stable;
-    // application code is split below 150 kB and workflow panels load on demand.
+    // Keep large framework/rendering vendors cache-stable, while shipping every
+    // workspace panel in the initial application graph for instant navigation.
     chunkSizeWarningLimit: 1_000,
     rolldownOptions: {
       output: {

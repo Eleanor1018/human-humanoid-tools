@@ -411,6 +411,34 @@
           ],
           "default": null,
           "title": "Solver"
+        },
+        "source_robot_asset_id": {
+          "anyOf": [
+            {
+              "description": "Content-addressed asset id.",
+              "pattern": "^asset:sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Robot Asset Id"
+        },
+        "source_robot_config_sha256": {
+          "anyOf": [
+            {
+              "description": "Lower-case SHA-256 content digest.",
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Robot Config Sha256"
         }
       },
       "title": "ExecutionProvenance",
@@ -478,6 +506,7 @@
     "JobSpecKind": {
       "enum": [
         "retarget",
+        "r2r_retarget",
         "batch_retarget"
       ],
       "title": "JobSpecKind",
@@ -671,6 +700,17 @@
           "default": 2,
           "title": "Schema Version",
           "type": "integer"
+        },
+        "source_robot": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JobSpecRobot"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [

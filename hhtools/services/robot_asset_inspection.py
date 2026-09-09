@@ -769,6 +769,7 @@ def _robot_metadata_files(bundle_root: Path, primary: Path) -> tuple[Path, ...]:
     # produce another runnable plan.
     for directory in {bundle_root, primary.parent}:
         candidates.update(directory.glob("retarget_calibration*.yaml"))
+        candidates.update(directory.glob("r2r_calibration_*.yaml"))
     files: set[Path] = set()
     for candidate in sorted(candidates, key=lambda item: item.as_posix().casefold()):
         if not candidate.exists() and not candidate.is_symlink():

@@ -36,7 +36,12 @@ from hhtools.services.jobs import (
 from hhtools.web.jobs.job_scheduler import JobScheduler
 
 
-def _spec(marker: str = "1", *, run_mode: str = "smoke") -> JobSpecV2:
+def _spec(
+    marker: str = "1",
+    *,
+    run_mode: str = "smoke",
+    backend: str = "newton",
+) -> JobSpecV2:
     marker = marker[0].lower()
     if marker not in "123456789abcdef":
         marker = "1"
@@ -55,7 +60,7 @@ def _spec(marker: str = "1", *, run_mode: str = "smoke") -> JobSpecV2:
             config_sha256="b" * 64,
         ),
         calibration=None,
-        backend="newton",
+        backend=backend,
         effective_parameters={
             "run_mode": run_mode,
             "limit_frames": 30 if run_mode == "smoke" else None,
@@ -370,8 +375,12 @@ def test_queued_cancel_is_precise_releases_capacity_and_never_runs_executor(
     assert scheduler.shutdown(wait=True, timeout=2.0)
 
 
-def test_running_cancel_stays_truthful_until_executor_acknowledges(tmp_path: Path) -> None:
-    spec = _spec()
+@pytest.mark.parametrize("backend", ["newton", "interaction_mesh"])
+def test_running_cancel_stays_truthful_until_executor_acknowledges(
+    tmp_path: Path,
+    backend: str,
+) -> None:
+    spec = _spec(backend=backend)
     scheduler = JobScheduler()
     started = threading.Event()
 
@@ -437,10 +446,12 @@ def test_completed_work_can_truthfully_win_a_late_cooperative_cancel(tmp_path: P
     assert scheduler.shutdown(wait=True, timeout=2.0)
 
 
+@pytest.mark.parametrize("backend", ["newton", "interaction_mesh"])
 def test_structured_execution_failure_publishes_failure_report_and_manifest(
     tmp_path: Path,
+    backend: str,
 ) -> None:
-    spec = _spec()
+    spec = _spec(backend=backend)
     scheduler = JobScheduler()
 
     def execute(_spec_value: JobSpecV2, _context: JobExecutionContext):

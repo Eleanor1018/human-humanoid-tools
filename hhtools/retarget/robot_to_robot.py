@@ -67,6 +67,7 @@ __all__ = [
     "SourceTrajectory",
     "build_source_reference_pose",
     "load_r2r_calibration",
+    "load_r2r_calibration_file",
     "load_source_trajectory",
     "r2r_calibration_path",
     "r2r_user_calibration_path",
@@ -131,7 +132,7 @@ def _canonical_keypoints(
     link_tx: dict[str, NDArray],
     ik_pairs: list[tuple[str, str]],
     *,
-    T_root: NDArray | None = None,
+    t_root: NDArray | None = None,
 ) -> dict[str, tuple[NDArray, NDArray]]:
     """Map ik-mapped links → ``{canonical: (pos(3), quat_xyzw(4))}`` (world)."""
     out: dict[str, tuple[NDArray, NDArray]] = {}
@@ -140,8 +141,8 @@ def _canonical_keypoints(
         if T is None:
             continue
         T = np.asarray(T, dtype=np.float64)
-        if T_root is not None:
-            T = T_root @ T
+        if t_root is not None:
+            T = t_root @ T
         pos = T[:3, 3].astype(np.float32)
         quat = _rotmat_to_xyzw(T[:3, :3]).astype(np.float32)
         out[canonical] = (pos, quat)
@@ -157,12 +158,11 @@ def _augment_upper_chain(kp: dict[str, tuple[NDArray, NDArray]]) -> None:
     ``missing canonical`` guard never trips; their tracking weight is typically
     low, so the approximation does not meaningfully degrade the solve.
     """
+
     def pos(name: str) -> NDArray | None:
         return kp[name][0] if name in kp else None
 
-    chest_q = kp["chest"][1] if "chest" in kp else (
-        kp["hips"][1] if "hips" in kp else _IDENTITY_Q
-    )
+    chest_q = kp["chest"][1] if "chest" in kp else (kp["hips"][1] if "hips" in kp else _IDENTITY_Q)
     hips_p = pos("hips")
     chest_p = pos("chest")
     lsh = pos("left_shoulder")
@@ -301,7 +301,7 @@ def source_trajectory_to_motion(
     try:
         cfg0 = {n: float(joint_q[0, 7 + i]) for i, n in enumerate(dof_names) if n in model_dof}
         link_tx0 = _collect_link_transforms_at_q(source_model, cfg0)
-        kp0 = _canonical_keypoints(link_tx0, ik_pairs, T_root=_root_matrix(joint_q[0]))
+        kp0 = _canonical_keypoints(link_tx0, ik_pairs, t_root=_root_matrix(joint_q[0]))
         _augment_upper_chain(kp0)
         hier = _build_canonical_hierarchy(list(kp0.keys()))
         names = list(hier.bone_names)
@@ -322,7 +322,7 @@ def source_trajectory_to_motion(
         for f in range(num_frames):
             cfg = {n: float(joint_q[f, 7 + i]) for i, n in enumerate(dof_names) if n in model_dof}
             link_tx = _collect_link_transforms_at_q(source_model, cfg)
-            kp = _canonical_keypoints(link_tx, ik_pairs, T_root=_root_matrix(joint_q[f]))
+            kp = _canonical_keypoints(link_tx, ik_pairs, t_root=_root_matrix(joint_q[f]))
             _augment_upper_chain(kp)
             for j, nm in enumerate(names):
                 p, q = kp.get(nm, (positions[f, j], quaternions[f, j]))
@@ -330,7 +330,9 @@ def source_trajectory_to_motion(
                 quaternions[f, j] = q
             if foot_parts:
                 sole_z = _frame_min_foot_world_z(
-                    source_model, joint_q[f, :7], foot_parts=foot_parts,
+                    source_model,
+                    joint_q[f, :7],
+                    foot_parts=foot_parts,
                 )
                 if sole_z is not None and (sole_z_min is None or sole_z < sole_z_min):
                     sole_z_min = float(sole_z)
@@ -402,9 +404,7 @@ def _align_trajectory_dof_names(
         return fallback_dof_names
     if len(fallback_dof_names) > n_dof_cols:
         return fallback_dof_names[:n_dof_cols]
-    extra = tuple(
-        f"dof_{i}" for i in range(len(fallback_dof_names), n_dof_cols)
-    )
+    extra = tuple(f"dof_{i}" for i in range(len(fallback_dof_names), n_dof_cols))
     return fallback_dof_names + extra
 
 
@@ -419,8 +419,13 @@ def _normalized_csv_column(name: str) -> str:
 
 def _motiondecode_running_root_columns(header: list[str]) -> bool:
     return tuple(_normalized_csv_column(col) for col in header[:7]) == (
-        "root_pos_x_m", "root_pos_y_m", "root_pos_z_m",
-        "root_rot_w", "root_rot_x", "root_rot_y", "root_rot_z",
+        "root_pos_x_m",
+        "root_pos_y_m",
+        "root_pos_z_m",
+        "root_rot_w",
+        "root_rot_x",
+        "root_rot_y",
+        "root_rot_z",
     )
 
 
@@ -453,9 +458,7 @@ def _load_motiondecode_running_csv(
         joint_q = np.zeros((0, len(header)), dtype=np.float32)
 
     declared_dof_names = tuple(
-        col[len("dof_"):].split("(", 1)[0].strip()
-        for col in header[7:]
-        if col.startswith("dof_")
+        col[len("dof_") :].split("(", 1)[0].strip() for col in header[7:] if col.startswith("dof_")
     )
     n_dof_cols = max(joint_q.shape[1] - 7, 0)
     dof_names = (
@@ -487,7 +490,13 @@ def _load_header_only_robot_csv(
     header = [str(cell).strip() for cell in rows[0]]
     norm = [_normalized_csv_column(col) for col in header]
     root_aliases = (
-        "root_x", "root_y", "root_z", "root_qx", "root_qy", "root_qz", "root_qw",
+        "root_x",
+        "root_y",
+        "root_z",
+        "root_qx",
+        "root_qy",
+        "root_qz",
+        "root_qw",
     )
     if _motiondecode_running_root_columns(header):
         return _load_motiondecode_running_csv(
@@ -509,9 +518,7 @@ def _load_header_only_robot_csv(
         joint_q = arr.astype(np.float32, copy=False)
 
     declared_dof_names = tuple(
-        col[len("dof_"):].split("(", 1)[0].strip()
-        for col in header[7:]
-        if col.startswith("dof_")
+        col[len("dof_") :].split("(", 1)[0].strip() for col in header[7:] if col.startswith("dof_")
     )
     n_dof_cols = max(joint_q.shape[1] - 7, 0)
     dof_names = (
@@ -564,20 +571,19 @@ def _load_csv_trajectory(
                     continue
                 rows.append(raw.split(","))
         if not rows:
-            raise ValueError(f"{path}: no numeric rows found")
+            raise ValueError(f"{path}: no numeric rows found") from None
         arr = np.asarray(rows, dtype=np.float64)
         times = arr[:, 0]
         joint_q = arr[:, 1:].astype(np.float32)
         n_dof_cols = joint_q.shape[1] - 7
         dof_names = _align_trajectory_dof_names(n_dof_cols, fallback_dof_names)
-        declared = (
-            float(1.0 / max(times[1] - times[0], 1e-6))
-            if times.shape[0] > 1
-            else None
-        )
+        declared = float(1.0 / max(times[1] - times[0], 1e-6)) if times.shape[0] > 1 else None
         fps = _resolve_source_framerate(declared, source_fps)
         return SourceTrajectory(
-            joint_q=joint_q, dof_names=dof_names, framerate=fps, meta={},
+            joint_q=joint_q,
+            dof_names=dof_names,
+            framerate=fps,
+            meta={},
         )
 
 
@@ -591,7 +597,7 @@ def _extract_robot_trajectory_block(blob: object, *, path: Path | None = None) -
         return robot
     if "joint_q" in blob:
         return blob
-    keys = sorted(str(k) for k in blob.keys())
+    keys = sorted(str(k) for k in blob)
     raise ValueError(
         f"{label}: no robot joint_q trajectory (keys: {keys}); "
         "expected hhtools robot export with robot.joint_q"
@@ -674,7 +680,10 @@ def _load_pkl_trajectory(
     if str(robot.get("root_quat_format", "xyzw")).lower() == "wxyz":
         joint_q = _wxyz_to_xyzw(joint_q)
     return SourceTrajectory(
-        joint_q=joint_q, dof_names=dof_names, framerate=fps, meta=dict(robot.get("meta", {})),
+        joint_q=joint_q,
+        dof_names=dof_names,
+        framerate=fps,
+        meta=dict(robot.get("meta", {})),
     )
 
 
@@ -684,29 +693,28 @@ def _load_npz_trajectory(
     fallback_dof_names: tuple[str, ...] | None,
     source_fps: float | None = None,
 ) -> SourceTrajectory:
-    data = np.load(path, allow_pickle=True)
-    keys = set(data.files)
-    jq_key = next((k for k in ("joint_q", "qpos", "q") if k in keys), None)
-    if jq_key is None:
-        raise ValueError(
-            f"{path}: npz has no joint_q/qpos array (keys: {sorted(keys)})"
-        )
-    joint_q = np.asarray(data[jq_key], dtype=np.float32)
-    if "dof_names" in keys:
-        dof_names = tuple(str(n) for n in data["dof_names"].tolist())
-    else:
-        dof_names = _align_trajectory_dof_names(
-            joint_q.shape[1] - 7, fallback_dof_names,
-        )
-    declared = None
-    for k in ("sample_rate", "fps", "framerate"):
-        if k in keys:
-            declared = float(np.asarray(data[k]).reshape(-1)[0])
-            break
-    fps = _resolve_source_framerate(declared, source_fps)
-    quat_fmt = "xyzw"
-    if "root_quat_format" in keys:
-        quat_fmt = str(data["root_quat_format"]).lower()
+    with np.load(path, allow_pickle=False) as data:
+        keys = set(data.files)
+        jq_key = next((k for k in ("joint_q", "qpos", "q") if k in keys), None)
+        if jq_key is None:
+            raise ValueError(f"{path}: npz has no joint_q/qpos array (keys: {sorted(keys)})")
+        joint_q = np.asarray(data[jq_key], dtype=np.float32)
+        if "dof_names" in keys:
+            dof_names = tuple(str(n) for n in data["dof_names"].tolist())
+        else:
+            dof_names = _align_trajectory_dof_names(
+                joint_q.shape[1] - 7,
+                fallback_dof_names,
+            )
+        declared = None
+        for k in ("sample_rate", "fps", "framerate"):
+            if k in keys:
+                declared = float(np.asarray(data[k]).reshape(-1)[0])
+                break
+        fps = _resolve_source_framerate(declared, source_fps)
+        quat_fmt = "xyzw"
+        if "root_quat_format" in keys:
+            quat_fmt = str(data["root_quat_format"]).lower()
     if quat_fmt == "wxyz":
         joint_q = _wxyz_to_xyzw(joint_q)
     return SourceTrajectory(joint_q=joint_q, dof_names=dof_names, framerate=fps, meta={})
@@ -734,30 +742,36 @@ def load_source_trajectory(
     fallback = tuple(source_model.dof_names()) if source_model is not None else None
     if suffix == ".csv":
         traj = _load_csv_trajectory(
-            path, fallback_dof_names=fallback, source_fps=source_fps,
+            path,
+            fallback_dof_names=fallback,
+            source_fps=source_fps,
         )
     elif suffix in (".pkl", ".pickle"):
         traj = _load_pkl_trajectory(
-            path, fallback_dof_names=fallback, source_fps=source_fps,
+            path,
+            fallback_dof_names=fallback,
+            source_fps=source_fps,
         )
     elif suffix == ".npz":
         traj = _load_npz_trajectory(
-            path, fallback_dof_names=fallback, source_fps=source_fps,
+            path,
+            fallback_dof_names=fallback,
+            source_fps=source_fps,
         )
     else:
         raise ValueError(
-            f"unsupported source trajectory format {suffix!r}; expected "
-            f".csv / .pkl / .npz"
+            f"unsupported source trajectory format {suffix!r}; expected .csv / .pkl / .npz"
         )
     if traj.joint_q.ndim != 2 or traj.joint_q.shape[1] < 8:
-        raise ValueError(
-            f"{path}: parsed joint_q shape {traj.joint_q.shape} is not (F, 7+N)"
-        )
+        raise ValueError(f"{path}: parsed joint_q shape {traj.joint_q.shape} is not (F, 7+N)")
     return traj
 
 
 def trajectory_to_retargeted_motion(
-    source_model: URDFRobotModel, traj: SourceTrajectory, *, name: str = "source",
+    source_model: URDFRobotModel,
+    traj: SourceTrajectory,
+    *,
+    name: str = "source",
 ) -> RetargetedMotion:
     """Wrap a parsed source trajectory as a :class:`RetargetedMotion`.
 
@@ -1141,6 +1155,22 @@ def resolve_r2r_calibration_file(
     return resolved[0] if resolved is not None else None
 
 
+def load_r2r_calibration_file(
+    path: str | Path,
+    *,
+    source_robot: str,
+    target_robot: str,
+) -> dict[str, float]:
+    """Load one exact pair-calibration file without performing path discovery."""
+
+    _stored_target, joint_q = _read_r2r_payload(
+        Path(path),
+        source_robot=_validated_robot_identity(source_robot, field="source_robot"),
+        target_robot=_validated_robot_identity(target_robot, field="target_robot"),
+    )
+    return dict(joint_q)
+
+
 def _atomic_write_r2r_payload(path: Path, payload: Mapping[str, object]) -> None:
     import yaml
 
@@ -1340,13 +1370,14 @@ def align_retargeted_ankles_to_scaled_source(
 
     cfg, ref = _build_scaler_config(source_model, target_model, calibrated_joint_q)
     ik_canons = (
-        frozenset(target_model.preset.ik_map.keys())
-        if target_model.preset.ik_map
-        else frozenset()
+        frozenset(target_model.preset.ik_map.keys()) if target_model.preset.ik_map else frozenset()
     )
     ratio = float(
         uniform_overlay_scale_for_motion(
-            cfg, float(ref.height_m), source_motion, ik_map_keys=ik_canons,
+            cfg,
+            float(ref.height_m),
+            source_motion,
+            ik_map_keys=ik_canons,
         )
     )
     names = list(source_motion.hierarchy.bone_names)
@@ -1369,7 +1400,9 @@ def align_retargeted_ankles_to_scaled_source(
     apply_retarget_dof(target_model, list(retargeted.dof_names), dof)
     ik_map = dict(target_model.preset.ik_map) if target_model.preset.ik_map else {}
     ankle_local = lowest_ankle_z(
-        target_model, ik_map, quat_xyzw_to_rotmat(root[3:7]),
+        target_model,
+        ik_map,
+        quat_xyzw_to_rotmat(root[3:7]),
     )
     if ankle_local is None:
         return retargeted
@@ -1401,9 +1434,7 @@ def r2r_scene_scale_ratio(
         calibrated_joint_q,
     )
     ik_canonicals = (
-        frozenset(target_model.preset.ik_map.keys())
-        if target_model.preset.ik_map
-        else frozenset()
+        frozenset(target_model.preset.ik_map.keys()) if target_model.preset.ik_map else frozenset()
     )
     return float(
         uniform_overlay_scale_for_motion(
@@ -1454,7 +1485,9 @@ def retarget_robot_to_robot(
         from hhtools.retarget.newton_basic.scaler import HumanToRobotScaler
 
         scaler = HumanToRobotScaler(
-            source_motion.hierarchy, cfg, human_height=float(ref.height_m),
+            source_motion.hierarchy,
+            cfg,
+            human_height=float(ref.height_m),
         )
         pipe = InteractionMeshPipeline(
             robot=target_model,
@@ -1503,13 +1536,17 @@ def retarget_robot_to_robot(
 
     configure_warp()
     feet_cfg = build_feet_stabilizer_config(
-        target_model.preset, reference_key, model=target_model,
+        target_model.preset,
+        reference_key,
+        model=target_model,
     )
     pipeline = NewtonBasicPipeline(
         target_model,
         scaler_config=cfg,
         pipeline_config=build_pipeline_config_for_preset(
-            target_model.preset, reference_key, ik_iterations=ik_iterations,
+            target_model.preset,
+            reference_key,
+            ik_iterations=ik_iterations,
         ),
         feet_stabilizer_config=feet_cfg,
         human_height=float(ref.height_m),

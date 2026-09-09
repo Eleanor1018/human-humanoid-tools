@@ -18,9 +18,10 @@ Installation and supported boundaries are documented in the public
 | `list_available_assets` | [available catalog request](../../../../docs/schemas/agent/v1/available-asset-catalog-request.schema.json) | [available catalog response](../../../../docs/schemas/agent/v1/available-asset-catalog-response.schema.json) |
 | `inspect_asset_bundle` | `asset_id`, `verify_hashes`, and `parse_content` from the live tool schema | [asset inspection](../../../../docs/schemas/agent/v1/asset-inspection.schema.json) |
 | `preflight_retarget` | [retarget preflight request](../../../../docs/schemas/agent/v1/retarget-preflight-request.schema.json) | [preflight response](../../../../docs/schemas/agent/v1/preflight-response.schema.json) |
-| `start_retarget` | [job start request](../../../../docs/schemas/agent/v1/job-start-request.schema.json) | [agent job view](../../../../docs/schemas/agent/v1/agent-job-view.schema.json) |
+| `preflight_r2r` | [R2R preflight request](../../../../docs/schemas/agent/v1/r2r-preflight-request.schema.json) | [R2R preflight response](../../../../docs/schemas/agent/v1/r2r-preflight-response.schema.json) |
+| `start_job` / `start_retarget` | [job start request](../../../../docs/schemas/agent/v1/job-start-request.schema.json) | [agent job view](../../../../docs/schemas/agent/v1/agent-job-view.schema.json) |
 | `lookup_job` | [job lookup request](../../../../docs/schemas/agent/v1/job-lookup-request.schema.json) | [agent job view](../../../../docs/schemas/agent/v1/agent-job-view.schema.json) |
-| `get_job` / `cancel_job` | Scalar job identity and live tool fields | [agent job view](../../../../docs/schemas/agent/v1/agent-job-view.schema.json) |
+| `get_job` / `wait_job` / `cancel_job` | Scalar job identity and live tool fields | [agent job view](../../../../docs/schemas/agent/v1/agent-job-view.schema.json) |
 | `retry_job` | [job retry request](../../../../docs/schemas/agent/v1/job-retry-request.schema.json) | [agent job view](../../../../docs/schemas/agent/v1/agent-job-view.schema.json) |
 | `list_job_artifacts` | `job_id`, `limit`, and `offset` | [artifact list response](../../../../docs/schemas/agent/v1/artifact-list-response.schema.json) |
 | `export_artifact` | Scalar `job_id` and `artifact_id` | [artifact export receipt](../../../../docs/schemas/agent/v1/artifact-export-receipt.schema.json) |
@@ -83,13 +84,16 @@ binary content.
   constructing an `AssetRegistrationRequest`; do not infer another path from display text.
 - `asset_id`, `plan_id`, `job_id`, and `artifact_id` are distinct identities. Never derive one
   from a display name or host path.
-- `run_mode` is `RetargetPreflightRequest.parameters.run_mode`. It is frozen in the returned
-  plan. [Job start](../../../../docs/schemas/agent/v1/job-start-request.schema.json) has no mode
-  override.
+- H2R returns its motion/robot plan through `preflight_retarget`. Scene-free R2R returns an
+  immutable [R2R plan](../../../../docs/schemas/agent/v1/r2r-plan.schema.json) binding the
+  trajectory, source robot, target robot, and pair calibration. Do not exchange either robot after
+  preflight.
+- `run_mode` belongs to the workflow preflight request's `parameters`. It is frozen in the returned
+  plan. [Job start](../../../../docs/schemas/agent/v1/job-start-request.schema.json) has no override.
 - Use `output_policy: create_new`. The current PreflightService rejects `overwrite` and
   `fail_if_exists` as unsupported rather than treating them as user-selectable alternatives.
 - An idempotency key binds one logical start request. Reuse it only with the exact same plan
-  when delivery of the response is uncertain. Persist that pair before calling `start_retarget`;
+  when delivery of the response is uncertain. Persist that pair before calling `start_job`;
   `lookup_job` accepts only the exact pair and recovers one submission without listing other jobs.
 - `AgentJobView.artifacts` is compact and may contain only the first page. Use
   `artifact_count` and `list_job_artifacts` for canonical pagination.

@@ -18,9 +18,11 @@ from typing import Any, NoReturn
 
 from pydantic import ValidationError
 
-from hhtools.contracts import ApiError, ErrorStage, RetargetPlan
+from hhtools.contracts import ApiError, ErrorStage, R2RPlan, RetargetPlan
 
 _RETARGET_PLAN_SEMANTICS = "hhtools.retarget.plan.v1"
+_R2R_PLAN_SEMANTICS = "hhtools.r2r.plan.v1"
+ExecutionPlan = RetargetPlan | R2RPlan
 
 
 class PlanStoreError(RuntimeError):
@@ -178,7 +180,7 @@ def compute_plan_id(canonical_payload: Mapping[str, Any]) -> str:
     return f"plan:sha256:{digest}"
 
 
-def _encode_plan(plan: RetargetPlan) -> str:
+def _encode_plan(plan: ExecutionPlan) -> str:
     """Validate and snapshot a plan without retaining nested caller objects."""
 
     try:
@@ -188,7 +190,7 @@ def _encode_plan(plan: RetargetPlan) -> str:
         _validate_portable_json(plan.parameters, location="$.parameters")
         document = plan.model_dump(mode="json")
         encoded = _canonical_json(document)
-        restored = RetargetPlan.model_validate_json(encoded)
+        restored = type(plan).model_validate_json(encoded)
     except (_InvalidDocumentError, TypeError, ValueError, ValidationError) as exc:
         raise _error(
             "INVALID_PARAMETER",
@@ -323,6 +325,106 @@ def _validate_retarget_plan_projection(
         )
 
 
+def _validate_r2r_plan_projection(
+    plan: R2RPlan,
+    canonical_payload: Mapping[str, Any],
+) -> None:
+    """Bind an R2R plan to its trajectory, robot pair, and calibration identity."""
+
+    trajectory = _nested_object(canonical_payload, "trajectory")
+    source_robot = _nested_object(canonical_payload, "source_robot")
+    target_robot = _nested_object(canonical_payload, "target_robot")
+    calibration = _nested_object(canonical_payload, "pair_calibration")
+    output = _nested_object(canonical_payload, "output")
+    parameters = canonical_payload.get("parameters")
+    if not isinstance(parameters, dict):
+        raise _InvalidDocumentError("parameters must be a JSON object")
+    if trajectory.get("category") != "robot_trajectory":
+        raise _InvalidDocumentError("R2R input category must be robot_trajectory")
+    if trajectory.get("source_robot_id") != source_robot.get("robot_id"):
+        raise _InvalidDocumentError("R2R trajectory source identity is inconsistent")
+    if trajectory.get("profile") != "mimic":
+        raise _InvalidDocumentError("R2R v1 supports only scene-free mimic trajectories")
+    if canonical_payload.get("backend") != "newton":
+        raise _InvalidDocumentError("R2R v1 supports only the Newton backend")
+
+    digests = {
+        "trajectory": trajectory.get("digest"),
+        "source_robot": source_robot.get("digest"),
+        "target_robot": target_robot.get("digest"),
+        "pair_calibration": calibration.get("digest"),
+    }
+    if any(not _is_sha256(value) for value in digests.values()):
+        raise _InvalidDocumentError("R2R identities must use SHA-256 digests")
+
+    calibration_digest = calibration.get("digest")
+    calibration_id = calibration.get("calibration_id")
+    if calibration_id != f"cal:sha256:{calibration_digest}":
+        raise _InvalidDocumentError("R2R calibration id must match its content digest")
+    if calibration.get("source_robot_id") != source_robot.get("robot_id"):
+        raise _InvalidDocumentError("R2R calibration source identity is inconsistent")
+    if calibration.get("target_robot_id") != target_robot.get("robot_id"):
+        raise _InvalidDocumentError("R2R calibration target identity is inconsistent")
+
+    storage = calibration.get("storage")
+    relative_path = calibration.get("relative_path")
+    if storage not in {"robot_bundle", "user_calibration"}:
+        raise _InvalidDocumentError("unsupported R2R calibration storage")
+    if not _is_portable_relative_path(relative_path):
+        raise _InvalidDocumentError("R2R calibration path must be portable and relative")
+    if storage == "user_calibration":
+        target_robot_id = target_robot.get("robot_id")
+        path = PurePosixPath(str(relative_path))
+        if (
+            not isinstance(target_robot_id, str)
+            or len(path.parts) != 2
+            or path.parts[0] != target_robot_id
+            or not path.name.startswith("r2r_calibration_")
+            or not path.name.endswith(".yaml")
+        ):
+            raise _InvalidDocumentError("user R2R calibration path must match the target robot")
+
+    projected = {
+        "trajectory_asset_id": trajectory.get("asset_id"),
+        "source_robot_id": source_robot.get("robot_id"),
+        "source_robot_asset_id": source_robot.get("asset_id"),
+        "target_robot_id": target_robot.get("robot_id"),
+        "target_robot_asset_id": target_robot.get("asset_id"),
+        "backend": canonical_payload.get("backend"),
+        "calibration_id": calibration_id,
+        "output_format": output.get("format"),
+        "output_policy": output.get("policy"),
+        "parameters": parameters,
+        "trajectory_digest": trajectory.get("digest"),
+        "source_robot_digest": source_robot.get("digest"),
+        "target_robot_digest": target_robot.get("digest"),
+        "calibration_digest": calibration_digest,
+    }
+    public_plan = plan.model_dump(mode="json")
+    divergent = sorted(
+        field for field, expected in projected.items() if public_plan.get(field) != expected
+    )
+    if divergent:
+        raise _InvalidDocumentError(
+            "R2R plan fields diverge from canonical payload: " + ", ".join(divergent)
+        )
+
+
+def _validate_plan_projection(
+    plan: ExecutionPlan,
+    canonical_payload: Mapping[str, Any],
+) -> None:
+    semantics = canonical_payload.get("semantics")
+    if semantics == _R2R_PLAN_SEMANTICS:
+        if not isinstance(plan, R2RPlan):
+            raise _InvalidDocumentError("R2R semantics require an R2R plan document")
+        _validate_r2r_plan_projection(plan, canonical_payload)
+        return
+    if not isinstance(plan, RetargetPlan):
+        raise _InvalidDocumentError("H2R semantics require a retarget plan document")
+    _validate_retarget_plan_projection(plan, canonical_payload)
+
+
 class PlanStore:
     """SQLite-backed immutable store for content-bound retarget plans."""
 
@@ -373,7 +475,7 @@ class PlanStore:
             ) from exc
 
     @staticmethod
-    def _decode_row(row: sqlite3.Row) -> tuple[RetargetPlan, dict[str, Any], str, str]:
+    def _decode_row(row: sqlite3.Row) -> tuple[ExecutionPlan, dict[str, Any], str, str]:
         try:
             plan_id = row["plan_id"]
             plan_json = row["plan_json"]
@@ -397,13 +499,18 @@ class PlanStore:
             if canonical_plan_json != plan_json or canonical_payload_json != payload_json:
                 raise _InvalidDocumentError("persisted documents are not canonical JSON")
 
-            plan = RetargetPlan.model_validate(plan_document)
+            plan_model = (
+                R2RPlan
+                if payload_document.get("semantics") == _R2R_PLAN_SEMANTICS
+                else RetargetPlan
+            )
+            plan = plan_model.model_validate(plan_document)
             expected_id = (
                 f"plan:sha256:{hashlib.sha256(canonical_payload_json.encode('utf-8')).hexdigest()}"
             )
             if plan.plan_id != plan_id or plan_id != expected_id:
                 raise _InvalidDocumentError("persisted plan identity is inconsistent")
-            _validate_retarget_plan_projection(plan, payload_document)
+            _validate_plan_projection(plan, payload_document)
         except (
             _InvalidDocumentError,
             KeyError,
@@ -420,9 +527,9 @@ class PlanStore:
 
     def put_if_absent(
         self,
-        plan: RetargetPlan,
+        plan: ExecutionPlan,
         canonical_payload: Mapping[str, Any],
-    ) -> RetargetPlan:
+    ) -> ExecutionPlan:
         """Insert one plan exactly once, or return the identical stored plan.
 
         An existing id is never overwritten.  Reusing it with any different
@@ -439,7 +546,7 @@ class PlanStore:
                 details={"expected_plan_id": expected_id},
             )
         try:
-            _validate_retarget_plan_projection(plan, payload_document)
+            _validate_plan_projection(plan, payload_document)
         except _InvalidDocumentError as exc:
             raise _error(
                 "PLAN_CONFLICT",
@@ -490,7 +597,7 @@ class PlanStore:
             )
         return stored
 
-    def get(self, plan_id: str) -> RetargetPlan:
+    def get(self, plan_id: str) -> ExecutionPlan:
         """Load a fresh validated plan object by content id."""
 
         row = self._get_row(plan_id)
@@ -539,4 +646,4 @@ class PlanStore:
         return row
 
 
-__all__ = ["PlanStore", "PlanStoreError", "compute_plan_id"]
+__all__ = ["ExecutionPlan", "PlanStore", "PlanStoreError", "compute_plan_id"]

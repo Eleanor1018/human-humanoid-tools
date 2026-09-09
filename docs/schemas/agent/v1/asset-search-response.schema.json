@@ -85,6 +85,7 @@
         "plain_motion",
         "object_interaction",
         "terrain_scene",
+        "robot_trajectory",
         "robot_model",
         "calibration"
       ],
@@ -130,6 +131,37 @@
           ],
           "default": null,
           "title": "Reference"
+        },
+        "source_robot_id": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Robot Id"
+        },
+        "trajectory_profile": {
+          "anyOf": [
+            {
+              "enum": [
+                "mimic",
+                "intermimic",
+                "meshmimic"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Trajectory Profile"
         }
       },
       "title": "AssetDetected",
@@ -192,6 +224,7 @@
       "description": "Semantic role of a file inside a bundle.",
       "enum": [
         "motion",
+        "robot_trajectory",
         "robot_description",
         "visual_mesh",
         "collision_mesh",
@@ -210,6 +243,7 @@
       "description": "Logical type of a registered asset.",
       "enum": [
         "motion_bundle",
+        "robot_trajectory_bundle",
         "robot_bundle",
         "calibration_bundle",
         "dataset_bundle",

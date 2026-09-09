@@ -295,10 +295,11 @@ def _backend_capabilities(devices: list[DeviceCapability]) -> list[BackendCapabi
             # adapter imports yourdfpy and MuJoCo before constructing it, so
             # capability discovery must include those real execution-path deps.
             ("newton", "warp", "mujoco", "yourdfpy"),
-            [AssetCategory.PLAIN_MOTION],
+            [AssetCategory.PLAIN_MOTION, AssetCategory.ROBOT_TRAJECTORY],
             {
                 "batch": True,
                 "scene_geometry": False,
+                "r2r": True,
                 "cuda_graph": cuda_available,
                 "cpu_fallback": True,
             },
@@ -432,7 +433,10 @@ class CapabilitiesService:
                 "mcp": self._mcp_available,
                 "persistent_jobs": self._job_manager_available,
                 "preflight": self._preflight_available,
+                "r2r_execution": self._job_execution_available,
+                "r2r_preflight": self._preflight_available,
                 "revision_polling": self._job_manager_available,
+                "revision_waiting": self._job_manager_available,
             },
         )
 

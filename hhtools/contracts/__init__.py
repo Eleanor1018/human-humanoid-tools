@@ -52,6 +52,7 @@ from .common import (
 )
 from .execution import (
     AgentH2RExecutionParameters,
+    AgentR2RExecutionParameters,
     ExecutionIdentifier,
     ExecutionProvenance,
     HumanRetargetExecutionOptions,
@@ -89,6 +90,9 @@ from .preflight import (
     PreflightCheckStatus,
     PreflightResponse,
     PreflightStatus,
+    R2RPlan,
+    R2RPreflightRequest,
+    R2RPreflightResponse,
     RetargetPlan,
     RetargetPreflightRequest,
 )
@@ -99,6 +103,7 @@ __all__ = [
     "AgentCliHelpArgument",
     "AgentCliHelpSubcommand",
     "AgentJobView",
+    "AgentR2RExecutionParameters",
     "ApiError",
     "ArtifactDescriptor",
     "ArtifactExportReceipt",
@@ -163,6 +168,9 @@ __all__ = [
     "ResourceUri",
     "RetargetPlan",
     "RetargetPreflightRequest",
+    "R2RPlan",
+    "R2RPreflightRequest",
+    "R2RPreflightResponse",
     "RobotCapability",
     "RobotListResponse",
     "SchedulerCapability",

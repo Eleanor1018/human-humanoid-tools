@@ -71,7 +71,10 @@ def test_capabilities_report_unlimited_defaults_and_backend_specific_dependencie
         "mcp": False,
         "persistent_jobs": False,
         "preflight": False,
+        "r2r_execution": False,
+        "r2r_preflight": False,
         "revision_polling": False,
+        "revision_waiting": False,
     }
     backends = {backend.backend_id: backend for backend in response.backends}
     assert backends["interaction_mesh"].available is True
@@ -117,7 +120,10 @@ def test_capabilities_normalize_live_scheduler_and_available_gpu_backends(
         "newton",
     }
     newton = next(backend for backend in response.backends if backend.backend_id == "newton")
-    assert [category.value for category in newton.supported_categories] == ["plain_motion"]
+    assert [category.value for category in newton.supported_categories] == [
+        "plain_motion",
+        "robot_trajectory",
+    ]
 
 
 def test_scheduler_reports_effective_unlimited_mode_when_queue_limit_is_ignored() -> None:
@@ -152,6 +158,7 @@ def test_job_features_distinguish_durable_services_from_trusted_execution() -> N
     assert durable_only.features["persistent_jobs"] is True
     assert durable_only.features["idempotent_jobs"] is True
     assert durable_only.features["revision_polling"] is True
+    assert durable_only.features["revision_waiting"] is True
     assert durable_only.features["job_execution"] is False
     assert durable_only.features["job_cancellation"] is False
     assert durable_only.features["job_retry"] is False

@@ -1,6 +1,6 @@
 ---
 name: hhtools-agent
-description: "Run local HHTools human-to-humanoid (H2R) retargeting through the versioned MCP Agent interface: discover capabilities, register or inspect allowlisted motion and robot assets, preflight immutable smoke/full plans, pause for calibration, manage jobs, and review verified artifacts. Use for HHTools H2R execution, status, cancellation, retry, or result requests. Do not use for UI or solver-code edits, R2R, Batch, Interaction-Mesh, arbitrary filesystem access, remote service setup, or real-robot deployment."
+description: "Run local HHTools H2R and scene-free R2R retargeting through the versioned MCP Agent interface: route H2R through Newton or Interaction-Mesh, inspect allowlisted assets, preflight immutable smoke/full plans, pause for calibration, manage jobs, and review verified artifacts. Use for HHTools H2R/R2R execution, status, cancellation, retry, or result requests. Do not use for UI or solver-code edits, Batch, scene-bearing R2R, arbitrary filesystem access, remote service setup, or real-robot deployment."
 ---
 
 # HHTools Agent
@@ -12,6 +12,8 @@ claims.
 ## Choose the workflow
 
 - For a new H2R run, follow the smoke-first workflow below.
+- For a new scene-free R2R run, follow the R2R-specific identity checks below, then use the
+  same job and artifact lifecycle.
 - For an asset-only request, discover or register the asset, inspect it, and report the
   structured inspection without starting a job.
 - For an existing job with a known `job_id`, start with `get_job`; do not recreate its inputs or
@@ -43,9 +45,10 @@ token.
    - Register only with `register_asset_bundle` using the catalog's portable identity.
    - Call `inspect_asset_bundle` with hash verification and parsing enabled for every selected
      motion and robot bundle. Stop on `invalid`; surface warnings before continuing.
-   - Continue only when the motion inspection category is `plain_motion` and neither the
-     selected nor recommended backend is `interaction_mesh`. Stop on `object_interaction`,
-     `terrain_scene`, or Interaction-Mesh routing; this skill has no validated workflow for them.
+   - Continue only when category and backend agree: `plain_motion` uses `newton`, while
+     `object_interaction` and `terrain_scene` use `interaction_mesh`. Never override the
+     inspected routing identity. Stop when content inspection requires isolated validation;
+     do not decode a rejected code-capable source format yourself.
    - Select a supported `robot_id` from `list_robots` or the capability snapshot and pair it with
      the inspected robot bundle's `asset_id`. Do not guess either identity.
 3. Call `preflight_retarget` with a versioned `RetargetPreflightRequest`. Put
@@ -62,13 +65,15 @@ token.
    - `rejected`: inspect the structured error and checks. Execute an `actor: agent` action only
      when it matches the allowlisted action mapping below; otherwise stop and explain it.
 5. Generate one caller-owned idempotency key for this logical submission. Call
-   `start_retarget(request={schema_version: "1.0", plan_id, idempotency_key})`; the nested request
-   contains only the ready plan identity and key. Persist the exact pair before submission. If the
-   transport result is ambiguous, call `lookup_job` with that pair before replaying the exact same
-   start request; never enumerate jobs or create a replacement key.
-6. Poll with `get_job(job_id, after_revision=<last revision>)`. Respect `poll_after_ms`; do not
-   busy-poll. Treat `queued` and `running` as nonterminal, and report queue/progress changes
-   without requesting large trajectories.
+   `start_job(request={schema_version: "1.0", plan_id, idempotency_key})`; the nested request
+   contains only the ready plan identity and key. `start_retarget` remains a compatibility alias.
+   Persist the exact pair before submission. If the transport result is ambiguous, call
+   `lookup_job` with that pair before replaying the exact same start request; never enumerate jobs
+   or create a replacement key.
+6. Wait with `wait_job(job_id, after_revision=<last revision>, timeout=30)`. Treat `queued` and
+   `running` as nonterminal, retain the returned revision, and wait again without busy-polling.
+   Use `get_job` only for an immediate snapshot when no wait is appropriate. Report
+   queue/progress changes without requesting large trajectories.
 7. At terminal state, use `list_job_artifacts(job_id, ...)` for canonical membership, then read
    `hhtools://jobs/{job_id}/artifacts/{artifact_id}` when one descriptor needs verification. Read
    `hhtools://jobs/{job_id}/evaluation`, `/manifest`, and `/failures` only when relevant.
@@ -83,6 +88,22 @@ token.
 9. Start a full run only after explicit user approval of the smoke evidence. Perform a new
    preflight with `request.parameters.run_mode: full`, receive a different immutable full plan,
    and submit it with a new idempotency key. Never promote or mutate the smoke plan.
+
+## Run a new scene-free R2R job
+
+1. Confirm `r2r_preflight` and `r2r_execution` in capabilities and select the advertised backend.
+2. Resolve and inspect exactly three bundles: one `robot_trajectory_bundle`, its source robot, and
+   the target robot. Require `category: robot_trajectory`, successful semantic parsing, a
+   scene-free `mimic` trajectory profile, and an exact match between the trajectory's declared
+   source robot and the selected source robot. Object or terrain sidecars are a stop condition.
+3. Call `preflight_r2r` with the trajectory asset ID, source robot ID and asset ID, target robot ID
+   and asset ID, `output_policy: create_new`, and `parameters.run_mode: smoke`. Retain the returned
+   immutable R2R plan, which binds all three assets and the pair-calibration digest.
+4. Handle `human_action_required` by performing the same exclusive-runtime WebUI handoff for the
+   exact source/target calibration pair. On `rejected`, do not switch robots, strip scene files, or
+   override the trajectory's source identity.
+5. Submit a ready plan with `start_job`; then follow H2R steps 6–9 for revision-aware waiting,
+   artifact verification, human quality review, and a separately approved full plan.
 
 ## Execute allowlisted agent actions
 
@@ -102,9 +123,10 @@ not validate against the live tool schema, stop and present the contract error.
 |---|---|
 | `MCP_ONLY` | Use HHTools MCP tools/resources only; never fall back to shell, JSON CLI, REST, or direct service imports. |
 | `ALLOWLISTED_ASSETS` | Asset registration accepts only a capability-advertised `root_id` plus normalized `relative_path`, never an arbitrary or absolute path. |
-| `PLAIN_H2R_ONLY` | Start new jobs only for inspected `plain_motion` assets on a non-`interaction_mesh` route; stop on object interaction, terrain scenes, or Interaction-Mesh. |
-| `PREFLIGHT_OWNS_MODE` | `run_mode` belongs in preflight `request.parameters`; `start_retarget` accepts only `plan_id` and `idempotency_key`. |
-| `OUTPUT_CREATE_NEW` | Use `output_policy: create_new`; other output policies are unsupported in the current H2R Agent service. |
+| `H2R_BACKEND_ROUTING` | Use `newton` only for inspected `plain_motion`; use `interaction_mesh` only for inspected object interaction or terrain scenes, and never bypass isolated content validation. |
+| `R2R_INITIAL_SCOPE` | R2R accepts only semantically inspected, scene-free robot trajectories whose declared source identity matches the selected source robot. |
+| `PREFLIGHT_OWNS_MODE` | `run_mode` belongs in preflight `request.parameters`; `start_job` accepts only `plan_id` and `idempotency_key`. |
+| `OUTPUT_CREATE_NEW` | Use `output_policy: create_new`; other output policies are unsupported in the current Agent service. |
 | `IDEMPOTENT_START` | Persist the exact plan and idempotency key, recover with `lookup_job`, and replay an ambiguous start only with that same plan and idempotency key; never create a second key for the same logical submission. |
 | `IDEMPOTENT_RETRY` | Replay an ambiguous retry with the exact same parent job and retry idempotency key; never create a second child attempt. |
 | `NEW_FULL_PLAN` | A full run requires explicit approval, a new full preflight, a new plan, and a new idempotency key. |
@@ -125,8 +147,8 @@ not validate against the live tool schema, stop and present the contract error.
 
 ## Report the result
 
-Return a compact audit trail: selected asset IDs and robot ID, run mode and plan ID, job ID and
-lineage, final state/outcome, evaluation verdict, canonical artifact IDs with hashes when
+Return a compact audit trail: selected input and robot asset IDs (including both R2R robots), run
+mode and plan ID, job ID and lineage, final state/outcome, evaluation verdict, artifact IDs with hashes when
 available, any artifact export receipt requested by the user, and any remaining human action.
 Explicitly label unverified quality, unavailable actual-device provenance, and unsupported remote
 or real-robot steps.

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 from pathlib import PurePosixPath, PureWindowsPath
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from pydantic import AwareDatetime, Field, field_validator, model_validator
 
@@ -15,6 +15,7 @@ class AssetKind(StrEnum):
     """Logical type of a registered asset."""
 
     MOTION_BUNDLE = "motion_bundle"
+    ROBOT_TRAJECTORY_BUNDLE = "robot_trajectory_bundle"
     ROBOT_BUNDLE = "robot_bundle"
     CALIBRATION_BUNDLE = "calibration_bundle"
     DATASET_BUNDLE = "dataset_bundle"
@@ -27,6 +28,7 @@ class AssetCategory(StrEnum):
     PLAIN_MOTION = "plain_motion"
     OBJECT_INTERACTION = "object_interaction"
     TERRAIN_SCENE = "terrain_scene"
+    ROBOT_TRAJECTORY = "robot_trajectory"
     ROBOT_MODEL = "robot_model"
     CALIBRATION = "calibration"
 
@@ -35,6 +37,7 @@ class AssetFileRole(StrEnum):
     """Semantic role of a file inside a bundle."""
 
     MOTION = "motion"
+    ROBOT_TRAJECTORY = "robot_trajectory"
     ROBOT_DESCRIPTION = "robot_description"
     VISUAL_MESH = "visual_mesh"
     COLLISION_MESH = "collision_mesh"
@@ -84,6 +87,8 @@ class AssetDetected(ContractModel):
     dataset: str | None = None
     reference: str | None = None
     recommended_backend: str | None = None
+    source_robot_id: Annotated[str | None, Field(default=None, min_length=1, max_length=256)]
+    trajectory_profile: Literal["mimic", "intermimic", "meshmimic"] | None = None
 
 
 # Backwards-compatible import name for the earliest service prototype.
@@ -173,6 +178,7 @@ class AssetInspection(ContractModel):
     frame_rate_hz: Annotated[float | None, Field(default=None, gt=0)]
     duration_seconds: Annotated[float | None, Field(default=None, ge=0)]
     joint_count: Annotated[int | None, Field(default=None, ge=0)]
+    source_robot_id: Annotated[str | None, Field(default=None, min_length=1, max_length=256)]
     has_object: bool = False
     has_terrain: bool = False
     warnings: list[str] = Field(default_factory=list)

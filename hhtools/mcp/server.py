@@ -49,6 +49,8 @@ from hhtools.contracts import (
     JobRetryRequest,
     JobStartRequest,
     PreflightResponse,
+    R2RPreflightRequest,
+    R2RPreflightResponse,
     RetargetPreflightRequest,
     RobotListResponse,
 )
@@ -319,8 +321,8 @@ def _read_report[T](
 
 def _server_instructions(web_ui_url: str) -> str:
     return (
-        "For every new H2R run: get capabilities, register/search and inspect assets, "
-        "preflight a smoke plan, start only a ready plan, poll by revision, then read "
+        "For every new H2R or R2R run: get capabilities, register/search and inspect assets, "
+        "preflight a smoke plan, start only a ready plan, wait by revision, then read "
         "evaluation and manifest for human review. Persist each plan_id plus idempotency "
         "key before start; use lookup_job to recover an ambiguous submission without job "
         "enumeration. On human_action_required, stop and "
@@ -384,7 +386,7 @@ def create_mcp_server(
     server: MCPServer[AgentRuntime] = _HHToolsMCPServer(
         "hhtools",
         title="HHTools Agent",
-        description="Safe local human-to-humanoid retargeting services.",
+        description="Safe local H2R and scene-free R2R retargeting services.",
         instructions=_server_instructions(web_ui_url),
         version=__version__,
         lifespan=lifespan,
@@ -489,11 +491,37 @@ def create_mcp_server(
         return _tool_call(lambda: _runtime(context).preflight.preflight_retarget(request))
 
     @server.tool(annotations=_SAFE_WRITE)
+    def preflight_r2r(
+        request: R2RPreflightRequest,
+        context: Context[AgentRuntime, Any],
+    ) -> R2RPreflightResponse:
+        """Validate one scene-free R2R intent and freeze both robot identities."""
+
+        return _tool_call(lambda: _runtime(context).r2r_preflight.preflight_r2r(request))
+
+    @server.tool(annotations=_SAFE_WRITE)
+    def start_job(
+        request: JobStartRequest,
+        context: Context[AgentRuntime, Any],
+    ) -> AgentJobView:
+        """Submit one H2R or R2R immutable plan through the shared lifecycle."""
+
+        def start() -> AgentJobView:
+            jobs = _runtime(context).jobs
+            submit = getattr(jobs, "start_job", jobs.start_retarget)
+            return submit(
+                request.plan_id,
+                idempotency_key=request.idempotency_key,
+            )
+
+        return _tool_call(start)
+
+    @server.tool(annotations=_SAFE_WRITE)
     def start_retarget(
         request: JobStartRequest,
         context: Context[AgentRuntime, Any],
     ) -> AgentJobView:
-        """Submit one preflighted plan; run_mode cannot be changed at this step."""
+        """Compatibility alias for submitting an immutable preflighted plan."""
 
         return _tool_call(
             lambda: _runtime(context).jobs.start_retarget(
@@ -514,6 +542,23 @@ def create_mcp_server(
             lambda: _runtime(context).jobs.get_job(
                 job_id,
                 after_revision=after_revision,
+            )
+        )
+
+    @server.tool(annotations=_READ_ONLY)
+    def wait_job(
+        job_id: str,
+        after_revision: Annotated[int, Field(ge=0)],
+        context: Context[AgentRuntime, Any],
+        timeout: Annotated[float, Field(ge=0.0, le=60.0, allow_inf_nan=False)] = 30.0,
+    ) -> AgentJobView:
+        """Wait until one job advances beyond a known revision or becomes terminal."""
+
+        return _tool_call(
+            lambda: _runtime(context).jobs.wait_job(
+                job_id,
+                after_revision=after_revision,
+                timeout=timeout,
             )
         )
 
@@ -547,7 +592,7 @@ def create_mcp_server(
         request: JobRetryRequest,
         context: Context[AgentRuntime, Any],
     ) -> AgentJobView:
-        """Create an idempotent whole-plan child attempt for a terminal H2R job."""
+        """Create an idempotent whole-plan child attempt for a terminal workflow job."""
 
         return _tool_call(
             lambda: _runtime(context).jobs.retry_job(
@@ -686,7 +731,7 @@ def create_mcp_server(
     @server.resource(
         "hhtools://jobs/{job_id}/status",
         name="hhtools-job-status",
-        description="Compact current state for one H2R job.",
+        description="Compact current state for one H2R or R2R job.",
         mime_type="application/json",
     )
     async def job_resource(
@@ -698,7 +743,7 @@ def create_mcp_server(
     @server.resource(
         "hhtools://jobs/{job_id}/manifest",
         name="hhtools-job-manifest",
-        description="Verified terminal audit manifest for one H2R job.",
+        description="Verified terminal audit manifest for one H2R or R2R job.",
         mime_type="application/json",
     )
     async def manifest_resource(

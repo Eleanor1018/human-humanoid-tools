@@ -68,7 +68,7 @@ class _Retargeted:
     )
 
 
-def _spec(**parameter_updates: Any) -> JobSpecV2:
+def _spec(*, backend: str = "newton", **parameter_updates: Any) -> JobSpecV2:
     parameters: dict[str, Any] = {
         "run_mode": "smoke",
         "limit_frames": 30,
@@ -81,6 +81,8 @@ def _spec(**parameter_updates: Any) -> JobSpecV2:
         "output_format": "csv",
     }
     parameters.update(parameter_updates)
+    if backend == "interaction_mesh":
+        parameters.pop("ik_iterations", None)
     return JobSpecV2(
         kind=JobSpecKind.RETARGET,
         plan_id=PLAN_ID,
@@ -91,7 +93,7 @@ def _spec(**parameter_updates: Any) -> JobSpecV2:
             config_sha256=SHA_B,
         ),
         calibration=None,
-        backend="newton",
+        backend=backend,
         effective_parameters=parameters,
         output_policy=OutputPolicy.CREATE_NEW,
         provenance=JobSpecProvenance(
@@ -131,10 +133,11 @@ def _bindings(
     dataset: str = "amass",
     motion_name: str = "walk",
     outside_export: bool = False,
+    has_scene: bool = False,
 ) -> H2RExecutorBindings:
     source_path = tmp_path / "walk.npz"
     source_path.write_bytes(b"source")
-    motion = _Motion(name=motion_name)
+    motion = _Motion(name=motion_name, objects=[object()] if has_scene else [])
     model = object()
     retargeted = _Retargeted()
 
@@ -338,6 +341,38 @@ def test_executor_maps_exact_job_spec_to_existing_h2r_chain_and_managed_artifact
     assert preview.descriptor.metadata["evidence_level"] == "kinematic_preview_heuristic"
 
 
+def test_executor_preserves_preflighted_interaction_mesh_identity_and_scene(
+    tmp_path: Path,
+) -> None:
+    calls: dict[str, Any] = {}
+    spec = _spec(backend="interaction_mesh")
+    context, _artifact_store, _progress = _context(tmp_path, spec)
+    executor = H2RJobExecutor(
+        _bindings(
+            tmp_path,
+            calls,
+            category=AssetCategory.OBJECT_INTERACTION,
+            dataset="omomo",
+            has_scene=True,
+        ),
+        temporary_root=tmp_path / "temporary",
+    )
+
+    result = executor(spec, context)
+
+    assert result.outcome is JobOutcome.REVIEW_REQUIRED
+    assert result.summary["has_scene"] is True
+    assert result.execution_provenance["backend"] == "interaction_mesh"
+    assert result.execution_provenance["dataset"] == "omomo"
+    assert calls["run"]["backend"] == "interaction_mesh"
+    assert calls["run"]["ik_iterations"] == 24
+    assert calls["export"]["backend"] == "interaction_mesh"
+    assert {item.kind for item in context.published_artifacts()} == {
+        "preview",
+        "retargeted_motion",
+    }
+
+
 @pytest.mark.parametrize(
     ("p95", "expected_band"),
     [
@@ -370,18 +405,30 @@ def test_executor_reports_web_tracking_band_without_claiming_quality_acceptance(
     assert result.evaluation_checks[0]["status"] == "review_required"
 
 
+@pytest.mark.parametrize("backend", ["newton", "interaction_mesh"])
 def test_executor_acknowledges_running_cancellation_at_legacy_progress_boundary(
     tmp_path: Path,
+    backend: str,
 ) -> None:
     calls: dict[str, Any] = {}
-    spec = _spec()
+    spec = _spec(backend=backend)
     cancelled = threading.Event()
     context, _artifact_store, _progress = _context(
         tmp_path,
         spec,
         cancellation_event=cancelled,
     )
-    bindings = _bindings(tmp_path, calls)
+    bindings = _bindings(
+        tmp_path,
+        calls,
+        category=(
+            AssetCategory.OBJECT_INTERACTION
+            if backend == "interaction_mesh"
+            else AssetCategory.PLAIN_MOTION
+        ),
+        dataset="omomo" if backend == "interaction_mesh" else "amass",
+        has_scene=backend == "interaction_mesh",
+    )
 
     original_run = bindings.run_retarget
 
@@ -403,12 +450,27 @@ def test_executor_acknowledges_running_cancellation_at_legacy_progress_boundary(
     assert calls["released_models"] == [calls["run"]["model"]]
 
 
-def test_executor_maps_export_failure_without_leaking_host_path(tmp_path: Path) -> None:
+@pytest.mark.parametrize("backend", ["newton", "interaction_mesh"])
+def test_executor_maps_export_failure_without_leaking_host_path(
+    tmp_path: Path,
+    backend: str,
+) -> None:
     calls: dict[str, Any] = {}
-    spec = _spec()
+    spec = _spec(backend=backend)
     context, _artifact_store, _progress = _context(tmp_path, spec)
     executor = H2RJobExecutor(
-        _bindings(tmp_path, calls, fail_export=True),
+        _bindings(
+            tmp_path,
+            calls,
+            fail_export=True,
+            category=(
+                AssetCategory.OBJECT_INTERACTION
+                if backend == "interaction_mesh"
+                else AssetCategory.PLAIN_MOTION
+            ),
+            dataset="omomo" if backend == "interaction_mesh" else "amass",
+            has_scene=backend == "interaction_mesh",
+        ),
         temporary_root=tmp_path / "temporary",
     )
 
@@ -521,7 +583,7 @@ def test_executor_rejects_output_policy_without_a_managed_alias(tmp_path: Path) 
 
 def test_executor_rejects_nonportable_object_pkl_before_loading(tmp_path: Path) -> None:
     calls: dict[str, Any] = {}
-    spec = _spec(output_format="pkl")
+    spec = _spec(backend="interaction_mesh", output_format="pkl")
     context, _artifact_store, _progress = _context(tmp_path, spec)
     executor = H2RJobExecutor(
         _bindings(

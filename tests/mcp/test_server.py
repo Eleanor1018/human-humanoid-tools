@@ -29,6 +29,7 @@ from hhtools.contracts import (
     JobProgress,
     NextAction,
     PreflightResponse,
+    R2RPreflightResponse,
     SchedulerCapability,
 )
 from hhtools.mcp.runtime import AgentRuntime
@@ -53,8 +54,11 @@ _EXPECTED_TOOLS = {
     "inspect_asset_bundle",
     "list_robots",
     "preflight_retarget",
+    "preflight_r2r",
+    "start_job",
     "start_retarget",
     "get_job",
+    "wait_job",
     "lookup_job",
     "cancel_job",
     "retry_job",
@@ -227,6 +231,31 @@ class _PreflightService:
         )
 
 
+class _R2RPreflightService:
+    def __init__(self) -> None:
+        self.calls: list[Any] = []
+
+    def preflight_r2r(self, request: Any) -> R2RPreflightResponse:
+        self.calls.append(request)
+        return R2RPreflightResponse(
+            request_id="request-mcp-r2r",
+            status="human_action_required",
+            recommended_backend="newton",
+            required_actions=[
+                NextAction(
+                    actor="human",
+                    action="open_calibration_ui",
+                    message="Calibrate this exact robot pair before retrying.",
+                    url="http://127.0.0.1:8009/?panel=r2r&calibrate=1",
+                    parameters={
+                        "source_robot_id": request.source_robot_id,
+                        "target_robot_id": request.target_robot_id,
+                    },
+                )
+            ],
+        )
+
+
 class _Plans:
     def get(self, _plan_id: str) -> Any:
         raise AssertionError("plan resource is outside this focused fixture")
@@ -256,6 +285,7 @@ class _Jobs:
     def __init__(self) -> None:
         self.start_calls: list[tuple[str, str]] = []
         self.get_calls: list[tuple[str, int | None]] = []
+        self.wait_calls: list[tuple[str, int, float]] = []
         self.lookup_calls: list[tuple[str, str, int | None]] = []
         self.list_calls: list[tuple[str, int, int]] = []
         self.artifact_calls: list[tuple[str, str, bool]] = []
@@ -290,6 +320,16 @@ class _Jobs:
                 )
             )
         return _job()
+
+    def wait_job(
+        self,
+        job_id: str,
+        *,
+        after_revision: int,
+        timeout: float = 30.0,
+    ) -> AgentJobView:
+        self.wait_calls.append((job_id, after_revision, timeout))
+        return self.get_job(job_id, after_revision=after_revision)
 
     def cancel_job(self, job_id: str) -> AgentJobView:
         return self.get_job(job_id)
@@ -342,6 +382,7 @@ class _Fixture:
         self.assets = _AssetsService()
         self.available_assets = _AvailableAssetsService()
         self.preflight = _PreflightService()
+        self.r2r_preflight = _R2RPreflightService()
         self.plans = _Plans()
         self.jobs = _Jobs()
         self.exports = _Exports()
@@ -350,6 +391,7 @@ class _Fixture:
             assets=cast(Any, self.assets),
             available_assets=cast(Any, self.available_assets),
             preflight=cast(Any, self.preflight),
+            r2r_preflight=self.r2r_preflight,
             plans=cast(Any, self.plans),
             jobs=cast(Any, self.jobs),
             exports=cast(Any, self.exports),
@@ -369,6 +411,7 @@ class _Fixture:
             assets=cast(Any, self.assets),
             available_assets=cast(Any, self.available_assets),
             preflight=cast(Any, self.preflight),
+            r2r_preflight=self.r2r_preflight,
             plans=cast(Any, self.plans),
             jobs=cast(Any, jobs),
             exports=cast(Any, self.exports),
@@ -645,6 +688,12 @@ async def test_mcp_tool_schemas_are_generated_from_public_pydantic_contracts() -
     }
     assert "run_mode" not in json.dumps(start.input_schema)
 
+    wait = _tool_by_name(tools, "wait_job")
+    assert set(wait.input_schema["required"]) == {"job_id", "after_revision"}
+    assert wait.input_schema["properties"]["after_revision"]["minimum"] == 0
+    assert wait.input_schema["properties"]["timeout"]["minimum"] == 0.0
+    assert wait.input_schema["properties"]["timeout"]["maximum"] == 60.0
+
     capabilities = _tool_by_name(tools, "get_capabilities")
     assert capabilities.output_schema["title"] == "CapabilityResponse"
     assert "features" in capabilities.output_schema["properties"]
@@ -712,6 +761,39 @@ async def test_human_action_preflight_never_starts_a_job() -> None:
 
 
 @pytest.mark.anyio
+async def test_r2r_preflight_and_generic_start_use_the_shared_job_lifecycle() -> None:
+    fixture = _Fixture()
+    request = {
+        "schema_version": "1.0",
+        "trajectory_asset_id": _ASSET_ID,
+        "source_robot_id": "source_bot",
+        "source_robot_asset_id": f"asset:sha256:{'b' * 64}",
+        "target_robot_id": "target_bot",
+        "target_robot_asset_id": f"asset:sha256:{'c' * 64}",
+    }
+
+    async with Client(fixture.server(), raise_exceptions=True) as client:
+        preflight = await client.call_tool("preflight_r2r", {"request": request})
+        started = await client.call_tool(
+            "start_job",
+            {
+                "request": {
+                    "schema_version": "1.0",
+                    "plan_id": _PLAN_ID,
+                    "idempotency_key": "r2r-mcp-test",
+                }
+            },
+        )
+
+    assert preflight.is_error is False
+    assert preflight.structured_content["status"] == "human_action_required"
+    assert preflight.structured_content["recommended_backend"] == "newton"
+    assert fixture.r2r_preflight.calls[0].source_robot_id == "source_bot"
+    assert started.is_error is False
+    assert fixture.jobs.start_calls == [(_PLAN_ID, "r2r-mcp-test")]
+
+
+@pytest.mark.anyio
 async def test_revision_polling_forwards_after_revision_and_stays_compact() -> None:
     fixture = _Fixture()
 
@@ -728,6 +810,21 @@ async def test_revision_polling_forwards_after_revision_and_stays_compact() -> N
     serialized = json.dumps(result.structured_content).casefold()
     assert "trajectory" not in serialized
     assert "base64" not in serialized
+
+
+@pytest.mark.anyio
+async def test_revision_wait_forwards_revision_and_bounded_timeout() -> None:
+    fixture = _Fixture()
+
+    async with Client(fixture.server(), raise_exceptions=True) as client:
+        result = await client.call_tool(
+            "wait_job",
+            {"job_id": _JOB_ID, "after_revision": 7, "timeout": 12.5},
+        )
+
+    assert result.is_error is False
+    assert result.structured_content["progress"]["revision"] == 7
+    assert fixture.jobs.wait_calls == [(_JOB_ID, 7, 12.5)]
 
 
 @pytest.mark.anyio

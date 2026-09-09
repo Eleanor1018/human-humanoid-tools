@@ -1,6 +1,6 @@
 # Agent interfaces
 
-HHTools exposes the same versioned H2R Agent contracts through two local
+HHTools exposes the same versioned H2R and scene-free R2R Agent contracts through two local
 adapters. Use the JSON CLI from scripts and use MCP when a compatible coding
 agent should discover and call tools directly.
 
@@ -9,11 +9,14 @@ agent should discover and call tools directly.
 | JSON CLI | Client of a running WebUI Agent API | `uv run hhtools agent ...` |
 | MCP | Own local stdio process; no WebUI required | `uv run --extra mcp hhtools-mcp` |
 
-The current Agent surface supports plain human-to-robot (H2R) retargeting:
-capability and robot discovery, allowlisted asset registration and inspection,
-preflight, jobs, verified artifacts, and export. R2R, Batch, Video2Motion,
-Analysis, Interaction-Mesh, remote service access, and robot deployment are not
-part of this interface.
+The current Agent surface supports human-to-robot (H2R) retargeting—plain motion through Newton
+and safely inspectable object-interaction or terrain-scene bundles through Interaction-Mesh—and
+scene-free robot-to-robot (R2R) trajectories through Newton. It includes capability and robot
+discovery, allowlisted asset registration and inspection, workflow-specific preflight, jobs,
+revision-aware waiting, verified artifacts, and export. Scene-bearing R2R, Batch, Video2Motion,
+Analysis, remote service access, and robot deployment are not part of this interface. Code-capable
+source formats still require safe content inspection; the Agent never bypasses an
+isolated-validation requirement.
 
 ## Install
 
@@ -23,7 +26,7 @@ Use any compatible Python 3.12 or newer and install the adapter you need:
 # JSON CLI plus the resident WebUI service
 uv sync --locked --extra web --extra retarget
 
-# Self-contained local MCP H2R server
+# Self-contained local MCP H2R/R2R server
 uv sync --locked --extra mcp
 ```
 
@@ -38,6 +41,7 @@ then query it from another terminal:
 uv run hhtools web
 uv run hhtools agent capabilities
 uv run hhtools agent --help
+uv run hhtools agent job wait JOB_ID --after-revision REVISION --wait-timeout 20
 ```
 
 Use `hhtools agent asset catalog` to discover registerable Motion Library and
@@ -49,12 +53,13 @@ allowlisted `root_id` and portable `relative_path`, never a host path.
 an interactive terminal. Its available options can be inspected with
 `uv run --extra mcp hhtools-mcp --help`.
 
-## Safe H2R workflow
+## Safe H2R and R2R workflows
 
-For a new run, discover capabilities, resolve and inspect both assets, and call
-preflight with `run_mode: smoke`. Start only the immutable plan returned with
-`status: ready`; retain its `plan_id` and the caller-owned idempotency key.
-Poll by revision and review the evaluation and manifest before considering a
+For a new run, discover capabilities and inspect every input. H2R binds one motion and one robot;
+R2R binds one scene-free robot trajectory, its declared source robot, the target robot, and their
+pair calibration. Call the matching preflight with `run_mode: smoke`, then submit only an immutable
+plan returned with `status: ready` through `start_job`; retain its `plan_id` and caller-owned key.
+Wait by revision and review the evaluation and manifest before considering a
 full run. Calibration and final motion quality remain human decisions.
 
 Only one local runtime may own a `save-dir`. MCP normally owns its directory

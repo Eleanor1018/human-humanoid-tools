@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -210,6 +212,86 @@ def test_concurrent_retries_with_one_key_create_exactly_one_job(tmp_path: Path) 
     assert sum(result.created for result in results) == 1
     with sqlite3.connect(store.database_path) as connection:
         assert connection.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 1
+
+
+def test_wait_for_revision_wakes_all_waiters_after_one_update(tmp_path: Path) -> None:
+    store = JobStore(tmp_path / "state", job_id_provider=lambda: "job:waiters")
+    queued = store.create(_spec(), idempotency_key="waiters")
+    ready = threading.Barrier(3)
+
+    def wait_for_update() -> int:
+        ready.wait(timeout=1.0)
+        return store.wait_for_revision(
+            queued.job_id,
+            after_revision=queued.revision,
+            timeout=1.0,
+        ).revision
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        waiters = [executor.submit(wait_for_update) for _ in range(2)]
+        ready.wait(timeout=1.0)
+        updated = store.transition(
+            queued.job_id,
+            expected_revision=queued.revision,
+            state=JobState.RUNNING,
+        )
+        revisions = [waiter.result(timeout=1.0) for waiter in waiters]
+
+    assert revisions == [updated.revision, updated.revision]
+
+
+def test_wait_for_revision_times_out_and_terminal_jobs_return_immediately(
+    tmp_path: Path,
+) -> None:
+    store = JobStore(tmp_path / "state", job_id_provider=lambda: "job:wait-timeout")
+    queued = store.create(_spec(), idempotency_key="wait-timeout")
+
+    started = time.monotonic()
+    unchanged = store.wait_for_revision(
+        queued.job_id,
+        after_revision=queued.revision,
+        timeout=0.03,
+    )
+    elapsed = time.monotonic() - started
+
+    assert unchanged.revision == queued.revision
+    assert elapsed >= 0.02
+
+    cancelled = store.transition(
+        queued.job_id,
+        expected_revision=queued.revision,
+        state=JobState.CANCELLED,
+    )
+    started = time.monotonic()
+    terminal = store.wait_for_revision(
+        queued.job_id,
+        after_revision=cancelled.revision,
+        timeout=1.0,
+    )
+    assert terminal.view.state is JobState.CANCELLED
+    assert time.monotonic() - started < 0.2
+
+
+@pytest.mark.parametrize("timeout", [-0.1, 60.1, float("nan"), float("inf"), True])
+def test_wait_for_revision_rejects_invalid_bounds(tmp_path: Path, timeout: float) -> None:
+    store = JobStore(tmp_path / "state", job_id_provider=lambda: "job:wait-invalid")
+    queued = store.create(_spec(), idempotency_key="wait-invalid")
+
+    with pytest.raises(JobStoreError) as invalid_timeout:
+        store.wait_for_revision(
+            queued.job_id,
+            after_revision=queued.revision,
+            timeout=timeout,
+        )
+    _assert_code(invalid_timeout, "INVALID_PARAMETER")
+
+    with pytest.raises(JobStoreError) as future_revision:
+        store.wait_for_revision(
+            queued.job_id,
+            after_revision=queued.revision + 1,
+            timeout=0,
+        )
+    _assert_code(future_revision, "INVALID_PARAMETER")
 
 
 def test_idempotency_key_conflicts_on_changed_request_but_other_key_is_new(

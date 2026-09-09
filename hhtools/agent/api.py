@@ -43,6 +43,8 @@ from hhtools.contracts import (
     LegacyJobUpgradeRequest,
     LegacyJobUpgradeResponse,
     PreflightResponse,
+    R2RPreflightRequest,
+    R2RPreflightResponse,
     RetargetPreflightRequest,
 )
 from hhtools.contracts.portability import (
@@ -353,7 +355,22 @@ class _PreflightProvider(Protocol):
     ) -> PreflightResponse: ...
 
 
+class _R2RPreflightProvider(Protocol):
+    def preflight_r2r(
+        self,
+        request: R2RPreflightRequest,
+    ) -> R2RPreflightResponse: ...
+
+
 class _JobProvider(Protocol):
+    def start_job(
+        self,
+        plan_id: str,
+        *,
+        idempotency_key: str,
+        parent_job_id: str | None = None,
+    ) -> AgentJobView: ...
+
     def start_retarget(
         self,
         plan_id: str,
@@ -367,6 +384,14 @@ class _JobProvider(Protocol):
         job_id: str,
         *,
         after_revision: int | None = None,
+    ) -> AgentJobView: ...
+
+    def wait_job(
+        self,
+        job_id: str,
+        *,
+        after_revision: int,
+        timeout: float = 30.0,
     ) -> AgentJobView: ...
 
     def lookup_job(
@@ -431,11 +456,19 @@ def _preflight_service(request: Request) -> _PreflightProvider:
     return cast("_PreflightProvider", service)
 
 
+def _r2r_preflight_service(request: Request) -> _R2RPreflightProvider:
+    service = getattr(request.app.state, "agent_r2r_preflight_service", None)
+    if service is None or not callable(getattr(service, "preflight_r2r", None)):
+        raise RuntimeError("agent R2R preflight service is not configured")
+    return cast("_R2RPreflightProvider", service)
+
+
 def _job_manager(request: Request) -> _JobProvider:
     service = getattr(request.app.state, "agent_job_manager", None)
     required = (
         "start_retarget",
         "get_job",
+        "wait_job",
         "lookup_job",
         "cancel_job",
         "retry_job",
@@ -586,6 +619,20 @@ def preflight_retarget(
 
 
 @router.post(
+    "/preflight/r2r",
+    response_model=R2RPreflightResponse,
+    response_model_exclude_none=True,
+)
+def preflight_r2r(
+    request: Request,
+    preflight: R2RPreflightRequest,
+) -> R2RPreflightResponse:
+    """Resolve R2R intent while binding the trajectory and both robots."""
+
+    return _r2r_preflight_service(request).preflight_r2r(preflight)
+
+
+@router.post(
     "/jobs",
     response_model=AgentJobView,
     response_model_exclude_none=True,
@@ -611,7 +658,9 @@ def start_retarget_job(
 ) -> AgentJobView:
     """Submit one immutable preflight plan with caller-owned idempotency."""
 
-    return _job_manager(request).start_retarget(
+    jobs = _job_manager(request)
+    start = getattr(jobs, "start_job", jobs.start_retarget)
+    return start(
         submission.plan_id,
         idempotency_key=submission.idempotency_key,
     )
@@ -665,6 +714,26 @@ def get_retarget_job(
     return _job_manager(request).get_job(
         job_id,
         after_revision=after_revision,
+    )
+
+
+@router.get(
+    "/jobs/{job_id}/wait",
+    response_model=AgentJobView,
+    response_model_exclude_none=True,
+)
+def wait_for_retarget_job(
+    request: Request,
+    job_id: str,
+    after_revision: int = Query(ge=0),
+    timeout: float = Query(default=30.0, ge=0.0, le=60.0, allow_inf_nan=False),
+) -> AgentJobView:
+    """Wait for one job revision change without cancelling the underlying job."""
+
+    return _job_manager(request).wait_job(
+        job_id,
+        after_revision=after_revision,
+        timeout=timeout,
     )
 
 

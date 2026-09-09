@@ -123,6 +123,7 @@
     "JobSpecKind": {
       "enum": [
         "retarget",
+        "r2r_retarget",
         "batch_retarget"
       ],
       "title": "JobSpecKind",
@@ -316,6 +317,17 @@
           "default": 2,
           "title": "Schema Version",
           "type": "integer"
+        },
+        "source_robot": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JobSpecRobot"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
