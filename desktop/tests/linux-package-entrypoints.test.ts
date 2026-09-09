@@ -10,6 +10,7 @@ interface DesktopPackage {
     productName: string
     extraResources: Array<{ from: string; to: string }>
     linux: { executableName: string }
+    win: { extraResources: Array<{ from: string; to: string; filter: string[] }> }
     deb: {
       depends: string[]
       fpm: string[]
@@ -39,13 +40,24 @@ describe('Linux package entry points', () => {
     expect(packageMetadata.build.deb.afterRemove).toBeUndefined()
   })
 
-  it('packages only the staged neutral model instead of a Python runtime', () => {
-    expect(packageMetadata.scripts['dist:linux']).toContain('npm run prepare:models')
+  it('packages the installer bootstrap without embedding a Linux Python runtime', () => {
+    expect(packageMetadata.scripts['dist:linux']).not.toContain('npm run prepare:models')
+    expect(packageMetadata.scripts['dist:linux']).toContain('npm run prepare:builtin')
+    expect(packageMetadata.scripts['dist:linux']).toContain('npm run prepare:bootstrap')
     expect(packageMetadata.scripts['dist:linux']).not.toContain('prepare:runtime')
     expect(packageMetadata.build.extraResources).toEqual([
-      { from: '.models', to: 'body_models', filter: ['**/*'] }
+      { from: '.bootstrap', to: 'bootstrap', filter: ['install.sh'] },
+      { from: '.builtin', to: 'builtin', filter: ['**/*'] }
     ])
     expect(packageMetadata.build.nsis.include).toBeUndefined()
+  })
+
+  it('restores a bundled runtime only for the standalone Windows installer', () => {
+    expect(packageMetadata.scripts['dist:win']).toContain('npm run prepare:runtime')
+    expect(packageMetadata.scripts['dist:win']).not.toContain('npm run prepare:models')
+    expect(packageMetadata.build.win.extraResources).toEqual([
+      { from: '.runtime', to: 'runtime', filter: ['**/*'] }
+    ])
   })
 
   it('migrates only the exact legacy GUI alternative and explains dpkg recovery', () => {
@@ -64,7 +76,13 @@ describe('Linux package entry points', () => {
 
   it('declares Electron libraries absent from minimal Ubuntu 22.04', () => {
     expect(packageMetadata.build.deb.depends).toEqual(
-      expect.arrayContaining(['libgbm1', 'libasound2'])
+      expect.arrayContaining([
+        'libgbm1',
+        'libasound2',
+        'ca-certificates',
+        'curl',
+        'policykit-1'
+      ])
     )
   })
 })

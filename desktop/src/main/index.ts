@@ -17,16 +17,24 @@ import { AppLifecycle } from './app-lifecycle'
 import { DesktopTutorialState } from './desktop-tutorial-state'
 import { DesktopLogger } from './desktop-logger'
 import { diagnosticsDataUrl } from './diagnostics-page'
+import { installerDataUrl } from './installer-page'
 import {
   configureGraphicsCommandLine,
   decideGraphicsStartup,
   softwareRenderingRelaunchArgs
 } from './graphics-mode'
 import { registerDesktopHandlers } from './ipc/register-desktop-handlers'
+import { registerInstallerHandlers } from './ipc/register-installer-handlers'
 import { createMainWindow } from './main-window'
 import { findAvailablePort } from './network'
 import { OptionalComponentStore, runGvhmrSetup } from './optional-components'
-import { buildSidecarEnvironment, resolveRuntime, type RuntimeConfig } from './runtime-resolver'
+import { RuntimeInstaller } from './runtime-installer'
+import {
+  buildSidecarEnvironment,
+  resolveRuntime,
+  RuntimeNotFoundError,
+  type RuntimeConfig
+} from './runtime-resolver'
 import { configureDesktopSession } from './security/configure-session'
 import { SidecarSupervisor, type SidecarSnapshot } from './sidecar-supervisor'
 import { WindowStateStore } from './window-state-store'
@@ -128,6 +136,15 @@ let allowQuit = false
 let shutdownPromise: Promise<void> | undefined
 let crashDialogOpen = false
 let optionalComponents: OptionalComponentStore | undefined
+let installerCleanup: (() => void) | undefined
+
+function desktopPreloadPath(): string {
+  return join(dirname(fileURLToPath(import.meta.url)), '../preload/index.cjs')
+}
+
+function installerPreloadPath(): string {
+  return join(dirname(fileURLToPath(import.meta.url)), '../preload/installer.cjs')
+}
 
 function runtimeState(snapshot: SidecarSnapshot | undefined = supervisor?.snapshot): RuntimeState {
   return {
@@ -186,9 +203,14 @@ async function startDesktop(): Promise<void> {
     userData,
     isPackaged: app.isPackaged,
     resourcesPath: process.resourcesPath,
+    appVersion: app.getVersion(),
   })
   logger = new DesktopLogger(runtime.logDirectory)
-  logger.info('Desktop startup began', { repoRoot: runtime.repoRoot, packaged: app.isPackaged })
+  logger.info('Desktop startup began', {
+    runtimeKind: runtime.kind,
+    repoRoot: runtime.repoRoot,
+    packaged: app.isPackaged
+  })
   logger.info('Graphics preflight passed', {
     renderer: graphicsProbe?.renderer,
     softwareRendering
@@ -196,7 +218,13 @@ async function startDesktop(): Promise<void> {
 
   const sidecarEnvironment = (): NodeJS.ProcessEnv => ({
     ...optionalComponents?.sidecarEnvironment(),
-    ...buildSidecarEnvironment(runtime!.repoRoot, process.env, runtime!.bodyModelsRoot),
+    ...buildSidecarEnvironment(
+      runtime!.repoRoot,
+      process.env,
+      runtime!.bodyModelsRoot,
+      runtime!.bundledRobotRoot,
+      runtime!.kind === 'checkout'
+    ),
   })
 
   const port = await findAvailablePort()
@@ -206,7 +234,7 @@ async function startDesktop(): Promise<void> {
   // Electron injects this per-launch secret below the renderer boundary. WebUI code never sees it.
   configureDesktopSession(session.defaultSession, backendOrigin, secret)
 
-  const preloadPath = join(dirname(fileURLToPath(import.meta.url)), '../preload/index.cjs')
+  const preloadPath = desktopPreloadPath()
   const stateStore = new WindowStateStore(join(userData, 'window-state.json'))
   const tutorialState = new DesktopTutorialState(userData)
   const windowResult = createMainWindow({
@@ -235,7 +263,7 @@ async function startDesktop(): Promise<void> {
         '--port',
         String(port)
       ],
-      cwd: runtime.repoRoot,
+      cwd: runtime.workingDirectory,
       env: {
         ...sidecarEnvironment(),
         // Use the environment rather than argv so the secret is absent from process listings.
@@ -306,6 +334,14 @@ async function startDesktop(): Promise<void> {
 }
 
 async function showStartupFailure(reason: unknown): Promise<void> {
+  if (
+    reason instanceof RuntimeNotFoundError &&
+    app.isPackaged &&
+    process.platform === 'linux'
+  ) {
+    await showRuntimeInstaller(reason)
+    return
+  }
   const message = reason instanceof Error ? reason.message : String(reason)
   logger?.error('Desktop startup failed', { error: message })
 
@@ -329,6 +365,58 @@ async function showStartupFailure(reason: unknown): Promise<void> {
     })
   )
   if (!mainWindow.isDestroyed()) mainWindow.show()
+}
+
+async function showRuntimeInstaller(reason: RuntimeNotFoundError): Promise<void> {
+  const window = new BrowserWindow({
+    width: 860,
+    height: 720,
+    minWidth: 700,
+    minHeight: 620,
+    show: false,
+    autoHideMenuBar: true,
+    backgroundColor: '#191d24',
+    icon: desktopIconPath(),
+    title: 'Set up Human-Humanoid Tools',
+    webPreferences: {
+      preload: installerPreloadPath(),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true
+    }
+  })
+  mainWindow = window
+  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  window.webContents.on('will-navigate', (event) => event.preventDefault())
+
+  const installer = new RuntimeInstaller({
+    scriptPath: join(process.resourcesPath, 'bootstrap', 'install.sh')
+  })
+  installerCleanup = registerInstallerHandlers({
+    window,
+    installer,
+    onInstalled: () => {
+      installerCleanup?.()
+      installerCleanup = undefined
+      allowQuit = true
+      app.relaunch()
+      app.exit(0)
+    }
+  })
+  lifecycle.registerShutdownJoiner('runtime-installer', () => installerCleanup?.())
+  window.once('closed', () => {
+    installerCleanup?.()
+    installerCleanup = undefined
+  })
+
+  await window.loadURL(
+    installerDataUrl({
+      version: app.getVersion(),
+      reason: reason.message
+    })
+  )
+  if (!window.isDestroyed()) window.show()
 }
 
 async function shutdown(): Promise<void> {

@@ -1,15 +1,20 @@
-/** Resolve the external hhtools checkout used by the thin desktop shell. */
-import { existsSync } from 'node:fs'
+/** Resolve a checkout, bundled Windows runtime, or managed Linux runtime. */
+import { existsSync, readFileSync } from 'node:fs'
 import { delimiter, dirname, isAbsolute, join, resolve } from 'node:path'
 
+export type RuntimeKind = 'checkout' | 'bundled' | 'managed'
+
 export interface RuntimeConfig {
-  repoRoot: string
+  kind: RuntimeKind
+  repoRoot?: string
+  workingDirectory: string
   pythonExecutable: string
   sourceRoot: string
   saveDirectory: string
   cacheDirectory: string
   logDirectory: string
   bodyModelsRoot?: string
+  bundledRobotRoot?: string
 }
 
 export interface ResolveRuntimeOptions {
@@ -18,9 +23,17 @@ export interface ResolveRuntimeOptions {
   userData: string
   isPackaged?: boolean
   resourcesPath?: string
+  appVersion?: string
   env?: NodeJS.ProcessEnv
   /** Override the host platform in deterministic resolver tests. */
   platform?: NodeJS.Platform
+}
+
+export class RuntimeNotFoundError extends Error {
+  constructor(message = 'No usable HHTools Python runtime is installed.') {
+    super(message)
+    this.name = 'RuntimeNotFoundError'
+  }
 }
 
 function isRepositoryRoot(candidate: string): boolean {
@@ -37,23 +50,24 @@ function walkForRepository(start: string): string | undefined {
   }
 }
 
-function resolveRepositoryRoot(options: ResolveRuntimeOptions, env: NodeJS.ProcessEnv): string {
+function configuredRepositoryRoot(env: NodeJS.ProcessEnv): string | undefined {
   const configured = env.HHTOOLS_REPO_ROOT
-  if (configured !== undefined) {
-    // An explicit path is authoritative; fail early instead of silently using another checkout.
-    const resolved = resolve(configured)
-    if (!isRepositoryRoot(resolved)) {
-      throw new Error(`HHTOOLS_REPO_ROOT is not a hhtools checkout: ${resolved}`)
-    }
-    return resolved
+  if (configured === undefined) return undefined
+  // An explicit path is authoritative; fail early instead of silently using another runtime.
+  const resolved = resolve(configured)
+  if (!isRepositoryRoot(resolved)) {
+    throw new Error(`HHTOOLS_REPO_ROOT is not a hhtools checkout: ${resolved}`)
   }
+  return resolved
+}
 
+function discoveredRepositoryRoot(options: ResolveRuntimeOptions): string | undefined {
   // Dev and unpacked builds normally live below the repository, so walking upward is enough.
   for (const candidate of [options.cwd, options.appPath, dirname(options.appPath)]) {
     const found = walkForRepository(candidate)
     if (found !== undefined) return found
   }
-  throw new Error('Unable to find the hhtools repository. Set HHTOOLS_REPO_ROOT.')
+  return undefined
 }
 
 function resolvePython(
@@ -76,11 +90,85 @@ function resolvePython(
   return localPython ?? (platform === 'win32' ? 'python' : 'python3')
 }
 
+function bundledRuntime(
+  options: ResolveRuntimeOptions,
+  platform: NodeJS.Platform
+): { repoRoot: string; pythonExecutable: string; runtimeRoot: string } | undefined {
+  if (!options.isPackaged || options.resourcesPath === undefined) return undefined
+  const runtimeRoot = join(options.resourcesPath, 'runtime')
+  const repoRoot = join(runtimeRoot, 'app')
+  const pythonExecutable = platform === 'win32'
+    ? join(runtimeRoot, 'python', 'python.exe')
+    : join(runtimeRoot, 'python', 'bin', 'python3')
+  if (!existsSync(repoRoot) && !existsSync(pythonExecutable)) return undefined
+  if (!isRepositoryRoot(repoRoot) || !existsSync(pythonExecutable)) {
+    throw new Error(`The bundled HHTools runtime is incomplete: ${runtimeRoot}`)
+  }
+  return { repoRoot, pythonExecutable, runtimeRoot }
+}
+
+function managedRuntimeRoots(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string[] {
+  if (platform !== 'linux') return []
+  const roots = [env.HHTOOLS_INSTALL_ROOT]
+  if (env.XDG_DATA_HOME) roots.push(join(env.XDG_DATA_HOME, 'hhtools'))
+  else if (env.HOME) roots.push(join(env.HOME, '.local', 'share', 'hhtools'))
+  roots.push('/opt/hhtools')
+  return [
+    ...new Set(
+      roots.filter((root): root is string => Boolean(root)).map((root) => resolve(root))
+    )
+  ]
+}
+
+function managedRuntime(
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+  expectedVersion?: string
+): { root: string; pythonExecutable: string } | undefined {
+  for (const root of managedRuntimeRoots(env, platform)) {
+    const marker = join(root, 'runtime-version')
+    const pythonExecutable = join(root, 'tools', 'hhtools', 'bin', 'python')
+    if (!existsSync(marker) || !existsSync(pythonExecutable)) continue
+    try {
+      const installedVersion = readFileSync(marker, 'utf8').trim()
+      if (
+        installedVersion
+        && (expectedVersion === undefined || installedVersion === expectedVersion)
+      ) {
+        return { root, pythonExecutable }
+      }
+    } catch {
+      // A partial or unreadable installation is not a runtime candidate.
+    }
+  }
+  return undefined
+}
+
+function packagedResource(options: ResolveRuntimeOptions, ...parts: string[]): string | undefined {
+  if (!options.isPackaged || options.resourcesPath === undefined) return undefined
+  const candidate = join(options.resourcesPath, ...parts)
+  return existsSync(candidate) ? candidate : undefined
+}
+
 export function resolveRuntime(options: ResolveRuntimeOptions): RuntimeConfig {
   const env = options.env ?? process.env
   const platform = options.platform ?? process.platform
-  const repoRoot = resolveRepositoryRoot(options, env)
-  const pythonExecutable = resolvePython(repoRoot, env, platform)
+  const explicitRepoRoot = configuredRepositoryRoot(env)
+  const packaged = explicitRepoRoot === undefined ? bundledRuntime(options, platform) : undefined
+  const managed = explicitRepoRoot === undefined && packaged === undefined && options.isPackaged
+    ? managedRuntime(env, platform, options.appVersion)
+    : undefined
+  const repoRoot = explicitRepoRoot
+    ?? packaged?.repoRoot
+    ?? (managed === undefined ? discoveredRepositoryRoot(options) : undefined)
+  if (repoRoot === undefined && managed === undefined) {
+    throw new RuntimeNotFoundError(
+      'HHTools needs a local Python runtime. Install it here or set HHTOOLS_REPO_ROOT.'
+    )
+  }
+  const pythonExecutable = managed?.pythonExecutable
+    ?? packaged?.pythonExecutable
+    ?? resolvePython(repoRoot!, env, platform)
   const packagedBodyModels =
     options.isPackaged && options.resourcesPath
       ? join(options.resourcesPath, 'body_models')
@@ -90,16 +178,26 @@ export function resolveRuntime(options: ResolveRuntimeOptions): RuntimeConfig {
   )
     ? packagedBodyModels
     : undefined
+  const bundledMotions = packagedResource(options, 'builtin', 'motions')
+  const bundledRobotRoot = packagedResource(options, 'builtin', 'robots')
+  const sourceRoot = resolve(
+    env.HHTOOLS_SOURCE_ROOT
+      ?? bundledMotions
+      ?? (repoRoot ? join(repoRoot, 'assets', 'motions') : join(options.userData, 'motions'))
+  )
 
   return {
+    kind: managed ? 'managed' : packaged ? 'bundled' : 'checkout',
     repoRoot,
+    workingDirectory: managed?.root ?? packaged?.runtimeRoot ?? repoRoot!,
     pythonExecutable,
-    sourceRoot: resolve(env.HHTOOLS_SOURCE_ROOT ?? join(repoRoot, 'assets', 'motions')),
+    sourceRoot,
     saveDirectory: resolve(env.HHTOOLS_SAVE_DIR ?? join(options.userData, 'save_npz')),
     // Keep Python's generated assets separate from Electron/Chromium's Cache directory.
     cacheDirectory: resolve(env.HHTOOLS_CACHE_DIR ?? join(options.userData, 'hhtools-cache')),
     logDirectory: resolve(env.HHTOOLS_LOG_DIR ?? join(options.userData, 'logs')),
-    bodyModelsRoot
+    bodyModelsRoot,
+    bundledRobotRoot
   }
 }
 
@@ -146,9 +244,11 @@ const ENV_ALLOWLIST = new Set([
 ])
 
 export function buildSidecarEnvironment(
-  repoRoot: string,
+  repoRoot: string | undefined,
   source: NodeJS.ProcessEnv = process.env,
-  packagedBodyModels?: string
+  packagedBodyModels?: string,
+  bundledRobotRoot?: string,
+  includeParentPythonPath = true
 ): NodeJS.ProcessEnv {
   const result: NodeJS.ProcessEnv = {}
 
@@ -166,21 +266,31 @@ export function buildSidecarEnvironment(
   }
 
   // Import the working checkout and make Python logs deterministic and immediately visible.
-  result.PYTHONPATH = [repoRoot, source.PYTHONPATH].filter(Boolean).join(delimiter)
+  if (repoRoot !== undefined) {
+    result.PYTHONPATH = [repoRoot, includeParentPythonPath ? source.PYTHONPATH : undefined]
+      .filter(Boolean)
+      .join(delimiter)
+  }
   result.PYTHONDONTWRITEBYTECODE = '1'
   result.PYTHONNOUSERSITE = '1'
   result.PYTHONUTF8 = '1'
   result.PYTHONUNBUFFERED = '1'
 
-  const bundledBodyModels = packagedBodyModels ?? join(repoRoot, 'configs', 'body_models')
-  const bundledSmplxNeutral = join(bundledBodyModels, 'smplx', 'SMPLX_NEUTRAL.npz')
-  if (existsSync(bundledSmplxNeutral)) {
+  const bundledBodyModels = packagedBodyModels
+    ?? (repoRoot ? join(repoRoot, 'configs', 'body_models') : undefined)
+  const bundledSmplxNeutral = bundledBodyModels
+    ? join(bundledBodyModels, 'smplx', 'SMPLX_NEUTRAL.npz')
+    : undefined
+  if (bundledBodyModels && bundledSmplxNeutral && existsSync(bundledSmplxNeutral)) {
     if (source.HHTOOLS_BODY_MODELS === undefined) {
       result.HHTOOLS_BODY_MODELS = bundledBodyModels
     }
     if (source.HHTOOLS_GVHMR_BODY_MODELS === undefined) {
       result.HHTOOLS_GVHMR_BODY_MODELS = bundledBodyModels
     }
+  }
+  if (bundledRobotRoot && source.HHTOOLS_ROBOT_PATH === undefined) {
+    result.HHTOOLS_ROBOT_PATH = bundledRobotRoot
   }
   return result
 }

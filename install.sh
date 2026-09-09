@@ -134,6 +134,11 @@ else
 fi
 
 mkdir -p "$install_root" "$bin_dir" "$cache_dir"
+# A marker represents a fully verified runtime, so hide any previous marker
+# before replacing files. A concurrent app launch will keep showing setup until
+# this installation finishes successfully.
+runtime_marker="$install_root/runtime-version"
+rm -f -- "$runtime_marker"
 temporary_parent=${TMPDIR:-/tmp}
 work_dir=$(mktemp -d "$temporary_parent/hhtools-install.XXXXXX")
 cleanup() {
@@ -200,6 +205,15 @@ hhtools_bin="$bin_dir/hhtools"
 [ -x "$hhtools_bin" ] || die "installed command not found: $hhtools_bin"
 "$hhtools_bin" --version
 "$hhtools_bin" doctor --require web --require retarget --require mcp >/dev/null
+
+# Publish the completion marker only after the installed interpreter and all
+# required runtime imports have passed validation. The desktop shell ignores a
+# partial tool environment without this marker.
+runtime_python="$install_root/tools/hhtools/bin/python"
+[ -x "$runtime_python" ] || die "installed runtime Python not found: $runtime_python"
+runtime_marker_tmp="$install_root/.runtime-version.$$"
+printf '%s\n' "$version" > "$runtime_marker_tmp"
+mv "$runtime_marker_tmp" "$runtime_marker"
 
 say ''
 say "HHTools $version is ready."

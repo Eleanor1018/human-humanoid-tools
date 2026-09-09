@@ -42,7 +42,7 @@ robot, and retargeting core, but their installation and launch paths are intenti
 |------|----------|--------|
 | **Terminal (CLI/TUI workflow)** | Batch jobs, servers, SSH, and automation | `uv run hhtools ...` |
 | **WebUI** | Browser-based visualization and interactive workflows | `uv run hhtools web` |
-| **Desktop GUI (`.deb`)** | Local desktop shell for an installed checkout | Application menu or `hhtools-desktop` |
+| **Desktop GUI** | Windows standalone app or Linux first-run setup | Application menu or `hhtools-desktop` |
 | **Agent (JSON CLI / MCP)** | Versioned H2R, scene-free R2R, and scalable Batch automation | [`hhtools agent` / `hhtools-mcp`](docs/agent.md) |
 
 ### One-line Linux release install
@@ -120,19 +120,22 @@ validated silent save. It does not yet expose the full WebUI feature set. See
 [Agent interfaces](docs/agent.md) for installation, scope, the smoke-first workflow, runtime
 ownership, and the included Codex project configuration.
 
-### Ubuntu desktop GUI (`.deb`)
+### Desktop GUI
 
-The small Debian package follows the original Desktop Alpha model: it contains Electron and the
-locally supplied neutral SMPL-X model, while reusing an existing checkout and `.venv` instead of
-duplicating Python, Torch, CUDA, and Newton:
+The Debian package contains Electron plus the curated built-in motions and robots. On first launch,
+its setup page installs the version-matched Python runtime from GitHub Releases; the recommended
+per-user option needs no administrator password, while the all-users option opens the operating
+system authentication dialog:
 
 ```bash
 sudo apt install ./hhtools-0.1.0-amd64.deb
 hhtools-desktop
 ```
 
-Set `HHTOOLS_REPO_ROOT` (and optionally `HHTOOLS_PYTHON`) for an installed shell outside the
-checkout. Build details are in [`desktop/README.md`](desktop/README.md#desktop-packages).
+The Windows installer instead bundles its Python runtime and application source, so it starts
+without a checkout or system Python. GVHMR and separately licensed SMPL-family weights remain
+optional on both platforms. Build and packaging details are in
+[`desktop/README.md`](desktop/README.md#desktop-packages).
 
 ### Frontend development
 
