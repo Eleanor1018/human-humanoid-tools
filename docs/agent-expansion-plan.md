@@ -157,7 +157,7 @@ JSON CLI 的既有 `--timeout` 表示整个 HTTP 请求超时，因此等待时�
 - [x] 对 source/target 不匹配、缺少 pair calibration、过期计划和场景输入进行前置拒绝；
 - [x] 产物沿用现有 CSV / PKL、preview、diagnostics 与 portable export，并补齐 provenance；
 - [x] MCP、REST 和 JSON CLI 增加 R2R 契约并完成自包含真实求解 E2E；
-- [ ] 人类 CLI 的 `hhtools retarget r2r` 简洁入口与 TUI 首页留在第 6 个提交统一完成。
+- [ ] 人类 CLI 的 `hhtools retarget r2r` 简洁入口留在第 6 个提交完成。
 
 ## 阶段 4：Batch
 
@@ -213,6 +213,11 @@ Open
 
 完整参数调用保持非交互；真实 TTY 中缺少参数时可以进入简洁向导。Agent 和 CI 使用
 `--json` 或 MCP，永不收到交互提示、ANSI 进度或非结构化第二份输出。
+
+- [x] `hhtools` 无参数启动时显示响应式首页，窄终端自动改为纵向布局；
+- [x] 首页只链接当前真实可用入口，R2R / Batch 暂时明确导向 WebUI；
+- [x] 非 TTY 输出不含 ANSI、不读取输入，`--help` 与 `--version` 行为保持不变；
+- [ ] R2R / Batch 人类 CLI 与真实 TTY 简洁向导在后续步骤接入首页。
 
 ## 提交与发布顺序
 

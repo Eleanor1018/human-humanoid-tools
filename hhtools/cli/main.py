@@ -51,9 +51,11 @@ def _attach(name: str, module_path: str, help_text: str) -> None:
 
 
 def _subcommands_for_argv() -> list[tuple[str, str, str]]:
-    """Load only the invoked subcommand (or all for top-level help)."""
+    """Load only the invoked subcommand, or all for explicit top-level help."""
     if len(sys.argv) < 2:
-        return _SUBCOMMANDS
+        # The landing page is deliberately cheap and does not need to import
+        # every command tree merely to advertise stable entry points.
+        return []
     arg = sys.argv[1]
     if arg == "agent":
         # The strict Agent command is registered directly below and lazily
@@ -106,7 +108,9 @@ def _root(
         typer.echo(f"hhtools {__version__}")
         raise typer.Exit(code=0)
     if ctx.invoked_subcommand is None:
-        typer.echo(ctx.get_help())
+        from hhtools.cli.home import print_homepage
+
+        print_homepage(version=__version__)
 
 
 if __name__ == "__main__":

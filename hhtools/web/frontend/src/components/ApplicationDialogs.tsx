@@ -546,7 +546,10 @@ function AboutDialog({
               {text("Authors and contributors", "作者与贡献者")}
             </dt>
             <dd>
-              jaggerShen {text("and", "与")} hhtools contributors
+              {text(
+                "Jagger Shen, Nora Sun and hhtools contributors",
+                "Jagger Shen、Nora Sun 与 hhtools 贡献者",
+              )}
             </dd>
           </div>
           <div>

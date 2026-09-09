@@ -224,7 +224,7 @@ test('starts the shared renderer and stops its Python sidecar', async ({}, testI
     const aboutDialog = page.getByRole('dialog', { name: 'Human-Humanoid Tools' })
     await expect(aboutDialog).toBeVisible()
     await expect(aboutDialog).toContainText('Humanoid motion retargeting and dataset analysis')
-    await expect(aboutDialog).toContainText('jaggerShen and hhtools contributors')
+    await expect(aboutDialog).toContainText('Jagger Shen, Nora Sun and hhtools contributors')
     await expect(aboutDialog).toContainText('2026')
     await expect(aboutDialog).toContainText('Apache-2.0')
     await expect(aboutDialog.getByRole('link', { name: 'github.com/Roboparty/human-humanoid-tools' }))
