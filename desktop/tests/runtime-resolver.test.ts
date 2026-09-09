@@ -134,6 +134,7 @@ describe('resolveRuntime', () => {
       userData: join(home, '.config', 'hhtools'),
       isPackaged: true,
       resourcesPath: join(root, 'resources'),
+      systemInstallRoot: null,
       env: { HOME: home },
       platform: 'linux'
     })).toThrow(RuntimeNotFoundError)
@@ -154,6 +155,7 @@ describe('resolveRuntime', () => {
       isPackaged: true,
       resourcesPath: join(root, 'resources'),
       appVersion: '0.1.0',
+      systemInstallRoot: null,
       env: { HOME: join(root, 'home') },
       platform: 'linux'
     })).toThrow(RuntimeNotFoundError)
