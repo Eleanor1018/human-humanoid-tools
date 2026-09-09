@@ -13,6 +13,7 @@ from hhtools.services import (
     AgentAssetService,
     ArtifactExportService,
     AvailableAssetCatalogService,
+    BatchPreflightService,
     CapabilitiesService,
     JobManager,
     PlanStore,
@@ -44,6 +45,7 @@ class AgentRuntime:
     available_assets: AvailableAssetCatalogService
     preflight: PreflightService
     r2r_preflight: R2RPreflightService
+    batch_preflight: BatchPreflightService
     plans: PlanStore
     jobs: JobManager
     exports: ArtifactExportService
@@ -62,6 +64,7 @@ class AgentRuntime:
             available_assets=services.agent_available_asset_catalog_service,
             preflight=services.agent_preflight_service,
             r2r_preflight=services.agent_r2r_preflight_service,
+            batch_preflight=services.agent_batch_preflight_service,
             plans=services.agent_plan_store,
             jobs=services.agent_job_manager,
             exports=services.agent_artifact_export_service,

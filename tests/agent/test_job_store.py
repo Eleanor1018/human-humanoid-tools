@@ -17,6 +17,7 @@ from hhtools.contracts import (
     ErrorStage,
     JobOutcome,
     JobProgress,
+    JobSpecCalibration,
     JobSpecInput,
     JobSpecKind,
     JobSpecProvenance,
@@ -806,7 +807,20 @@ def test_retry_parent_identity_and_idempotency_lineage_cannot_be_changed(
         )
     _assert_code(plan_conflict, "JOB_CONFLICT")
 
-    changed_kind = _spec().model_copy(update={"kind": JobSpecKind.BATCH_RETARGET})
+    changed_kind = _spec().model_copy(
+        update={
+            "kind": JobSpecKind.R2R_RETARGET,
+            "source_robot": JobSpecRobot(
+                robot_id="source_robot",
+                asset_id=f"asset:sha256:{'c' * 64}",
+                config_sha256="c" * 64,
+            ),
+            "calibration": JobSpecCalibration(
+                calibration_id=f"cal:sha256:{'d' * 64}",
+                sha256="d" * 64,
+            ),
+        }
+    )
     with pytest.raises(JobStoreError) as kind_conflict:
         store.create(
             changed_kind,

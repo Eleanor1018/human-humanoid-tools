@@ -16,6 +16,8 @@ from typing import TYPE_CHECKING, Any
 
 from hhtools._version import __version__
 from hhtools.contracts import (
+    MAX_BATCH_ITEMS,
+    MAX_BATCH_TOTAL_FRAMES,
     AssetCategory,
     BackendCapability,
     CapabilityResponse,
@@ -314,6 +316,8 @@ def _backend_capabilities(devices: list[DeviceCapability]) -> list[BackendCapabi
                 "max_retarget_fps": 1_000.0,
                 "max_retarget_frames": 100_000,
                 "max_human_height": 10.0,
+                "max_batch_items": MAX_BATCH_ITEMS,
+                "max_batch_total_frames": MAX_BATCH_TOTAL_FRAMES,
             },
         ),
         (
@@ -322,7 +326,7 @@ def _backend_capabilities(devices: list[DeviceCapability]) -> list[BackendCapabi
             ("mujoco", "osqp", "scipy", "yourdfpy"),
             [AssetCategory.OBJECT_INTERACTION, AssetCategory.TERRAIN_SCENE],
             {
-                "batch": False,
+                "batch": True,
                 "scene_geometry": True,
                 "mpc": True,
                 "cpu_fallback": True,
@@ -332,6 +336,8 @@ def _backend_capabilities(devices: list[DeviceCapability]) -> list[BackendCapabi
                 "max_retarget_fps": 1_000.0,
                 "max_retarget_frames": 100_000,
                 "max_human_height": 10.0,
+                "max_batch_items": MAX_BATCH_ITEMS,
+                "max_batch_total_frames": MAX_BATCH_TOTAL_FRAMES,
             },
         ),
     )
@@ -420,6 +426,8 @@ class CapabilitiesService:
                 "asset_inspection": self._asset_root_provider is not None,
                 "asset_registry": self._asset_root_provider is not None,
                 "available_asset_catalog": self._available_asset_catalog_available,
+                "batch_execution": self._job_execution_available,
+                "batch_preflight": self._preflight_available,
                 "artifact_store": self._artifact_store_available,
                 "idempotent_jobs": self._job_manager_available,
                 "job_cancellation": self._job_execution_available,

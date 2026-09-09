@@ -35,6 +35,8 @@ from hhtools.contracts import (
     AssetSearchResponse,
     AvailableAssetCatalogRequest,
     AvailableAssetCatalogResponse,
+    BatchPreflightRequest,
+    BatchPreflightResponse,
     CapabilityResponse,
     ErrorStage,
     JobLookupRequest,
@@ -362,6 +364,13 @@ class _R2RPreflightProvider(Protocol):
     ) -> R2RPreflightResponse: ...
 
 
+class _BatchPreflightProvider(Protocol):
+    def preflight_batch(
+        self,
+        request: BatchPreflightRequest,
+    ) -> BatchPreflightResponse: ...
+
+
 class _JobProvider(Protocol):
     def start_job(
         self,
@@ -461,6 +470,13 @@ def _r2r_preflight_service(request: Request) -> _R2RPreflightProvider:
     if service is None or not callable(getattr(service, "preflight_r2r", None)):
         raise RuntimeError("agent R2R preflight service is not configured")
     return cast("_R2RPreflightProvider", service)
+
+
+def _batch_preflight_service(request: Request) -> _BatchPreflightProvider:
+    service = getattr(request.app.state, "agent_batch_preflight_service", None)
+    if service is None or not callable(getattr(service, "preflight_batch", None)):
+        raise RuntimeError("agent batch preflight service is not configured")
+    return cast("_BatchPreflightProvider", service)
 
 
 def _job_manager(request: Request) -> _JobProvider:
@@ -630,6 +646,20 @@ def preflight_r2r(
     """Resolve R2R intent while binding the trajectory and both robots."""
 
     return _r2r_preflight_service(request).preflight_r2r(preflight)
+
+
+@router.post(
+    "/preflight/batch",
+    response_model=BatchPreflightResponse,
+    response_model_exclude_none=True,
+)
+def preflight_batch(
+    request: Request,
+    preflight: BatchPreflightRequest,
+) -> BatchPreflightResponse:
+    """Freeze an ordered list of ready child plans into one bounded batch."""
+
+    return _batch_preflight_service(request).preflight_batch(preflight)
 
 
 @router.post(

@@ -18,11 +18,12 @@ from typing import Any, NoReturn
 
 from pydantic import ValidationError
 
-from hhtools.contracts import ApiError, ErrorStage, R2RPlan, RetargetPlan
+from hhtools.contracts import ApiError, BatchPlan, ErrorStage, R2RPlan, RetargetPlan
 
 _RETARGET_PLAN_SEMANTICS = "hhtools.retarget.plan.v1"
 _R2R_PLAN_SEMANTICS = "hhtools.r2r.plan.v1"
-ExecutionPlan = RetargetPlan | R2RPlan
+_BATCH_PLAN_SEMANTICS = "hhtools.batch.plan.v1"
+ExecutionPlan = RetargetPlan | R2RPlan | BatchPlan
 
 
 class PlanStoreError(RuntimeError):
@@ -187,7 +188,9 @@ def _encode_plan(plan: ExecutionPlan) -> str:
         # RetargetPlan is frozen, but ``parameters`` is intentionally an open
         # JSON object.  Validate it before Pydantic has an opportunity to turn
         # a Path or tuple into a superficially JSON-compatible representation.
-        _validate_portable_json(plan.parameters, location="$.parameters")
+        parameters = getattr(plan, "parameters", None)
+        if parameters is not None:
+            _validate_portable_json(parameters, location="$.parameters")
         document = plan.model_dump(mode="json")
         encoded = _canonical_json(document)
         restored = type(plan).model_validate_json(encoded)
@@ -410,11 +413,56 @@ def _validate_r2r_plan_projection(
         )
 
 
+def _validate_batch_plan_projection(
+    plan: BatchPlan,
+    canonical_payload: Mapping[str, Any],
+) -> None:
+    """Bind a batch plan to its ordered child projections and fixed ceilings."""
+
+    target_robot = _nested_object(canonical_payload, "target_robot")
+    output = _nested_object(canonical_payload, "output")
+    resource_limits = _nested_object(canonical_payload, "resource_limits")
+    source_robot = canonical_payload.get("source_robot")
+    if source_robot is not None and not isinstance(source_robot, dict):
+        raise _InvalidDocumentError("source_robot must be null or a JSON object")
+    items = canonical_payload.get("items")
+    if not isinstance(items, list) or not all(isinstance(item, dict) for item in items):
+        raise _InvalidDocumentError("batch items must be an ordered object list")
+    if items != [item.model_dump(mode="json") for item in plan.items]:
+        raise _InvalidDocumentError("batch child plan projections are inconsistent")
+
+    projected = {
+        "workflow": canonical_payload.get("workflow"),
+        "run_mode": canonical_payload.get("run_mode"),
+        "target_robot_id": target_robot.get("robot_id"),
+        "target_robot_asset_id": target_robot.get("asset_id"),
+        "target_robot_digest": target_robot.get("digest"),
+        "source_robot_id": source_robot.get("robot_id") if source_robot else None,
+        "source_robot_asset_id": source_robot.get("asset_id") if source_robot else None,
+        "source_robot_digest": source_robot.get("digest") if source_robot else None,
+        "output_policy": output.get("policy"),
+        "resource_limits": resource_limits,
+    }
+    public_plan = plan.model_dump(mode="json")
+    divergent = sorted(
+        field for field, expected in projected.items() if public_plan.get(field) != expected
+    )
+    if divergent:
+        raise _InvalidDocumentError(
+            "batch plan fields diverge from canonical payload: " + ", ".join(divergent)
+        )
+
+
 def _validate_plan_projection(
     plan: ExecutionPlan,
     canonical_payload: Mapping[str, Any],
 ) -> None:
     semantics = canonical_payload.get("semantics")
+    if semantics == _BATCH_PLAN_SEMANTICS:
+        if not isinstance(plan, BatchPlan):
+            raise _InvalidDocumentError("batch semantics require a batch plan document")
+        _validate_batch_plan_projection(plan, canonical_payload)
+        return
     if semantics == _R2R_PLAN_SEMANTICS:
         if not isinstance(plan, R2RPlan):
             raise _InvalidDocumentError("R2R semantics require an R2R plan document")
@@ -500,7 +548,9 @@ class PlanStore:
                 raise _InvalidDocumentError("persisted documents are not canonical JSON")
 
             plan_model = (
-                R2RPlan
+                BatchPlan
+                if payload_document.get("semantics") == _BATCH_PLAN_SEMANTICS
+                else R2RPlan
                 if payload_document.get("semantics") == _R2R_PLAN_SEMANTICS
                 else RetargetPlan
             )

@@ -40,6 +40,9 @@ from hhtools.contracts import (
     AssetSearchResponse,
     AvailableAssetCatalogRequest,
     AvailableAssetCatalogResponse,
+    BatchPreflightRequest,
+    BatchPreflightResponse,
+    BatchReport,
     CapabilityResponse,
     ErrorStage,
     EvaluationReport,
@@ -321,13 +324,16 @@ def _read_report[T](
 
 def _server_instructions(web_ui_url: str) -> str:
     return (
-        "For every new H2R or R2R run: get capabilities, register/search and inspect assets, "
+        "For every new H2R, R2R, or bounded batch run: get capabilities, register/search "
+        "and inspect assets, "
         "preflight a smoke plan, start only a ready plan, wait by revision, then read "
         "evaluation and manifest for human review. Persist each plan_id plus idempotency "
         "key before start; use lookup_job to recover an ambiguous submission without job "
         "enumeration. On human_action_required, stop and "
         "present next_action; never guess calibration. run_mode is frozen at preflight, "
-        "and full requires a new full preflight plus explicit user approval. Completed "
+        "and batch preflight accepts only ordered ready child plans from one workflow and "
+        "run mode. Batch retry always retries the whole plan. "
+        "Full execution requires a new full preflight plus explicit user approval. Completed "
         "does not mean quality-approved. Never use host paths, Base64 binary artifacts, "
         "or real-robot deployment. For user-requested files, export only by job_id and "
         "artifact_id and return the portable agent-exports receipt. Cancellation is "
@@ -498,6 +504,15 @@ def create_mcp_server(
         """Validate one scene-free R2R intent and freeze both robot identities."""
 
         return _tool_call(lambda: _runtime(context).r2r_preflight.preflight_r2r(request))
+
+    @server.tool(annotations=_SAFE_WRITE)
+    def preflight_batch(
+        request: BatchPreflightRequest,
+        context: Context[AgentRuntime, Any],
+    ) -> BatchPreflightResponse:
+        """Freeze an ordered list of ready H2R or R2R plans into one bounded batch."""
+
+        return _tool_call(lambda: _runtime(context).batch_preflight.preflight_batch(request))
 
     @server.tool(annotations=_SAFE_WRITE)
     def start_job(
@@ -774,6 +789,22 @@ def create_mcp_server(
                     "evaluation_report",
                     EvaluationReport,
                 )
+            )
+        )
+
+    @server.resource(
+        "hhtools://jobs/{job_id}/batch",
+        name="hhtools-job-batch-report",
+        description="Verified bounded per-item result report for one batch job.",
+        mime_type="application/json",
+    )
+    async def batch_resource(
+        job_id: str,
+        context: Context,
+    ) -> dict[str, Any]:
+        return _resource_call(
+            lambda: _model_document(
+                _read_report(_runtime(context), job_id, "batch_report", BatchReport)
             )
         )
 

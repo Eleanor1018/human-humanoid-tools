@@ -38,7 +38,8 @@ These are different operations:
 - Ambiguous retry replay repeats the same `retry_job`, parent `job_id`, and retry idempotency key;
   it does not authorize another child attempt.
 - `retry_job` is allowed only for a terminal parent. It creates an auditable child attempt of the
-  same whole H2R or R2R plan and requires explicit user intent plus its own retry idempotency key.
+  same whole H2R, R2R, or Batch plan and requires explicit user intent plus its own retry
+  idempotency key. Batch retry never means retrying an implicit subset.
 - A changed run mode or changed input is neither replay nor retry. It requires a new preflight,
   new plan, and new start key.
 

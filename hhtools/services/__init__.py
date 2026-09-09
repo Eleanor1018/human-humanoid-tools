@@ -25,6 +25,8 @@ from .available_assets import (
     iter_bounded_catalog_files,
     require_bounded_catalog_root,
 )
+from .batch_preflight import BatchPreflightService
+from .batch_retarget import BatchRetargetService, ExecutionPlanService
 from .capabilities import CapabilitiesService
 from .job_store import JobStore, JobStoreError, StoredJob, compute_request_fingerprint
 from .jobs import (
@@ -65,6 +67,8 @@ __all__ = [
     "AvailableAssetCatalogLimitError",
     "AvailableAssetCatalogService",
     "AvailableAssetProvider",
+    "BatchPreflightService",
+    "BatchRetargetService",
     "CapabilitiesService",
     "JobCancelledError",
     "JobExecutionContext",
@@ -76,6 +80,7 @@ __all__ = [
     "JobStore",
     "JobStoreError",
     "DynamicRootLocator",
+    "ExecutionPlanService",
     "LegacyJobUpgradeError",
     "LegacyJobUpgradeResult",
     "LegacyJobUpgradeService",

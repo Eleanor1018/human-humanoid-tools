@@ -19,6 +19,7 @@ Installation and supported boundaries are documented in the public
 | `inspect_asset_bundle` | `asset_id`, `verify_hashes`, and `parse_content` from the live tool schema | [asset inspection](../../../../docs/schemas/agent/v1/asset-inspection.schema.json) |
 | `preflight_retarget` | [retarget preflight request](../../../../docs/schemas/agent/v1/retarget-preflight-request.schema.json) | [preflight response](../../../../docs/schemas/agent/v1/preflight-response.schema.json) |
 | `preflight_r2r` | [R2R preflight request](../../../../docs/schemas/agent/v1/r2r-preflight-request.schema.json) | [R2R preflight response](../../../../docs/schemas/agent/v1/r2r-preflight-response.schema.json) |
+| `preflight_batch` | [batch preflight request](../../../../docs/schemas/agent/v1/batch-preflight-request.schema.json) | [batch preflight response](../../../../docs/schemas/agent/v1/batch-preflight-response.schema.json) |
 | `start_job` / `start_retarget` | [job start request](../../../../docs/schemas/agent/v1/job-start-request.schema.json) | [agent job view](../../../../docs/schemas/agent/v1/agent-job-view.schema.json) |
 | `lookup_job` | [job lookup request](../../../../docs/schemas/agent/v1/job-lookup-request.schema.json) | [agent job view](../../../../docs/schemas/agent/v1/agent-job-view.schema.json) |
 | `get_job` / `wait_job` / `cancel_job` | Scalar job identity and live tool fields | [agent job view](../../../../docs/schemas/agent/v1/agent-job-view.schema.json) |
@@ -56,6 +57,7 @@ hhtools://plans/{plan_id}
 hhtools://jobs/{job_id}/status
 hhtools://jobs/{job_id}/manifest
 hhtools://jobs/{job_id}/evaluation
+hhtools://jobs/{job_id}/batch
 hhtools://jobs/{job_id}/failures
 hhtools://jobs/{job_id}/artifacts/{artifact_id}
 ```
@@ -88,6 +90,10 @@ binary content.
   immutable [R2R plan](../../../../docs/schemas/agent/v1/r2r-plan.schema.json) binding the
   trajectory, source robot, target robot, and pair calibration. Do not exchange either robot after
   preflight.
+- Batch takes only ordered ready child plan IDs and returns an immutable
+  [batch plan](../../../../docs/schemas/agent/v1/batch-plan.schema.json). Its
+  [batch report](../../../../docs/schemas/agent/v1/batch-report.schema.json) contains the bounded
+  per-item results; routine job status exposes only compact completed/total counts.
 - `run_mode` belongs to the workflow preflight request's `parameters`. It is frozen in the returned
   plan. [Job start](../../../../docs/schemas/agent/v1/job-start-request.schema.json) has no override.
 - Use `output_policy: create_new`. The current PreflightService rejects `overwrite` and

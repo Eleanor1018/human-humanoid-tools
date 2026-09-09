@@ -55,6 +55,7 @@ _EXPECTED_TOOLS = {
     "list_robots",
     "preflight_retarget",
     "preflight_r2r",
+    "preflight_batch",
     "start_job",
     "start_retarget",
     "get_job",
@@ -74,6 +75,7 @@ _EXPECTED_RESOURCE_TEMPLATES = {
     "hhtools://jobs/{job_id}/status",
     "hhtools://jobs/{job_id}/manifest",
     "hhtools://jobs/{job_id}/evaluation",
+    "hhtools://jobs/{job_id}/batch",
     "hhtools://jobs/{job_id}/failures",
     "hhtools://jobs/{job_id}/artifacts/{artifact_id}",
 }
@@ -383,6 +385,7 @@ class _Fixture:
         self.available_assets = _AvailableAssetsService()
         self.preflight = _PreflightService()
         self.r2r_preflight = _R2RPreflightService()
+        self.batch_preflight = cast(Any, object())
         self.plans = _Plans()
         self.jobs = _Jobs()
         self.exports = _Exports()
@@ -392,6 +395,7 @@ class _Fixture:
             available_assets=cast(Any, self.available_assets),
             preflight=cast(Any, self.preflight),
             r2r_preflight=self.r2r_preflight,
+            batch_preflight=self.batch_preflight,
             plans=cast(Any, self.plans),
             jobs=cast(Any, self.jobs),
             exports=cast(Any, self.exports),
@@ -412,6 +416,7 @@ class _Fixture:
             available_assets=cast(Any, self.available_assets),
             preflight=cast(Any, self.preflight),
             r2r_preflight=self.r2r_preflight,
+            batch_preflight=self.batch_preflight,
             plans=cast(Any, self.plans),
             jobs=cast(Any, jobs),
             exports=cast(Any, self.exports),
@@ -693,6 +698,11 @@ async def test_mcp_tool_schemas_are_generated_from_public_pydantic_contracts() -
     assert wait.input_schema["properties"]["after_revision"]["minimum"] == 0
     assert wait.input_schema["properties"]["timeout"]["minimum"] == 0.0
     assert wait.input_schema["properties"]["timeout"]["maximum"] == 60.0
+
+    batch = _tool_by_name(tools, "preflight_batch")
+    batch_request = batch.input_schema["$defs"]["BatchPreflightRequest"]
+    assert batch_request["properties"]["item_plan_ids"]["maxItems"] == 32
+    assert batch_request["additionalProperties"] is False
 
     capabilities = _tool_by_name(tools, "get_capabilities")
     assert capabilities.output_schema["title"] == "CapabilityResponse"

@@ -36,6 +36,8 @@ from hhtools.contracts import (
     AssetSearchResponse,
     AvailableAssetCatalogRequest,
     AvailableAssetCatalogResponse,
+    BatchPreflightRequest,
+    BatchPreflightResponse,
     CapabilityResponse,
     ErrorStage,
     JobLookupRequest,
@@ -241,6 +243,11 @@ _COMMAND_SPECS: dict[tuple[str, ...], _CliCommandSpec] = {
     ("preflight", "r2r"): _CliCommandSpec(
         ("preflight", "r2r"),
         "Validate one robot-to-robot request and freeze both robot identities.",
+        options=(_REQUEST_ARGUMENT,),
+    ),
+    ("preflight", "batch"): _CliCommandSpec(
+        ("preflight", "batch"),
+        "Freeze ordered ready child plans into one bounded H2R or R2R batch.",
         options=(_REQUEST_ARGUMENT,),
     ),
     ("job",): _CliCommandSpec(
@@ -677,6 +684,9 @@ def _parser() -> _JsonArgumentParser:
     r2r = preflight_commands.add_parser("r2r", add_help=False)
     r2r.add_argument("--request", required=True)
     r2r.set_defaults(operation="preflight_r2r")
+    batch = preflight_commands.add_parser("batch", add_help=False)
+    batch.add_argument("--request", required=True)
+    batch.set_defaults(operation="preflight_batch")
 
     job = commands.add_parser("job", add_help=False)
     job_commands = job.add_subparsers(dest="job_command", required=True)
@@ -1012,6 +1022,17 @@ def _execute(  # noqa: PLR0911 - one explicit branch per public CLI operation
             ),
         )
 
+    if operation == "preflight_batch":
+        preflight_request = _validated_request(BatchPreflightRequest, namespace.request, stdin)
+        return _response(
+            BatchPreflightResponse,
+            transport.request_json(
+                "POST",
+                "/preflight/batch",
+                document=preflight_request.model_dump(mode="json", exclude_none=True),
+            ),
+        )
+
     if operation == "job_start":
         try:
             start_request = JobStartRequest(
@@ -1201,7 +1222,7 @@ def _error_exit_code(error: ApiError) -> int:
 
 
 def _result_exit_code(result: BaseModel) -> int:
-    if isinstance(result, PreflightResponse | R2RPreflightResponse):
+    if isinstance(result, PreflightResponse | R2RPreflightResponse | BatchPreflightResponse):
         return EXIT_SUCCESS if result.status is PreflightStatus.READY else EXIT_PREFLIGHT_ERROR
     if isinstance(result, LegacyJobUpgradeResponse):
         return (
@@ -1399,6 +1420,11 @@ def preflight_retarget_command(ctx: typer.Context) -> None:
 @preflight_app.command("r2r", context_settings=_PASSTHROUGH_CONTEXT)
 def preflight_r2r_command(ctx: typer.Context) -> None:
     _passthrough(["preflight", "r2r"], ctx)
+
+
+@preflight_app.command("batch", context_settings=_PASSTHROUGH_CONTEXT)
+def preflight_batch_command(ctx: typer.Context) -> None:
+    _passthrough(["preflight", "batch"], ctx)
 
 
 job_app = typer.Typer(

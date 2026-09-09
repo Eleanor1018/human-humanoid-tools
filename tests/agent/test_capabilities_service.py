@@ -62,6 +62,8 @@ def test_capabilities_report_unlimited_defaults_and_backend_specific_dependencie
         "asset_registry": False,
         "available_asset_catalog": False,
         "artifact_store": False,
+        "batch_execution": False,
+        "batch_preflight": False,
         "idempotent_jobs": False,
         "job_cancellation": False,
         "job_execution": False,
@@ -79,6 +81,8 @@ def test_capabilities_report_unlimited_defaults_and_backend_specific_dependencie
     backends = {backend.backend_id: backend for backend in response.backends}
     assert backends["interaction_mesh"].available is True
     assert backends["interaction_mesh"].limits["requires_cuda"] is False
+    assert backends["interaction_mesh"].features["batch"] is True
+    assert backends["interaction_mesh"].limits["max_batch_items"] == 32
     assert backends["newton"].available is False
     assert "newton, warp" in (backends["newton"].unavailable_reason or "")
     assert backends["newton"].features["cpu_fallback"] is True

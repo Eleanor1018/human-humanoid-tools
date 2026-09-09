@@ -43,7 +43,7 @@ hhtools 有三种交互式运行方式，另提供一个 Agent 自动化接口�
 | **终端（CLI/TUI 工作流）** | 批处理、服务器、SSH 与自动化 | `uv run hhtools ...` |
 | **WebUI** | 浏览器中的可视化与交互工作流 | `uv run hhtools web` |
 | **桌面 GUI（`.deb`）** | 复用已安装源码环境的桌面壳 | 应用菜单或 `hhtools-desktop` |
-| **Agent（JSON CLI / MCP）** | 带版本契约的本机 H2R 与无场景 R2R 自动化 | [`hhtools agent` / `hhtools-mcp`](docs/agent.md) |
+| **Agent（JSON CLI / MCP）** | 带版本契约的 H2R、无场景 R2R 与有界 Batch 自动化 | [`hhtools agent` / `hhtools-mcp`](docs/agent.md) |
 
 ### Linux 一行安装
 
@@ -110,9 +110,9 @@ Python import traceback。
 ### Agent 与 MCP
 
 HHTools 提供供脚本使用的严格 JSON CLI，以及供兼容 Agent 使用的本机 stdio MCP server。
-当前 Agent 接口覆盖经过 preflight 的安全 H2R、无场景 R2R 任务和校验后的产物导出，尚未
-覆盖 WebUI 的全部功能。安装方式、能力边界、smoke-first 流程、运行时目录所有权和仓库
-自带的 Codex 项目配置见 [Agent interfaces](docs/agent.md)。
+当前 Agent 接口覆盖经过 preflight 的安全 H2R、无场景 R2R、有界 H2R/R2R Batch 任务和
+校验后的产物导出，尚未覆盖 WebUI 的全部功能。安装方式、能力边界、smoke-first 流程、
+运行时目录所有权和仓库自带的 Codex 项目配置见 [Agent interfaces](docs/agent.md)。
 
 ### Ubuntu 桌面 GUI（`.deb`）
 

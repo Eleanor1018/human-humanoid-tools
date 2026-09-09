@@ -43,7 +43,7 @@ robot, and retargeting core, but their installation and launch paths are intenti
 | **Terminal (CLI/TUI workflow)** | Batch jobs, servers, SSH, and automation | `uv run hhtools ...` |
 | **WebUI** | Browser-based visualization and interactive workflows | `uv run hhtools web` |
 | **Desktop GUI (`.deb`)** | Local desktop shell for an installed checkout | Application menu or `hhtools-desktop` |
-| **Agent (JSON CLI / MCP)** | Versioned local H2R and scene-free R2R automation | [`hhtools agent` / `hhtools-mcp`](docs/agent.md) |
+| **Agent (JSON CLI / MCP)** | Versioned H2R, scene-free R2R, and bounded Batch automation | [`hhtools agent` / `hhtools-mcp`](docs/agent.md) |
 
 ### One-line Linux release install
 
@@ -114,8 +114,8 @@ recovery command instead of a Python import traceback.
 ### Agent and MCP
 
 HHTools provides a strict JSON CLI for scripts and a local stdio MCP server for compatible agents.
-The current Agent interface covers safe, preflighted H2R and scene-free R2R jobs with verified
-artifact export; it does not yet expose the full WebUI feature set. See
+The current Agent interface covers safe, preflighted H2R, scene-free R2R, and bounded H2R/R2R
+Batch jobs with verified artifact export; it does not yet expose the full WebUI feature set. See
 [Agent interfaces](docs/agent.md) for installation, scope, the smoke-first workflow, runtime
 ownership, and the included Codex project configuration.
 

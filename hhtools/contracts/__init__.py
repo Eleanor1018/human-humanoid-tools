@@ -21,6 +21,18 @@ from .assets import (
     DetectedAssetMetadata,
     InspectionStatus,
 )
+from .batch import (
+    MAX_BATCH_ITEMS,
+    MAX_BATCH_TOTAL_FRAMES,
+    BatchPlan,
+    BatchPlanItem,
+    BatchPreflightRequest,
+    BatchPreflightResponse,
+    BatchReport,
+    BatchReportItem,
+    BatchResourceLimits,
+    BatchWorkflow,
+)
 from .capabilities import (
     BackendCapability,
     CapabilityResponse,
@@ -59,6 +71,7 @@ from .execution import (
     SolverExecutionOptions,
 )
 from .job_spec import (
+    JobSpecBatchItem,
     JobSpecCalibration,
     JobSpecInput,
     JobSpecKind,
@@ -126,6 +139,14 @@ __all__ = [
     "AvailableAssetCatalogRequest",
     "AvailableAssetCatalogResponse",
     "BackendCapability",
+    "BatchPlan",
+    "BatchPlanItem",
+    "BatchPreflightRequest",
+    "BatchPreflightResponse",
+    "BatchReport",
+    "BatchReportItem",
+    "BatchResourceLimits",
+    "BatchWorkflow",
     "CapabilityResponse",
     "CalibrationId",
     "ContractModel",
@@ -145,6 +166,7 @@ __all__ = [
     "JobQueueView",
     "JobRetryRequest",
     "JobSpecCalibration",
+    "JobSpecBatchItem",
     "JobSpecInput",
     "JobSpecKind",
     "JobSpecProvenance",
@@ -157,6 +179,8 @@ __all__ = [
     "LegacyJobUpgradeRequest",
     "LegacyJobUpgradeResponse",
     "LegacyMigrationReceipt",
+    "MAX_BATCH_ITEMS",
+    "MAX_BATCH_TOTAL_FRAMES",
     "NextAction",
     "OutputPolicy",
     "PreflightCheck",

@@ -40,6 +40,7 @@ from hhtools.contracts import (
     ArtifactListResponse,
     AvailableAssetCatalogEntry,
     AvailableAssetCatalogResponse,
+    BatchPreflightResponse,
     CapabilityResponse,
     ErrorStage,
     JobProgress,
@@ -948,6 +949,33 @@ def test_r2r_preflight_uses_the_same_strict_json_cli_boundary() -> None:
         "output_policy": "create_new",
         "parameters": {},
     }
+
+
+def test_batch_preflight_preserves_ordered_child_plan_ids() -> None:
+    response = BatchPreflightResponse(
+        request_id="req_batch_cli",
+        status="rejected",
+        error=ApiError(
+            code="PLAN_NOT_FOUND",
+            message="Child plan unavailable.",
+            stage=ErrorStage.PREFLIGHT,
+        ),
+    )
+    plans = [f"plan:sha256:{'a' * 64}", f"plan:sha256:{'b' * 64}"]
+    request = {"schema_version": "1.0", "workflow": "h2r", "item_plan_ids": plans}
+    transport = FakeTransport([response])
+
+    code, document, _selected = _invoke(
+        ["preflight", "batch", "--request", "-"],
+        transport,
+        stdin=json.dumps(request),
+    )
+
+    assert code == EXIT_PREFLIGHT_ERROR
+    assert document["error"]["code"] == "PLAN_NOT_FOUND"
+    assert transport.requests[0][0:2] == ("POST", "/preflight/batch")
+    assert transport.requests[0][3]["item_plan_ids"] == plans
+    assert transport.requests[0][3]["output_policy"] == "create_new"
 
 
 @pytest.mark.parametrize(

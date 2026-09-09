@@ -87,6 +87,7 @@ def test_skill_has_minimal_repo_scoped_structure_and_trigger_metadata() -> None:
     for included_scope in (
         "h2r",
         "r2r",
+        "batch",
         "interaction-mesh",
         "status",
         "cancellation",
@@ -97,7 +98,6 @@ def test_skill_has_minimal_repo_scoped_structure_and_trigger_metadata() -> None:
     for excluded_scope in (
         "solver-code edits",
         "scene-bearing r2r",
-        "batch",
         "remote service setup",
         "real-robot deployment",
     ):
@@ -112,7 +112,7 @@ def test_skill_has_minimal_repo_scoped_structure_and_trigger_metadata() -> None:
             {
                 "type": "mcp",
                 "value": "hhtools",
-                "description": "Local HHTools H2R/R2R Agent MCP server",
+                "description": "Local HHTools H2R/R2R/Batch Agent MCP server",
                 "transport": "stdio",
                 "command": "uv",
                 "args": [
@@ -197,6 +197,7 @@ def test_workflow_invariants_preserve_transport_and_execution_boundaries() -> No
         "ALLOWLISTED_ASSETS",
         "H2R_BACKEND_ROUTING",
         "R2R_INITIAL_SCOPE",
+        "BOUNDED_BATCH",
         "PREFLIGHT_OWNS_MODE",
         "OUTPUT_CREATE_NEW",
         "IDEMPOTENT_START",
@@ -223,6 +224,17 @@ def test_workflow_invariants_preserve_transport_and_execution_boundaries() -> No
     assert all(
         term in normalized["R2R_INITIAL_SCOPE"]
         for term in ("scene-free", "source identity", "source robot")
+    )
+    assert all(
+        term in normalized["BOUNDED_BATCH"]
+        for term in (
+            "ordered ready child plans",
+            "one workflow",
+            "run mode",
+            "32 items",
+            "100,000 estimated frames",
+            "whole-batch",
+        )
     )
     assert all(
         term in normalized["PREFLIGHT_OWNS_MODE"]

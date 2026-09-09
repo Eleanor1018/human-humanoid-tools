@@ -44,6 +44,7 @@ def assemble_agent_services(
     # Agent-facing REST is a thin, versioned adapter over transport-neutral
     # services.  Capability discovery receives only the scheduler's read-only
     # snapshot function: it cannot reserve a queue slot or touch solver state.
+    from hhtools.agent.batch_job_executor import BatchJobExecutor
     from hhtools.agent.h2r_job_executor import (
         H2RExecutorBindings,
         H2RJobExecutor,
@@ -80,8 +81,11 @@ def assemble_agent_services(
         AvailableAssetCatalogLimitError,
         AvailableAssetCatalogService,
         AvailableAssetProvider,
+        BatchPreflightService,
+        BatchRetargetService,
         CapabilitiesService,
         DynamicRootLocator,
+        ExecutionPlanService,
         JobManager,
         JobStore,
         LegacyJobUpgradeService,
@@ -295,10 +299,19 @@ def assemble_agent_services(
         services.agent_plan_store,
         services.agent_asset_service,
     )
-    services.agent_retarget_service = WorkflowRetargetService(
+    services.agent_single_retarget_service = WorkflowRetargetService(
         services.agent_plan_store,
         services.agent_h2r_retarget_service,
         services.agent_r2r_retarget_service,
+    )
+    services.agent_batch_retarget_service = BatchRetargetService(
+        services.agent_plan_store,
+        services.agent_single_retarget_service,
+    )
+    services.agent_retarget_service = ExecutionPlanService(
+        services.agent_plan_store,
+        services.agent_single_retarget_service,
+        services.agent_batch_retarget_service,
     )
     services.agent_artifact_store = ArtifactStore(agent_data_dir)
     services.agent_job_store = JobStore(agent_data_dir)
@@ -847,7 +860,13 @@ def assemble_agent_services(
         temporary_root=agent_data_dir / "temporary",
     )
 
-    agent_executor = WorkflowJobExecutor(h2r_executor, r2r_executor)
+    single_executor = WorkflowJobExecutor(h2r_executor, r2r_executor)
+    batch_executor = BatchJobExecutor(
+        single_executor,
+        validate_spec=_agent_validate_spec,
+        temporary_root=agent_data_dir / "temporary",
+    )
+    agent_executor = WorkflowJobExecutor(h2r_executor, r2r_executor, batch_executor)
 
     services.agent_job_manager = JobManager(
         services.agent_job_store,
@@ -884,6 +903,12 @@ def assemble_agent_services(
         services.agent_plan_store,
         capabilities_provider=services.agent_capabilities_service.get_capabilities,
         robot_provider=_agent_robot_provider,
+    )
+    services.agent_batch_preflight_service = BatchPreflightService(
+        services.agent_plan_store,
+        services.agent_asset_service,
+        services.agent_single_retarget_service,
+        capabilities_provider=services.agent_capabilities_service.get_capabilities,
     )
     # Phase 4's REST/JSON-CLI adapters call this exact transport-neutral
     # service instance; they do not reimplement path migration or construct

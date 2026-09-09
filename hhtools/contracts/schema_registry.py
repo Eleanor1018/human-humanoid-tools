@@ -20,6 +20,7 @@ from .assets import (
     AvailableAssetCatalogRequest,
     AvailableAssetCatalogResponse,
 )
+from .batch import BatchPlan, BatchPreflightRequest, BatchPreflightResponse, BatchReport
 from .capabilities import CapabilityResponse, RobotListResponse
 from .common import ApiError
 from .job_spec import JobSpecV2
@@ -57,6 +58,10 @@ PUBLIC_AGENT_SCHEMAS: MappingProxyType[str, type[BaseModel]] = MappingProxyType(
         "asset-search-response": AssetSearchResponse,
         "available-asset-catalog-request": AvailableAssetCatalogRequest,
         "available-asset-catalog-response": AvailableAssetCatalogResponse,
+        "batch-plan": BatchPlan,
+        "batch-preflight-request": BatchPreflightRequest,
+        "batch-preflight-response": BatchPreflightResponse,
+        "batch-report": BatchReport,
         "capabilities": CapabilityResponse,
         "evaluation-report": EvaluationReport,
         "failure-report": FailureReport,

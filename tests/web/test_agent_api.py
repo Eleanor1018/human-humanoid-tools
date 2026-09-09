@@ -28,6 +28,8 @@ from hhtools.contracts import (
     AvailableAssetCatalogEntry,
     AvailableAssetCatalogRequest,
     AvailableAssetCatalogResponse,
+    BatchPreflightRequest,
+    BatchPreflightResponse,
     CapabilityResponse,
     ErrorStage,
     InspectionStatus,
@@ -215,6 +217,23 @@ class _FakeR2RPreflight:
         )
 
 
+class _FakeBatchPreflight:
+    def preflight_batch(
+        self,
+        request: BatchPreflightRequest,
+    ) -> BatchPreflightResponse:
+        assert request.workflow.value == "h2r"
+        return BatchPreflightResponse(
+            request_id="req_batch_rest_test",
+            status="rejected",
+            error=ApiError(
+                code="PLAN_NOT_FOUND",
+                message="A child plan is unavailable.",
+                stage=ErrorStage.PREFLIGHT,
+            ),
+        )
+
+
 def _agent_app() -> FastAPI:
     app = FastAPI()
     app.state.agent_capabilities_service = _FakeCapabilities()
@@ -222,6 +241,7 @@ def _agent_app() -> FastAPI:
     app.state.agent_available_asset_catalog_service = _FakeAvailableAssets()
     app.state.agent_preflight_service = _FakePreflight()
     app.state.agent_r2r_preflight_service = _FakeR2RPreflight()
+    app.state.agent_batch_preflight_service = _FakeBatchPreflight()
     app.include_router(router)
     return app
 
@@ -780,6 +800,20 @@ def test_agent_r2r_preflight_route_uses_the_versioned_pair_contract() -> None:
     assert response.json()["error"]["code"] == "R2R_CALIBRATION_REQUIRED"
 
 
+def test_agent_batch_preflight_route_uses_ordered_child_plan_contract() -> None:
+    response = TestClient(_agent_app()).post(
+        "/api/agent/v1/preflight/batch",
+        json={
+            "workflow": "h2r",
+            "item_plan_ids": [f"plan:sha256:{'a' * 64}"],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "rejected"
+    assert response.json()["error"]["code"] == "PLAN_NOT_FOUND"
+
+
 def test_agent_job_rest_lifecycle_idempotency_retry_and_canonical_artifacts(
     tmp_path: Path,
 ) -> None:
@@ -1203,6 +1237,7 @@ def test_agent_phase4_routes_and_examples_are_visible_in_openapi() -> None:
     schema = TestClient(_agent_app()).get("/openapi.json").json()
     expected_paths = {
         "/api/agent/v1/preflight/r2r",
+        "/api/agent/v1/preflight/batch",
         "/api/agent/v1/jobs",
         "/api/agent/v1/jobs/lookup",
         "/api/agent/v1/jobs/{job_id}",
