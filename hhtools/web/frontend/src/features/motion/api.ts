@@ -32,6 +32,8 @@ export interface MotionLibraryEntry {
   readonly suggested_backend?: string;
   readonly motion_category?: MotionCategory;
   readonly asset_kind?: MotionAssetKind;
+  readonly source_robot?: string;
+  readonly job_id?: string;
 }
 
 export interface MotionLibraryResponse {
@@ -39,6 +41,18 @@ export interface MotionLibraryResponse {
   readonly motions_library_root: string;
   readonly folders: readonly string[];
   readonly entries: readonly MotionLibraryEntry[];
+}
+
+export function humanMotionEntries(
+  entries: readonly MotionLibraryEntry[],
+): readonly MotionLibraryEntry[] {
+  return entries.filter((entry) => entry.asset_kind !== "robot_trajectory");
+}
+
+export function robotTrajectoryEntries(
+  entries: readonly MotionLibraryEntry[],
+): readonly MotionLibraryEntry[] {
+  return entries.filter((entry) => entry.asset_kind === "robot_trajectory");
 }
 
 const motionLibraryCache = createRequestCache<MotionLibraryResponse>(1_000);
@@ -101,6 +115,14 @@ export function getMotionLibrary(
     () => requestJson<MotionLibraryResponse>("/api/library"),
     options.signal,
   );
+}
+
+/** Human-motion view over the shared, coalesced Library catalog. */
+export async function getHumanMotionLibrary(
+  options: { signal?: AbortSignal; fetcher?: Fetcher } = {},
+): Promise<MotionLibraryResponse> {
+  const library = await getMotionLibrary(options);
+  return { ...library, entries: humanMotionEntries(library.entries) };
 }
 
 /** Start loading one library row; the server performs parsing in a job. */

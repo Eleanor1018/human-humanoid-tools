@@ -14,7 +14,7 @@ import { SegmentedControl } from "@/components/SegmentedControl";
 import type { StageMotionPayload } from "@/stage/types";
 
 import {
-  getMotionLibrary,
+  getHumanMotionLibrary,
   loadMotionLibraryEntry,
   toStageMotionPayload,
   uploadMotion,
@@ -157,7 +157,7 @@ export function MotionView({
     libraryRequest.current = request;
     setLoadingLibrary(true);
     setError(null);
-    void getMotionLibrary({ signal: request.signal })
+    void getHumanMotionLibrary({ signal: request.signal })
       .then((response) => {
         if (request.signal.aborted) return;
         setEntries(response.entries);
@@ -403,7 +403,7 @@ export function MotionView({
             id="motion-library-title"
             className="text-[19px] leading-tight font-bold tracking-normal text-foreground"
           >
-            {text("Library", "资源库")}
+            {text("Human Motion Library", "人体动作资源库")}
           </h2>
           <RefreshButton
             label={text("Refresh Motion Library", "刷新动作资源库")}

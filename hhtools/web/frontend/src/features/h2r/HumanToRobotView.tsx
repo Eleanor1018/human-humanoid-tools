@@ -21,7 +21,7 @@ import {
 import { useLocaleText } from "@/LocaleProvider";
 import { displayFileName } from "@/lib/api";
 import {
-  getMotionLibrary,
+  getHumanMotionLibrary,
   loadMotionLibraryEntry,
   type MotionLibraryEntry,
   type MotionPayload,
@@ -255,17 +255,13 @@ export function HumanToRobotView({
   useEffect(() => {
     const request = new AbortController();
     void Promise.all([
-      getMotionLibrary({ signal: request.signal }),
+      getHumanMotionLibrary({ signal: request.signal }),
       getRobotLibrary({ signal: request.signal }),
       getCalibrationReferences({ signal: request.signal }),
     ])
       .then(([motionLibrary, robotLibrary, referenceNames]) => {
         if (request.signal.aborted) return;
-        setMotionEntries(
-          motionLibrary.entries.filter(
-            (entry) => entry.asset_kind !== "robot_trajectory",
-          ),
-        );
+        setMotionEntries(motionLibrary.entries);
         setRobotEntries(robotLibrary.robots);
         setReferences(referenceNames);
       })

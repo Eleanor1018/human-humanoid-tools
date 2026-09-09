@@ -9,6 +9,7 @@ import {
 } from "@/lib/api";
 import {
   getMotionLibrary,
+  robotTrajectoryEntries,
   type MotionLibraryEntry,
 } from "@/features/motion/api";
 import {
@@ -159,7 +160,19 @@ export async function getR2rLibrary(
   options: RequestOptions = {},
 ): Promise<readonly MotionLibraryEntry[]> {
   const library = await getMotionLibrary(options);
-  return library.entries.filter((entry) => entry.asset_kind === "robot_trajectory");
+  return robotTrajectoryEntries(library.entries);
+}
+
+/** Keep known-incompatible trajectories out of a loaded source robot's picker. */
+export function r2rEntriesForSourceRobot(
+  entries: readonly MotionLibraryEntry[],
+  sourceRobot?: string | null,
+): readonly MotionLibraryEntry[] {
+  const robot = sourceRobot?.trim();
+  if (!robot) return entries;
+  return entries.filter(
+    (entry) => !entry.source_robot || entry.source_robot === robot,
+  );
 }
 
 export async function loadR2rLibraryEntry(

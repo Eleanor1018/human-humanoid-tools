@@ -11,7 +11,7 @@ import { InspectorPage } from "@/components/Inspector";
 import { RefreshButton } from "@/components/RefreshButton";
 import { SegmentedControl } from "@/components/SegmentedControl";
 import {
-  getMotionLibrary,
+  getHumanMotionLibrary,
   type MotionLibraryEntry,
 } from "@/features/motion/api";
 import {
@@ -73,7 +73,7 @@ export function BatchView({
     setCatalogBusy(true);
     setCatalogError(null);
     void Promise.all([
-      getMotionLibrary({ signal: request.signal }),
+      getHumanMotionLibrary({ signal: request.signal }),
       getRobotLibrary({ signal: request.signal }),
     ])
       .then(([motionLibrary, robotLibrary]) => {

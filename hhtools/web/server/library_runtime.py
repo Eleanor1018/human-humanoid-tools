@@ -24,6 +24,98 @@ _DATASET_TO_REFERENCE: dict[str, str] = {
     "parc_ms": "smpl",
 }
 
+_ROBOT_RESULT_JOB_KINDS = frozenset({"retarget", "r2r_retarget"})
+
+
+def _source_robot_trajectory_entries(source_root: Path) -> list[dict[str, Any]]:
+    """Return structurally validated robot trajectories below ``source_root``.
+
+    The legacy source-library scanner only knows human dataset adapters and
+    therefore cannot surface CSV robot exports (including MotionDecode).  Keep
+    those files on the same Library boundary, but mark them explicitly so H2R
+    and R2R clients can retain their separate input contracts.
+    """
+    from hhtools.io.robot_trajectory_detect import trajectory_robot_name
+    from hhtools.services.r2r_upload_resolve import enumerate_r2r_clips
+
+    root = Path(source_root).expanduser().resolve()
+    entries: list[dict[str, Any]] = []
+    for reference in enumerate_r2r_clips(root, profile="auto"):
+        path = Path(reference.path).resolve()
+        try:
+            relative = path.relative_to(root)
+        except ValueError:
+            relative = Path(path.name)
+        parent = relative.parent
+        folder_label = parent.as_posix() if parent != Path(".") else "Robot trajectories"
+        stem = path.parent.name if path.parent.name == path.stem else path.stem
+        entry: dict[str, Any] = {
+            "dataset": "robot",
+            "folder_label": folder_label,
+            "sequence_id": relative.as_posix(),
+            "source_path": str(path),
+            "stem": stem,
+            "label": f"{folder_label} · {stem}",
+            "origin": "assets",
+            "upload_profile": reference.profile,
+            "motion_category": (
+                "terrain"
+                if reference.profile == "meshmimic"
+                else "object"
+                if reference.profile == "intermimic"
+                else "motion"
+            ),
+            "asset_kind": "robot_trajectory",
+        }
+        source_robot = trajectory_robot_name(path)
+        if source_robot:
+            entry["source_robot"] = source_robot
+        entries.append(entry)
+    return entries
+
+
+def _retained_robot_trajectory_entries(job_history: Any) -> list[dict[str, Any]]:
+    """Expose retained H2R/R2R files as reusable robot trajectories.
+
+    Workflow artifacts already live in the bounded, persistent job-history
+    store.  Referencing them avoids a second copy while allowing a completed
+    H2R result to become the source of a later R2R workflow.  ZIP bundles are
+    intentionally omitted because the single-source loader requires one
+    concrete trajectory file.
+    """
+    from hhtools.io.robot_trajectory_detect import is_robot_export_trajectory
+
+    entries: list[dict[str, Any]] = []
+    for record in job_history.list_records():
+        if record.get("status") != "done" or record.get("kind") not in _ROBOT_RESULT_JOB_KINDS:
+            continue
+        path = job_history.artifact_path(record)
+        if path is None or not is_robot_export_trajectory(path):
+            continue
+        request = record.get("request")
+        request = request if isinstance(request, dict) else {}
+        source_robot = str(
+            (request.get("robot") if record.get("kind") == "retarget" else request.get("target"))
+            or ""
+        ).strip()
+        folder_label = "Generated trajectories"
+        entry: dict[str, Any] = {
+            "dataset": "robot",
+            "folder_label": folder_label,
+            "sequence_id": path.name,
+            "source_path": str(path),
+            "stem": path.stem,
+            "label": f"{folder_label} · {path.stem}",
+            "origin": "job",
+            "job_id": str(record.get("id") or ""),
+            "motion_category": "motion",
+            "asset_kind": "robot_trajectory",
+        }
+        if source_robot:
+            entry["source_robot"] = source_robot
+        entries.append(entry)
+    return entries
+
 
 def _adopt_motion_library_root(
     target: Path,

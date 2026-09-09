@@ -7,7 +7,11 @@ from pathlib import Path
 from fastapi import HTTPException
 
 from hhtools.services.motion_library_links import motions_library_root
-from hhtools.web.server.library_runtime import _enrich_basket_entry
+from hhtools.web.server.library_runtime import (
+    _enrich_basket_entry,
+    _retained_robot_trajectory_entries,
+    _source_robot_trajectory_entries,
+)
 
 
 def register_library_routes(
@@ -38,6 +42,12 @@ def register_library_routes(
             )
             seen.add(row["source_path"])
             merged.append(row)
+        for raw in _source_robot_trajectory_entries(root):
+            row = _enrich_basket_entry(raw)
+            if row["source_path"] in seen:
+                continue
+            seen.add(row["source_path"])
+            merged.append(row)
         # Avoid observing a half-copied same-process publish.  The filesystem
         # namespace is still only process-local; multi-worker deployments need
         # a cross-process file lock before they can offer this guarantee.
@@ -45,6 +55,12 @@ def register_library_routes(
             lib_root = motions_library_root()
             motion_entries = scan_motions_library(lib_root)
         for raw in motion_entries:
+            sp = str(raw.get("source_path") or "")
+            if not sp or sp in seen:
+                continue
+            seen.add(sp)
+            merged.append(_enrich_basket_entry(raw))
+        for raw in _retained_robot_trajectory_entries(state.job_history):
             sp = str(raw.get("source_path") or "")
             if not sp or sp in seen:
                 continue
