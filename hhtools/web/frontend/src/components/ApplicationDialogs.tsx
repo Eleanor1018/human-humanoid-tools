@@ -14,6 +14,7 @@ import {
   getGvhmrRuntimeSettings,
   getJobAdmissionSettings,
   getMotionLibrarySettings,
+  invalidateGvhmrRuntimeStatus,
   updateJobAdmissionSettings,
   updateMotionLibrarySettings,
   type GvhmrOptionalComponentState,
@@ -174,7 +175,8 @@ function SettingsDialog(props: SettingsDialogProps) {
   const [error, setError] = useState<string | null>(null);
   const refreshRequest = useRef<AbortController | null>(null);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (freshGvhmr = false) => {
+    if (freshGvhmr) invalidateGvhmrRuntimeStatus();
     refreshRequest.current?.abort();
     const request = new AbortController();
     refreshRequest.current = request;
@@ -274,7 +276,7 @@ function SettingsDialog(props: SettingsDialogProps) {
       const result = await desktop.setupGvhmr();
       setGvhmrComponent(result.state);
       if (result.action === "cancelled") return;
-      const runtime = await refresh();
+      const runtime = await refresh(true);
       if (runtime) props.onGvhmrChange(runtime);
     } catch (reason) {
       setError(errorMessage(reason));
@@ -450,7 +452,7 @@ function SettingsDialog(props: SettingsDialogProps) {
           label={text("Refresh settings", "刷新设置")}
           busy={loading}
           disabled={action !== null}
-          onClick={() => void refresh()}
+          onClick={() => void refresh(true)}
         />
         <Button
           size="sm"

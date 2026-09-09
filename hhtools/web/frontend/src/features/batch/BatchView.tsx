@@ -1,4 +1,6 @@
 import {
+  Suspense,
+  lazy,
   useCallback,
   useEffect,
   useRef,
@@ -20,7 +22,6 @@ import { useLocaleText } from "@/LocaleProvider";
 
 import { HumanBatchView } from "./HumanBatchView";
 import { RobotBatchView } from "./RobotBatchView";
-import { VideoBatchView } from "./VideoBatchView";
 import { appendUniqueEntries } from "./model";
 
 type BatchMode = "v2m" | "h2r" | "r2r";
@@ -30,6 +31,10 @@ const modes = [
   { id: "h2r", label: "H2R" },
   { id: "r2r", label: "R2R" },
 ] as const;
+
+const VideoBatchView = lazy(async () => ({
+  default: (await import("./VideoBatchView")).VideoBatchView,
+}));
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -51,6 +56,7 @@ export function BatchView({
 }) {
   const text = useLocaleText();
   const [mode, setMode] = useState<BatchMode>("h2r");
+  const [videoModeMounted, setVideoModeMounted] = useState(false);
   const [motions, setMotions] = useState<readonly MotionLibraryEntry[]>([]);
   const [robots, setRobots] = useState<readonly RobotSummary[]>([]);
   const [catalogError, setCatalogError] = useState<string | null>(null);
@@ -96,6 +102,10 @@ export function BatchView({
 
   useEffect(() => () => catalogRequest.current?.abort(), []);
 
+  useEffect(() => {
+    if (mode === "v2m") setVideoModeMounted(true);
+  }, [mode]);
+
   function addPublishedMotion(entry: MotionLibraryEntry): void {
     const next = appendUniqueEntries(humanEntriesRef.current, [entry]);
     humanEntriesRef.current = next;
@@ -122,12 +132,29 @@ export function BatchView({
         onValueChange={setMode}
       />
 
-      <div hidden={mode !== "v2m"}>
-        <VideoBatchView
-          onMotionPublished={addPublishedMotion}
-          runtimeRevision={runtimeRevision}
-        />
-      </div>
+      {(videoModeMounted || mode === "v2m") && (
+        <div hidden={mode !== "v2m"}>
+          <Suspense
+            fallback={
+              <div
+                className="flex min-h-24 items-center justify-center gap-2 text-xs text-muted-foreground"
+                role="status"
+              >
+                <span
+                  className="size-4 animate-spin bg-current [mask:url(/icons/common/refresh-cw.svg)_center/contain_no-repeat] [-webkit-mask:url(/icons/common/refresh-cw.svg)_center/contain_no-repeat]"
+                  aria-hidden="true"
+                />
+                <span>{text("Loading Video Batch…", "正在加载视频批处理……")}</span>
+              </div>
+            }
+          >
+            <VideoBatchView
+              onMotionPublished={addPublishedMotion}
+              runtimeRevision={runtimeRevision}
+            />
+          </Suspense>
+        </div>
+      )}
       <div hidden={mode !== "h2r"}>
         <HumanBatchView
           active={active && mode === "h2r"}

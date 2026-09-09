@@ -19,6 +19,7 @@ import {
   canSetupGvhmrInDesktop,
   formatFileSize,
   getGvhmrRuntimeStatus,
+  invalidateGvhmrRuntimeStatus,
   isSupportedVideoName,
   parseOptionalFocalLength,
   setupGvhmrInDesktop,
@@ -91,7 +92,8 @@ export function VideoToMotionView({
   const generating = workflowPhase === "uploading" || workflowPhase === "running";
   const busy = generating;
 
-  const refreshRuntime = useCallback(() => {
+  const refreshRuntime = useCallback((fresh = false) => {
+    if (fresh) invalidateGvhmrRuntimeStatus();
     runtimeRequest.current?.abort();
     const request = new AbortController();
     runtimeRequest.current = request;
@@ -167,7 +169,7 @@ export function VideoToMotionView({
     setRuntimeError(null);
     try {
       const setup = await setupGvhmrInDesktop();
-      if (setup.action === "configured") refreshRuntime();
+      if (setup.action === "configured") refreshRuntime(true);
     } catch (error) {
       setRuntimePhase("error");
       setRuntimeError(errorMessage(error));
@@ -435,7 +437,7 @@ export function VideoToMotionView({
                 label={text("Refresh GVHMR status", "刷新 GVHMR 状态")}
                 busy={runtimePhase === "checking"}
                 variant="ghost"
-                onClick={refreshRuntime}
+                onClick={() => refreshRuntime(true)}
                 disabled={busy || setupBusy}
               />
             </div>

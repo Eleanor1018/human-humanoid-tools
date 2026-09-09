@@ -23,8 +23,8 @@ export default defineConfig({
     // FastAPI and Electron both load this one renderer build.
     outDir: "../static",
     emptyOutDir: true,
-    // Keep large framework/rendering vendors cache-stable, while shipping every
-    // workspace panel in the initial application graph for instant navigation.
+    // Keep large framework/rendering vendors cache-stable. Core workspaces ship
+    // eagerly; the optional Video-to-Motion surfaces remain on-demand.
     chunkSizeWarningLimit: 1_000,
     rolldownOptions: {
       output: {

@@ -4,6 +4,7 @@ import {
   type Fetcher,
   type JobSnapshot,
 } from "@/lib/api";
+import { createRequestCache } from "@/lib/requestCache";
 import type {
   ExportOptions,
   ResultDiagnosticsPayload,
@@ -90,6 +91,8 @@ interface RequestOptions {
   readonly fetcher?: Fetcher;
 }
 
+const calibrationReferencesCache = createRequestCache<readonly string[]>(1_000);
+
 function jsonPost<T>(
   url: string,
   body: Readonly<Record<string, unknown>>,
@@ -110,16 +113,20 @@ function jsonPost<T>(
 export async function getCalibrationReferences(
   options: RequestOptions = {},
 ): Promise<readonly string[]> {
-  const response = await requestJson<{ references?: unknown }>(
-    "/api/calibration/references",
-    { signal: options.signal },
-    options.fetcher,
-  );
-  return Array.isArray(response.references)
-    ? response.references.filter(
-        (reference): reference is string => typeof reference === "string",
-      )
-    : [];
+  const load = async (signal?: AbortSignal, fetcher?: Fetcher) => {
+    const response = await requestJson<{ references?: unknown }>(
+      "/api/calibration/references",
+      { signal },
+      fetcher,
+    );
+    return Array.isArray(response.references)
+      ? response.references.filter(
+          (reference): reference is string => typeof reference === "string",
+        )
+      : [];
+  };
+  if (options.fetcher) return load(options.signal, options.fetcher);
+  return calibrationReferencesCache.read(() => load(), options.signal);
 }
 
 export function getCalibrationStatus(

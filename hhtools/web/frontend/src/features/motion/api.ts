@@ -6,6 +6,7 @@ import {
   type JobSnapshot,
   type UploadFile,
 } from "@/lib/api";
+import { createRequestCache } from "@/lib/requestCache";
 import type { StageMotionPayload } from "@/stage/types";
 
 export type MotionProfile = "mimic" | "intermimic" | "meshmimic";
@@ -39,6 +40,8 @@ export interface MotionLibraryResponse {
   readonly folders: readonly string[];
   readonly entries: readonly MotionLibraryEntry[];
 }
+
+const motionLibraryCache = createRequestCache<MotionLibraryResponse>(1_000);
 
 /** Full result emitted by `/api/motion/load_library` or `/api/motion/upload`. */
 export interface MotionPayload extends StageMotionPayload {
@@ -87,10 +90,16 @@ export interface UploadMotionOptions extends LoadMotionOptions {
 export function getMotionLibrary(
   options: { signal?: AbortSignal; fetcher?: Fetcher } = {},
 ): Promise<MotionLibraryResponse> {
-  return requestJson<MotionLibraryResponse>(
-    "/api/library",
-    { signal: options.signal },
-    options.fetcher,
+  if (options.fetcher) {
+    return requestJson<MotionLibraryResponse>(
+      "/api/library",
+      { signal: options.signal },
+      options.fetcher,
+    );
+  }
+  return motionLibraryCache.read(
+    () => requestJson<MotionLibraryResponse>("/api/library"),
+    options.signal,
   );
 }
 

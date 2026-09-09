@@ -8,6 +8,7 @@ import {
   canSetupGvhmrInDesktop,
   formatFileSize,
   getGvhmrRuntimeStatus,
+  invalidateGvhmrRuntimeStatus,
   isSupportedVideoName,
   parseOptionalFocalLength,
   setupGvhmrInDesktop,
@@ -72,7 +73,8 @@ export function VideoBatchView({
   const runtimeRequest = useRef<AbortController | null>(null);
   const runRequest = useRef<AbortController | null>(null);
 
-  const refreshRuntime = useCallback(() => {
+  const refreshRuntime = useCallback((fresh = false) => {
+    if (fresh) invalidateGvhmrRuntimeStatus();
     runtimeRequest.current?.abort();
     const request = new AbortController();
     runtimeRequest.current = request;
@@ -139,7 +141,7 @@ export function VideoBatchView({
     setRuntimeError(null);
     try {
       const result = await setupGvhmrInDesktop();
-      if (result.action === "configured") refreshRuntime();
+      if (result.action === "configured") refreshRuntime(true);
     } catch (reason) {
       setRuntimeError(errorMessage(reason));
     } finally {
@@ -353,7 +355,7 @@ export function VideoBatchView({
               busy={runtimeChecking}
               variant="ghost"
               disabled={busy}
-              onClick={refreshRuntime}
+              onClick={() => refreshRuntime(true)}
             />
           </div>
           {canSetupGvhmrInDesktop() && runtime?.ready !== true && (

@@ -4,7 +4,10 @@ import {
   type GvhmrRuntimeStatus,
 } from "@/features/video-to-motion/api";
 
-export type { GvhmrRuntimeStatus } from "@/features/video-to-motion/api";
+export {
+  invalidateGvhmrRuntimeStatus,
+  type GvhmrRuntimeStatus,
+} from "@/features/video-to-motion/api";
 
 export interface JobAdmissionSnapshot {
   readonly mode: "unlimited" | "queued" | string;
