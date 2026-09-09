@@ -5,7 +5,11 @@ import { fileURLToPath } from 'node:url'
 
 import { describe, expect, it } from 'vitest'
 
-import { buildSidecarEnvironment, resolveRuntime } from '../src/main/runtime-resolver'
+import {
+  buildSidecarEnvironment,
+  resolveRuntime,
+  RuntimeNotFoundError
+} from '../src/main/runtime-resolver'
 
 describe('resolveRuntime', () => {
   it('finds a repository above the desktop working directory', () => {
@@ -17,6 +21,8 @@ describe('resolveRuntime', () => {
     })
 
     expect(runtime.repoRoot).toBe(resolve(root))
+    expect(runtime.kind).toBe('checkout')
+    expect(runtime.workingDirectory).toBe(resolve(root))
     expect(runtime.sourceRoot).toBe(join(root, 'assets', 'motions'))
     expect(runtime.cacheDirectory).toBe(join(root, '.test-user-data', 'hhtools-cache'))
   })
@@ -48,6 +54,111 @@ describe('resolveRuntime', () => {
     expect(runtime.bodyModelsRoot).toBe(bodyModels)
   })
 
+  it('uses a completed user-managed Linux runtime with packaged built-in assets', () => {
+    const root = mkdtempSync(join(tmpdir(), 'hhtools-managed-runtime-test-'))
+    const home = join(root, 'home')
+    const installRoot = join(home, '.local', 'share', 'hhtools')
+    const pythonExecutable = join(installRoot, 'tools', 'hhtools', 'bin', 'python')
+    const resourcesPath = join(root, 'resources')
+    const motions = join(resourcesPath, 'builtin', 'motions')
+    const robots = join(resourcesPath, 'builtin', 'robots')
+    mkdirSync(dirname(pythonExecutable), { recursive: true })
+    mkdirSync(motions, { recursive: true })
+    mkdirSync(robots, { recursive: true })
+    writeFileSync(pythonExecutable, '', 'utf8')
+    writeFileSync(join(installRoot, 'runtime-version'), '0.1.0\n', 'utf8')
+
+    const runtime = resolveRuntime({
+      appPath: '/opt/Human-Humanoid Tools/resources/app.asar',
+      cwd: '/opt/Human-Humanoid Tools',
+      userData: join(home, '.config', 'hhtools'),
+      isPackaged: true,
+      resourcesPath,
+      appVersion: '0.1.0',
+      env: { HOME: home },
+      platform: 'linux'
+    })
+
+    expect(runtime.kind).toBe('managed')
+    expect(runtime.repoRoot).toBeUndefined()
+    expect(runtime.workingDirectory).toBe(installRoot)
+    expect(runtime.pythonExecutable).toBe(pythonExecutable)
+    expect(runtime.sourceRoot).toBe(motions)
+    expect(runtime.bundledRobotRoot).toBe(robots)
+  })
+
+  it('prefers a complete bundled Windows runtime when no checkout override exists', () => {
+    const root = mkdtempSync(join(tmpdir(), 'hhtools-bundled-runtime-test-'))
+    const resourcesPath = join(root, 'resources')
+    const repoRoot = join(resourcesPath, 'runtime', 'app')
+    const pythonExecutable = join(resourcesPath, 'runtime', 'python', 'python.exe')
+    mkdirSync(join(repoRoot, 'hhtools'), { recursive: true })
+    mkdirSync(dirname(pythonExecutable), { recursive: true })
+    writeFileSync(join(repoRoot, 'pyproject.toml'), '', 'utf8')
+    writeFileSync(pythonExecutable, '', 'utf8')
+
+    const runtime = resolveRuntime({
+      appPath: 'C:\\Program Files\\HHTools',
+      cwd: 'C:\\Program Files\\HHTools',
+      userData: join(root, 'user-data'),
+      isPackaged: true,
+      resourcesPath,
+      env: {},
+      platform: 'win32'
+    })
+
+    expect(runtime.kind).toBe('bundled')
+    expect(runtime.repoRoot).toBe(repoRoot)
+    expect(runtime.pythonExecutable).toBe(pythonExecutable)
+  })
+
+  it('rejects a partial managed runtime without its atomic completion marker', () => {
+    const root = mkdtempSync(join(tmpdir(), 'hhtools-partial-runtime-test-'))
+    const home = join(root, 'home')
+    const pythonExecutable = join(
+      home,
+      '.local',
+      'share',
+      'hhtools',
+      'tools',
+      'hhtools',
+      'bin',
+      'python'
+    )
+    mkdirSync(dirname(pythonExecutable), { recursive: true })
+    writeFileSync(pythonExecutable, '', 'utf8')
+
+    expect(() => resolveRuntime({
+      appPath: '/opt/HHTools',
+      cwd: '/opt/HHTools',
+      userData: join(home, '.config', 'hhtools'),
+      isPackaged: true,
+      resourcesPath: join(root, 'resources'),
+      env: { HOME: home },
+      platform: 'linux'
+    })).toThrow(RuntimeNotFoundError)
+  })
+
+  it('rejects a managed runtime from another desktop release', () => {
+    const root = mkdtempSync(join(tmpdir(), 'hhtools-stale-runtime-test-'))
+    const installRoot = join(root, 'home', '.local', 'share', 'hhtools')
+    const pythonExecutable = join(installRoot, 'tools', 'hhtools', 'bin', 'python')
+    mkdirSync(dirname(pythonExecutable), { recursive: true })
+    writeFileSync(pythonExecutable, '', 'utf8')
+    writeFileSync(join(installRoot, 'runtime-version'), '0.0.9\n', 'utf8')
+
+    expect(() => resolveRuntime({
+      appPath: '/opt/HHTools',
+      cwd: '/opt/HHTools',
+      userData: join(root, 'user-data'),
+      isPackaged: true,
+      resourcesPath: join(root, 'resources'),
+      appVersion: '0.1.0',
+      env: { HOME: join(root, 'home') },
+      platform: 'linux'
+    })).toThrow(RuntimeNotFoundError)
+  })
+
   it('finds a checkout-local Linux virtual environment', () => {
     const root = mkdtempSync(join(tmpdir(), 'hhtools-linux-runtime-test-'))
     const pythonExecutable = join(root, '.venv', 'bin', 'python')
@@ -65,6 +176,35 @@ describe('resolveRuntime', () => {
     })
 
     expect(runtime.pythonExecutable).toBe(pythonExecutable)
+  })
+
+  it('keeps development on the checkout even when a managed runtime exists', () => {
+    const root = mkdtempSync(join(tmpdir(), 'hhtools-development-runtime-test-'))
+    const repoRoot = join(root, 'repo')
+    const checkoutPython = join(repoRoot, '.venv', 'bin', 'python')
+    const managedRoot = join(root, 'home', '.local', 'share', 'hhtools')
+    const managedPython = join(managedRoot, 'tools', 'hhtools', 'bin', 'python')
+    mkdirSync(join(repoRoot, 'hhtools'), { recursive: true })
+    mkdirSync(dirname(checkoutPython), { recursive: true })
+    mkdirSync(dirname(managedPython), { recursive: true })
+    writeFileSync(join(repoRoot, 'pyproject.toml'), '', 'utf8')
+    writeFileSync(checkoutPython, '', 'utf8')
+    writeFileSync(managedPython, '', 'utf8')
+    writeFileSync(join(managedRoot, 'runtime-version'), '0.1.0\n', 'utf8')
+
+    const runtime = resolveRuntime({
+      appPath: join(repoRoot, 'desktop'),
+      cwd: repoRoot,
+      userData: join(root, 'user-data'),
+      isPackaged: false,
+      appVersion: '0.1.0',
+      env: { HOME: join(root, 'home') },
+      platform: 'linux'
+    })
+
+    expect(runtime.kind).toBe('checkout')
+    expect(runtime.repoRoot).toBe(repoRoot)
+    expect(runtime.pythonExecutable).toBe(checkoutPython)
   })
 
   it('honors an explicit checkout and Python runtime', () => {
@@ -156,5 +296,29 @@ describe('resolveRuntime', () => {
 
     expect(environment.HHTOOLS_BODY_MODELS).toBe('/custom/hhtools-models')
     expect(environment.HHTOOLS_GVHMR_BODY_MODELS).toBe('/custom/gvhmr-models')
+  })
+
+  it('keeps managed runtimes isolated while exposing packaged robots', () => {
+    const root = mkdtempSync(join(tmpdir(), 'hhtools-runtime-robot-assets-'))
+    const robots = join(root, 'builtin', 'robots')
+    mkdirSync(robots, { recursive: true })
+
+    const environment = buildSidecarEnvironment(undefined, { PATH: '/usr/bin' }, undefined, robots)
+
+    expect(environment.PYTHONPATH).toBeUndefined()
+    expect(environment.HHTOOLS_ROBOT_PATH).toBe(robots)
+    expect(environment.PATH).toBe('/usr/bin')
+  })
+
+  it('does not inject a host PYTHONPATH into a bundled runtime', () => {
+    const environment = buildSidecarEnvironment(
+      'C:\\Program Files\\HHTools\\resources\\runtime\\app',
+      { PYTHONPATH: 'C:\\untrusted-host-package', PATH: 'C:\\Windows\\System32' },
+      undefined,
+      undefined,
+      false
+    )
+
+    expect(environment.PYTHONPATH).toBe('C:\\Program Files\\HHTools\\resources\\runtime\\app')
   })
 })

@@ -6,6 +6,7 @@ import {
   type Fetcher,
   type UploadFile,
 } from "@/lib/api";
+import { createRequestCache } from "@/lib/requestCache";
 import type { StageRobotPayload } from "@/stage/types";
 
 export interface RobotSummary {
@@ -22,6 +23,8 @@ export interface RobotsResponse {
   readonly library_dir: string;
 }
 
+const robotLibraryCache = createRequestCache<RobotsResponse>(1_000);
+
 /** Complete zero-pose payload returned by POST /api/robot/select. */
 export type RobotPayload = StageRobotPayload;
 
@@ -34,23 +37,27 @@ export interface RobotRequestOptions {
 export async function getRobotLibrary(
   options: RobotRequestOptions = {},
 ): Promise<RobotsResponse> {
-  const response = await requestJson<RobotsResponse>(
-    "/api/robots",
-    { signal: options.signal },
-    options.fetcher,
-  );
-  return {
-    library_dir:
-      typeof response.library_dir === "string" ? response.library_dir : "",
-    robots: Array.isArray(response.robots)
-      ? response.robots.filter(
-          (robot): robot is RobotSummary =>
-            Boolean(robot) &&
-            typeof robot.name === "string" &&
-            typeof robot.display_name === "string",
-        )
-      : [],
+  const load = async (signal?: AbortSignal, fetcher?: Fetcher) => {
+    const response = await requestJson<RobotsResponse>(
+      "/api/robots",
+      { signal },
+      fetcher,
+    );
+    return {
+      library_dir:
+        typeof response.library_dir === "string" ? response.library_dir : "",
+      robots: Array.isArray(response.robots)
+        ? response.robots.filter(
+            (robot): robot is RobotSummary =>
+              Boolean(robot) &&
+              typeof robot.name === "string" &&
+              typeof robot.display_name === "string",
+          )
+        : [],
+    };
   };
+  if (options.fetcher) return load(options.signal, options.fetcher);
+  return robotLibraryCache.read(() => load(), options.signal);
 }
 
 /** Load one robot and return its serialized zero-pose model for the Stage. */

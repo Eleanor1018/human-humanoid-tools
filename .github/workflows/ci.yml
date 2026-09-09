@@ -165,5 +165,12 @@ jobs:
       - name: Run desktop tests
         run: npm test
 
+      - name: Validate desktop packaging inputs
+        run: |
+          node --check scripts/prepare-builtin-assets.mjs
+          node --check scripts/prepare-runtime.mjs
+          npm run prepare:bootstrap
+          dash -n .bootstrap/install.sh
+
       - name: Build Electron main and preload bundles
         run: npm run build

@@ -38,12 +38,15 @@ def assemble_agent_services(
     agent_mcp_available: bool,
     agent_rest_available: bool,
     agent_json_cli_available: bool,
+    max_batch_items: int,
+    max_batch_total_frames: int,
 ) -> SimpleNamespace:
     services = SimpleNamespace()
 
     # Agent-facing REST is a thin, versioned adapter over transport-neutral
     # services.  Capability discovery receives only the scheduler's read-only
     # snapshot function: it cannot reserve a queue slot or touch solver state.
+    from hhtools.agent.batch_job_executor import BatchJobExecutor
     from hhtools.agent.h2r_job_executor import (
         H2RExecutorBindings,
         H2RJobExecutor,
@@ -66,6 +69,7 @@ def assemble_agent_services(
         AssetKind,
         ErrorStage,
         InspectionStatus,
+        JobSpecRobot,
         JobSpecV2,
         NextAction,
     )
@@ -80,13 +84,20 @@ def assemble_agent_services(
         AvailableAssetCatalogLimitError,
         AvailableAssetCatalogService,
         AvailableAssetProvider,
+        BatchLimitPolicy,
+        BatchPreflightService,
+        BatchRetargetService,
+        CalibrationCandidateStore,
+        CalibrationService,
         CapabilitiesService,
         DynamicRootLocator,
+        ExecutionPlanService,
         JobManager,
         JobStore,
         LegacyJobUpgradeService,
         PlanStore,
         PreflightService,
+        R2RCalibrationService,
         R2RPreflightService,
         R2RRetargetService,
         RetargetService,
@@ -96,6 +107,11 @@ def assemble_agent_services(
         is_catalog_motion_sidecar,
         iter_bounded_catalog_files,
         require_bounded_catalog_root,
+    )
+
+    services.agent_batch_limit_policy = BatchLimitPolicy(
+        max_batch_items=max_batch_items,
+        max_batch_total_frames=max_batch_total_frames,
     )
 
     agent_motion_roots: dict[str, Path | Callable[[], Path]] = {
@@ -295,10 +311,19 @@ def assemble_agent_services(
         services.agent_plan_store,
         services.agent_asset_service,
     )
-    services.agent_retarget_service = WorkflowRetargetService(
+    services.agent_single_retarget_service = WorkflowRetargetService(
         services.agent_plan_store,
         services.agent_h2r_retarget_service,
         services.agent_r2r_retarget_service,
+    )
+    services.agent_batch_retarget_service = BatchRetargetService(
+        services.agent_plan_store,
+        services.agent_single_retarget_service,
+    )
+    services.agent_retarget_service = ExecutionPlanService(
+        services.agent_plan_store,
+        services.agent_single_retarget_service,
+        services.agent_batch_retarget_service,
     )
     services.agent_artifact_store = ArtifactStore(agent_data_dir)
     services.agent_job_store = JobStore(agent_data_dir)
@@ -847,7 +872,13 @@ def assemble_agent_services(
         temporary_root=agent_data_dir / "temporary",
     )
 
-    agent_executor = WorkflowJobExecutor(h2r_executor, r2r_executor)
+    single_executor = WorkflowJobExecutor(h2r_executor, r2r_executor)
+    batch_executor = BatchJobExecutor(
+        single_executor,
+        validate_spec=_agent_validate_spec,
+        temporary_root=agent_data_dir / "temporary",
+    )
+    agent_executor = WorkflowJobExecutor(h2r_executor, r2r_executor, batch_executor)
 
     services.agent_job_manager = JobManager(
         services.agent_job_store,
@@ -859,6 +890,36 @@ def assemble_agent_services(
     services.agent_artifact_export_service = ArtifactExportService(
         services.agent_job_manager,
         state.save_dir / "agent-exports",
+    )
+
+    def _agent_materialize_calibration_robot(robot_id: str, asset_id: str) -> Any:
+        return _agent_materialize_robot(
+            JobSpecRobot(
+                robot_id=robot_id,
+                asset_id=asset_id,
+                config_sha256=asset_id.rsplit(":", 1)[-1],
+            ),
+            compile_mjcf=False,
+        )
+
+    def _agent_load_calibration_motion(asset_id: str) -> Any:
+        return _agent_load_motion(_agent_resolve_motion(asset_id))
+
+    services.agent_calibration_candidate_store = CalibrationCandidateStore(agent_data_dir)
+    services.agent_calibration_service = CalibrationService(
+        services.agent_asset_service,
+        services.agent_calibration_candidate_store,
+        robot_provider=_agent_robot_provider,
+        materialize_robot=_agent_materialize_calibration_robot,
+        release_robot=_agent_release_robot_model,
+        motion_loader=_agent_load_calibration_motion,
+    )
+    services.agent_r2r_calibration_service = R2RCalibrationService(
+        services.agent_asset_service,
+        services.agent_calibration_candidate_store,
+        robot_provider=_agent_robot_provider,
+        materialize_robot=_agent_materialize_calibration_robot,
+        release_robot=_agent_release_robot_model,
     )
     services.agent_capabilities_service = CapabilitiesService(
         scheduler_snapshot=scheduler.snapshot,
@@ -872,6 +933,9 @@ def assemble_agent_services(
         mcp_available=agent_mcp_available,
         agent_rest_available=agent_rest_available,
         json_cli_available=agent_json_cli_available,
+        batch_limits_provider=services.agent_batch_limit_policy.snapshot,
+        calibration_assistance_available=True,
+        calibration_visual_preview_available=(agent_mcp_available or agent_rest_available),
     )
     services.agent_preflight_service = PreflightService(
         services.agent_asset_service,
@@ -884,6 +948,13 @@ def assemble_agent_services(
         services.agent_plan_store,
         capabilities_provider=services.agent_capabilities_service.get_capabilities,
         robot_provider=_agent_robot_provider,
+    )
+    services.agent_batch_preflight_service = BatchPreflightService(
+        services.agent_plan_store,
+        services.agent_asset_service,
+        services.agent_single_retarget_service,
+        capabilities_provider=services.agent_capabilities_service.get_capabilities,
+        limits_provider=services.agent_batch_limit_policy.snapshot,
     )
     # Phase 4's REST/JSON-CLI adapters call this exact transport-neutral
     # service instance; they do not reimplement path migration or construct

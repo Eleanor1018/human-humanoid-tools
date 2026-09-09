@@ -1,4 +1,6 @@
 import {
+  Suspense,
+  lazy,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -24,7 +26,7 @@ import { Inspector } from "./components/Inspector";
 import { Navbar } from "./components/Navbar";
 import { Sidebar } from "./components/Sidebar";
 import { TutorialOverlay } from "./components/TutorialOverlay";
-import { LocaleProvider } from "./LocaleProvider";
+import { LocaleProvider, useLocaleText } from "./LocaleProvider";
 import {
   storeLocale,
   storedLocaleOverride,
@@ -49,7 +51,6 @@ import {
   type TutorialPersistenceBridge,
   type TutorialStep,
 } from "./features/tutorial/model";
-import { VideoToMotionView } from "./features/video-to-motion/VideoToMotionView";
 import {
   retargetExportUrl,
   type CalibrationPose,
@@ -84,6 +85,12 @@ import {
   storedWorkspaceLayout,
   storeWorkspaceLayout,
 } from "./workspaceLayout";
+import { preloadCoreWorkspace } from "./workspaceBootstrap";
+
+const VideoToMotionView = lazy(async () => ({
+  default: (await import("./features/video-to-motion/VideoToMotionView"))
+    .VideoToMotionView,
+}));
 
 function motionWithScene(
   motion: StageMotionPayload | null | undefined,
@@ -140,6 +147,22 @@ function preferredSystemLocale(): WorkspaceLocale {
   ]);
 }
 
+function VideoWorkspaceLoading() {
+  const text = useLocaleText();
+  return (
+    <div
+      className="flex h-full items-center justify-center gap-2 text-xs text-muted-foreground"
+      role="status"
+    >
+      <span
+        className="size-4 animate-spin bg-current [mask:url(/icons/common/refresh-cw.svg)_center/contain_no-repeat] [-webkit-mask:url(/icons/common/refresh-cw.svg)_center/contain_no-repeat]"
+        aria-hidden="true"
+      />
+      <span>{text("Loading Video to Motion…", "正在加载视频转动作……")}</span>
+    </div>
+  );
+}
+
 export function App() {
   const themeOverride = useRef<ApplicationTheme | null | undefined>(undefined);
   const localeOverride = useRef<WorkspaceLocale | null | undefined>(undefined);
@@ -151,6 +174,8 @@ export function App() {
   }
 
   const [activeView, setActiveView] = useState<ViewId>("motion");
+  const [coreWorkspaceReady, setCoreWorkspaceReady] = useState(false);
+  const [videoToMotionMounted, setVideoToMotionMounted] = useState(false);
   const [theme, setTheme] = useState<ApplicationTheme>(() =>
     themeOverride.current ?? preferredSystemTheme(),
   );
@@ -234,6 +259,25 @@ export function App() {
   useLayoutEffect(() => {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
+
+  useEffect(() => {
+    const request = new AbortController();
+    let mounted = true;
+    const timeout = window.setTimeout(() => request.abort(), 5_000);
+    void preloadCoreWorkspace(request.signal).then(() => {
+      window.clearTimeout(timeout);
+      if (mounted) setCoreWorkspaceReady(true);
+    });
+    return () => {
+      mounted = false;
+      window.clearTimeout(timeout);
+      request.abort();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (activeView === "video-to-motion") setVideoToMotionMounted(true);
+  }, [activeView]);
 
   useLayoutEffect(() => {
     document.documentElement.lang = locale;
@@ -568,7 +612,7 @@ export function App() {
     <LocaleProvider locale={locale}>
       <div
         id="app"
-        className="grid h-dvh min-h-0 min-w-0"
+        className={`grid h-dvh min-h-0 min-w-0 ${coreWorkspaceReady ? "" : "invisible"}`}
         style={
           {
             "--workspace-sidebar-wide": sidebarHidden ? "0px" : "208px",
@@ -576,7 +620,8 @@ export function App() {
             "--workspace-inspector": inspectorHidden ? "0px" : "360px",
           } as CSSProperties
         }
-        data-hhtools-ready="true"
+        aria-busy={!coreWorkspaceReady}
+        data-hhtools-ready={coreWorkspaceReady ? "true" : "false"}
         data-active-view={activeView}
         data-theme={theme}
         data-sidebar-hidden={sidebarHidden}
@@ -648,13 +693,17 @@ export function App() {
             importRequest={importRequest}
           />
         </div>
-        <div className={activeView === "video-to-motion" ? "h-full" : "hidden"}>
-          <VideoToMotionView
-            onMotionLoaded={publishMotion}
-            importRequest={importRequest}
-            runtimeRevision={gvhmrRevision}
-          />
-        </div>
+        {(videoToMotionMounted || activeView === "video-to-motion") && (
+          <div className={activeView === "video-to-motion" ? "h-full" : "hidden"}>
+            <Suspense fallback={<VideoWorkspaceLoading />}>
+              <VideoToMotionView
+                onMotionLoaded={publishMotion}
+                importRequest={importRequest}
+                runtimeRevision={gvhmrRevision}
+              />
+            </Suspense>
+          </div>
+        )}
         <div className={activeView === "h2r" ? "h-full" : "hidden"}>
           <HumanToRobotView
             currentMotion={workspaceMotion}

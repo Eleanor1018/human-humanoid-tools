@@ -4,12 +4,17 @@ import {
   type GvhmrRuntimeStatus,
 } from "@/features/video-to-motion/api";
 
-export type { GvhmrRuntimeStatus } from "@/features/video-to-motion/api";
+export {
+  invalidateGvhmrRuntimeStatus,
+  type GvhmrRuntimeStatus,
+} from "@/features/video-to-motion/api";
 
 export interface JobAdmissionSnapshot {
   readonly mode: "unlimited" | "queued" | string;
   readonly max_running_jobs: number;
   readonly max_queued_jobs: number;
+  readonly max_batch_items: number;
+  readonly max_batch_total_frames: number;
   readonly running_jobs: number;
   readonly queued_jobs: number;
   readonly reserved_jobs: number;
@@ -21,6 +26,8 @@ export interface JobAdmissionSnapshot {
 export interface JobAdmissionLimits {
   readonly max_running_jobs: number;
   readonly max_queued_jobs: number;
+  readonly max_batch_items: number;
+  readonly max_batch_total_frames: number;
 }
 
 export interface MotionLibrarySettingsSnapshot {

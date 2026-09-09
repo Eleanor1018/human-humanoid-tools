@@ -34,6 +34,7 @@ import {
   loadR2rLibraryEntry,
   loadRobot,
   previewR2rCalibrationPose,
+  r2rEntriesForSourceRobot,
   r2rExportUrl,
   runR2rRetarget,
   saveR2rCalibration,
@@ -456,10 +457,25 @@ export function RobotToRobotView({
     selectedCalibrationJoint,
   ]);
 
-  const selectedEntry = useMemo(
-    () => entries.find((entry) => entry.source_path === trajectoryChoice) ?? null,
-    [entries, trajectoryChoice],
+  const compatibleEntries = useMemo(
+    () => r2rEntriesForSourceRobot(entries, sourceRobot?.name),
+    [entries, sourceRobot?.name],
   );
+  const selectedEntry = useMemo(
+    () =>
+      compatibleEntries.find(
+        (entry) => entry.source_path === trajectoryChoice,
+      ) ?? null,
+    [compatibleEntries, trajectoryChoice],
+  );
+
+  useEffect(() => {
+    setTrajectoryChoice((current) =>
+      compatibleEntries.some((entry) => entry.source_path === current)
+        ? current
+        : compatibleEntries[0]?.source_path || "",
+    );
+  }, [compatibleEntries]);
   const activeStep = calibration
     ? 3
     : retargetResult || calibrated
@@ -887,15 +903,27 @@ export function RobotToRobotView({
               <select
                 className={fieldClass}
                 value={trajectoryChoice}
-                disabled={!sourceRobot || busy !== null || calibration !== null || entries.length === 0}
+                disabled={
+                  !sourceRobot ||
+                  busy !== null ||
+                  calibration !== null ||
+                  compatibleEntries.length === 0
+                }
                 onChange={(event) => setTrajectoryChoice(event.target.value)}
               >
-                {!entries.length && (
+                {!compatibleEntries.length && (
                   <option value="">
-                    {text("No robot trajectories available", "没有可用的机器人轨迹")}
+                    {text(
+                      entries.length
+                        ? "No trajectories match this source robot"
+                        : "No robot trajectories available",
+                      entries.length
+                        ? "没有与此源机器人匹配的轨迹"
+                        : "没有可用的机器人轨迹",
+                    )}
                   </option>
                 )}
-                {entries.map((entry) => (
+                {compatibleEntries.map((entry) => (
                   <option key={entry.source_path} value={entry.source_path}>
                     {entryLabel(entry, text("Trajectory", "轨迹"))}
                   </option>

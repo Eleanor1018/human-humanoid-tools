@@ -78,30 +78,57 @@ a screenshot, closes the app, and verifies that the supervised Python process ex
 
 ## Desktop packages
 
-The installer is intentionally a thin Electron shell, matching the original Desktop Alpha design.
-It does not duplicate Python, Torch, CUDA, Newton, or the hhtools source tree. The target computer
-uses an existing checkout and its `.venv`; set `HHTOOLS_REPO_ROOT` and, when needed,
-`HHTOOLS_PYTHON` before launching an installed build.
+The two desktop targets use different runtime delivery models:
 
-Both package commands build Electron, stage only the local neutral SMPL-X model, and then invoke
-electron-builder:
+- Windows stages the current all-extras `.venv` and tracked HHTools application files into the
+  installer, so the installed EXE does not require a checkout or system Python.
+- Linux keeps Python outside the Debian package. On first launch, a native setup page installs the
+  version-matched GitHub Release runtime either for the current user (recommended) or under
+  `/opt/hhtools`. System installation uses the operating system's `pkexec` authentication dialog;
+  HHTools never reads or forwards the password.
+
+Both packages include only the 30 motions and six robot bundles selected by
+`configs/builtin-assets.json`. Before packaging, install the pinned robot bundles and point the
+stager at that library:
+
+```bash
+uv run python scripts/install_builtin_robots.py --destination /path/to/release-robots
+export HHTOOLS_BUNDLED_ROBOT_DIR=/path/to/release-robots
+```
+
+Then invoke electron-builder through the package scripts:
 
 ```bash
 npm run dist:linux   # release/hhtools-0.1.0-amd64.deb
 npm run dist:win     # release/hhtools-0.1.0-x64-setup.exe
 ```
 
-`configs/body_models/smplx/SMPLX_NEUTRAL.npz` is a required local build input. It remains ignored
-by Git and is copied to `resources/body_models` only for the installer. A missing file fails the
-build immediately. The package adds about 104 MiB for this model instead of several GiB for a
-duplicated GPU environment.
+Fork releases should select their own GitHub download source at build time without changing the
+canonical project metadata:
+
+```bash
+HHTOOLS_DESKTOP_RELEASE_REPOSITORY=Eleanor1018/human-humanoid-tools npm run dist:linux
+```
+
+`npm run dist:win` must run on Windows after `uv sync --all-extras --no-dev`; the runtime stager
+rejects another host platform and excludes untracked files, development packages, caches, model
+weights, and source-map files. `npm run dist:linux` never stages that runtime.
+
+Before publishing the Windows installer, verify the final EXE stays below
+[GitHub Releases' 2 GiB per-file limit](https://docs.github.com/en/repositories/releasing-projects-on-github/about-releases#storage-and-bandwidth-quotas).
+If the all-extras GPU runtime exceeds it, choose a smaller core runtime or a
+separately downloaded, checksummed optional GPU payload rather than silently producing an
+unpublishable release asset.
+
+SMPL-family model files and GVHMR weights are not part of the default distributable. The separate
+`npm run prepare:models` command exists only for a locally authorized build; a user checkbox cannot
+grant redistribution rights for a model file.
 
 Install the Linux package with `sudo apt install ./release/hhtools-0.1.0-amd64.deb`, then launch
-`hhtools-desktop`. The package does not install or replace the separate `hhtools` CLI command.
-
-GVHMR itself remains external. On Linux, choose its checkout and Python from the desktop setup; on
-Windows, configure the existing Docker-backed runtime. The bundled neutral model is passed to both
-hhtools and GVHMR automatically.
+`hhtools-desktop`. The first-run setup may download several gigabytes, shows live output, verifies
+the release checksums, and restarts the app only after `hhtools doctor` succeeds. The Debian package
+does not install or replace the separate `hhtools` CLI command. GVHMR remains optional: use its
+dedicated setup from the Video to Motion view after the core application starts.
 
 ## Runtime model
 
@@ -111,9 +138,11 @@ hhtools and GVHMR automatically.
    the existing WebUI.
 4. Closing Electron stops the full Python process tree before the app exits.
 
-Packaged and development builds use the same external checkout and `.venv` resolution;
-`HHTOOLS_REPO_ROOT` and `HHTOOLS_PYTHON` remain explicit overrides. The sidecar receives the
-packaged model path and an allowlisted environment rather than Electron's complete environment.
+Development builds use the checkout and `.venv`; packaged Windows builds prefer their bundled
+runtime, and packaged Linux builds prefer a completed user or system installation.
+`HHTOOLS_REPO_ROOT` remains an explicit development/support override. The sidecar receives only an
+allowlisted environment rather than Electron's complete environment, and bundled runtimes do not
+inherit the host `PYTHONPATH`.
 Linux display/session and native-library variables such as `DISPLAY`,
 `WAYLAND_DISPLAY`, `DBUS_SESSION_BUS_ADDRESS`, `XDG_RUNTIME_DIR`, `LD_LIBRARY_PATH`, `MUJOCO_GL`,
 and `PYOPENGL_PLATFORM` are retained so GNOME, MuJoCo, and GPU runtimes can initialize normally.

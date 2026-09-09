@@ -10,6 +10,35 @@ import numpy as np
 ROBOT_TRAJECTORY_EXTENSIONS = (".csv", ".pkl", ".npz")
 
 
+def trajectory_robot_name(path: Path) -> str | None:
+    """Return an embedded source-robot id when the trajectory declares one.
+
+    Canonical hhtools CSV files carry ``# robot: <preset>`` before the column
+    header.  Reading only that comment prefix keeps library discovery cheap and
+    lets R2R hide trajectories known to belong to a different source robot.
+    Foreign files without identity metadata remain selectable for compatibility.
+    """
+
+    path = Path(path)
+    if path.suffix.casefold() != ".csv" or not path.is_file():
+        return None
+    try:
+        with path.open(encoding="utf-8") as stream:
+            for _index, line in zip(range(64), stream, strict=False):
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                if not stripped.startswith("#"):
+                    break
+                key, separator, value = stripped.lstrip("#").strip().partition(":")
+                if separator and key.strip().casefold() in {"robot", "source_robot"}:
+                    robot = value.strip()
+                    return robot or None
+    except (OSError, UnicodeDecodeError):
+        return None
+    return None
+
+
 def sniff_robot_csv(path: Path) -> bool:  # noqa: PLR0911 - each format exit is explicit
     """Return whether a CSV looks like a robot trajectory rather than an object track."""
 
@@ -132,4 +161,5 @@ __all__ = [
     "joint_q_width_from_npz",
     "joint_q_width_from_pkl",
     "sniff_robot_csv",
+    "trajectory_robot_name",
 ]

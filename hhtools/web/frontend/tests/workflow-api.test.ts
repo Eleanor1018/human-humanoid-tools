@@ -12,7 +12,12 @@ registerHooks({
 
 const { loadScaledPreview, retarget: runH2rRetarget, retargetExportUrl } =
   await import("../src/features/h2r/api.ts");
-const { getR2rLibrary, r2rExportUrl, runR2rRetarget } =
+const {
+  getR2rLibrary,
+  r2rEntriesForSourceRobot,
+  r2rExportUrl,
+  runR2rRetarget,
+} =
   await import("../src/features/r2r/api.ts");
 const { deleteRobot, uploadRobot } = await import("../src/features/robot/api.ts");
 const {
@@ -23,7 +28,8 @@ const {
   removeDatasetUploadFolder,
   uploadDataset,
 } = await import("../src/features/analysis/api.ts");
-const { uploadMotion } = await import("../src/features/motion/api.ts");
+const { getHumanMotionLibrary, uploadMotion } =
+  await import("../src/features/motion/api.ts");
 
 test("Motion import uploads a GVHMR result with the mimic profile", async () => {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
@@ -155,6 +161,47 @@ test("R2R library accepts only entries explicitly marked robot_trajectory", asyn
   assert.deepEqual(
     entries.map((entry) => entry.source_path),
     ["/robot.csv"],
+  );
+});
+
+test("human and robot workflows project separate logical libraries", async () => {
+  const fetcher = async () =>
+    Response.json({
+      source_root: "/source",
+      motions_library_root: "/library",
+      folders: [],
+      entries: [
+        { source_path: "/human.bvh", asset_kind: "human_motion" },
+        {
+          source_path: "/g1.csv",
+          asset_kind: "robot_trajectory",
+          source_robot: "g1_29dof",
+        },
+        {
+          source_path: "/x2.csv",
+          asset_kind: "robot_trajectory",
+          source_robot: "agibot_x2_ultra",
+        },
+        { source_path: "/foreign.csv", asset_kind: "robot_trajectory" },
+      ],
+    });
+
+  const human = await getHumanMotionLibrary({ fetcher });
+  const robot = await getR2rLibrary({ fetcher });
+
+  assert.deepEqual(
+    human.entries.map((entry) => entry.source_path),
+    ["/human.bvh"],
+  );
+  assert.deepEqual(
+    robot.map((entry) => entry.source_path),
+    ["/g1.csv", "/x2.csv", "/foreign.csv"],
+  );
+  assert.deepEqual(
+    r2rEntriesForSourceRobot(robot, "g1_29dof").map(
+      (entry) => entry.source_path,
+    ),
+    ["/g1.csv", "/foreign.csv"],
   );
 });
 

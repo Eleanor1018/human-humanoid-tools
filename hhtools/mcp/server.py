@@ -8,6 +8,7 @@ export, scheduler, or artifact-membership logic.
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import logging
@@ -21,7 +22,13 @@ from urllib.parse import urlsplit
 from mcp.server import MCPServer
 from mcp.server.mcpserver import Context
 from mcp.server.mcpserver.exceptions import ResourceError, ToolError
-from mcp.types import CallToolResult, InputRequiredResult, TextContent, ToolAnnotations
+from mcp.types import (
+    CallToolResult,
+    ImageContent,
+    InputRequiredResult,
+    TextContent,
+    ToolAnnotations,
+)
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from hhtools._version import __version__
@@ -40,6 +47,19 @@ from hhtools.contracts import (
     AssetSearchResponse,
     AvailableAssetCatalogRequest,
     AvailableAssetCatalogResponse,
+    BatchPreflightRequest,
+    BatchPreflightResponse,
+    BatchReport,
+    CalibrationPreview,
+    CalibrationPreviewRequest,
+    CalibrationProposalRequest,
+    CalibrationProposalResponse,
+    CalibrationSaveReceipt,
+    CalibrationSaveRequest,
+    CalibrationStatusRequest,
+    CalibrationStatusResponse,
+    CalibrationValidationReport,
+    CalibrationValidationRequest,
     CapabilityResponse,
     ErrorStage,
     EvaluationReport,
@@ -49,6 +69,15 @@ from hhtools.contracts import (
     JobRetryRequest,
     JobStartRequest,
     PreflightResponse,
+    R2RCalibrationPreview,
+    R2RCalibrationPreviewRequest,
+    R2RCalibrationProposalRequest,
+    R2RCalibrationProposalResponse,
+    R2RCalibrationSaveReceipt,
+    R2RCalibrationSaveRequest,
+    R2RCalibrationStatusRequest,
+    R2RCalibrationStatusResponse,
+    R2RCalibrationValidationRequest,
     R2RPreflightRequest,
     R2RPreflightResponse,
     RetargetPreflightRequest,
@@ -80,6 +109,12 @@ _SAFE_WRITE = ToolAnnotations(
 _CANCEL = ToolAnnotations(
     read_only_hint=False,
     destructive_hint=True,
+    idempotent_hint=True,
+    open_world_hint=False,
+)
+_CALIBRATION_SAVE = ToolAnnotations(
+    read_only_hint=False,
+    destructive_hint=False,
     idempotent_hint=True,
     open_world_hint=False,
 )
@@ -220,6 +255,36 @@ def _tool_call[T](call: Callable[[], T]) -> T:
         return cast(T, _error_result(document))
 
 
+def _calibration_preview_call[T: CalibrationPreview](
+    call: Callable[[], tuple[T, bytes]],
+) -> T:
+    """Return typed metadata plus an actual image block for vision-capable clients."""
+
+    try:
+        preview, payload = call()
+        document = _model_document(preview)
+        return cast(
+            T,
+            CallToolResult(
+                content=[
+                    TextContent(
+                        type="text",
+                        text=json.dumps(document, ensure_ascii=False, separators=(",", ":")),
+                    ),
+                    ImageContent(
+                        type="image",
+                        data=base64.b64encode(payload).decode("ascii"),
+                        mimeType="image/png",
+                    ),
+                ],
+                structuredContent=document,
+            ),
+        )
+    except Exception as exception:  # noqa: BLE001 - protocol boundary
+        _error_value, document = _safe_error_document(exception)
+        return cast(T, _error_result(document))
+
+
 def _resource_call[T](call: Callable[[], T]) -> T:
     try:
         return call()
@@ -241,6 +306,20 @@ def _resource_call[T](call: Callable[[], T]) -> T:
 
 def _runtime(context: Context[AgentRuntime, Any]) -> AgentRuntime:
     return context.request_context.lifespan_context
+
+
+def _calibration_runtime(context: Context[AgentRuntime, Any]):
+    service = _runtime(context).calibration
+    if service is None:
+        raise RuntimeError("the calibration service is not configured")
+    return service
+
+
+def _r2r_calibration_runtime(context: Context[AgentRuntime, Any]):
+    service = _runtime(context).r2r_calibration
+    if service is None:
+        raise RuntimeError("the R2R calibration service is not configured")
+    return service
 
 
 def _job_error(code: str, message: str, *, job_id: str) -> JobManagerError:
@@ -285,6 +364,12 @@ def _read_report[T](
     model: type[T],
 ) -> T:
     descriptor = _find_report(runtime, job_id, kind)
+    if descriptor.size_bytes is not None and descriptor.size_bytes > _REPORT_LIMIT_BYTES:
+        raise _job_error(
+            "REPORT_TOO_LARGE",
+            "The verified report is too large for inline model context; export its artifact.",
+            job_id=job_id,
+        )
     stored = runtime.jobs.get_artifact(job_id, descriptor.artifact_id, verify=False)
     try:
         with stored.path.open("rb") as stream:
@@ -321,21 +406,32 @@ def _read_report[T](
 
 def _server_instructions(web_ui_url: str) -> str:
     return (
-        "For every new H2R or R2R run: get capabilities, register/search and inspect assets, "
+        "For every new H2R, R2R, or batch run: get capabilities, register/search and inspect "
+        "assets. Before H2R preflight, check the exact robot/reference calibration status; before "
+        "R2R preflight, check the exact source/target pair calibration status. Replace missing or "
+        "invalid calibration through the matching validated proposal flow. Then "
         "preflight a smoke plan, start only a ready plan, wait by revision, then read "
         "evaluation and manifest for human review. Persist each plan_id plus idempotency "
         "key before start; use lookup_job to recover an ambiguous submission without job "
-        "enumeration. On human_action_required, stop and "
-        "present next_action; never guess calibration. run_mode is frozen at preflight, "
-        "and full requires a new full preflight plus explicit user approval. Completed "
-        "does not mean quality-approved. Never use host paths, Base64 binary artifacts, "
-        "or real-robot deployment. For user-requested files, export only by job_id and "
+        "enumeration. On CALIBRATION_REQUIRED or R2R_CALIBRATION_REQUIRED, use the matching "
+        "calibration status, "
+        "proposal, deterministic validation, and preview tools; stop and present every other "
+        "human action. A "
+        "vision-capable GPT client should inspect the preview image before using "
+        "gpt_vision_silent save; the review declaration is audit metadata, not authentication. "
+        "Validated silent calibration writes are allowed and must be followed by fresh preflight. "
+        "run_mode is frozen at preflight, "
+        "and batch preflight accepts only ordered ready child plans from one workflow and "
+        "run mode. Batch retry always retries the whole plan. "
+        "Full execution requires a new full preflight plus explicit user approval. Completed "
+        "does not mean quality-approved. Never use host paths, put Base64 in tool arguments or "
+        "text, or deploy to a real robot. preview_calibration and preview_r2r_calibration are the "
+        "only image-content exceptions. For user-requested files, export only by job_id and "
         "artifact_id and return the portable agent-exports receipt. Cancellation is "
         "cooperative while native code runs. "
-        "Only one local runtime may own a save directory. If calibration is required, "
-        "ask the human to disconnect this stdio server before starting the WebUI with "
-        f"the same save directory at {web_ui_url}; after WebUI exit, reconnect and run "
-        "preflight again. Never read or request the WebUI session token."
+        "Only one local runtime may own a save directory. The WebUI fallback remains available "
+        f"at {web_ui_url}, but never run it concurrently with this stdio owner or request its "
+        "session token."
     )
 
 
@@ -386,7 +482,9 @@ def create_mcp_server(
     server: MCPServer[AgentRuntime] = _HHToolsMCPServer(
         "hhtools",
         title="HHTools Agent",
-        description="Safe local H2R and scene-free R2R retargeting services.",
+        description=(
+            "Safe local H2R, scene-free R2R, batch, and validated calibration services."
+        ),
         instructions=_server_instructions(web_ui_url),
         version=__version__,
         lifespan=lifespan,
@@ -481,6 +579,100 @@ def create_mcp_server(
             )
         )
 
+    @server.tool(annotations=_READ_ONLY)
+    def get_calibration_status(
+        request: CalibrationStatusRequest,
+        context: Context[AgentRuntime, Any],
+    ) -> CalibrationStatusResponse:
+        """Inspect one content-bound robot/reference calibration and its current quality."""
+
+        return _tool_call(lambda: _calibration_runtime(context).status(request))
+
+    @server.tool(annotations=_SAFE_WRITE)
+    def propose_calibration(
+        request: CalibrationProposalRequest,
+        context: Context[AgentRuntime, Any],
+    ) -> CalibrationProposalResponse:
+        """Generate or revise a persisted, limit-constrained calibration candidate."""
+
+        return _tool_call(lambda: _calibration_runtime(context).propose(request))
+
+    @server.tool(annotations=_READ_ONLY)
+    def validate_calibration(
+        request: CalibrationValidationRequest,
+        context: Context[AgentRuntime, Any],
+    ) -> CalibrationValidationReport:
+        """Recompute deterministic mapping, limit, alignment, symmetry, and foot checks."""
+
+        return _tool_call(lambda: _calibration_runtime(context).validate(request))
+
+    @server.tool(annotations=_READ_ONLY)
+    def preview_calibration(
+        request: CalibrationPreviewRequest,
+        context: Context[AgentRuntime, Any],
+    ) -> CalibrationPreview:
+        """Return front/side PNG overlays for a vision-capable GPT calibration review."""
+
+        return _calibration_preview_call(
+            lambda: _calibration_runtime(context).preview(request)
+        )
+
+    @server.tool(annotations=_CALIBRATION_SAVE)
+    def save_calibration(
+        request: CalibrationSaveRequest,
+        context: Context[AgentRuntime, Any],
+    ) -> CalibrationSaveReceipt:
+        """Silently save only a currently valid candidate under an explicit save mode."""
+
+        return _tool_call(lambda: _calibration_runtime(context).save(request))
+
+    @server.tool(annotations=_READ_ONLY)
+    def get_r2r_calibration_status(
+        request: R2RCalibrationStatusRequest,
+        context: Context[AgentRuntime, Any],
+    ) -> R2RCalibrationStatusResponse:
+        """Inspect one content-bound source/target robot pair calibration."""
+
+        return _tool_call(lambda: _r2r_calibration_runtime(context).status(request))
+
+    @server.tool(annotations=_SAFE_WRITE)
+    def propose_r2r_calibration(
+        request: R2RCalibrationProposalRequest,
+        context: Context[AgentRuntime, Any],
+    ) -> R2RCalibrationProposalResponse:
+        """Generate or revise a target-pose candidate against the source robot rest pose."""
+
+        return _tool_call(lambda: _r2r_calibration_runtime(context).propose(request))
+
+    @server.tool(annotations=_READ_ONLY)
+    def validate_r2r_calibration(
+        request: R2RCalibrationValidationRequest,
+        context: Context[AgentRuntime, Any],
+    ) -> CalibrationValidationReport:
+        """Recompute deterministic pair mapping, limits, alignment, symmetry, and foot checks."""
+
+        return _tool_call(lambda: _r2r_calibration_runtime(context).validate(request))
+
+    @server.tool(annotations=_READ_ONLY)
+    def preview_r2r_calibration(
+        request: R2RCalibrationPreviewRequest,
+        context: Context[AgentRuntime, Any],
+    ) -> R2RCalibrationPreview:
+        """Return source-reference and target-pose front/side PNG overlays for visual review."""
+
+        return _calibration_preview_call(
+            lambda: _r2r_calibration_runtime(context).preview(request)
+        )
+
+    @server.tool(annotations=_CALIBRATION_SAVE)
+    def save_r2r_calibration(
+        request: R2RCalibrationSaveRequest,
+        context: Context[AgentRuntime, Any],
+    ) -> R2RCalibrationSaveReceipt:
+        """Silently save a valid pair candidate to the target robot's user overlay."""
+
+        return _tool_call(lambda: _r2r_calibration_runtime(context).save(request))
+
     @server.tool(annotations=_SAFE_WRITE)
     def preflight_retarget(
         request: RetargetPreflightRequest,
@@ -498,6 +690,15 @@ def create_mcp_server(
         """Validate one scene-free R2R intent and freeze both robot identities."""
 
         return _tool_call(lambda: _runtime(context).r2r_preflight.preflight_r2r(request))
+
+    @server.tool(annotations=_SAFE_WRITE)
+    def preflight_batch(
+        request: BatchPreflightRequest,
+        context: Context[AgentRuntime, Any],
+    ) -> BatchPreflightResponse:
+        """Freeze an ordered list of ready H2R or R2R plans into one batch."""
+
+        return _tool_call(lambda: _runtime(context).batch_preflight.preflight_batch(request))
 
     @server.tool(annotations=_SAFE_WRITE)
     def start_job(
@@ -778,6 +979,22 @@ def create_mcp_server(
         )
 
     @server.resource(
+        "hhtools://jobs/{job_id}/batch",
+        name="hhtools-job-batch-report",
+        description="Verified per-item result report for one batch job.",
+        mime_type="application/json",
+    )
+    async def batch_resource(
+        job_id: str,
+        context: Context,
+    ) -> dict[str, Any]:
+        return _resource_call(
+            lambda: _model_document(
+                _read_report(_runtime(context), job_id, "batch_report", BatchReport)
+            )
+        )
+
+    @server.resource(
         "hhtools://jobs/{job_id}/failures",
         name="hhtools-job-failures",
         description="Verified structured failure report for a failed or partial job.",
@@ -830,6 +1047,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--job-settings", type=Path, default=None)
     parser.add_argument("--max-running-jobs", type=int, default=None)
     parser.add_argument("--max-queued-jobs", type=int, default=None)
+    parser.add_argument("--max-batch-items", type=int, default=None)
+    parser.add_argument("--max-batch-total-frames", type=int, default=None)
     parser.add_argument("--web-ui-url", default="http://127.0.0.1:8009")
     return parser
 
@@ -879,7 +1098,12 @@ def main(argv: Sequence[str] | None = None) -> None:
     """Console entry point. stdout remains exclusively owned by MCP framing."""
 
     arguments = _parser().parse_args(argv)
-    for name in ("max_running_jobs", "max_queued_jobs"):
+    for name in (
+        "max_running_jobs",
+        "max_queued_jobs",
+        "max_batch_items",
+        "max_batch_total_frames",
+    ):
         value = getattr(arguments, name)
         if value is not None and value < 0:
             _parser().error(f"--{name.replace('_', '-')} must be non-negative")
@@ -889,6 +1113,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         cache_dir=arguments.cache,
         max_running_jobs=arguments.max_running_jobs,
         max_queued_jobs=arguments.max_queued_jobs,
+        max_batch_items=arguments.max_batch_items,
+        max_batch_total_frames=arguments.max_batch_total_frames,
         job_settings_path=arguments.job_settings,
         web_ui_url=arguments.web_ui_url,
     )

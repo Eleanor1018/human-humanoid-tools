@@ -19,7 +19,6 @@ from dataclasses import asdict, is_dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, NoReturn
-from urllib.parse import urlencode
 from xml.etree import ElementTree
 
 from yaml import YAMLError  # type: ignore[import-untyped]
@@ -34,6 +33,7 @@ from hhtools.contracts import (
     AssetRegistrationRequest,
     AssetSourceScheme,
     BackendCapability,
+    CalibrationStatusRequest,
     CapabilityResponse,
     ErrorStage,
     InspectionStatus,
@@ -653,7 +653,7 @@ def _register_asset_action(
         actor="agent",
         action="register_asset_bundle",
         message=message,
-        parameters={"request": request.model_dump(mode="json")},
+        parameters={"request": request.model_dump(mode="json", exclude_none=True)},
     )
 
 
@@ -969,14 +969,24 @@ def _validate_scaler_semantics(scaler: Any, preset: RobotPreset) -> None:
         raise ValueError("scaler root trajectory scale is not positive")
 
 
-def _calibration_action(robot_id: str, reference: str) -> NextAction:
-    query = urlencode({"panel": "h2r", "robot": robot_id, "calibrate": reference})
+def _calibration_action(
+    robot_id: str,
+    robot_asset_id: str,
+    reference: str,
+    *,
+    motion_asset_id: str | None = None,
+) -> NextAction:
+    request = CalibrationStatusRequest(
+        robot_id=robot_id,
+        robot_asset_id=robot_asset_id,
+        reference=reference,
+        motion_asset_id=motion_asset_id,
+    )
     return NextAction(
-        actor="human",
-        action="open_calibration_ui",
-        message="Open the HHTools calibration UI and save this robot/reference alignment.",
-        url=f"/?{query}",
-        parameters={"robot_id": robot_id, "reference": reference},
+        actor="agent",
+        action="get_calibration_status",
+        message="Inspect this robot/reference and generate a validated calibration candidate.",
+        parameters={"request": request.model_dump(mode="json", exclude_none=True)},
     )
 
 
@@ -985,6 +995,8 @@ def _manual_calibration(
     reference: str,
     limits: Mapping[str, tuple[float | None, float | None]],
     robot_bundle: AssetBundle,
+    *,
+    user_root: Path | None = None,
 ) -> tuple[Path, str, str, str] | None:
     from hhtools.retarget.calibration import (
         load_calibration,
@@ -993,7 +1005,7 @@ def _manual_calibration(
     )
 
     try:
-        managed_user_root = user_robot_dir().resolve(strict=True)
+        managed_user_root = (user_root or user_robot_dir()).resolve(strict=True)
         path = resolve_preset_calibration_file(
             preset,
             reference,
@@ -1146,18 +1158,23 @@ def _retarget_profile(
                 "No installed robot calibration matches the requested id.",
                 details={"robot_id": preset.name, "reference": reference},
             )
-        action = _calibration_action(preset.name, reference)
+        action = _calibration_action(
+            preset.name,
+            robot_bundle.asset_id,
+            reference,
+            motion_asset_id=(request.motion_asset_id if reference == "glb" else None),
+        )
         raise _PreflightFailureError(
             _error(
                 "CALIBRATION_REQUIRED",
-                "A matching human-reviewed robot calibration is required.",
+                "A matching validated robot calibration is required.",
                 details={"robot_id": preset.name, "reference": reference},
                 next_action=action,
             ),
             PreflightCheck(
                 code="CALIBRATION_REQUIRED",
                 level=PreflightCheckLevel.ERROR,
-                message="A matching human-reviewed robot calibration is required.",
+                message="A matching validated robot calibration is required.",
                 details={"robot_id": preset.name, "reference": reference},
                 next_action=action,
             ),

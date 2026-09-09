@@ -24,10 +24,17 @@ from hhtools.contracts import (
     ArtifactExportReceipt,
     AvailableAssetCatalogEntry,
     AvailableAssetCatalogResponse,
+    CalibrationCandidate,
+    CalibrationPreview,
+    CalibrationProposalResponse,
+    CalibrationSaveReceipt,
+    CalibrationStatusResponse,
+    CalibrationValidationReport,
     CapabilityResponse,
     ErrorStage,
     JobProgress,
     NextAction,
+    PreflightCheck,
     PreflightResponse,
     R2RPreflightResponse,
     SchedulerCapability,
@@ -45,18 +52,30 @@ _PLAN_ID = f"plan:sha256:{_DIGEST}"
 _JOB_ID = "job:mcp-test"
 _ARTIFACT_ID = "artifact:retargeted_motion:mcp-test"
 _NOW = datetime(2026, 8, 31, tzinfo=UTC)
+_CALIBRATION_CANDIDATE_ID = f"cal-candidate:sha256:{'c' * 64}"
 
 _EXPECTED_TOOLS = {
     "get_capabilities",
+    "get_calibration_status",
+    "get_r2r_calibration_status",
     "register_asset_bundle",
     "search_assets",
     "list_available_assets",
     "inspect_asset_bundle",
     "list_robots",
+    "preview_calibration",
+    "preview_r2r_calibration",
     "preflight_retarget",
     "preflight_r2r",
+    "propose_calibration",
+    "propose_r2r_calibration",
+    "save_calibration",
+    "save_r2r_calibration",
+    "preflight_batch",
     "start_job",
     "start_retarget",
+    "validate_calibration",
+    "validate_r2r_calibration",
     "get_job",
     "wait_job",
     "lookup_job",
@@ -74,6 +93,7 @@ _EXPECTED_RESOURCE_TEMPLATES = {
     "hhtools://jobs/{job_id}/status",
     "hhtools://jobs/{job_id}/manifest",
     "hhtools://jobs/{job_id}/evaluation",
+    "hhtools://jobs/{job_id}/batch",
     "hhtools://jobs/{job_id}/failures",
     "hhtools://jobs/{job_id}/artifacts/{artifact_id}",
 }
@@ -261,6 +281,93 @@ class _Plans:
         raise AssertionError("plan resource is outside this focused fixture")
 
 
+def _calibration_validation() -> CalibrationValidationReport:
+    return CalibrationValidationReport(
+        candidate_id=_CALIBRATION_CANDIDATE_ID,
+        valid=True,
+        score=0.95,
+        changed_joint_count=2,
+        mapped_slots=16,
+        edge_errors_deg={"left_upper_arm": 4.0, "right_upper_arm": 4.0},
+        checks=[
+            PreflightCheck(
+                code="CALIBRATION_POSE_ALIGNED",
+                level="pass",
+                message="Calibration pose is aligned.",
+            )
+        ],
+    )
+
+
+class _CalibrationService:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def status(self, request: Any) -> CalibrationStatusResponse:
+        self.calls.append("status")
+        return CalibrationStatusResponse(
+            request_id="req_calibration_mcp",
+            state="missing",
+            robot_id=request.robot_id,
+            robot_asset_id=request.robot_asset_id,
+            robot_digest=request.robot_asset_id.rsplit(":", 1)[-1],
+            reference=request.reference,
+            source="none",
+            joint_count=0,
+            mapped_slots=16,
+            can_propose=True,
+            can_silent_save=True,
+        )
+
+    def propose(self, request: Any) -> CalibrationProposalResponse:
+        self.calls.append("propose")
+        candidate = CalibrationCandidate(
+            candidate_id=_CALIBRATION_CANDIDATE_ID,
+            robot_id=request.robot_id,
+            robot_asset_id=request.robot_asset_id,
+            robot_digest=request.robot_asset_id.rsplit(":", 1)[-1],
+            reference=request.reference,
+            baseline="urdf_zero",
+            joint_q={"left_shoulder_roll_joint": 1.2},
+        )
+        return CalibrationProposalResponse(
+            candidate=candidate,
+            validation=_calibration_validation(),
+        )
+
+    def validate(self, _request: Any) -> CalibrationValidationReport:
+        self.calls.append("validate")
+        return _calibration_validation()
+
+    def preview(self, _request: Any) -> tuple[CalibrationPreview, bytes]:
+        self.calls.append("preview")
+        payload = b"\x89PNG\r\n\x1a\nvision-test"
+        return (
+            CalibrationPreview(
+                candidate_id=_CALIBRATION_CANDIDATE_ID,
+                sha256=hashlib.sha256(payload).hexdigest(),
+                width=1200,
+                height=700,
+                validation=_calibration_validation(),
+            ),
+            payload,
+        )
+
+    def save(self, request: Any) -> CalibrationSaveReceipt:
+        self.calls.append("save")
+        digest = "d" * 64
+        return CalibrationSaveReceipt(
+            candidate_id=request.candidate_id,
+            calibration_id=f"cal:sha256:{digest}",
+            calibration_digest=digest,
+            robot_id="g1_29dof",
+            reference="smplx",
+            save_mode=request.save_mode,
+            validation=_calibration_validation(),
+            visual_review=request.visual_review,
+        )
+
+
 class _Exports:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []
@@ -383,6 +490,8 @@ class _Fixture:
         self.available_assets = _AvailableAssetsService()
         self.preflight = _PreflightService()
         self.r2r_preflight = _R2RPreflightService()
+        self.batch_preflight = cast(Any, object())
+        self.calibration = _CalibrationService()
         self.plans = _Plans()
         self.jobs = _Jobs()
         self.exports = _Exports()
@@ -392,6 +501,8 @@ class _Fixture:
             available_assets=cast(Any, self.available_assets),
             preflight=cast(Any, self.preflight),
             r2r_preflight=self.r2r_preflight,
+            batch_preflight=self.batch_preflight,
+            calibration=cast(Any, self.calibration),
             plans=cast(Any, self.plans),
             jobs=cast(Any, self.jobs),
             exports=cast(Any, self.exports),
@@ -412,6 +523,8 @@ class _Fixture:
             available_assets=cast(Any, self.available_assets),
             preflight=cast(Any, self.preflight),
             r2r_preflight=self.r2r_preflight,
+            batch_preflight=self.batch_preflight,
+            calibration=cast(Any, self.calibration),
             plans=cast(Any, self.plans),
             jobs=cast(Any, jobs),
             exports=cast(Any, self.exports),
@@ -694,6 +807,31 @@ async def test_mcp_tool_schemas_are_generated_from_public_pydantic_contracts() -
     assert wait.input_schema["properties"]["timeout"]["minimum"] == 0.0
     assert wait.input_schema["properties"]["timeout"]["maximum"] == 60.0
 
+    batch = _tool_by_name(tools, "preflight_batch")
+    batch_request = batch.input_schema["$defs"]["BatchPreflightRequest"]
+    assert "maxItems" not in batch_request["properties"]["item_plan_ids"]
+    assert batch_request["additionalProperties"] is False
+
+    calibration = _tool_by_name(tools, "propose_calibration")
+    calibration_request = calibration.input_schema["$defs"]["CalibrationProposalRequest"]
+    assert calibration_request["additionalProperties"] is False
+    assert "robot_asset_id" in calibration_request["required"]
+    preview = _tool_by_name(tools, "preview_calibration")
+    assert preview.output_schema["title"] == "CalibrationPreview"
+    save_calibration = _tool_by_name(tools, "save_calibration")
+    assert save_calibration.annotations.destructive_hint is False
+    r2r_calibration = _tool_by_name(tools, "propose_r2r_calibration")
+    r2r_request = r2r_calibration.input_schema["$defs"]["R2RCalibrationProposalRequest"]
+    assert r2r_request["additionalProperties"] is False
+    assert {
+        "source_robot_asset_id",
+        "target_robot_asset_id",
+    } <= set(r2r_request["required"])
+    r2r_preview = _tool_by_name(tools, "preview_r2r_calibration")
+    assert r2r_preview.output_schema["title"] == "R2RCalibrationPreview"
+    r2r_save = _tool_by_name(tools, "save_r2r_calibration")
+    assert r2r_save.annotations.destructive_hint is False
+
     capabilities = _tool_by_name(tools, "get_capabilities")
     assert capabilities.output_schema["title"] == "CapabilityResponse"
     assert "features" in capabilities.output_schema["properties"]
@@ -734,6 +872,60 @@ async def test_capabilities_report_mcp_true_for_tool_and_resource() -> None:
         "mcp": True,
     }
     assert fixture.capabilities.calls == 2
+
+
+@pytest.mark.anyio
+async def test_calibration_tools_return_a_vision_preview_and_silent_save_receipt() -> None:
+    fixture = _Fixture()
+    identity = {
+        "schema_version": "1.0",
+        "robot_id": "g1_29dof",
+        "robot_asset_id": _ASSET_ID,
+        "reference": "smplx",
+    }
+
+    async with Client(fixture.server(), raise_exceptions=True) as client:
+        status = await client.call_tool(
+            "get_calibration_status",
+            {"request": identity},
+        )
+        proposal = await client.call_tool(
+            "propose_calibration",
+            {"request": identity},
+        )
+        candidate_id = proposal.structured_content["candidate"]["candidate_id"]
+        validation = await client.call_tool(
+            "validate_calibration",
+            {"request": {"schema_version": "1.0", "candidate_id": candidate_id}},
+        )
+        preview = await client.call_tool(
+            "preview_calibration",
+            {"request": {"schema_version": "1.0", "candidate_id": candidate_id}},
+        )
+        saved = await client.call_tool(
+            "save_calibration",
+            {
+                "request": {
+                    "schema_version": "1.0",
+                    "candidate_id": candidate_id,
+                    "save_mode": "gpt_vision_silent",
+                    "visual_review": {
+                        "reviewer": "gpt_vision",
+                        "verdict": "pass",
+                        "model_hint": "gpt-test",
+                        "summary": "The front and side overlays are aligned.",
+                    },
+                }
+            },
+        )
+
+    assert status.structured_content["state"] == "missing"
+    assert validation.structured_content["valid"] is True
+    assert preview.structured_content["media_type"] == "image/png"
+    assert [content.type for content in preview.content] == ["text", "image"]
+    assert preview.content[1].mime_type == "image/png"
+    assert saved.structured_content["saved"] is True
+    assert fixture.calibration.calls == ["status", "propose", "validate", "preview", "save"]
 
 
 @pytest.mark.anyio
@@ -965,6 +1157,40 @@ async def test_report_hash_covers_the_exact_payload_returned(tmp_path: Path) -> 
     # second pass that a concurrent writer could swap underneath it.
     assert mutating_path.seek_calls == 0
     assert report_file.read_bytes() == original
+
+
+@pytest.mark.anyio
+async def test_oversized_batch_report_remains_exportable_instead_of_looking_corrupt() -> None:
+    fixture = _Fixture()
+    descriptor = ArtifactDescriptor(
+        artifact_id="artifact:batch_report:mcp-test",
+        job_id=_JOB_ID,
+        kind="batch_report",
+        format="json",
+        resource_uri=f"hhtools://jobs/{_JOB_ID}/artifacts/batch-report",
+        media_type="application/json",
+        size_bytes=2 * 1024 * 1024 + 1,
+        sha256=_DIGEST,
+    )
+
+    class _OversizedReportJobs:
+        def get_job(self, _job_id: str) -> Any:
+            return SimpleNamespace(artifact_count=1)
+
+        def list_artifacts(self, _job_id: str, *, offset: int, limit: int) -> list[Any]:
+            return [descriptor][offset : offset + limit]
+
+        def get_artifact(self, *_args: Any, **_kwargs: Any) -> Any:
+            raise AssertionError("oversized reports must not be loaded into model context")
+
+    fixture.replace_jobs(_OversizedReportJobs())
+    async with Client(fixture.server(), raise_exceptions=True) as client:
+        with pytest.raises(MCPError) as raised:
+            await client.read_resource(f"hhtools://jobs/{_JOB_ID}/batch")
+
+    error = json.loads(raised.value.message)
+    assert error["code"] == "REPORT_TOO_LARGE"
+    assert error["stage"] == "artifact"
 
 
 @pytest.mark.anyio

@@ -6,6 +6,7 @@ import {
   type JobSnapshot,
   type UploadFile,
 } from "@/lib/api";
+import { createRequestCache } from "@/lib/requestCache";
 import type { StageMotionPayload } from "@/stage/types";
 
 export type MotionProfile = "mimic" | "intermimic" | "meshmimic";
@@ -31,6 +32,8 @@ export interface MotionLibraryEntry {
   readonly suggested_backend?: string;
   readonly motion_category?: MotionCategory;
   readonly asset_kind?: MotionAssetKind;
+  readonly source_robot?: string;
+  readonly job_id?: string;
 }
 
 export interface MotionLibraryResponse {
@@ -39,6 +42,20 @@ export interface MotionLibraryResponse {
   readonly folders: readonly string[];
   readonly entries: readonly MotionLibraryEntry[];
 }
+
+export function humanMotionEntries(
+  entries: readonly MotionLibraryEntry[],
+): readonly MotionLibraryEntry[] {
+  return entries.filter((entry) => entry.asset_kind !== "robot_trajectory");
+}
+
+export function robotTrajectoryEntries(
+  entries: readonly MotionLibraryEntry[],
+): readonly MotionLibraryEntry[] {
+  return entries.filter((entry) => entry.asset_kind === "robot_trajectory");
+}
+
+const motionLibraryCache = createRequestCache<MotionLibraryResponse>(1_000);
 
 /** Full result emitted by `/api/motion/load_library` or `/api/motion/upload`. */
 export interface MotionPayload extends StageMotionPayload {
@@ -87,11 +104,25 @@ export interface UploadMotionOptions extends LoadMotionOptions {
 export function getMotionLibrary(
   options: { signal?: AbortSignal; fetcher?: Fetcher } = {},
 ): Promise<MotionLibraryResponse> {
-  return requestJson<MotionLibraryResponse>(
-    "/api/library",
-    { signal: options.signal },
-    options.fetcher,
+  if (options.fetcher) {
+    return requestJson<MotionLibraryResponse>(
+      "/api/library",
+      { signal: options.signal },
+      options.fetcher,
+    );
+  }
+  return motionLibraryCache.read(
+    () => requestJson<MotionLibraryResponse>("/api/library"),
+    options.signal,
   );
+}
+
+/** Human-motion view over the shared, coalesced Library catalog. */
+export async function getHumanMotionLibrary(
+  options: { signal?: AbortSignal; fetcher?: Fetcher } = {},
+): Promise<MotionLibraryResponse> {
+  const library = await getMotionLibrary(options);
+  return { ...library, entries: humanMotionEntries(library.entries) };
 }
 
 /** Start loading one library row; the server performs parsing in a job. */

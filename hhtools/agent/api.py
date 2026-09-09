@@ -35,6 +35,17 @@ from hhtools.contracts import (
     AssetSearchResponse,
     AvailableAssetCatalogRequest,
     AvailableAssetCatalogResponse,
+    BatchPreflightRequest,
+    BatchPreflightResponse,
+    CalibrationPreviewRequest,
+    CalibrationProposalRequest,
+    CalibrationProposalResponse,
+    CalibrationSaveReceipt,
+    CalibrationSaveRequest,
+    CalibrationStatusRequest,
+    CalibrationStatusResponse,
+    CalibrationValidationReport,
+    CalibrationValidationRequest,
     CapabilityResponse,
     ErrorStage,
     JobLookupRequest,
@@ -43,6 +54,14 @@ from hhtools.contracts import (
     LegacyJobUpgradeRequest,
     LegacyJobUpgradeResponse,
     PreflightResponse,
+    R2RCalibrationPreviewRequest,
+    R2RCalibrationProposalRequest,
+    R2RCalibrationProposalResponse,
+    R2RCalibrationSaveReceipt,
+    R2RCalibrationSaveRequest,
+    R2RCalibrationStatusRequest,
+    R2RCalibrationStatusResponse,
+    R2RCalibrationValidationRequest,
     R2RPreflightRequest,
     R2RPreflightResponse,
     RetargetPreflightRequest,
@@ -61,6 +80,7 @@ from hhtools.contracts.portability import (
 )
 from hhtools.services.artifacts import StoredArtifact
 from hhtools.services.assets import AssetServiceError
+from hhtools.services.calibration import CalibrationServiceError
 from hhtools.services.jobs import JobManagerError
 from hhtools.services.legacy_job_upgrade import LegacyJobUpgradeError
 
@@ -80,6 +100,9 @@ _ERROR_STATUS_BY_CODE = {
     "AVAILABLE_ASSET_CATALOG_LIMIT_EXCEEDED": 422,
     "BACKEND_UNAVAILABLE": 503,
     "BUNDLE_AMBIGUOUS": 409,
+    "CALIBRATION_CANDIDATE_MISMATCH": 409,
+    "CALIBRATION_CANDIDATE_NOT_FOUND": 404,
+    "CALIBRATION_CANDIDATE_STALE": 409,
     "INTERNAL_ERROR": 500,
     "INVALID_JOB_TRANSITION": 409,
     "INVALID_JOB_SPEC": 400,
@@ -300,7 +323,7 @@ class _AgentRoute(APIRoute):
                 )
             except AssetServiceError as exc:
                 response = _error_response(exc.api_error)
-            except (JobManagerError, LegacyJobUpgradeError) as exc:
+            except (CalibrationServiceError, JobManagerError, LegacyJobUpgradeError) as exc:
                 response = _error_response(exc.api_error)
             except Exception:  # noqa: BLE001 - REST must not expose internals
                 _log.exception("unexpected Agent REST failure")
@@ -360,6 +383,46 @@ class _R2RPreflightProvider(Protocol):
         self,
         request: R2RPreflightRequest,
     ) -> R2RPreflightResponse: ...
+
+
+class _BatchPreflightProvider(Protocol):
+    def preflight_batch(
+        self,
+        request: BatchPreflightRequest,
+    ) -> BatchPreflightResponse: ...
+
+
+class _CalibrationProvider(Protocol):
+    def status(self, request: CalibrationStatusRequest) -> CalibrationStatusResponse: ...
+
+    def propose(self, request: CalibrationProposalRequest) -> CalibrationProposalResponse: ...
+
+    def validate(self, request: CalibrationValidationRequest) -> CalibrationValidationReport: ...
+
+    def preview(self, request: CalibrationPreviewRequest) -> tuple[Any, bytes]: ...
+
+    def save(self, request: CalibrationSaveRequest) -> CalibrationSaveReceipt: ...
+
+
+class _R2RCalibrationProvider(Protocol):
+    def status(
+        self,
+        request: R2RCalibrationStatusRequest,
+    ) -> R2RCalibrationStatusResponse: ...
+
+    def propose(
+        self,
+        request: R2RCalibrationProposalRequest,
+    ) -> R2RCalibrationProposalResponse: ...
+
+    def validate(
+        self,
+        request: R2RCalibrationValidationRequest,
+    ) -> CalibrationValidationReport: ...
+
+    def preview(self, request: R2RCalibrationPreviewRequest) -> tuple[Any, bytes]: ...
+
+    def save(self, request: R2RCalibrationSaveRequest) -> R2RCalibrationSaveReceipt: ...
 
 
 class _JobProvider(Protocol):
@@ -461,6 +524,29 @@ def _r2r_preflight_service(request: Request) -> _R2RPreflightProvider:
     if service is None or not callable(getattr(service, "preflight_r2r", None)):
         raise RuntimeError("agent R2R preflight service is not configured")
     return cast("_R2RPreflightProvider", service)
+
+
+def _batch_preflight_service(request: Request) -> _BatchPreflightProvider:
+    service = getattr(request.app.state, "agent_batch_preflight_service", None)
+    if service is None or not callable(getattr(service, "preflight_batch", None)):
+        raise RuntimeError("agent batch preflight service is not configured")
+    return cast("_BatchPreflightProvider", service)
+
+
+def _calibration_service(request: Request) -> _CalibrationProvider:
+    service = getattr(request.app.state, "agent_calibration_service", None)
+    required = ("status", "propose", "validate", "preview", "save")
+    if service is None or any(not callable(getattr(service, name, None)) for name in required):
+        raise RuntimeError("agent calibration service is not configured")
+    return cast("_CalibrationProvider", service)
+
+
+def _r2r_calibration_service(request: Request) -> _R2RCalibrationProvider:
+    service = getattr(request.app.state, "agent_r2r_calibration_service", None)
+    required = ("status", "propose", "validate", "preview", "save")
+    if service is None or any(not callable(getattr(service, name, None)) for name in required):
+        raise RuntimeError("agent R2R calibration service is not configured")
+    return cast("_R2RCalibrationProvider", service)
 
 
 def _job_manager(request: Request) -> _JobProvider:
@@ -630,6 +716,172 @@ def preflight_r2r(
     """Resolve R2R intent while binding the trajectory and both robots."""
 
     return _r2r_preflight_service(request).preflight_r2r(preflight)
+
+
+@router.post(
+    "/preflight/batch",
+    response_model=BatchPreflightResponse,
+    response_model_exclude_none=True,
+)
+def preflight_batch(
+    request: Request,
+    preflight: BatchPreflightRequest,
+) -> BatchPreflightResponse:
+    """Freeze an ordered list of ready child plans into one batch."""
+
+    return _batch_preflight_service(request).preflight_batch(preflight)
+
+
+@router.post(
+    "/calibrations/status",
+    response_model=CalibrationStatusResponse,
+    response_model_exclude_none=True,
+)
+def calibration_status(
+    request: Request,
+    calibration: CalibrationStatusRequest,
+) -> CalibrationStatusResponse:
+    """Inspect one exact robot/reference calibration and deterministic quality report."""
+
+    return _calibration_service(request).status(calibration)
+
+
+@router.post(
+    "/calibrations/proposals",
+    response_model=CalibrationProposalResponse,
+    response_model_exclude_none=True,
+)
+def propose_calibration(
+    request: Request,
+    calibration: CalibrationProposalRequest,
+) -> CalibrationProposalResponse:
+    """Create or revise an immutable, limit-constrained calibration candidate."""
+
+    return _calibration_service(request).propose(calibration)
+
+
+@router.post(
+    "/calibrations/validate",
+    response_model=CalibrationValidationReport,
+    response_model_exclude_none=True,
+)
+def validate_calibration(
+    request: Request,
+    calibration: CalibrationValidationRequest,
+) -> CalibrationValidationReport:
+    """Revalidate a stored candidate against the current content-bound robot."""
+
+    return _calibration_service(request).validate(calibration)
+
+
+@router.post("/calibrations/preview")
+def preview_calibration(
+    request: Request,
+    calibration: CalibrationPreviewRequest,
+) -> Response:
+    """Render a deterministic front/side PNG for a vision-capable Agent."""
+
+    preview, payload = _calibration_service(request).preview(calibration)
+    return Response(
+        content=payload,
+        media_type=preview.media_type,
+        headers={
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+            "X-HHTools-Calibration-Candidate": preview.candidate_id,
+            "X-HHTools-Content-SHA256": preview.sha256,
+        },
+    )
+
+
+@router.post(
+    "/calibrations/save",
+    response_model=CalibrationSaveReceipt,
+    response_model_exclude_none=True,
+)
+def save_calibration(
+    request: Request,
+    calibration: CalibrationSaveRequest,
+) -> CalibrationSaveReceipt:
+    """Persist only a valid candidate under an explicit silent-save mode."""
+
+    return _calibration_service(request).save(calibration)
+
+
+@router.post(
+    "/calibrations/r2r/status",
+    response_model=R2RCalibrationStatusResponse,
+    response_model_exclude_none=True,
+)
+def r2r_calibration_status(
+    request: Request,
+    calibration: R2RCalibrationStatusRequest,
+) -> R2RCalibrationStatusResponse:
+    """Inspect one exact source/target robot pair calibration."""
+
+    return _r2r_calibration_service(request).status(calibration)
+
+
+@router.post(
+    "/calibrations/r2r/proposals",
+    response_model=R2RCalibrationProposalResponse,
+    response_model_exclude_none=True,
+)
+def propose_r2r_calibration(
+    request: Request,
+    calibration: R2RCalibrationProposalRequest,
+) -> R2RCalibrationProposalResponse:
+    """Create or revise an immutable target-pose candidate for a robot pair."""
+
+    return _r2r_calibration_service(request).propose(calibration)
+
+
+@router.post(
+    "/calibrations/r2r/validate",
+    response_model=CalibrationValidationReport,
+    response_model_exclude_none=True,
+)
+def validate_r2r_calibration(
+    request: Request,
+    calibration: R2RCalibrationValidationRequest,
+) -> CalibrationValidationReport:
+    """Revalidate an R2R candidate against both current robot bundles."""
+
+    return _r2r_calibration_service(request).validate(calibration)
+
+
+@router.post("/calibrations/r2r/preview")
+def preview_r2r_calibration(
+    request: Request,
+    calibration: R2RCalibrationPreviewRequest,
+) -> Response:
+    """Render source-reference and target-pose front/side overlays."""
+
+    preview, payload = _r2r_calibration_service(request).preview(calibration)
+    return Response(
+        content=payload,
+        media_type=preview.media_type,
+        headers={
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+            "X-HHTools-Calibration-Candidate": preview.candidate_id,
+            "X-HHTools-Content-SHA256": preview.sha256,
+        },
+    )
+
+
+@router.post(
+    "/calibrations/r2r/save",
+    response_model=R2RCalibrationSaveReceipt,
+    response_model_exclude_none=True,
+)
+def save_r2r_calibration(
+    request: Request,
+    calibration: R2RCalibrationSaveRequest,
+) -> R2RCalibrationSaveReceipt:
+    """Persist only a valid pair candidate under an explicit silent-save mode."""
+
+    return _r2r_calibration_service(request).save(calibration)
 
 
 @router.post(

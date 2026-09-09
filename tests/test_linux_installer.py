@@ -41,11 +41,17 @@ def _fake_uv(root: Path) -> tuple[Path, Path]:
 set -eu
 printf '%s\\n' "$@" > "$HHTOOLS_TEST_UV_ARGUMENTS"
 mkdir -p "$UV_TOOL_BIN_DIR"
+mkdir -p "$UV_TOOL_DIR/hhtools/bin"
+cat > "$UV_TOOL_DIR/hhtools/bin/python" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+chmod +x "$UV_TOOL_DIR/hhtools/bin/python"
 cat > "$UV_TOOL_BIN_DIR/hhtools" <<'EOF'
 #!/bin/sh
 case "${1:-}" in
     --version) printf '%s\\n' 'hhtools 1.2.3' ;;
-    doctor) exit 0 ;;
+    doctor) [ "${HHTOOLS_TEST_DOCTOR_FAIL:-0}" != '1' ] ;;
     *) exit 0 ;;
 esac
 EOF
@@ -95,6 +101,12 @@ def _installed_bin_dir(tmp_path: Path) -> Path:
     return tmp_path / "home" / ".local" / "bin"
 
 
+def _installed_root(tmp_path: Path) -> Path:
+    if os.geteuid() == 0:
+        return tmp_path / "system" / "hhtools"
+    return tmp_path / "home" / ".local" / "share" / "hhtools"
+
+
 def test_installer_is_posix_sh_and_documents_model_boundaries() -> None:
     contents = INSTALLER.read_text(encoding="utf-8")
 
@@ -123,12 +135,39 @@ def test_install_uses_verified_release_assets_and_isolated_uv_tool(tmp_path: Pat
     bin_dir = _installed_bin_dir(tmp_path)
     assert (bin_dir / "hhtools").is_file()
     assert (bin_dir / "hhtools-mcp").is_file()
+    install_root = _installed_root(tmp_path)
+    assert (install_root / "runtime-version").read_text(encoding="utf-8") == "1.2.3\n"
+    assert (install_root / "tools" / "hhtools" / "bin" / "python").is_file()
 
     passed_arguments = arguments.read_text(encoding="utf-8").splitlines()
     assert passed_arguments[:2] == ["tool", "install"]
     assert passed_arguments[passed_arguments.index("--python") + 1] == ">=3.12,<3.14"
     assert "--with-requirements" in passed_arguments
     assert passed_arguments[-1].startswith("hhtools @ file://")
+
+
+def test_failed_runtime_verification_does_not_publish_completion_marker(
+    tmp_path: Path,
+) -> None:
+    assets = _release_assets(tmp_path)
+    uv_bin, arguments = _fake_uv(tmp_path)
+    install_root = _installed_root(tmp_path)
+    install_root.mkdir(parents=True)
+    marker = install_root / "runtime-version"
+    marker.write_text("stale\n", encoding="utf-8")
+    environment = _environment(tmp_path, assets, uv_bin, arguments)
+    environment["HHTOOLS_TEST_DOCTOR_FAIL"] = "1"
+
+    completed = subprocess.run(
+        _installer_command(),
+        env=environment,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode != 0
+    assert not marker.exists()
 
 
 def test_installer_rejects_a_release_checksum_mismatch_before_running_uv(tmp_path: Path) -> None:

@@ -175,6 +175,55 @@ def register_h2r_routes(app, *, state, jobs) -> H2RRouteOperations:
             _log.exception("calibration session failed")
             raise HTTPException(status_code=500, detail=str(err)) from err
 
+    @app.post("/api/calibration/propose")
+    def calibration_proposal(body: dict) -> dict:
+        """Generate a constrained editable pose without saving it."""
+
+        from hhtools.retarget.calibration.assistant import propose_calibration_pose
+
+        robot = body.get("robot")
+        reference = str(body.get("reference") or "")
+        loaded_model = state.robots.get(robot)
+        if loaded_model is None:
+            raise HTTPException(status_code=404, detail="robot not loaded")
+        from hhtools.robot.loader import load_robot
+
+        model = load_robot(loaded_model.preset, compile_mjcf=False)
+        motion = None
+        token = body.get("motion_token")
+        if token:
+            record = state.motions.get(token)
+            if record is not None:
+                motion = record["motion"]
+        try:
+            seed = {
+                str(name): float(value)
+                for name, value in (body.get("joint_q") or {}).items()
+            }
+            locked = frozenset(str(name) for name in (body.get("locked_joints") or []))
+            joint_q, assessment = propose_calibration_pose(
+                model,
+                reference,
+                seed,
+                locked_joints=locked,
+                reference_motion=motion,
+            )
+        except (TypeError, ValueError) as err:
+            raise HTTPException(status_code=400, detail=str(err)) from err
+        return {
+            "joint_q": joint_q,
+            "validation": {
+                "valid": assessment.valid,
+                "score": round(assessment.score, 6),
+                "changed_joint_count": assessment.changed_joint_count,
+                "edge_errors_deg": assessment.edge_errors_deg,
+                "near_limit_joints": list(assessment.near_limit_joints),
+                "alignment_errors": list(assessment.alignment_errors),
+                "alignment_warnings": list(assessment.alignment_warnings),
+                "foot_height_delta_m": assessment.foot_height_delta_m,
+            },
+        }
+
     # ----------------------------------------------------------------- retarget
 
     def _run_retarget_job(job: Job, body: dict) -> None:

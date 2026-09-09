@@ -1,3 +1,4 @@
+import { createRequestCache } from "@/lib/requestCache";
 import type { StageMotionPayload } from "@/stage/types";
 
 export const SMPLX_DOWNLOAD_URL =
@@ -245,18 +246,18 @@ export async function setupGvhmrInDesktop(
 ): Promise<DesktopGvhmrSetupResult> {
   const bridge = desktopBridge(host);
   if (!bridge) throw new Error("GVHMR setup is available in the desktop app only.");
-  return bridge.setupGvhmr();
+  const result = await bridge.setupGvhmr();
+  if (result.action === "configured") gvhmrStatusCache.invalidate();
+  return result;
 }
 
-export async function getGvhmrRuntimeStatus(
-  signal: AbortSignal,
-  fetcher: Fetcher = fetch,
-): Promise<GvhmrRuntimeStatus> {
-  const status = await requestJson<GvhmrRuntimeStatus>(
-    "/api/video-to-motion/status",
-    { signal },
-    fetcher,
-  );
+const gvhmrStatusCache = createRequestCache<GvhmrRuntimeStatus>(5_000);
+
+export function invalidateGvhmrRuntimeStatus(): void {
+  gvhmrStatusCache.invalidate();
+}
+
+function normalizeGvhmrRuntimeStatus(status: GvhmrRuntimeStatus): GvhmrRuntimeStatus {
   const normalized = {
     ...status,
     ready: status.ready === true,
@@ -265,6 +266,22 @@ export async function getGvhmrRuntimeStatus(
       : [],
   };
   return { ...normalized, missing: visibleGvhmrMissing(normalized) };
+}
+
+export async function getGvhmrRuntimeStatus(
+  signal: AbortSignal,
+  fetcher: Fetcher = fetch,
+): Promise<GvhmrRuntimeStatus> {
+  const load = async (requestSignal?: AbortSignal, requestFetcher: Fetcher = fetch) =>
+    normalizeGvhmrRuntimeStatus(
+      await requestJson<GvhmrRuntimeStatus>(
+        "/api/video-to-motion/status",
+        { signal: requestSignal },
+        requestFetcher,
+      ),
+    );
+  if (fetcher !== fetch) return load(signal, fetcher);
+  return gvhmrStatusCache.read(() => load(), signal);
 }
 
 export async function startVideoToMotion(

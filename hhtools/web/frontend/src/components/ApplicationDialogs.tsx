@@ -14,6 +14,7 @@ import {
   getGvhmrRuntimeSettings,
   getJobAdmissionSettings,
   getMotionLibrarySettings,
+  invalidateGvhmrRuntimeStatus,
   updateJobAdmissionSettings,
   updateMotionLibrarySettings,
   type GvhmrOptionalComponentState,
@@ -166,6 +167,8 @@ function SettingsDialog(props: SettingsDialogProps) {
     useState<GvhmrRuntimeStatus | null>(null);
   const [runningLimit, setRunningLimit] = useState("0");
   const [queueLimit, setQueueLimit] = useState("0");
+  const [batchItemLimit, setBatchItemLimit] = useState("0");
+  const [batchFrameLimit, setBatchFrameLimit] = useState("0");
   const [loading, setLoading] = useState(true);
   const [action, setAction] = useState<"jobs" | "library" | "gvhmr" | null>(
     null,
@@ -174,7 +177,8 @@ function SettingsDialog(props: SettingsDialogProps) {
   const [error, setError] = useState<string | null>(null);
   const refreshRequest = useRef<AbortController | null>(null);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (freshGvhmr = false) => {
+    if (freshGvhmr) invalidateGvhmrRuntimeStatus();
     refreshRequest.current?.abort();
     const request = new AbortController();
     refreshRequest.current = request;
@@ -193,6 +197,8 @@ function SettingsDialog(props: SettingsDialogProps) {
       setJobAdmission(jobs);
       setRunningLimit(String(jobs.max_running_jobs));
       setQueueLimit(String(jobs.max_queued_jobs));
+      setBatchItemLimit(String(jobs.max_batch_items));
+      setBatchFrameLimit(String(jobs.max_batch_total_frames));
       setMotionLibrary(library);
       setGvhmrRuntime(runtime);
       setGvhmrComponent(components?.gvhmr ?? null);
@@ -212,7 +218,13 @@ function SettingsDialog(props: SettingsDialogProps) {
 
   const parsedRunning = nonNegativeInteger(runningLimit);
   const parsedQueued = nonNegativeInteger(queueLimit);
-  const limitsValid = parsedRunning !== null && parsedQueued !== null;
+  const parsedBatchItems = nonNegativeInteger(batchItemLimit);
+  const parsedBatchFrames = nonNegativeInteger(batchFrameLimit);
+  const limitsValid =
+    parsedRunning !== null &&
+    parsedQueued !== null &&
+    parsedBatchItems !== null &&
+    parsedBatchFrames !== null;
   const busy = loading || action !== null;
 
   const saveJobs = async () => {
@@ -220,6 +232,8 @@ function SettingsDialog(props: SettingsDialogProps) {
       !limitsValid ||
       parsedRunning === null ||
       parsedQueued === null ||
+      parsedBatchItems === null ||
+      parsedBatchFrames === null ||
       jobAdmission?.editable !== true
     ) {
       return;
@@ -231,10 +245,14 @@ function SettingsDialog(props: SettingsDialogProps) {
       const result = await updateJobAdmissionSettings({
         max_running_jobs: parsedRunning,
         max_queued_jobs: parsedQueued,
+        max_batch_items: parsedBatchItems,
+        max_batch_total_frames: parsedBatchFrames,
       });
       setJobAdmission(result);
       setRunningLimit(String(result.max_running_jobs));
       setQueueLimit(String(result.max_queued_jobs));
+      setBatchItemLimit(String(result.max_batch_items));
+      setBatchFrameLimit(String(result.max_batch_total_frames));
       setSaved(true);
     } catch (reason) {
       setError(errorMessage(reason));
@@ -274,7 +292,7 @@ function SettingsDialog(props: SettingsDialogProps) {
       const result = await desktop.setupGvhmr();
       setGvhmrComponent(result.state);
       if (result.action === "cancelled") return;
-      const runtime = await refresh();
+      const runtime = await refresh(true);
       if (runtime) props.onGvhmrChange(runtime);
     } catch (reason) {
       setError(errorMessage(reason));
@@ -412,7 +430,35 @@ function SettingsDialog(props: SettingsDialogProps) {
               onChange={(event) => setQueueLimit(event.currentTarget.value)}
             />
           </Field>
+          <Field label={text("Maximum batch items", "单批最大条目数")}>
+            <input
+              className={fieldClass}
+              type="number"
+              min="0"
+              step="1"
+              value={batchItemLimit}
+              disabled={busy || jobAdmission?.editable !== true}
+              onChange={(event) => setBatchItemLimit(event.currentTarget.value)}
+            />
+          </Field>
+          <Field label={text("Maximum batch frames", "单批最大总帧数")}>
+            <input
+              className={fieldClass}
+              type="number"
+              min="0"
+              step="1"
+              value={batchFrameLimit}
+              disabled={busy || jobAdmission?.editable !== true}
+              onChange={(event) => setBatchFrameLimit(event.currentTarget.value)}
+            />
+          </Field>
         </div>
+        <p className="text-[11px] text-muted-foreground">
+          {text(
+            "Use 0 for unlimited. Batch processing remains serial within each job.",
+            "设为 0 表示不限；单个批任务内部仍按顺序执行。",
+          )}
+        </p>
         {!limitsValid ? (
           <p className="text-[11px] text-danger" role="alert">
             {text(
@@ -450,7 +496,7 @@ function SettingsDialog(props: SettingsDialogProps) {
           label={text("Refresh settings", "刷新设置")}
           busy={loading}
           disabled={action !== null}
-          onClick={() => void refresh()}
+          onClick={() => void refresh(true)}
         />
         <Button
           size="sm"
@@ -500,7 +546,10 @@ function AboutDialog({
               {text("Authors and contributors", "作者与贡献者")}
             </dt>
             <dd>
-              jaggerShen {text("and", "与")} hhtools contributors
+              {text(
+                "Jagger Shen, Nora Sun and hhtools contributors",
+                "Jagger Shen、Nora Sun 与 hhtools 贡献者",
+              )}
             </dd>
           </div>
           <div>

@@ -4,6 +4,7 @@ import {
   type Fetcher,
   type JobSnapshot,
 } from "@/lib/api";
+import { createRequestCache } from "@/lib/requestCache";
 import type {
   ExportOptions,
   ResultDiagnosticsPayload,
@@ -50,6 +51,20 @@ export interface CalibrationPose {
   readonly ground_offset_z: number;
 }
 
+export interface CalibrationProposal {
+  readonly joint_q: Readonly<Record<string, number>>;
+  readonly validation: {
+    readonly valid: boolean;
+    readonly score: number;
+    readonly changed_joint_count: number;
+    readonly edge_errors_deg: Readonly<Record<string, number>>;
+    readonly near_limit_joints: readonly string[];
+    readonly alignment_errors: readonly string[];
+    readonly alignment_warnings: readonly string[];
+    readonly foot_height_delta_m?: number | null;
+  };
+}
+
 export interface H2rScenePayload {
   readonly terrain?: StageMotionPayload["terrain"];
   readonly objects?: StageMotionPayload["objects"];
@@ -90,6 +105,8 @@ interface RequestOptions {
   readonly fetcher?: Fetcher;
 }
 
+const calibrationReferencesCache = createRequestCache<readonly string[]>(1_000);
+
 function jsonPost<T>(
   url: string,
   body: Readonly<Record<string, unknown>>,
@@ -110,16 +127,20 @@ function jsonPost<T>(
 export async function getCalibrationReferences(
   options: RequestOptions = {},
 ): Promise<readonly string[]> {
-  const response = await requestJson<{ references?: unknown }>(
-    "/api/calibration/references",
-    { signal: options.signal },
-    options.fetcher,
-  );
-  return Array.isArray(response.references)
-    ? response.references.filter(
-        (reference): reference is string => typeof reference === "string",
-      )
-    : [];
+  const load = async (signal?: AbortSignal, fetcher?: Fetcher) => {
+    const response = await requestJson<{ references?: unknown }>(
+      "/api/calibration/references",
+      { signal },
+      fetcher,
+    );
+    return Array.isArray(response.references)
+      ? response.references.filter(
+          (reference): reference is string => typeof reference === "string",
+        )
+      : [];
+  };
+  if (options.fetcher) return load(options.signal, options.fetcher);
+  return calibrationReferencesCache.read(() => load(), options.signal);
 }
 
 export function getCalibrationStatus(
@@ -160,6 +181,19 @@ export function saveCalibration(
   options: RequestOptions = {},
 ): Promise<{ readonly ok: boolean; readonly path?: string }> {
   return jsonPost("/api/calibration/save", body, options);
+}
+
+export function proposeCalibration(
+  body: {
+    readonly robot: string;
+    readonly reference: string;
+    readonly joint_q: Readonly<Record<string, number>>;
+    readonly motion_token?: string;
+    readonly locked_joints?: readonly string[];
+  },
+  options: RequestOptions = {},
+): Promise<CalibrationProposal> {
+  return jsonPost("/api/calibration/propose", body, options);
 }
 
 export function previewCalibrationPose(

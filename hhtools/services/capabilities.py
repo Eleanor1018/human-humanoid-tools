@@ -25,6 +25,8 @@ from hhtools.contracts import (
     SchedulerMode,
 )
 
+from .batch_limits import BatchLimitSnapshot
+
 if TYPE_CHECKING:
     from hhtools.robot.base import RobotPreset
 
@@ -208,7 +210,7 @@ def _scheduler_capability(snapshot: object | None) -> SchedulerCapability:
 def _reference_readiness(preset: RobotPreset) -> tuple[list[str], list[str]]:
     """Return independently validated calibration and scaler references.
 
-    A bundled Newton scaler is not equivalent to a human-reviewed robot pose
+    A bundled Newton scaler is not equivalent to a validated robot pose
     calibration: notably, Interaction-Mesh still requires the latter.  Keep
     both facts separate so clients can make backend-specific decisions.
     """
@@ -284,7 +286,10 @@ def _robot_capabilities(presets: Iterable[RobotPreset]) -> list[RobotCapability]
     return robots
 
 
-def _backend_capabilities(devices: list[DeviceCapability]) -> list[BackendCapability]:
+def _backend_capabilities(
+    devices: list[DeviceCapability],
+    batch_limits: BatchLimitSnapshot,
+) -> list[BackendCapability]:
     cuda_available = any(device.kind.value == "cuda" and device.available for device in devices)
 
     definitions = (
@@ -314,6 +319,8 @@ def _backend_capabilities(devices: list[DeviceCapability]) -> list[BackendCapabi
                 "max_retarget_fps": 1_000.0,
                 "max_retarget_frames": 100_000,
                 "max_human_height": 10.0,
+                "max_batch_items": batch_limits.max_batch_items,
+                "max_batch_total_frames": batch_limits.max_batch_total_frames,
             },
         ),
         (
@@ -322,7 +329,7 @@ def _backend_capabilities(devices: list[DeviceCapability]) -> list[BackendCapabi
             ("mujoco", "osqp", "scipy", "yourdfpy"),
             [AssetCategory.OBJECT_INTERACTION, AssetCategory.TERRAIN_SCENE],
             {
-                "batch": False,
+                "batch": True,
                 "scene_geometry": True,
                 "mpc": True,
                 "cpu_fallback": True,
@@ -332,6 +339,8 @@ def _backend_capabilities(devices: list[DeviceCapability]) -> list[BackendCapabi
                 "max_retarget_fps": 1_000.0,
                 "max_retarget_frames": 100_000,
                 "max_human_height": 10.0,
+                "max_batch_items": batch_limits.max_batch_items,
+                "max_batch_total_frames": batch_limits.max_batch_total_frames,
             },
         ),
     )
@@ -367,6 +376,7 @@ class CapabilitiesService:
         robot_provider: Callable[[], Iterable[RobotPreset]] | None = None,
         device_probe: Callable[[], list[DeviceCapability]] = _detect_devices,
         asset_root_provider: Callable[[], Iterable[str]] | None = None,
+        batch_limits_provider: Callable[[], BatchLimitSnapshot] = BatchLimitSnapshot,
         available_asset_catalog_available: bool = False,
         preflight_available: bool = False,
         artifact_store_available: bool = False,
@@ -375,6 +385,8 @@ class CapabilitiesService:
         mcp_available: bool = False,
         agent_rest_available: bool = True,
         json_cli_available: bool = True,
+        calibration_assistance_available: bool = False,
+        calibration_visual_preview_available: bool = False,
     ) -> None:
         if robot_provider is None:
             from hhtools.robot.registry import list_presets_readonly
@@ -384,6 +396,7 @@ class CapabilitiesService:
         self._robot_provider = robot_provider
         self._device_probe = device_probe
         self._asset_root_provider = asset_root_provider
+        self._batch_limits_provider = batch_limits_provider
         self._available_asset_catalog_available = bool(available_asset_catalog_available)
         self._preflight_available = bool(preflight_available)
         self._artifact_store_available = bool(artifact_store_available)
@@ -395,6 +408,10 @@ class CapabilitiesService:
         self._mcp_available = bool(mcp_available)
         self._agent_rest_available = bool(agent_rest_available)
         self._json_cli_available = bool(json_cli_available)
+        self._calibration_assistance_available = bool(calibration_assistance_available)
+        self._calibration_visual_preview_available = bool(
+            calibration_assistance_available and calibration_visual_preview_available
+        )
 
     def get_capabilities(self) -> CapabilityResponse:
         """Return a compact snapshot; no solver, queue slot, or asset is created."""
@@ -408,7 +425,7 @@ class CapabilitiesService:
         )
         return CapabilityResponse(
             service_version=__version__,
-            backends=_backend_capabilities(devices),
+            backends=_backend_capabilities(devices, self._batch_limits_provider()),
             devices=devices,
             robots=_robot_capabilities(self._robot_provider()),
             scheduler=_scheduler_capability(snapshot),
@@ -420,6 +437,13 @@ class CapabilitiesService:
                 "asset_inspection": self._asset_root_provider is not None,
                 "asset_registry": self._asset_root_provider is not None,
                 "available_asset_catalog": self._available_asset_catalog_available,
+                "batch_execution": self._job_execution_available,
+                "batch_preflight": self._preflight_available,
+                "calibration_proposals": self._calibration_assistance_available,
+                "calibration_silent_save": self._calibration_assistance_available,
+                "calibration_status": self._calibration_assistance_available,
+                "calibration_validation": self._calibration_assistance_available,
+                "calibration_visual_preview": self._calibration_visual_preview_available,
                 "artifact_store": self._artifact_store_available,
                 "idempotent_jobs": self._job_manager_available,
                 "job_cancellation": self._job_execution_available,
@@ -434,6 +458,11 @@ class CapabilitiesService:
                 "persistent_jobs": self._job_manager_available,
                 "preflight": self._preflight_available,
                 "r2r_execution": self._job_execution_available,
+                "r2r_calibration_proposals": self._calibration_assistance_available,
+                "r2r_calibration_silent_save": self._calibration_assistance_available,
+                "r2r_calibration_status": self._calibration_assistance_available,
+                "r2r_calibration_validation": self._calibration_assistance_available,
+                "r2r_calibration_visual_preview": self._calibration_visual_preview_available,
                 "r2r_preflight": self._preflight_available,
                 "revision_polling": self._job_manager_available,
                 "revision_waiting": self._job_manager_available,

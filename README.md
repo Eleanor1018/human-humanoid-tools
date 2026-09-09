@@ -42,8 +42,8 @@ robot, and retargeting core, but their installation and launch paths are intenti
 |------|----------|--------|
 | **Terminal (CLI/TUI workflow)** | Batch jobs, servers, SSH, and automation | `uv run hhtools ...` |
 | **WebUI** | Browser-based visualization and interactive workflows | `uv run hhtools web` |
-| **Desktop GUI (`.deb`)** | Local desktop shell for an installed checkout | Application menu or `hhtools-desktop` |
-| **Agent (JSON CLI / MCP)** | Versioned local H2R and scene-free R2R automation | [`hhtools agent` / `hhtools-mcp`](docs/agent.md) |
+| **Desktop GUI** | Windows standalone app or Linux first-run setup | Application menu or `hhtools-desktop` |
+| **Agent (JSON CLI / MCP)** | Versioned H2R, scene-free R2R, and scalable Batch automation | [`hhtools agent` / `hhtools-mcp`](docs/agent.md) |
 
 ### One-line Linux release install
 
@@ -114,24 +114,28 @@ recovery command instead of a Python import traceback.
 ### Agent and MCP
 
 HHTools provides a strict JSON CLI for scripts and a local stdio MCP server for compatible agents.
-The current Agent interface covers safe, preflighted H2R and scene-free R2R jobs with verified
-artifact export; it does not yet expose the full WebUI feature set. See
+The current Agent interface covers safe, preflighted H2R, scene-free R2R, scalable H2R/R2R
+Batch jobs, and content-bound calibration assistance with GPT-visible front/side previews and
+validated silent save. It does not yet expose the full WebUI feature set. See
 [Agent interfaces](docs/agent.md) for installation, scope, the smoke-first workflow, runtime
 ownership, and the included Codex project configuration.
 
-### Ubuntu desktop GUI (`.deb`)
+### Desktop GUI
 
-The small Debian package follows the original Desktop Alpha model: it contains Electron and the
-locally supplied neutral SMPL-X model, while reusing an existing checkout and `.venv` instead of
-duplicating Python, Torch, CUDA, and Newton:
+The Debian package contains Electron plus the curated built-in motions and robots. On first launch,
+its setup page installs the version-matched Python runtime from GitHub Releases; the recommended
+per-user option needs no administrator password, while the all-users option opens the operating
+system authentication dialog:
 
 ```bash
 sudo apt install ./hhtools-0.1.0-amd64.deb
 hhtools-desktop
 ```
 
-Set `HHTOOLS_REPO_ROOT` (and optionally `HHTOOLS_PYTHON`) for an installed shell outside the
-checkout. Build details are in [`desktop/README.md`](desktop/README.md#desktop-packages).
+The Windows installer instead bundles its Python runtime and application source, so it starts
+without a checkout or system Python. GVHMR and separately licensed SMPL-family weights remain
+optional on both platforms. Build and packaging details are in
+[`desktop/README.md`](desktop/README.md#desktop-packages).
 
 ### Frontend development
 
@@ -160,16 +164,19 @@ uv run hhtools web --max-running-jobs 1 --max-queued-jobs 32
 ```
 
 `0` means unlimited for both options; the queue setting only applies when running concurrency is
-limited. The same settings are available as `HHTOOLS_MAX_RUNNING_JOBS` and
-`HHTOOLS_MAX_QUEUED_JOBS` (including in the Electron sidecar).
+limited. Agent batches likewise have no configured item or total-frame cap by default. Positive
+`--max-batch-items` and `--max-batch-total-frames` values opt into deployment-specific safeguards;
+`0` restores unlimited mode. The same settings are available as `HHTOOLS_MAX_RUNNING_JOBS`,
+`HHTOOLS_MAX_QUEUED_JOBS`, `HHTOOLS_MAX_BATCH_ITEMS`, and
+`HHTOOLS_MAX_BATCH_TOTAL_FRAMES` (including in the Electron sidecar and MCP server).
 They can also be edited under **Settings → Background-job scheduling** from local Web/Electron
 or an SSH loopback tunnel; ordinary remote-browser sessions are shown read-only until authenticated
 remote administration is implemented. Saving hot-applies the limits without restarting Python or Electron: lower running limits grandfather active jobs,
 while higher limits immediately promote FIFO waiters. The backend persists the values in the
 platform user-config directory; `HHTOOLS_WEB_SETTINGS_PATH` selects another file. Explicit CLI
 or environment values remain startup overrides and will win again on the next launch.
-The cap applies to scheduled Web jobs, not the optional Warp/Newton robot prewarm thread, so it
-is admission control rather than a process-wide GPU concurrency guarantee.
+The concurrency cap applies to scheduled Web jobs, not the optional Warp/Newton robot prewarm
+thread, so it is admission control rather than a process-wide GPU concurrency guarantee.
 
 | Panel | Flow |
 |-------|------|

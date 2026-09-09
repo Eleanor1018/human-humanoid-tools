@@ -1,10 +1,20 @@
 import assert from "node:assert/strict";
+import { registerHooks } from "node:module";
 import test from "node:test";
 
-import {
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (!specifier.startsWith("@/")) return nextResolve(specifier, context);
+    const url = new URL(`../src/${specifier.slice(2)}.ts`, import.meta.url);
+    return nextResolve(url.href, context);
+  },
+});
+
+const {
   boundedProgress,
   canSetupGvhmrInDesktop,
   getGvhmrRuntimeStatus,
+  invalidateGvhmrRuntimeStatus,
   isSmplxNeutralMissing,
   isGvhmrResultName,
   isSupportedVideoName,
@@ -16,7 +26,7 @@ import {
   toStageMotionPayload,
   visibleGvhmrMissing,
   waitForVideoToMotion,
-} from "../src/features/video-to-motion/api.ts";
+} = await import("../src/features/video-to-motion/api.ts");
 
 test("uses the desktop setup bridge only when Electron exposes it", async () => {
   const webHost = {};
@@ -58,6 +68,30 @@ test("normalizes runtime status responses", async () => {
   assert.equal(status.ready, false);
   assert.equal(status.checks?.smplx_neutral, false);
   assert.equal(status.body_models_root, "/models");
+});
+
+test("coalesces and briefly caches the default GVHMR status probe", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    return Response.json({ ready: true, missing: [] });
+  };
+  invalidateGvhmrRuntimeStatus();
+  try {
+    const first = getGvhmrRuntimeStatus(new AbortController().signal);
+    const second = getGvhmrRuntimeStatus(new AbortController().signal);
+    await Promise.all([first, second]);
+    await getGvhmrRuntimeStatus(new AbortController().signal);
+    assert.equal(calls, 1);
+
+    invalidateGvhmrRuntimeStatus();
+    await getGvhmrRuntimeStatus(new AbortController().signal);
+    assert.equal(calls, 2);
+  } finally {
+    invalidateGvhmrRuntimeStatus();
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("links the SMPL-X download only to structured model absence", () => {

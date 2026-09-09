@@ -70,6 +70,8 @@ def build_application_runtime(
     *,
     max_running_jobs: int = 0,
     max_queued_jobs: int = 0,
+    max_batch_items: int = 0,
+    max_batch_total_frames: int = 0,
     max_retained_jobs: int = 64,
     agent_mcp_available: bool = False,
     agent_rest_available: bool = True,
@@ -79,8 +81,16 @@ def build_application_runtime(
     from hhtools.application.agent_services import assemble_agent_services
     from hhtools.utils.paths import user_job_history_dir, user_motion_library_settings_path
 
-    if max_running_jobs < 0 or max_queued_jobs < 0:
-        raise ValueError("job scheduler limits must be non-negative")
+    if any(
+        value < 0
+        for value in (
+            max_running_jobs,
+            max_queued_jobs,
+            max_batch_items,
+            max_batch_total_frames,
+        )
+    ):
+        raise ValueError("job and batch limits must be non-negative")
     if max_retained_jobs <= 0:
         raise ValueError("resource limits must be positive: max_retained_jobs")
     lease = agent_runtime_lease or AgentRuntimeLease.acquire(
@@ -144,6 +154,8 @@ def build_application_runtime(
             agent_mcp_available=agent_mcp_available,
             agent_rest_available=agent_rest_available,
             agent_json_cli_available=agent_json_cli_available,
+            max_batch_items=max_batch_items,
+            max_batch_total_frames=max_batch_total_frames,
         )
         lifecycle = RuntimeLifecycle(state, scheduler, settings_lock, lease)
         return ApplicationRuntime(

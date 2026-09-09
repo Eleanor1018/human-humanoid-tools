@@ -30,6 +30,19 @@ from hhtools.contracts import (
     AvailableAssetCatalogRequest,
     AvailableAssetCatalogResponse,
     BackendCapability,
+    CalibrationCandidate,
+    CalibrationJointLimit,
+    CalibrationPreview,
+    CalibrationPreviewRequest,
+    CalibrationProposalRequest,
+    CalibrationProposalResponse,
+    CalibrationSaveReceipt,
+    CalibrationSaveRequest,
+    CalibrationStatusRequest,
+    CalibrationStatusResponse,
+    CalibrationValidationReport,
+    CalibrationValidationRequest,
+    CalibrationVisualReview,
     CapabilityResponse,
     DeviceCapability,
     EvaluationReport,
@@ -59,6 +72,7 @@ from hhtools.contracts import (
     PreflightCheckLevel,
     PreflightResponse,
     PreflightStatus,
+    R2RCalibrationStatusRequest,
     RetargetPlan,
     RetargetPreflightRequest,
     RobotCapability,
@@ -727,6 +741,19 @@ def test_legacy_upgrade_transport_request_is_wrapped_and_strict() -> None:
         RobotListResponse,
         SchedulerCapability,
         CapabilityResponse,
+        CalibrationCandidate,
+        CalibrationJointLimit,
+        CalibrationPreview,
+        CalibrationPreviewRequest,
+        CalibrationProposalRequest,
+        CalibrationProposalResponse,
+        CalibrationSaveReceipt,
+        CalibrationSaveRequest,
+        CalibrationStatusRequest,
+        CalibrationStatusResponse,
+        CalibrationValidationReport,
+        CalibrationValidationRequest,
+        CalibrationVisualReview,
         RetargetPreflightRequest,
         PreflightCheck,
         RetargetPlan,
@@ -806,3 +833,61 @@ def test_execution_provenance_requires_truthful_fallback_and_cuda_graph_flags() 
         ExecutionProvenance(cuda_graph_requested=False, cuda_graph_used=True)
     with pytest.raises(ValidationError):
         ExecutionProvenance(fallback_reason="silent fallback")
+
+
+def test_gpt_silent_calibration_requires_a_portable_passing_visual_review() -> None:
+    candidate_id = f"cal-candidate:sha256:{SHA_C}"
+
+    with pytest.raises(ValidationError):
+        CalibrationSaveRequest(
+            candidate_id=candidate_id,
+            save_mode="gpt_vision_silent",
+        )
+    with pytest.raises(ValidationError):
+        CalibrationSaveRequest(
+            candidate_id=candidate_id,
+            save_mode="gpt_vision_silent",
+            visual_review=CalibrationVisualReview(
+                reviewer="gpt_vision",
+                verdict="pass",
+                summary="Loaded /home/private/calibration.png",
+            ),
+        )
+
+    request = CalibrationSaveRequest(
+        candidate_id=candidate_id,
+        save_mode="gpt_vision_silent",
+        visual_review=CalibrationVisualReview(
+            reviewer="gpt_vision",
+            verdict="pass",
+            model_hint="gpt-test",
+            summary="Front and side landmark directions are aligned.",
+        ),
+    )
+    assert request.visual_review is not None
+    assert request.visual_review.verdict.value == "pass"
+
+
+def test_r2r_calibration_identity_requires_a_distinct_robot_pair() -> None:
+    valid = R2RCalibrationStatusRequest(
+        source_robot_id="source_bot",
+        source_robot_asset_id=ASSET_MOTION,
+        target_robot_id="target_bot",
+        target_robot_asset_id=ASSET_ROBOT,
+    )
+    assert valid.source_robot_id != valid.target_robot_id
+
+    with pytest.raises(ValidationError):
+        R2RCalibrationStatusRequest(
+            source_robot_id="same_bot",
+            source_robot_asset_id=ASSET_MOTION,
+            target_robot_id="same_bot",
+            target_robot_asset_id=ASSET_ROBOT,
+        )
+    with pytest.raises(ValidationError):
+        R2RCalibrationStatusRequest(
+            source_robot_id="source_bot",
+            source_robot_asset_id=ASSET_ROBOT,
+            target_robot_id="target_bot",
+            target_robot_asset_id=ASSET_ROBOT,
+        )

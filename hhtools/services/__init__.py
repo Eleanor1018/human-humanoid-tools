@@ -25,6 +25,11 @@ from .available_assets import (
     iter_bounded_catalog_files,
     require_bounded_catalog_root,
 )
+from .batch_limits import BatchLimitPolicy, BatchLimitSnapshot
+from .batch_preflight import BatchPreflightService
+from .batch_retarget import BatchRetargetService, ExecutionPlanService
+from .calibration import CalibrationService, CalibrationServiceError
+from .calibration_candidates import CalibrationCandidateStore
 from .capabilities import CapabilitiesService
 from .job_store import JobStore, JobStoreError, StoredJob, compute_request_fingerprint
 from .jobs import (
@@ -46,6 +51,7 @@ from .legacy_job_upgrade import (
 from .plans import PlanStore, PlanStoreError, compute_plan_id
 from .preflight import PreflightService
 from .r2r_asset_inspection import R2RTrajectoryInspector
+from .r2r_calibration import R2RCalibrationService
 from .r2r_preflight import R2RPreflightService
 from .r2r_retarget import R2RRetargetService, WorkflowRetargetService
 from .retarget import RetargetService, RetargetServiceError
@@ -65,6 +71,13 @@ __all__ = [
     "AvailableAssetCatalogLimitError",
     "AvailableAssetCatalogService",
     "AvailableAssetProvider",
+    "BatchPreflightService",
+    "BatchLimitPolicy",
+    "BatchLimitSnapshot",
+    "BatchRetargetService",
+    "CalibrationCandidateStore",
+    "CalibrationService",
+    "CalibrationServiceError",
     "CapabilitiesService",
     "JobCancelledError",
     "JobExecutionContext",
@@ -76,6 +89,7 @@ __all__ = [
     "JobStore",
     "JobStoreError",
     "DynamicRootLocator",
+    "ExecutionPlanService",
     "LegacyJobUpgradeError",
     "LegacyJobUpgradeResult",
     "LegacyJobUpgradeService",
@@ -84,6 +98,7 @@ __all__ = [
     "PlanStoreError",
     "PreflightService",
     "R2RPreflightService",
+    "R2RCalibrationService",
     "R2RRetargetService",
     "R2RTrajectoryInspector",
     "RetargetService",

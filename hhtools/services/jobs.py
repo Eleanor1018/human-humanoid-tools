@@ -207,14 +207,38 @@ class JobExecutionContext:
         artifact_store: ArtifactStore,
         cancellation_event: threading.Event,
         progress_callback: Any,
+        artifact_metadata: Mapping[str, Any] | None = None,
+        shared_artifacts: list[ArtifactDescriptor] | None = None,
+        shared_artifact_lock: threading.Lock | None = None,
     ) -> None:
         self.job_id = job_id
         self.spec = JobSpecV2.model_validate_json(spec.model_dump_json())
         self._artifact_store = artifact_store
         self._cancellation_event = cancellation_event
         self._progress_callback = progress_callback
-        self._artifacts: list[ArtifactDescriptor] = []
-        self._artifact_lock = threading.Lock()
+        self._artifact_metadata = dict(artifact_metadata or {})
+        self._artifacts = shared_artifacts if shared_artifacts is not None else []
+        self._artifact_lock = shared_artifact_lock or threading.Lock()
+
+    def for_child(
+        self,
+        spec: JobSpecV2,
+        *,
+        progress_callback: Any,
+        artifact_metadata: Mapping[str, Any],
+    ) -> JobExecutionContext:
+        """Create a child view sharing cancellation and canonical artifact membership."""
+
+        return JobExecutionContext(
+            job_id=self.job_id,
+            spec=spec,
+            artifact_store=self._artifact_store,
+            cancellation_event=self._cancellation_event,
+            progress_callback=progress_callback,
+            artifact_metadata={**self._artifact_metadata, **dict(artifact_metadata)},
+            shared_artifacts=self._artifacts,
+            shared_artifact_lock=self._artifact_lock,
+        )
 
     @property
     def cancellation_requested(self) -> bool:
@@ -266,7 +290,7 @@ class JobExecutionContext:
             payload=payload,
             format=format,
             media_type=media_type,
-            metadata=metadata,
+            metadata={**dict(metadata or {}), **self._artifact_metadata},
         )
         return self._remember(descriptor)
 
@@ -281,7 +305,7 @@ class JobExecutionContext:
             job_id=self.job_id,
             kind=kind,
             document=document,
-            metadata=metadata,
+            metadata={**dict(metadata or {}), **self._artifact_metadata},
         )
         return self._remember(descriptor)
 
@@ -300,7 +324,7 @@ class JobExecutionContext:
             source=source,
             format=format,
             media_type=media_type,
-            metadata=metadata,
+            metadata={**dict(metadata or {}), **self._artifact_metadata},
         )
         return self._remember(descriptor)
 
@@ -313,6 +337,20 @@ class JobExecutionContext:
     def published_artifacts(self) -> tuple[ArtifactDescriptor, ...]:
         with self._artifact_lock:
             return tuple(self._artifacts)
+
+    def get_published_artifact(self, artifact_id: str) -> StoredArtifact:
+        """Resolve verified bytes only for an artifact published through this context."""
+
+        with self._artifact_lock:
+            if all(item.artifact_id != artifact_id for item in self._artifacts):
+                raise ArtifactStoreError(
+                    ApiError(
+                        code="ARTIFACT_NOT_FOUND",
+                        message="The execution context did not publish the requested artifact.",
+                        stage=ErrorStage.ARTIFACT,
+                    )
+                )
+        return self._artifact_store.get(artifact_id, verify=True)
 
 
 class JobManager:

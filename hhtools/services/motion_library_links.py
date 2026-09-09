@@ -799,7 +799,7 @@ def _entry_with_link_label(
     except ValueError:
         rel = PurePosixPath(source.name)
     stem = rel.with_suffix("").as_posix() if rel.parts else source.stem
-    return {
+    entry = {
         "dataset": raw.get("dataset", "unknown"),
         "folder_label": folder_label,
         "sequence_id": rel.as_posix() if rel.parts else source.name,
@@ -808,6 +808,10 @@ def _entry_with_link_label(
         "label": f"{folder_label} · {stem}",
         "origin": "link",
     }
+    source_robot = str(raw.get("source_robot") or "").strip()
+    if source_robot:
+        entry["source_robot"] = source_robot
+    return entry
 
 
 __all__ = [

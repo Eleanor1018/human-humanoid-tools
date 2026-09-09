@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import pickle
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -19,6 +21,7 @@ from hhtools.web.server import state as server_state
 def _create_app(tmp_path: Path, monkeypatch):
     monkeypatch.delenv("HHTOOLS_MOTION_LIBRARY_ROOT", raising=False)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     monkeypatch.setenv(
         "HHTOOLS_MOTION_LIBRARY_SETTINGS_PATH",
         str(tmp_path / "motion-library-settings.json"),
@@ -334,3 +337,174 @@ def test_library_api_exposes_robot_trajectory_asset_boundary(
 
     assert response.status_code == 200
     assert response.json()["entries"][0]["asset_kind"] == "robot_trajectory"
+
+
+def test_r2r_library_discovers_and_loads_robot_pkl_before_human_fallback(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from hhtools.web.server.routes import r2r as r2r_routes
+
+    def complete_source_job(
+        job,
+        _drop,
+        source_robot,
+        _profile,
+        _state,
+        _source_fps=None,
+        selected_path=None,
+    ) -> None:
+        job.result = {
+            "token": "source-token",
+            "source_robot": source_robot,
+            "name": Path(selected_path).stem,
+        }
+        job.mark_terminal("done")
+
+    monkeypatch.setattr(
+        r2r_routes,
+        "_run_r2r_source_upload_job",
+        complete_source_job,
+    )
+    app = _create_app(tmp_path, monkeypatch)
+    selected_root = tmp_path / "managed-motion-library"
+
+    with _local_client(app) as client:
+        switched = client.patch(
+            "/api/settings/motion-library",
+            json={"root": str(selected_root)},
+        )
+        assert switched.status_code == 200
+
+        clip = selected_root / "G1 exports" / "walk.pkl"
+        clip.parent.mkdir(parents=True)
+        with clip.open("wb") as stream:
+            pickle.dump(
+                {
+                    "hhtools_export": "r2r_v1",
+                    "robot": {"joint_q": [[0.0] * 8]},
+                },
+                stream,
+            )
+
+        library = client.get("/api/library")
+        assert library.status_code == 200
+        entries = library.json()["entries"]
+        assert len(entries) == 1
+        entry = entries[0]
+        assert entry["dataset"] == "robot"
+        assert entry["asset_kind"] == "robot_trajectory"
+        assert entry["motion_category"] == "motion"
+
+        started = client.post(
+            "/api/r2r/source/library",
+            json={**entry, "source_robot": "g1_29dof"},
+        )
+        assert started.status_code == 200
+        job_id = started.json()["job_id"]
+        for _ in range(100):
+            completed = client.get(f"/api/job/{job_id}").json()
+            if completed["status"] in {"done", "error"}:
+                break
+            time.sleep(0.01)
+
+    assert completed["status"] == "done"
+    assert completed["kind"] == "r2r_source_library"
+    assert completed["result"]["name"] == "walk"
+
+
+def test_library_api_includes_robot_trajectories_from_source_root(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    clip = tmp_path / "assets" / "motions" / "r2r" / "samples" / "walk.csv"
+    clip.parent.mkdir(parents=True)
+    clip.write_text(
+        "# robot: g1_29dof\n"
+        "root_x,root_y,root_z,root_qx,root_qy,root_qz,root_qw,dof_0\n"
+        "0,0,1,0,0,0,1,0\n",
+        encoding="utf-8",
+    )
+    app = _create_app(tmp_path, monkeypatch)
+
+    with _local_client(app) as client:
+        response = client.get("/api/library")
+
+    assert response.status_code == 200
+    entry = next(row for row in response.json()["entries"] if row["source_path"] == str(clip))
+    assert entry["dataset"] == "robot"
+    assert entry["asset_kind"] == "robot_trajectory"
+    assert entry["origin"] == "assets"
+    assert entry["upload_profile"] == "mimic"
+    assert entry["source_robot"] == "g1_29dof"
+
+
+def test_managed_robot_library_preserves_declared_source_robot(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    app = _create_app(tmp_path, monkeypatch)
+    selected_root = tmp_path / "managed-motion-library"
+
+    with _local_client(app) as client:
+        switched = client.patch(
+            "/api/settings/motion-library",
+            json={"root": str(selected_root)},
+        )
+        assert switched.status_code == 200
+        clip = selected_root / "AgiBot X2" / "reach.csv"
+        clip.parent.mkdir(parents=True)
+        clip.write_text(
+            "# robot: agibot_x2_ultra\n"
+            "root_x,root_y,root_z,root_qx,root_qy,root_qz,root_qw,dof_0\n"
+            "0,0,1,0,0,0,1,0\n",
+            encoding="utf-8",
+        )
+
+        response = client.get("/api/library")
+
+    assert response.status_code == 200
+    entry = next(row for row in response.json()["entries"] if row["source_path"] == str(clip))
+    assert entry["asset_kind"] == "robot_trajectory"
+    assert entry["source_robot"] == "agibot_x2_ultra"
+
+
+def test_library_api_includes_retained_h2r_result_as_r2r_source(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    app = _create_app(tmp_path, monkeypatch)
+    history = app.state.session_state.job_history
+    generated = tmp_path / "runtime" / "walk.csv"
+    generated.parent.mkdir()
+    generated.write_text(
+        "root_x,root_y,root_z,root_qx,root_qy,root_qz,root_qw,dof_0\n0,0,1,0,0,0,1,0\n",
+        encoding="utf-8",
+    )
+    retained = history.adopt_artifact(
+        "h2r-result",
+        generated,
+        download_name="walk.csv",
+    )
+    history.put(
+        {
+            "id": "h2r-result",
+            "kind": "retarget",
+            "status": "done",
+            "created_at": 10.0,
+            "finished_at": 11.0,
+            "request": {"robot": "g1_29dof"},
+            "artifact_path": str(retained),
+            "download_name": retained.name,
+        }
+    )
+
+    with _local_client(app) as client:
+        response = client.get("/api/library")
+
+    assert response.status_code == 200
+    entry = next(row for row in response.json()["entries"] if row.get("job_id") == "h2r-result")
+    assert entry["asset_kind"] == "robot_trajectory"
+    assert entry["origin"] == "job"
+    assert entry["source_robot"] == "g1_29dof"
+    assert entry["source_path"] == str(retained)

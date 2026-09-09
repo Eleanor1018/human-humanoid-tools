@@ -43,7 +43,7 @@ hhtools 有三种交互式运行方式，另提供一个 Agent 自动化接口�
 | **终端（CLI/TUI 工作流）** | 批处理、服务器、SSH 与自动化 | `uv run hhtools ...` |
 | **WebUI** | 浏览器中的可视化与交互工作流 | `uv run hhtools web` |
 | **桌面 GUI（`.deb`）** | 复用已安装源码环境的桌面壳 | 应用菜单或 `hhtools-desktop` |
-| **Agent（JSON CLI / MCP）** | 带版本契约的本机 H2R 与无场景 R2R 自动化 | [`hhtools agent` / `hhtools-mcp`](docs/agent.md) |
+| **Agent（JSON CLI / MCP）** | 带版本契约的 H2R、无场景 R2R 与可扩展 Batch 自动化 | [`hhtools agent` / `hhtools-mcp`](docs/agent.md) |
 
 ### Linux 一行安装
 
@@ -110,9 +110,10 @@ Python import traceback。
 ### Agent 与 MCP
 
 HHTools 提供供脚本使用的严格 JSON CLI，以及供兼容 Agent 使用的本机 stdio MCP server。
-当前 Agent 接口覆盖经过 preflight 的安全 H2R、无场景 R2R 任务和校验后的产物导出，尚未
-覆盖 WebUI 的全部功能。安装方式、能力边界、smoke-first 流程、运行时目录所有权和仓库
-自带的 Codex 项目配置见 [Agent interfaces](docs/agent.md)。
+当前 Agent 接口覆盖经过 preflight 的安全 H2R、无场景 R2R、可扩展 H2R/R2R Batch 任务、
+内容寻址的标定辅助、供 GPT 视觉检查的前/侧视预览，以及验证后的静默保存和产物导出，
+尚未覆盖 WebUI 的全部功能。安装方式、能力边界、smoke-first 流程、
+运行时目录所有权和仓库自带的 Codex 项目配置见 [Agent interfaces](docs/agent.md)。
 
 ### Ubuntu 桌面 GUI（`.deb`）
 
@@ -151,13 +152,16 @@ uv run hhtools web --max-running-jobs 1 --max-queued-jobs 32
 ```
 
 两个参数的 `0` 都表示不限；只有运行并发为正数时，等待队列设置才生效。也可以使用
-`HHTOOLS_MAX_RUNNING_JOBS` 和 `HHTOOLS_MAX_QUEUED_JOBS` 环境变量，Electron sidecar 同样支持。
+Agent Batch 的条目数和总帧数默认也不设上限；只有把 `--max-batch-items` 或
+`--max-batch-total-frames` 设为正数时才启用部署侧保护，设回 `0` 即恢复不限。对应环境变量为
+`HHTOOLS_MAX_RUNNING_JOBS`、`HHTOOLS_MAX_QUEUED_JOBS`、`HHTOOLS_MAX_BATCH_ITEMS` 和
+`HHTOOLS_MAX_BATCH_TOTAL_FRAMES`，Electron sidecar 与 MCP server 同样支持。
 也可以从本机 Web/Electron 或 SSH 本地回环隧道，在 **设置 → 后台任务调度** 中直接修改；
 在未实现远程管理鉴权前，普通远程浏览器会显示为只读。保存会热更新调度器，无需重启 Python 或
 Electron：降低并发不会中断正在运行的任务，提高上限会立即按 FIFO 补跑等待任务。后端会将
 配置写入平台用户配置目录，也可用 `HHTOOLS_WEB_SETTINGS_PATH` 指定文件。显式 CLI/环境变量
 仍是启动覆盖项，只要保留这些覆盖项，下次启动时就会再次覆盖 GUI 保存值。
-该上限只约束调度器管理的 Web Job，不包含选择机器人时可选的 Warp/Newton 预热线程，
+并发上限只约束调度器管理的 Web Job，不包含选择机器人时可选的 Warp/Newton 预热线程，
 因此它是任务准入控制，并非整个进程的严格 GPU 并发上限。
 
 | 面板 | 流程 |

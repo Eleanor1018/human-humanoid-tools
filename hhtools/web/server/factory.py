@@ -49,6 +49,8 @@ def _mount_web_app(
     max_upload_request_bytes: int = _DEFAULT_MAX_UPLOAD_REQUEST_BYTES,
     max_running_jobs: int = _DEFAULT_MAX_RUNNING_JOBS,
     max_queued_jobs: int = _DEFAULT_MAX_QUEUED_JOBS,
+    max_batch_items: int = 0,
+    max_batch_total_frames: int = 0,
     max_retained_jobs: int = _DEFAULT_MAX_RETAINED_JOBS,
     job_ttl_seconds: float = _DEFAULT_JOB_TTL_SECONDS,
     job_history_dir: Path | None = None,
@@ -79,11 +81,13 @@ def _mount_web_app(
     non_negative_limits = {
         "max_running_jobs": max_running_jobs,
         "max_queued_jobs": max_queued_jobs,
+        "max_batch_items": max_batch_items,
+        "max_batch_total_frames": max_batch_total_frames,
     }
     invalid_limits = [name for name, value in non_negative_limits.items() if int(value) < 0]
     if invalid_limits:
         names = ", ".join(invalid_limits)
-        raise ValueError(f"job scheduler limits must be non-negative: {names}")
+        raise ValueError(f"job and batch limits must be non-negative: {names}")
 
     state = runtime.state
     scheduler = runtime.scheduler
@@ -149,6 +153,7 @@ def _mount_web_app(
         static_dir=static_dir,
         ui_build_id=UI_BUILD_ID,
         scheduler=scheduler,
+        batch_limit_policy=runtime.services.agent_batch_limit_policy,
         jobs=jobs,
         job_settings_store=job_settings_store,
         job_settings_update_lock=job_settings_update_lock,
@@ -208,6 +213,8 @@ def create_app(
     max_upload_request_bytes: int = _DEFAULT_MAX_UPLOAD_REQUEST_BYTES,
     max_running_jobs: int = _DEFAULT_MAX_RUNNING_JOBS,
     max_queued_jobs: int = _DEFAULT_MAX_QUEUED_JOBS,
+    max_batch_items: int = 0,
+    max_batch_total_frames: int = 0,
     max_retained_jobs: int = _DEFAULT_MAX_RETAINED_JOBS,
     job_ttl_seconds: float = _DEFAULT_JOB_TTL_SECONDS,
     job_history_dir: Path | None = None,
@@ -233,6 +240,8 @@ def create_app(
         ),
         max_running_jobs=max_running_jobs,
         max_queued_jobs=max_queued_jobs,
+        max_batch_items=max_batch_items,
+        max_batch_total_frames=max_batch_total_frames,
         max_retained_jobs=max_retained_jobs,
         agent_mcp_available=agent_mcp_available,
         agent_rest_available=agent_rest_available,
@@ -251,6 +260,8 @@ def create_app(
             max_upload_request_bytes=max_upload_request_bytes,
             max_running_jobs=max_running_jobs,
             max_queued_jobs=max_queued_jobs,
+            max_batch_items=max_batch_items,
+            max_batch_total_frames=max_batch_total_frames,
             max_retained_jobs=max_retained_jobs,
             job_ttl_seconds=job_ttl_seconds,
             job_history_dir=job_history_dir,

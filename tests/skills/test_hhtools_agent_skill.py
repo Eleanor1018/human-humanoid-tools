@@ -87,6 +87,7 @@ def test_skill_has_minimal_repo_scoped_structure_and_trigger_metadata() -> None:
     for included_scope in (
         "h2r",
         "r2r",
+        "batch",
         "interaction-mesh",
         "status",
         "cancellation",
@@ -97,7 +98,6 @@ def test_skill_has_minimal_repo_scoped_structure_and_trigger_metadata() -> None:
     for excluded_scope in (
         "solver-code edits",
         "scene-bearing r2r",
-        "batch",
         "remote service setup",
         "real-robot deployment",
     ):
@@ -112,7 +112,7 @@ def test_skill_has_minimal_repo_scoped_structure_and_trigger_metadata() -> None:
             {
                 "type": "mcp",
                 "value": "hhtools",
-                "description": "Local HHTools H2R/R2R Agent MCP server",
+                "description": "Local HHTools H2R/R2R/Batch and visual calibration MCP server",
                 "transport": "stdio",
                 "command": "uv",
                 "args": [
@@ -197,14 +197,16 @@ def test_workflow_invariants_preserve_transport_and_execution_boundaries() -> No
         "ALLOWLISTED_ASSETS",
         "H2R_BACKEND_ROUTING",
         "R2R_INITIAL_SCOPE",
+        "SCALABLE_BATCH",
         "PREFLIGHT_OWNS_MODE",
         "OUTPUT_CREATE_NEW",
         "IDEMPOTENT_START",
         "IDEMPOTENT_RETRY",
         "NEW_FULL_PLAN",
         "JOB_SCOPED_ARTIFACTS",
-        "NO_BINARY_CONTEXT",
-        "HUMAN_GATES",
+        "CONTROLLED_MEDIA_CONTEXT",
+        "VALIDATED_CALIBRATION",
+        "SILENT_SAVE_SCOPE",
         "COOPERATIVE_CANCEL",
         "HONEST_PROVENANCE",
         "SINGLE_RUNTIME_OWNER",
@@ -225,6 +227,17 @@ def test_workflow_invariants_preserve_transport_and_execution_boundaries() -> No
         for term in ("scene-free", "source identity", "source robot")
     )
     assert all(
+        term in normalized["SCALABLE_BATCH"]
+        for term in (
+            "ordered ready child plans",
+            "one workflow",
+            "run mode",
+            "administrator caps",
+            "0 for unlimited",
+            "whole-batch",
+        )
+    )
+    assert all(
         term in normalized["PREFLIGHT_OWNS_MODE"]
         for term in ("run_mode", "preflight", "plan_id", "idempotency_key")
     )
@@ -242,16 +255,32 @@ def test_workflow_invariants_preserve_transport_and_execution_boundaries() -> No
         for term in ("explicit approval", "new full preflight", "new plan", "new idempotency key")
     )
     assert all(term in normalized["JOB_SCOPED_ARTIFACTS"] for term in ("job_id", "artifact_id"))
-    assert all(term in normalized["NO_BINARY_CONTEXT"] for term in ("binary", "base64"))
+    assert all(
+        term in normalized["CONTROLLED_MEDIA_CONTEXT"]
+        for term in ("binary", "base64", "preview_calibration", "mcp image block")
+    )
+    assert all(
+        term in normalized["VALIDATED_CALIBRATION"]
+        for term in (
+            "candidate id",
+            "currently valid",
+            "gpt_vision_silent",
+            "passing image review",
+            "fresh preflight",
+        )
+    )
+    assert all(
+        term in normalized["SILENT_SAVE_SCOPE"]
+        for term in ("automatic-calibration request", "without another prompt", "full job")
+    )
     assert all(
         term in normalized["SINGLE_RUNTIME_OWNER"]
         for term in (
             "one local runtime",
             "save_dir",
-            "disconnect stdio mcp",
-            "close webui",
-            "reconnecting mcp",
-            "preflight again",
+            "in-process calibration tools",
+            "never start",
+            "webui concurrently",
         )
     )
     assert all(
@@ -267,18 +296,35 @@ def test_stop_matrix_blocks_unsafe_continuation_and_duplicate_work() -> None:
     assert all(
         term in human_required
         for term in (
+            "do not start a job",
+            "calibration_required",
+            "in-process automatic flow",
             "pause",
-            "required_actions",
-            "disconnect the stdio mcp",
-            "same `save_dir`",
-            "close webui",
-            "reconnect mcp",
-            "new preflight",
+            "required_action",
         )
     )
-    assert "do not call `start_job` or `start_retarget`" in human_required
+    assert "do not call `start_job`" in human_required
     assert "run mcp and web against the same directory" in human_required
     assert "request a webui session token" in human_required
+
+    calibration_required = " ".join(rows["CALIBRATION_REQUIRED"]).casefold()
+    assert all(
+        term in calibration_required
+        for term in ("status", "propose", "validate", "gpt preview", "silent save", "new preflight")
+    )
+    assert all(
+        term in calibration_required
+        for term in ("do not guess", "invalid candidate", "full-run approval")
+    )
+
+    validation_failed = " ".join(rows["CALIBRATION_VALIDATION_FAILED"]).casefold()
+    assert all(term in validation_failed for term in ("parent candidate", "revalidate", "three"))
+    assert all(term in validation_failed for term in ("do not weaken", "visual review"))
+
+    candidate_stale = " ".join(
+        rows["CALIBRATION_CANDIDATE_STALE / CALIBRATION_CANDIDATE_MISMATCH"]
+    ).casefold()
+    assert all(term in candidate_stale for term in ("discard", "propose again", "stale id"))
 
     active_runtime = " ".join(rows["RUNTIME_ALREADY_ACTIVE"]).casefold()
     assert all(term in active_runtime for term in ("stop", "same `save_dir`", "close"))
@@ -288,10 +334,10 @@ def test_stop_matrix_blocks_unsafe_continuation_and_duplicate_work() -> None:
     assert "stop" in rejected and "do not start a job" in rejected
 
     mismatch = " ".join(rows["CALIBRATION_MISMATCH"]).casefold()
-    assert all(term in mismatch for term in ("rejected", "stop", "only if one is actually present"))
+    assert all(term in mismatch for term in ("rejected", "new candidate", "requested"))
     assert all(
         term in mismatch
-        for term in ("do not assume a human action", "automatically preflight again")
+        for term in ("do not silently choose", "malformed file", "repaired in place")
     )
 
     stale = " ".join(rows["PLAN_STALE"]).casefold()

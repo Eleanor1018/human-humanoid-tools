@@ -1,4 +1,5 @@
 import { requestJson, type Fetcher } from "@/lib/api";
+import { createRequestCache } from "@/lib/requestCache";
 
 export type TaskStatus = "pending" | "running" | "done" | "error";
 
@@ -19,6 +20,8 @@ export interface TaskRecord {
 interface TaskListResponse {
   readonly jobs: readonly TaskRecord[];
 }
+
+const taskListCache = createRequestCache<readonly TaskRecord[]>(250);
 
 const RESULT_TASK_KINDS: ReadonlySet<string> = new Set([
   "video_to_motion",
@@ -44,12 +47,16 @@ export async function listTasks(options: {
   readonly signal?: AbortSignal;
   readonly fetcher?: Fetcher;
 } = {}): Promise<readonly TaskRecord[]> {
-  const response = await requestJson<TaskListResponse>(
-    "/api/jobs?limit=50",
-    { signal: options.signal },
-    options.fetcher,
-  );
-  return response.jobs;
+  const load = async (signal?: AbortSignal, fetcher?: Fetcher) => {
+    const response = await requestJson<TaskListResponse>(
+      "/api/jobs?limit=50",
+      { signal },
+      fetcher,
+    );
+    return response.jobs;
+  };
+  if (options.fetcher) return load(options.signal, options.fetcher);
+  return taskListCache.read(() => load(), options.signal);
 }
 
 export function taskDownloadUrl(taskId: string): string {

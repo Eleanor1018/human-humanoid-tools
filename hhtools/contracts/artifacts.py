@@ -40,7 +40,7 @@ class FailureReport(ContractModel):
 
     schema_version: SchemaVersion = SchemaVersion.V1
     job_id: Annotated[str, Field(min_length=1, max_length=256)]
-    failures: Annotated[list[FailureItem], Field(min_length=1, max_length=10_000)]
+    failures: Annotated[list[FailureItem], Field(min_length=1)]
     created_at: AwareDatetime
 
 
@@ -64,7 +64,7 @@ class JobManifest(ContractModel):
     job_spec: JobSpecV2
     execution_provenance: ExecutionProvenance = Field(default_factory=ExecutionProvenance)
     summary: dict[str, Any] = Field(default_factory=dict)
-    artifacts: list[ArtifactDescriptor] = Field(default_factory=list, max_length=10_000)
+    artifacts: list[ArtifactDescriptor] = Field(default_factory=list)
     submitted_at: AwareDatetime
     started_at: AwareDatetime | None = None
     completed_at: AwareDatetime

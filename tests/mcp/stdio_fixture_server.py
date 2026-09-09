@@ -33,6 +33,7 @@ _RUNTIME = AgentRuntime(
     available_assets=_UNUSED,
     preflight=_UNUSED,
     r2r_preflight=_UNUSED,
+    batch_preflight=_UNUSED,
     plans=_UNUSED,
     jobs=_UNUSED,
     exports=_UNUSED,

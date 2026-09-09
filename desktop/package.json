@@ -13,15 +13,20 @@
   "type": "module",
   "main": "out/main/index.js",
   "scripts": {
+    "postinstall": "npm run prepare:electron",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
+    "prepare:bootstrap": "node scripts/prepare-bootstrap.mjs",
+    "prepare:builtin": "node scripts/prepare-builtin-assets.mjs",
+    "prepare:electron": "node node_modules/electron/install.js",
     "prepare:models": "node scripts/prepare-models.mjs",
+    "prepare:runtime": "node scripts/prepare-runtime.mjs",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --config vitest.config.ts",
     "test:e2e": "npm run build && playwright test --config playwright.config.ts",
-    "dist:win": "npm run build && npm run prepare:models && electron-builder --win nsis",
-    "dist:linux": "npm run build && npm run prepare:models && electron-builder --linux deb --x64"
+    "dist:win": "npm run prepare:electron && npm run build && npm run prepare:runtime && npm run prepare:builtin && npm run prepare:bootstrap && electron-builder --win nsis",
+    "dist:linux": "npm run prepare:electron && npm run build && npm run prepare:builtin && npm run prepare:bootstrap && electron-builder --linux deb --x64"
   },
   "devDependencies": {
     "@playwright/test": "1.62.1",
@@ -50,8 +55,15 @@
     ],
     "extraResources": [
       {
-        "from": ".models",
-        "to": "body_models",
+        "from": ".bootstrap",
+        "to": "bootstrap",
+        "filter": [
+          "install.sh"
+        ]
+      },
+      {
+        "from": ".builtin",
+        "to": "builtin",
         "filter": [
           "**/*"
         ]
@@ -59,6 +71,15 @@
     ],
     "win": {
       "icon": "resources/icon.ico",
+      "extraResources": [
+        {
+          "from": ".runtime",
+          "to": "runtime",
+          "filter": [
+            "**/*"
+          ]
+        }
+      ],
       "target": [
         "nsis"
       ]
@@ -90,7 +111,10 @@
         "libuuid1",
         "libsecret-1-0",
         "libgbm1",
-        "libasound2"
+        "libasound2",
+        "ca-certificates",
+        "curl",
+        "policykit-1"
       ],
       "fpm": [
         "--before-install=scripts/linux-before-install.sh"

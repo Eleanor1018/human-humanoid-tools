@@ -32,6 +32,7 @@ def register_system_routes(
     static_dir: Path,
     ui_build_id: str,
     scheduler,
+    batch_limit_policy,
     jobs,
     job_settings_store,
     job_settings_update_lock,
@@ -41,6 +42,17 @@ def register_system_routes(
     UI_BUILD_ID = ui_build_id
     _scheduler_payload = jobs.scheduler_payload
     _job_settings_editable = jobs.settings_editable
+
+    def _job_admission_payload(*, editable: bool | None = None) -> dict:
+        payload = _scheduler_payload(editable=editable)
+        batch_limits = batch_limit_policy.snapshot()
+        payload.update(
+            {
+                "max_batch_items": batch_limits.max_batch_items,
+                "max_batch_total_frames": batch_limits.max_batch_total_frames,
+            }
+        )
+        return payload
 
     @app.get("/api/health")
     def health() -> dict:
@@ -60,14 +72,14 @@ def register_system_routes(
             "source_root": str(state.source_root),
             "save_dir": str(state.save_dir),
             "motions_library_root": str(motions_library_root()),
-            "job_scheduler": _scheduler_payload(),
+            "job_scheduler": _job_admission_payload(),
         }
 
     @app.get("/api/settings/job-admission")
     def get_job_admission_settings(request: Request) -> dict[str, int | bool | str]:
         """Return live scheduler settings, counters, and edit capability."""
 
-        return _scheduler_payload(editable=_job_settings_editable(request))
+        return _job_admission_payload(editable=_job_settings_editable(request))
 
     @app.patch("/api/settings/job-admission")
     def patch_job_admission_settings(
@@ -90,9 +102,12 @@ def register_system_routes(
         # settings tabs cannot leave the JSON file and live scheduler disagreeing.
         with job_settings_update_lock:
             snapshot = scheduler.snapshot()
+            batch_limits = batch_limit_policy.snapshot()
             current = JobAdmissionSettings(
                 max_running_jobs=snapshot.max_running_jobs,
                 max_queued_jobs=snapshot.max_queued_jobs,
+                max_batch_items=batch_limits.max_batch_items,
+                max_batch_total_frames=batch_limits.max_batch_total_frames,
             )
             try:
                 updated = updated_job_admission_settings(current, payload)
@@ -115,9 +130,13 @@ def register_system_routes(
                     max_running_jobs=updated.max_running_jobs,
                     max_queued_jobs=updated.max_queued_jobs,
                 )
+                batch_limit_policy.reconfigure(
+                    max_batch_items=updated.max_batch_items,
+                    max_batch_total_frames=updated.max_batch_total_frames,
+                )
             except JobSchedulerClosedError as err:
                 raise HTTPException(status_code=503, detail=str(err)) from err
-            return _scheduler_payload(editable=True)
+            return _job_admission_payload(editable=True)
 
     def _motion_library_settings_payload(
         request: Request,

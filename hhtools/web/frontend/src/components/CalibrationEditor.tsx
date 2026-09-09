@@ -39,11 +39,19 @@ interface CalibrationEditorProps {
   readonly selectedJoint?: string | null;
   readonly disabled?: boolean;
   readonly saving?: boolean;
+  readonly suggesting?: boolean;
+  readonly assistantValidation?: {
+    readonly valid: boolean;
+    readonly score: number;
+    readonly alignment_errors: readonly string[];
+    readonly alignment_warnings: readonly string[];
+  } | null;
   readonly onChange: (value: Record<string, number>) => void;
   readonly onDisplayChange: (value: CalibrationDisplayOptions) => void;
   readonly onAngleUnitChange?: (unit: CalibrationAngleUnit) => void;
   readonly onJointSelected?: (name: string) => void;
   readonly onCancel: () => void;
+  readonly onSuggest?: () => void;
   readonly onSave: () => void;
 }
 
@@ -192,11 +200,14 @@ export function CalibrationEditor({
   selectedJoint = null,
   disabled = false,
   saving = false,
+  suggesting = false,
+  assistantValidation = null,
   onChange,
   onDisplayChange,
   onAngleUnitChange,
   onJointSelected,
   onCancel,
+  onSuggest,
   onSave,
 }: CalibrationEditorProps) {
   const text = useLocaleText();
@@ -427,6 +438,48 @@ export function CalibrationEditor({
         items={calibrationValidationFacts(robot, limits, value, text)}
         label={text("Calibration validation", "标定验证")}
       />
+
+      {onSuggest ? (
+        <Button
+          size="sm"
+          disabled={disabled}
+          onClick={onSuggest}
+          title={text(
+            "Generate a limit-constrained pose proposal; it will not be saved automatically here.",
+            "生成满足关节限位的姿态建议；此处不会自动保存。",
+          )}
+        >
+          {suggesting
+            ? text("Proposing…", "正在生成建议…")
+            : text("Auto-propose pose", "自动建议姿态")}
+        </Button>
+      ) : null}
+      {assistantValidation ? (
+        <p
+          className={`rounded-md border px-2.5 py-2 text-[11px] ${
+            assistantValidation.valid
+              ? "border-success/35 bg-success-muted text-success"
+              : "border-warning/40 bg-warning-muted text-warning"
+          }`}
+          role="status"
+        >
+          {assistantValidation.valid
+            ? text(
+                `Automatic checks passed · score ${assistantValidation.score.toFixed(2)}.`,
+                `自动检查已通过 · 评分 ${assistantValidation.score.toFixed(2)}。`,
+              )
+            : text(
+                `Needs adjustment · ${assistantValidation.alignment_errors.length} alignment errors.`,
+                `仍需调整 · ${assistantValidation.alignment_errors.length} 个对齐错误。`,
+              )}
+          {assistantValidation.alignment_warnings.length
+            ? text(
+                ` ${assistantValidation.alignment_warnings.length} warnings remain.`,
+                ` 仍有 ${assistantValidation.alignment_warnings.length} 项警告。`,
+              )
+            : ""}
+        </p>
+      ) : null}
 
       <div className="grid max-h-64 gap-1.5 overflow-y-auto pr-1">
         {visibleLimits.map((limit) => (

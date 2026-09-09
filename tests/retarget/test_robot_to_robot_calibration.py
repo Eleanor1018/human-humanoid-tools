@@ -93,6 +93,26 @@ def test_readonly_sibling_falls_back_to_user_override(
     ) == {"hip": -0.5}
 
 
+def test_agent_save_can_force_the_user_overlay_in_a_writable_checkout(
+    tmp_path: Path,
+) -> None:
+    target_dir = tmp_path / "target_bot"
+    target_dir.mkdir()
+    user_root = tmp_path / "user-robots"
+
+    saved = r2r.save_r2r_calibration(
+        target_dir,
+        target_robot="target_bot",
+        source_robot="source_bot",
+        calibrated_joint_q={"hip": 0.25},
+        user_root=user_root,
+        prefer_user_overlay=True,
+    )
+
+    assert saved == user_root / "target_bot" / "r2r_calibration_source_bot.yaml"
+    assert not (target_dir / saved.name).exists()
+
+
 def test_existing_user_override_wins_and_receives_later_saves(tmp_path: Path) -> None:
     target_dir = tmp_path / "target_bot"
     target_dir.mkdir()
@@ -141,6 +161,7 @@ def test_existing_user_override_wins_and_receives_later_saves(tmp_path: Path) ->
         ({"calibrated_joint_q": {"hip": ".nan"}}, "numeric"),
         ({"calibrated_joint_q": {"hip": float("inf")}}, "non-finite"),
         ({"calibrated_joint_q": {}}, "non-empty"),
+        ({"notes": 42}, "notes"),
     ],
 )
 def test_canonical_user_override_is_strictly_validated(

@@ -763,7 +763,7 @@ def _robot_metadata_files(bundle_root: Path, primary: Path) -> tuple[Path, ...]:
         primary.parent / "robot.yaml",
         primary.parent / f"robot.{primary.stem}.yaml",
     }
-    # Human-reviewed calibrations are executable robot configuration, not
+    # Human- or Agent-validated calibrations are executable robot configuration, not
     # incidental workspace state.  Binding them into the robot manifest means
     # editing or adding one requires a new robot asset id before preflight can
     # produce another runnable plan.

@@ -8,7 +8,6 @@ import uuid
 from collections.abc import Callable, Iterable, Mapping
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import urlencode
 
 from hhtools.contracts import (
     AssetBundle,
@@ -23,6 +22,7 @@ from hhtools.contracts import (
     PreflightCheck,
     PreflightCheckLevel,
     PreflightStatus,
+    R2RCalibrationStatusRequest,
     R2RPlan,
     R2RPreflightRequest,
     R2RPreflightResponse,
@@ -240,23 +240,23 @@ def _normalize_parameters(
     }
 
 
-def _calibration_action(source_robot_id: str, target_robot_id: str) -> NextAction:
-    query = urlencode(
-        {
-            "panel": "r2r",
-            "robot": target_robot_id,
-            "calibrate": "1",
-        }
+def _calibration_action(
+    source_robot_id: str,
+    source_robot_asset_id: str,
+    target_robot_id: str,
+    target_robot_asset_id: str,
+) -> NextAction:
+    request = R2RCalibrationStatusRequest(
+        source_robot_id=source_robot_id,
+        source_robot_asset_id=source_robot_asset_id,
+        target_robot_id=target_robot_id,
+        target_robot_asset_id=target_robot_asset_id,
     )
     return NextAction(
-        actor="human",
-        action="open_calibration_ui",
-        message="Open R2R calibration and save the target pose for this source robot.",
-        url=f"/?{query}",
-        parameters={
-            "source_robot_id": source_robot_id,
-            "target_robot_id": target_robot_id,
-        },
+        actor="agent",
+        action="get_r2r_calibration_status",
+        message="Inspect this robot pair and generate a validated target-pose candidate.",
+        parameters={"request": request.model_dump(mode="json", exclude_none=True)},
     )
 
 
@@ -264,6 +264,7 @@ def _pair_calibration(
     request: R2RPreflightRequest,
     *,
     source: RobotPreset,
+    source_bundle: AssetBundle,
     target: RobotPreset,
     target_bundle: AssetBundle,
     target_limits: Mapping[str, tuple[float | None, float | None]],
@@ -292,7 +293,12 @@ def _pair_calibration(
             },
         )
     if path is None:
-        action = _calibration_action(source.name, target.name)
+        action = _calibration_action(
+            source.name,
+            source_bundle.asset_id,
+            target.name,
+            target_bundle.asset_id,
+        )
         raise _PreflightFailureError(
             error := _error_for_action(
                 "R2R_CALIBRATION_REQUIRED",
@@ -565,6 +571,7 @@ class R2RPreflightService:
             calibration_digest, calibration_path, calibration_storage = _pair_calibration(
                 request,
                 source=source,
+                source_bundle=source_bundle,
                 target=target,
                 target_bundle=target_bundle,
                 target_limits=target_limits,

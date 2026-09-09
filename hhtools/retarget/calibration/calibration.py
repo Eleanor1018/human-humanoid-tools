@@ -3,10 +3,10 @@
 Workflow at a glance
 --------------------
 
-1. **Capture** — the viewer's calibration mode lets the user dial
-   actuated joint angles so the robot, at floating-base identity,
-   visually matches a chosen reference human T-pose.  The resulting
-   configuration is packaged into a :class:`RobotRetargetCalibration` and
+1. **Capture** — the viewer can dial actuated joint angles, or the Agent
+   calibration assistant can generate and validate a constrained candidate,
+   so the robot at floating-base identity matches a chosen reference pose.
+   The resulting configuration is packaged into a :class:`RobotRetargetCalibration` and
    persisted via :func:`save_calibration_for_preset`.  Writable source-tree
    presets keep the historical sibling file; packaged read-only presets use a
    per-user override below ``~/.config/hhtools/robots/<robot>/``.  Legacy
@@ -50,6 +50,7 @@ from __future__ import annotations
 import errno
 import logging
 import os
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import TYPE_CHECKING
@@ -441,6 +442,7 @@ def save_calibration_for_preset(
     *,
     derived: _DerivedParams | None = None,
     user_robot_root: str | Path | None = None,
+    prefer_user_overlay: bool = False,
 ) -> Path:
     """Persist calibration beside a writable source preset or in user overlay.
 
@@ -450,6 +452,8 @@ def save_calibration_for_preset(
     exact same document is written below the per-user robot directory.  Once a
     preset has any user calibration, later saves stay in that layer so a
     writable checkout cannot unexpectedly bypass an existing override.
+    ``prefer_user_overlay`` makes validated Agent writes leave the registered
+    robot bundle untouched even in a writable source checkout.
     """
 
     reference = _require_calibration_reference(str(calibration.reference))
@@ -475,7 +479,8 @@ def save_calibration_for_preset(
     )
 
     if (
-        bundled_target.resolve(strict=False) == user_target.resolve(strict=False)
+        prefer_user_overlay
+        or bundled_target.resolve(strict=False) == user_target.resolve(strict=False)
         or _user_override_exists(user_directory, reference)
         or not _path_appears_writable(bundled_target)
     ):
@@ -591,8 +596,18 @@ def save_calibration(
                 "cannot silently misalign retarget."
             ),
         }
-    with target.open("w", encoding="utf-8") as fp:
-        yaml.safe_dump(payload, fp, default_flow_style=False, sort_keys=False)
+    encoded = yaml.safe_dump(
+        payload,
+        default_flow_style=False,
+        sort_keys=False,
+        allow_unicode=True,
+    )
+    temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text(encoded, encoding="utf-8")
+        temporary.replace(target)
+    finally:
+        temporary.unlink(missing_ok=True)
     return target
 
 

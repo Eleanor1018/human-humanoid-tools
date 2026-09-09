@@ -13,10 +13,13 @@ from hhtools.services import (
     AgentAssetService,
     ArtifactExportService,
     AvailableAssetCatalogService,
+    BatchPreflightService,
+    CalibrationService,
     CapabilitiesService,
     JobManager,
     PlanStore,
     PreflightService,
+    R2RCalibrationService,
     R2RPreflightService,
 )
 
@@ -30,6 +33,8 @@ class LocalRuntimeConfig:
     cache_dir: Path | None = None
     max_running_jobs: int | None = None
     max_queued_jobs: int | None = None
+    max_batch_items: int | None = None
+    max_batch_total_frames: int | None = None
     job_settings_path: Path | None = None
     web_ui_url: str = "http://127.0.0.1:8009"
     paths: ApplicationPaths | None = None
@@ -44,9 +49,12 @@ class AgentRuntime:
     available_assets: AvailableAssetCatalogService
     preflight: PreflightService
     r2r_preflight: R2RPreflightService
+    batch_preflight: BatchPreflightService
     plans: PlanStore
     jobs: JobManager
     exports: ArtifactExportService
+    calibration: CalibrationService | None = None
+    r2r_calibration: R2RCalibrationService | None = None
 
     @classmethod
     def from_application(cls, app: Any) -> AgentRuntime:
@@ -62,6 +70,9 @@ class AgentRuntime:
             available_assets=services.agent_available_asset_catalog_service,
             preflight=services.agent_preflight_service,
             r2r_preflight=services.agent_r2r_preflight_service,
+            batch_preflight=services.agent_batch_preflight_service,
+            calibration=services.agent_calibration_service,
+            r2r_calibration=services.agent_r2r_calibration_service,
             plans=services.agent_plan_store,
             jobs=services.agent_job_manager,
             exports=services.agent_artifact_export_service,
@@ -101,12 +112,16 @@ async def local_agent_runtime(
         settings, settings_path = effective_job_admission_settings(
             max_running_jobs=config.max_running_jobs,
             max_queued_jobs=config.max_queued_jobs,
+            max_batch_items=config.max_batch_items,
+            max_batch_total_frames=config.max_batch_total_frames,
             job_settings_path=paths.job_settings_path,
         )
         runtime = build_application_runtime(
             replace(paths, job_settings_path=settings_path),
             max_running_jobs=settings.max_running_jobs,
             max_queued_jobs=settings.max_queued_jobs,
+            max_batch_items=settings.max_batch_items,
+            max_batch_total_frames=settings.max_batch_total_frames,
             agent_mcp_available=True,
             agent_rest_available=False,
             agent_json_cli_available=False,

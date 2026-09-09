@@ -1,4 +1,4 @@
-"""Resource-limit defaults and persisted Web job admission settings."""
+"""Resource-limit defaults and persisted job/batch admission settings."""
 
 from __future__ import annotations
 
@@ -32,6 +32,8 @@ def effective_job_admission_settings(
     max_running_jobs: int | None,
     max_queued_jobs: int | None,
     job_settings_path: Path | None,
+    max_batch_items: int | None = None,
+    max_batch_total_frames: int | None = None,
 ) -> tuple[JobAdmissionSettings, Path]:
     """Merge persistent settings with explicit CLI/environment overrides."""
 
@@ -42,5 +44,11 @@ def effective_job_admission_settings(
     settings = validate_job_admission_settings(
         persisted.max_running_jobs if max_running_jobs is None else max_running_jobs,
         persisted.max_queued_jobs if max_queued_jobs is None else max_queued_jobs,
+        persisted.max_batch_items if max_batch_items is None else max_batch_items,
+        (
+            persisted.max_batch_total_frames
+            if max_batch_total_frames is None
+            else max_batch_total_frames
+        ),
     )
     return settings, path

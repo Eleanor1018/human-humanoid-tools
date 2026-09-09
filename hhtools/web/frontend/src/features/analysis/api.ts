@@ -9,6 +9,7 @@ import {
   type JobSnapshot,
   type UploadFile,
 } from "@/lib/api";
+import { createRequestCache } from "@/lib/requestCache";
 import type {
   StageMotionPayload,
   StageRobotPayload,
@@ -107,6 +108,8 @@ export interface DatasetCatalog {
   readonly [key: string]: unknown;
 }
 
+const datasetCatalogCache = createRequestCache<DatasetCatalog>(1_000);
+
 interface RequestOptions {
   readonly signal?: AbortSignal;
   readonly fetcher?: Fetcher;
@@ -137,10 +140,16 @@ function jsonPost<T>(
 export function getDatasetCatalog(
   options: RequestOptions = {},
 ): Promise<DatasetCatalog> {
-  return requestJson<DatasetCatalog>(
-    "/api/dataset/catalog",
-    { signal: options.signal },
-    options.fetcher,
+  if (options.fetcher) {
+    return requestJson<DatasetCatalog>(
+      "/api/dataset/catalog",
+      { signal: options.signal },
+      options.fetcher,
+    );
+  }
+  return datasetCatalogCache.read(
+    () => requestJson<DatasetCatalog>("/api/dataset/catalog"),
+    options.signal,
   );
 }
 

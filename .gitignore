@@ -70,7 +70,11 @@ desktop/node_modules/
 desktop/out/
 desktop/release/
 desktop/.runtime/
+desktop/.runtime.staging-*/
 desktop/.models/
+desktop/.bootstrap/
+desktop/.builtin/
+desktop/.builtin.staging-*/
 desktop/.vite/
 desktop/test-results/
 desktop/playwright-report/

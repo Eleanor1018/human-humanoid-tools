@@ -21,6 +21,7 @@ const {
 const { getJobAdmissionSettings, updateJobAdmissionSettings } = await import(
   "../src/features/settings/api.ts"
 );
+const { proposeCalibration } = await import("../src/features/h2r/api.ts");
 
 test("application menu descriptors retain the five-menu contract", () => {
   const navigation: string[] = [];
@@ -178,6 +179,8 @@ test("job-admission settings use the typed GET and PATCH contracts", async () =>
       mode: "queued",
       max_running_jobs: 2,
       max_queued_jobs: 16,
+      max_batch_items: 0,
+      max_batch_total_frames: 0,
       running_jobs: 1,
       queued_jobs: 3,
       reserved_jobs: 0,
@@ -189,7 +192,12 @@ test("job-admission settings use the typed GET and PATCH contracts", async () =>
 
   const before = await getJobAdmissionSettings({ fetcher });
   const after = await updateJobAdmissionSettings(
-    { max_running_jobs: 2, max_queued_jobs: 16 },
+    {
+      max_running_jobs: 2,
+      max_queued_jobs: 16,
+      max_batch_items: 0,
+      max_batch_total_frames: 0,
+    },
     { fetcher },
   );
 
@@ -202,5 +210,50 @@ test("job-admission settings use the typed GET and PATCH contracts", async () =>
   assert.deepEqual(JSON.parse(String(calls[1].init?.body)), {
     max_running_jobs: 2,
     max_queued_jobs: 16,
+    max_batch_items: 0,
+    max_batch_total_frames: 0,
+  });
+});
+
+test("calibration proposal keeps the current editable pose as its seed", async () => {
+  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
+    calls.push({ url: String(input), init });
+    return Response.json({
+      joint_q: {
+        left_shoulder_roll_joint: 1.2,
+        right_shoulder_roll_joint: -1.2,
+      },
+      validation: {
+        valid: true,
+        score: 0.94,
+        changed_joint_count: 2,
+        edge_errors_deg: { left_upper_arm: 5.0 },
+        near_limit_joints: [],
+        alignment_errors: [],
+        alignment_warnings: [],
+        foot_height_delta_m: 0,
+      },
+    });
+  };
+
+  const result = await proposeCalibration(
+    {
+      robot: "agibot_x2_ultra",
+      reference: "smplx",
+      joint_q: { left_shoulder_roll_joint: 0.3 },
+      motion_token: "motion-token",
+    },
+    { fetcher },
+  );
+
+  assert.equal(result.validation.valid, true);
+  assert.equal(result.joint_q.left_shoulder_roll_joint, 1.2);
+  assert.equal(calls[0].url, "/api/calibration/propose");
+  assert.deepEqual(JSON.parse(String(calls[0].init?.body)), {
+    robot: "agibot_x2_ultra",
+    reference: "smplx",
+    joint_q: { left_shoulder_roll_joint: 0.3 },
+    motion_token: "motion-token",
   });
 });
