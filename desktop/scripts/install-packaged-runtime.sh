@@ -6,6 +6,7 @@ umask 022
 installer_name='HHTools desktop runtime installer'
 embedded_version=''
 embedded_wheel=''
+embedded_runtime_id=''
 python_request=${HHTOOLS_PYTHON:-'>=3.12,<3.14'}
 system_install=0
 
@@ -58,7 +59,7 @@ case "$(uname -m)" in
     *) die 'the bundled uv executable supports Linux x86_64 only' ;;
 esac
 
-for command_name in cp dirname id mkdir mktemp mv rm sha256sum uname; do
+for command_name in cat cp dirname id mkdir mktemp mv rm sha256sum uname; do
     command -v "$command_name" >/dev/null 2>&1 \
         || die "required command not found: $command_name"
 done
@@ -67,11 +68,17 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 asset_dir="$script_dir/assets"
 uv_bin="$script_dir/bin/uv"
 checksum_file="$script_dir/SHA256SUMS"
+runtime_id_file="$script_dir/RUNTIME_ID"
 version=$embedded_version
 wheel_name=$embedded_wheel
+runtime_id=$embedded_runtime_id
 
 [ -n "$version" ] || die 'the desktop package has no embedded runtime version'
 [ -n "$wheel_name" ] || die 'the desktop package has no embedded HHTools wheel'
+[ -n "$runtime_id" ] || die 'the desktop package has no embedded runtime identity'
+[ -f "$runtime_id_file" ] || die "bundled runtime identity not found: $runtime_id_file"
+[ "$(cat "$runtime_id_file")" = "$runtime_id" ] \
+    || die 'bundled runtime identity differs from the installer'
 [ -f "$checksum_file" ] || die "bundled checksum file not found: $checksum_file"
 [ -x "$uv_bin" ] || die "bundled uv executable not found: $uv_bin"
 [ -f "$asset_dir/$wheel_name" ] || die "bundled wheel not found: $wheel_name"
@@ -137,7 +144,7 @@ runtime_python="$install_root/tools/hhtools/bin/python"
 [ -x "$runtime_python" ] || die "installed runtime Python not found: $runtime_python"
 
 runtime_marker_tmp="$install_root/.runtime-version.$$"
-printf '%s\n' "$version" > "$runtime_marker_tmp"
+printf '%s\n' "$runtime_id" > "$runtime_marker_tmp"
 mv "$runtime_marker_tmp" "$runtime_marker"
 
 say '[5/5] HHTools runtime installation completed.'

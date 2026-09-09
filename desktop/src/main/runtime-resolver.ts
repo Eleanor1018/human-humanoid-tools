@@ -157,13 +157,31 @@ function packagedResource(options: ResolveRuntimeOptions, ...parts: string[]): s
   return existsSync(candidate) ? candidate : undefined
 }
 
+function packagedRuntimeIdentity(options: ResolveRuntimeOptions): string | undefined {
+  const identityPath = packagedResource(options, 'bootstrap', 'RUNTIME_ID')
+  if (!identityPath) return undefined
+  let identity: string
+  try {
+    identity = readFileSync(identityPath, 'utf8').trim()
+  } catch (error) {
+    throw new Error(`Cannot read the packaged runtime identity: ${String(error)}`)
+  }
+  if (!/^[0-9A-Za-z._+-]{1,128}$/.test(identity)) {
+    throw new Error(`The packaged runtime identity is invalid: ${identityPath}`)
+  }
+  return identity
+}
+
 export function resolveRuntime(options: ResolveRuntimeOptions): RuntimeConfig {
   const env = options.env ?? process.env
   const platform = options.platform ?? process.platform
   const explicitRepoRoot = configuredRepositoryRoot(env)
   const packaged = explicitRepoRoot === undefined ? bundledRuntime(options, platform) : undefined
+  const expectedManagedIdentity = explicitRepoRoot === undefined && packaged === undefined
+    ? packagedRuntimeIdentity(options) ?? options.appVersion
+    : options.appVersion
   const managed = explicitRepoRoot === undefined && packaged === undefined && options.isPackaged
-    ? managedRuntime(env, platform, options.appVersion, options.systemInstallRoot)
+    ? managedRuntime(env, platform, expectedManagedIdentity, options.systemInstallRoot)
     : undefined
   const repoRoot = explicitRepoRoot
     ?? packaged?.repoRoot

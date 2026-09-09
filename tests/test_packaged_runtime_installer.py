@@ -9,6 +9,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 INSTALLER_TEMPLATE = REPOSITORY_ROOT / "desktop" / "scripts" / "install-packaged-runtime.sh"
 VERSION = "0.1.0"
 WHEEL = f"hhtools-{VERSION}-py3-none-any.whl"
+RUNTIME_ID = f"{VERSION}+sha256.0123456789abcdefabcd"
 
 
 def _write_executable(path: Path, content: str) -> None:
@@ -25,6 +26,7 @@ def _bootstrap(tmp_path: Path) -> tuple[Path, Path]:
     (assets / WHEEL).write_text("wheel fixture\n", encoding="utf-8")
     (assets / "requirements-all.txt").write_text("dependency==1.0\n", encoding="utf-8")
     (assets / "installer-uv.toml").write_text("", encoding="utf-8")
+    (root / "RUNTIME_ID").write_text(f"{RUNTIME_ID}\n", encoding="utf-8")
 
     arguments = tmp_path / "uv-arguments.txt"
     uv = bin_dir / "uv"
@@ -56,6 +58,7 @@ chmod +x "$UV_TOOL_BIN_DIR/hhtools"
         "assets/requirements-all.txt",
         "assets/installer-uv.toml",
         "bin/uv",
+        "RUNTIME_ID",
     ]
     checksums = "".join(
         f"{hashlib.sha256((root / relative).read_bytes()).hexdigest()}  {relative}\n"
@@ -65,6 +68,7 @@ chmod +x "$UV_TOOL_BIN_DIR/hhtools"
     installer = INSTALLER_TEMPLATE.read_text(encoding="utf-8")
     installer = installer.replace("embedded_version=''", f"embedded_version='{VERSION}'")
     installer = installer.replace("embedded_wheel=''", f"embedded_wheel='{WHEEL}'")
+    installer = installer.replace("embedded_runtime_id=''", f"embedded_runtime_id='{RUNTIME_ID}'")
     installer_path = root / "install.sh"
     _write_executable(installer_path, installer)
     return installer_path, arguments
@@ -110,7 +114,7 @@ def test_packaged_installer_uses_local_inputs_and_publishes_runtime_marker(
     assert "curl" not in INSTALLER_TEMPLATE.read_text(encoding="utf-8")
     assert (tmp_path / "installed" / "runtime" / "runtime-version").read_text(
         encoding="utf-8"
-    ) == "0.1.0\n"
+    ) == f"{RUNTIME_ID}\n"
     passed_arguments = arguments.read_text(encoding="utf-8").splitlines()
     assert passed_arguments[:2] == ["tool", "install"]
     assert "--with-requirements" in passed_arguments

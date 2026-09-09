@@ -62,11 +62,14 @@ describe('resolveRuntime', () => {
     const resourcesPath = join(root, 'resources')
     const motions = join(resourcesPath, 'builtin', 'motions')
     const robots = join(resourcesPath, 'builtin', 'robots')
+    const runtimeId = '0.1.0+sha256.0123456789abcdefabcd'
     mkdirSync(dirname(pythonExecutable), { recursive: true })
     mkdirSync(motions, { recursive: true })
     mkdirSync(robots, { recursive: true })
+    mkdirSync(join(resourcesPath, 'bootstrap'), { recursive: true })
     writeFileSync(pythonExecutable, '', 'utf8')
-    writeFileSync(join(installRoot, 'runtime-version'), '0.1.0\n', 'utf8')
+    writeFileSync(join(installRoot, 'runtime-version'), `${runtimeId}\n`, 'utf8')
+    writeFileSync(join(resourcesPath, 'bootstrap', 'RUNTIME_ID'), `${runtimeId}\n`, 'utf8')
 
     const runtime = resolveRuntime({
       appPath: '/opt/Human-Humanoid Tools/resources/app.asar',
@@ -157,6 +160,35 @@ describe('resolveRuntime', () => {
       appVersion: '0.1.0',
       systemInstallRoot: null,
       env: { HOME: join(root, 'home') },
+      platform: 'linux'
+    })).toThrow(RuntimeNotFoundError)
+  })
+
+  it('refreshes a same-version runtime when the packaged inputs change', () => {
+    const root = mkdtempSync(join(tmpdir(), 'hhtools-runtime-identity-test-'))
+    const home = join(root, 'home')
+    const installRoot = join(home, '.local', 'share', 'hhtools')
+    const pythonExecutable = join(installRoot, 'tools', 'hhtools', 'bin', 'python')
+    const resourcesPath = join(root, 'resources')
+    mkdirSync(dirname(pythonExecutable), { recursive: true })
+    mkdirSync(join(resourcesPath, 'bootstrap'), { recursive: true })
+    writeFileSync(pythonExecutable, '', 'utf8')
+    writeFileSync(join(installRoot, 'runtime-version'), '0.1.0\n', 'utf8')
+    writeFileSync(
+      join(resourcesPath, 'bootstrap', 'RUNTIME_ID'),
+      '0.1.0+sha256.0123456789abcdefabcd\n',
+      'utf8'
+    )
+
+    expect(() => resolveRuntime({
+      appPath: '/opt/HHTools',
+      cwd: '/opt/HHTools',
+      userData: join(root, 'user-data'),
+      isPackaged: true,
+      resourcesPath,
+      appVersion: '0.1.0',
+      systemInstallRoot: null,
+      env: { HOME: home },
       platform: 'linux'
     })).toThrow(RuntimeNotFoundError)
   })

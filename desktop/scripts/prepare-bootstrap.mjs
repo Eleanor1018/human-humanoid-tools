@@ -171,7 +171,21 @@ try {
   }
 
   const template = readFileSync(templatePath, 'utf8')
-  for (const field of ['embedded_version', 'embedded_wheel']) {
+  const payloadPaths = [
+    `assets/${wheelName}`,
+    'assets/requirements-all.txt',
+    'assets/installer-uv.toml',
+    'bin/uv',
+  ]
+  const payloadHashes = new Map(
+    payloadPaths.map((path) => [path, sha256(join(stagingRoot, path))])
+  )
+  const runtimeDigest = createHash('sha256')
+  for (const path of payloadPaths) runtimeDigest.update(`${path}\0${payloadHashes.get(path)}\n`)
+  const runtimeId = `${version}+sha256.${runtimeDigest.digest('hex').slice(0, 20)}`
+  writeFileSync(join(stagingRoot, 'RUNTIME_ID'), `${runtimeId}\n`, 'utf8')
+
+  for (const field of ['embedded_version', 'embedded_wheel', 'embedded_runtime_id']) {
     if (!new RegExp(`^${field}=.*$`, 'm').test(template)) {
       fail(`packaged runtime installer has no ${field} field`)
     }
@@ -179,6 +193,7 @@ try {
   const installer = template
     .replace(/^embedded_version=.*$/m, `embedded_version='${version}'`)
     .replace(/^embedded_wheel=.*$/m, `embedded_wheel='${wheelName}'`)
+    .replace(/^embedded_runtime_id=.*$/m, `embedded_runtime_id='${runtimeId}'`)
   if (/(^|[;&|]\s*)curl(?:\s|$)/m.test(installer)) {
     fail('packaged runtime installer must not invoke curl')
   }
@@ -186,15 +201,10 @@ try {
   writeFileSync(installerPath, installer, 'utf8')
   chmodSync(installerPath, 0o755)
 
-  const checksumPaths = [
-    `assets/${wheelName}`,
-    'assets/requirements-all.txt',
-    'assets/installer-uv.toml',
-    'bin/uv',
-  ]
+  const checksumPaths = [...payloadPaths, 'RUNTIME_ID']
   writeFileSync(
     join(stagingRoot, 'SHA256SUMS'),
-    `${checksumPaths.map((path) => `${sha256(join(stagingRoot, path))}  ${path}`).join('\n')}\n`,
+    `${checksumPaths.map((path) => `${payloadHashes.get(path) ?? sha256(join(stagingRoot, path))}  ${path}`).join('\n')}\n`,
     'utf8',
   )
 
@@ -203,7 +213,7 @@ try {
   const wheelBytes = lstatSync(join(outputRoot, 'assets', wheelName)).size
   const uvBytes = lstatSync(join(outputRoot, 'bin', 'uv')).size
   console.log(
-    `[prepare-bootstrap] Ready: HHTools ${version}, ${wheelName} `
+    `[prepare-bootstrap] Ready: ${runtimeId}, ${wheelName} `
       + `(${(wheelBytes / 1024 / 1024).toFixed(1)} MiB), uv ${uvVersion} `
       + `(${(uvBytes / 1024 / 1024).toFixed(1)} MiB)`,
   )
