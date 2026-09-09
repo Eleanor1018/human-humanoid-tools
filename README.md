@@ -45,33 +45,12 @@ robot, and retargeting core, but their installation and launch paths are intenti
 | **Desktop GUI** | Windows standalone app or Linux first-run setup | Application menu or `hhtools-desktop` |
 | **Agent (JSON CLI / MCP)** | Versioned H2R, scene-free R2R, and scalable Batch automation | [`hhtools agent` / `hhtools-mcp`](docs/agent.md) |
 
-### One-line Linux release install
+### Planned one-line Linux release install
 
-Tagged releases provide a POSIX `sh` installer for the complete Python, WebUI,
-retargeting, and Agent runtime:
-
-```bash
-curl --proto '=https' --tlsv1.2 -fsSL \
-  https://github.com/Roboparty/human-humanoid-tools/releases/latest/download/install.sh | sh
-hhtools web
-```
-
-The default install is isolated under the current user's data directory and does
-not need `sudo`. It installs the locked `all` dependency set but does not download
-GVHMR, SMPL-family weights, robot model archives, or NVIDIA drivers. The isolated
-full-stack environment currently selects Python 3.12 or 3.13 because all binary
-dependencies are verified there; this does not change the source package's Python
-3.12+ contract. A machine-wide install is explicit:
-
-```bash
-curl --proto '=https' --tlsv1.2 -fsSL \
-  https://github.com/Roboparty/human-humanoid-tools/releases/latest/download/install.sh \
-  | sudo sh -s -- --system
-```
-
-Native Windows does not include `sh`; a PowerShell installer will be provided
-separately. Git Bash adds a shell but is still a Windows runtime, so this Linux-only
-installer rejects it. WSL can use the installer normally.
+The POSIX `sh` release installer is reserved for a future tagged release that publishes its wheel,
+dependency lock, uv configuration, and checksums. Until those assets exist, do not direct users to
+an unpublished `releases/latest/download/install.sh` URL; use the source-checkout instructions or
+the Debian desktop package below.
 
 ### Source checkout: Terminal or WebUI
 
@@ -123,9 +102,9 @@ ownership, and the included Codex project configuration.
 ### Desktop GUI
 
 The Debian package contains Electron plus the curated built-in motions and robots. On first launch,
-its setup page installs the version-matched Python runtime from GitHub Releases; the recommended
-per-user option needs no administrator password, while the all-users option opens the operating
-system authentication dialog:
+its setup page uses the HHTools wheel, locked dependency list, uv configuration, and uv executable
+carried inside that same package. The recommended per-user option needs no administrator password,
+while the all-users option opens the operating system authentication dialog:
 
 ```bash
 sudo apt install ./hhtools-0.1.0-amd64.deb
