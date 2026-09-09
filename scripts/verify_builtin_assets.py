@@ -52,6 +52,18 @@ def _safe_relative(raw: object, *, prefix: str | None = None) -> str:
 def _git_paths(repository: Path, revision: str) -> set[str] | None:
     if not (repository / ".git").exists():
         return None
+    available = subprocess.run(
+        ["git", "cat-file", "-e", f"{revision}^{{commit}}"],
+        cwd=repository,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    if available.returncode != 0:
+        # CI normally uses a depth-one checkout. The current tracked tree is
+        # still checked below, while a full clone additionally verifies the
+        # historical baseline object.
+        return None
     try:
         output = subprocess.check_output(
             [
@@ -70,6 +82,23 @@ def _git_paths(repository: Path, revision: str) -> set[str] | None:
         raise BuiltinAssetManifestError(
             f"cannot inspect baseline commit {revision}: {error}"
         ) from error
+    return {
+        item.decode("utf-8")
+        for item in output.split(b"\0")
+        if item and b"/.hhtools_analysis/" not in item
+    }
+
+
+def _git_index_paths(repository: Path) -> set[str] | None:
+    if not (repository / ".git").exists():
+        return None
+    try:
+        output = subprocess.check_output(
+            ["git", "ls-files", "-z", "--", "assets/motions"],
+            cwd=repository,
+        )
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise BuiltinAssetManifestError(f"cannot inspect tracked motion files: {error}") from error
     return {
         item.decode("utf-8")
         for item in output.split(b"\0")
@@ -157,6 +186,13 @@ def _validate_motion_entries(payload: dict[str, Any], repository: Path) -> tuple
         extra = sorted(reviewed_paths - baseline_paths)
         raise BuiltinAssetManifestError(
             f"reviewed motion paths differ from baseline; missing={missing}, extra={extra}"
+        )
+    tracked_paths = _git_index_paths(repository)
+    if tracked_paths is not None and reviewed_paths != tracked_paths:
+        missing = sorted(tracked_paths - reviewed_paths)
+        extra = sorted(reviewed_paths - tracked_paths)
+        raise BuiltinAssetManifestError(
+            f"reviewed motion paths differ from the Git index; missing={missing}, extra={extra}"
         )
     return paths
 
