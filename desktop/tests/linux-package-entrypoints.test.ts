@@ -134,15 +134,16 @@ describe('Linux package entry points', () => {
     expect(beforeInstall).toContain('sudo apt-get -f install')
   })
 
-  it('declares Electron libraries absent from minimal Ubuntu 22.04', () => {
+  it('declares Electron libraries across supported Ubuntu releases', () => {
     expect(packageMetadata.build.deb.depends).toEqual(
       expect.arrayContaining([
         'libgbm1',
         'libasound2',
         'ca-certificates',
-        'policykit-1'
+        'pkexec'
       ])
     )
+    expect(packageMetadata.build.deb.depends).not.toContain('policykit-1')
     expect(packageMetadata.build.deb.depends).not.toContain('curl')
   })
 })

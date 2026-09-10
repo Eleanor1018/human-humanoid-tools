@@ -116,7 +116,7 @@
         "libgbm1",
         "libasound2",
         "ca-certificates",
-        "policykit-1"
+        "pkexec"
       ],
       "fpm": [
         "--before-install=scripts/linux-before-install.sh"
