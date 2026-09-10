@@ -366,10 +366,11 @@ def resolve_preset_calibration_file(
 
     Resolution order is deliberately deterministic:
 
-    1. ``<user robot root>/<preset.name>/`` (canonical file, historical alias,
+    1. ``<user robot root>/.calibration-overlays/<preset.name>/``,
+    2. ``<user robot root>/<preset.name>/`` (canonical file, historical alias,
        then matching legacy single-file calibration),
-    2. the directory containing the preset URDF, and
-    3. ``preset.root_dir`` when it differs from the URDF directory.
+    3. the directory containing the preset URDF, and
+    4. ``preset.root_dir`` when it differs from the URDF directory.
 
     The user layer is therefore writable even when a packaged robot lives in
     a root-owned ``/opt`` tree.  Existing source checkouts retain their bundled
@@ -379,9 +380,14 @@ def resolve_preset_calibration_file(
     """
 
     _require_calibration_reference(reference)
-    user_directory = _user_calibration_directory(preset, user_root)
+    from hhtools.utils.paths import user_calibration_overlay_dir
 
-    search: list[Path] = [user_directory]
+    user_directory = _user_calibration_directory(preset, user_root)
+    overlay_directory = user_calibration_overlay_dir(
+        _safe_preset_component(preset.name), user_root=user_root
+    )
+
+    search: list[Path] = [overlay_directory, user_directory]
     urdf_path = getattr(preset, "urdf_path", None)
     if urdf_path is not None:
         search.append(Path(urdf_path).parent)
@@ -453,7 +459,9 @@ def save_calibration_for_preset(
     preset has any user calibration, later saves stay in that layer so a
     writable checkout cannot unexpectedly bypass an existing override.
     ``prefer_user_overlay`` makes validated Agent writes leave the registered
-    robot bundle untouched even in a writable source checkout.
+    robot bundle untouched even in a writable source checkout. If the legacy
+    user directory overlaps the robot bundle, use the separate overlay layer;
+    once adopted, that layer also receives subsequent Web/CLI saves.
     """
 
     reference = _require_calibration_reference(str(calibration.reference))
@@ -477,6 +485,28 @@ def save_calibration_for_preset(
         bundled_directory,
         bundled_directory / f"retarget_calibration_{reference}.yaml",
     )
+    from hhtools.utils.paths import user_calibration_overlay_dir
+
+    overlay_directory = user_calibration_overlay_dir(
+        _safe_preset_component(preset.name), user_root=user_robot_root
+    )
+    bundle_root = Path(preset.root_dir).resolve(strict=False)
+    overlaps_bundle = (
+        user_directory.is_relative_to(bundle_root)
+        or bundle_root.is_relative_to(user_directory)
+        or user_directory.is_relative_to(bundled_directory)
+        or bundled_directory.is_relative_to(user_directory)
+    )
+    if _user_override_exists(overlay_directory, reference) or (
+        prefer_user_overlay and overlaps_bundle
+    ):
+        if overlay_directory.is_relative_to(bundle_root):
+            raise ValueError("calibration overlay must be outside the registered robot bundle")
+        overlay_target = _contained_calibration_path(
+            overlay_directory,
+            overlay_directory / f"retarget_calibration_{reference}.yaml",
+        )
+        return save_calibration(calibration, overlay_target, derived=derived)
 
     if (
         prefer_user_overlay

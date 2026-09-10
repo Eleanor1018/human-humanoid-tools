@@ -285,6 +285,8 @@ def _validate_retarget_plan_projection(
         expected_paths = {
             f"{robot_id}/retarget_calibration_{reference}.yaml",
             f"{robot_id}/retarget_calibration.yaml",
+            f".calibration-overlays/{robot_id}/retarget_calibration_{reference}.yaml",
+            f".calibration-overlays/{robot_id}/retarget_calibration.yaml",
         }
         if profile_relative_path not in expected_paths:
             raise _InvalidDocumentError(
@@ -380,8 +382,8 @@ def _validate_r2r_plan_projection(
         path = PurePosixPath(str(relative_path))
         if (
             not isinstance(target_robot_id, str)
-            or len(path.parts) != 2
-            or path.parts[0] != target_robot_id
+            or path.parent.as_posix()
+            not in {target_robot_id, f".calibration-overlays/{target_robot_id}"}
             or not path.name.startswith("r2r_calibration_")
             or not path.name.endswith(".yaml")
         ):

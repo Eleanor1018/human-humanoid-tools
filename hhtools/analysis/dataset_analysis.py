@@ -3,15 +3,17 @@
 
 Bridges the library scan and the :mod:`hhtools.analysis` pipeline behind the
 ``/api/dataset/*`` endpoints.  Results are cached on disk so re-opening the panel
-is instant; the cache key includes the embedding backend and per-file mtimes.
+avoids recomputing features; the cache key binds inputs, sidecars, and configuration.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
 import time
+import uuid
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
@@ -21,7 +23,7 @@ ProgressCb = Callable[[float, str], None]
 
 _SOURCE_HINT_FILE = ".hhtools_source.json"
 # Bump when user-facing numeric metrics change so old manifests are not reused.
-_METRIC_CACHE_SCHEMA = 2
+_METRIC_CACHE_SCHEMA = 3
 
 
 def save_upload_source_hint(drop_dir: Path, user_source_root: str) -> None:
@@ -68,19 +70,69 @@ def _manifest_path(source_root: Path, fallback: Path, embedding: str) -> Path:
     return _cache_dir(source_root, fallback) / f"manifest_{embedding}.json"
 
 
-def _fingerprint(entries: list[dict[str, Any]]) -> str:
-    """Cheap cache key: count + max mtime over source files."""
-    latest = 0.0
-    for e in entries:
-        try:
-            latest = max(latest, Path(e["source_path"]).stat().st_mtime)
-        except OSError:
-            pass
-    return f"{len(entries)}:{latest:.0f}"
+def _fingerprint(
+    entries: list[dict[str, Any]],
+    *,
+    source_root: Path | None = None,
+    cfg: dict[str, Any] | None = None,
+) -> str | None:
+    """Bind paths, file contents, sidecars, config, and algorithm.
+
+    Content hashing also detects edits on coarse-timestamp filesystems and
+    replacements that preserve timestamps. Read in chunks; failed, missing,
+    or concurrently changing inputs never form a reusable snapshot.
+    """
+    from hhtools.analysis.config import load_config
+
+    try:
+        sources = [Path(entry["source_path"]).absolute() for entry in entries]
+        root = source_root.absolute() if source_root is not None else (
+            Path(os.path.commonpath([str(path.parent) for path in sources])) if sources else None
+        )
+        paths = set(sources)
+        if root is not None:
+            def fail_walk(error: OSError) -> None:
+                raise error
+
+            for directory, children, files in os.walk(root, onerror=fail_walk):
+                children[:] = [name for name in children if not name.startswith(".") and name != "__pycache__"]
+                paths.update(Path(directory) / name for name in files if not name.startswith("."))
+        identities = []
+        for path in sorted(paths):
+            info = path.stat()
+            if not path.is_file():
+                return None
+            with path.open("rb") as stream:
+                content_digest = hashlib.file_digest(stream, "sha256").hexdigest()
+            after = path.stat()
+            if (
+                info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_dev, info.st_ino
+            ) != (
+                after.st_size, after.st_mtime_ns, after.st_ctime_ns, after.st_dev, after.st_ino
+            ):
+                return None
+            identities.append([
+                path.relative_to(root).as_posix() if root is not None else str(path),
+                info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_dev, info.st_ino,
+                content_digest,
+            ])
+        payload = {
+            "source_root": str(root) if root is not None else None,
+            "files": identities,
+            "entries": sorted(entries, key=lambda entry: str(entry["source_path"])),
+            "config": load_config() if cfg is None else cfg,
+            "metric_schema": _METRIC_CACHE_SCHEMA,
+        }
+        return hashlib.sha256(json.dumps(
+            payload, sort_keys=True, separators=(",", ":"), allow_nan=False,
+        ).encode()).hexdigest()
+    except (OSError, KeyError, TypeError, ValueError):
+        return None
 
 
 def load_cached(
-    source_root: Path, fallback: Path, embedding: str, entries: list[dict[str, Any]]
+    source_root: Path, fallback: Path, embedding: str, entries: list[dict[str, Any]],
+    *, cfg: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Return a cached result if present and still fresh, else ``None``."""
     path = _manifest_path(source_root, fallback, embedding)
@@ -90,7 +142,10 @@ def load_cached(
         data = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return None
-    if data.get("meta", {}).get("fingerprint") != _fingerprint(entries):
+    if not isinstance(data, dict) or not isinstance(data.get("meta"), dict):
+        return None
+    fingerprint = _fingerprint(entries, source_root=source_root, cfg=cfg)
+    if fingerprint is None or data["meta"].get("fingerprint") != fingerprint:
         return None
     if data.get("meta", {}).get("metric_schema") != _METRIC_CACHE_SCHEMA:
         return None
@@ -111,14 +166,15 @@ def run_analysis(
     from hhtools.analysis.config import load_config
 
     entries = build_entries(source_root)
+    cfg = load_config(cfg_override)
     if not force:
-        cached = load_cached(source_root, fallback, embedding, entries)
+        cached = load_cached(source_root, fallback, embedding, entries, cfg=cfg)
         if cached is not None:
             if progress is not None:
                 progress(1.0, "命中缓存")
             return cached
 
-    cfg = load_config(cfg_override)
+    fingerprint = _fingerprint(entries, source_root=source_root, cfg=cfg)
     clips = analyze_entries(
         entries, cfg=cfg, embedding_name=embedding, progress=progress
     )
@@ -127,19 +183,28 @@ def run_analysis(
         "meta": {
             "source_root": str(source_root),
             "embedding": embedding,
-            "fingerprint": _fingerprint(entries),
+            "fingerprint": fingerprint,
             "metric_schema": _METRIC_CACHE_SCHEMA,
             "generated_at": time.time(),
         },
         "clips": [c.to_dict() for c in clips],
         "summary": summary,
     }
+    # Never publish a mixed snapshot under the identity of newer inputs.
+    if fingerprint is None or fingerprint != _fingerprint(entries, source_root=source_root, cfg=cfg):
+        payload["meta"]["fingerprint"] = None
+        return payload
+    path = _manifest_path(source_root, fallback, embedding)
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     try:
-        _manifest_path(source_root, fallback, embedding).write_text(
+        temporary.write_text(
             json.dumps(payload, ensure_ascii=False), encoding="utf-8"
         )
+        temporary.replace(path)
     except Exception:
         pass
+    finally:
+        temporary.unlink(missing_ok=True)
     return payload
 
 

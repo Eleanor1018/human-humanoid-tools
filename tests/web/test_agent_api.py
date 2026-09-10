@@ -952,6 +952,96 @@ def test_agent_artifact_rejects_unsafe_descriptor_headers(tmp_path: Path) -> Non
     assert "x-leak" not in response.headers
 
 
+@pytest.mark.parametrize("kind", ["job_spec", "preview", "evaluation_report", "manifest"])
+@pytest.mark.parametrize("media_type", ["application/json", "Application/Problem+JSON"])
+@pytest.mark.parametrize("tampered", [False, True])
+def test_agent_json_artifact_downloads_exact_verified_bytes(
+    tmp_path: Path,
+    kind: str,
+    media_type: str,
+    tampered: bool,
+) -> None:
+    payload = b'{ "schema_version": "1.0", "status": "ok" }\n'
+    original = tmp_path / "original.json"
+    original.write_bytes(payload)
+    replacement = tmp_path / "replacement.json"
+    replacement.write_bytes(b'{"private":"must never be served"}')
+    switch_path = _SwitchAfterFirstOpenPath(original, replacement)
+    descriptor = ArtifactDescriptor(
+        artifact_id=f"artifact:{kind}:json-download",
+        job_id="job:json-download",
+        kind=kind,
+        format="json",
+        media_type=media_type,
+        resource_uri=f"hhtools://jobs/job:json-download/artifacts/artifact:{kind}:json-download",
+        size_bytes=len(payload),
+        sha256=hashlib.sha256(payload).hexdigest(),
+    )
+    app = FastAPI()
+    app.state.agent_job_manager = _SingleArtifactManager(
+        StoredArtifact(descriptor=descriptor, path=switch_path)  # type: ignore[arg-type]
+    )
+    app.include_router(router)
+    if tampered:
+        original.write_bytes(payload + b" ")
+    with TestClient(app) as client:
+        response = client.get(
+            f"/api/agent/v1/jobs/{descriptor.job_id}/artifacts/{descriptor.artifact_id}/content"
+        )
+    if tampered:
+        assert response.status_code == 409
+        assert response.json()["code"] == "ARTIFACT_HASH_MISMATCH"
+        return
+    assert response.status_code == 200, response.text
+    assert response.content == payload
+    assert switch_path.open_calls == 1
+    assert response.headers["x-content-sha256"] == hashlib.sha256(response.content).hexdigest()
+    assert response.headers["content-length"] == str(len(payload))
+    assert response.headers["content-disposition"] == f'attachment; filename="{kind}.json"'
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["x-content-type-options"] == "nosniff"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b'{"value":NaN}',
+        b'{"value":1,"value":2}',
+        b'{"value":"/home/private/file"}',
+        b'{"secret":"private"}',
+        b"not json",
+    ],
+)
+def test_agent_json_artifacts_still_enforce_content_validation(
+    tmp_path: Path,
+    payload: bytes,
+) -> None:
+    path = tmp_path / "invalid.json"
+    path.write_bytes(payload)
+    descriptor = ArtifactDescriptor(
+        artifact_id="artifact:manifest:invalid-json",
+        job_id="job:invalid-json",
+        kind="manifest",
+        format="json",
+        media_type="application/json",
+        resource_uri="hhtools://jobs/job:invalid-json/artifacts/artifact:manifest:invalid-json",
+        size_bytes=len(payload),
+        sha256=hashlib.sha256(payload).hexdigest(),
+    )
+    app = FastAPI()
+    app.state.agent_job_manager = _SingleArtifactManager(
+        StoredArtifact(descriptor=descriptor, path=path)
+    )
+    app.include_router(router)
+    with TestClient(app) as client:
+        response = client.get(
+            f"/api/agent/v1/jobs/{descriptor.job_id}/artifacts/{descriptor.artifact_id}/content"
+        )
+    assert response.status_code == 500
+    assert response.json()["code"] == "INTERNAL_ERROR"
+    assert "private" not in response.text
+
+
 def test_agent_asset_routes_serialize_versioned_contracts() -> None:
     client = TestClient(_agent_app())
 

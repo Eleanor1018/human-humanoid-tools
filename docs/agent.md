@@ -97,6 +97,24 @@ does not authorize a full retarget or physical robot deployment. After saving, a
 and preflight again so the new
 calibration digest is bound into a fresh plan.
 
+H2R preflight requires a current geometric validation record for a manual
+calibration. Status checks and successful saves persist that record, bound to
+the robot asset, reference family, calibration digest, and validator version
+(also the exact motion asset for GLB). Preflight reads the record without
+constructing a solver. Missing or failed evidence returns an executable
+`get_calibration_status` action and no ready plan. A changed calibration, robot,
+reference, clip, or validator version requires a new assessment. Existing
+calibrations can be assessed through status without being rewritten.
+
+For robots installed in the user library, automatic saves use
+`<user robot root>/.calibration-overlays/<robot id>/` when the historical override
+directory overlaps the registered bundle. This keeps the robot asset ID unchanged:
+reuse the original IDs for status, exact save retries (including after restart),
+and the next preflight. Existing sibling calibrations remain readable fallbacks,
+and subsequent Web/CLI saves follow an adopted overlay. The selected calibration
+file and its digest are still bound into each execution plan; editing the overlay
+invalidates a plan that used its previous contents.
+
 R2R calibration uses the parallel `get_r2r_calibration_status`, `propose_r2r_calibration`,
 `validate_r2r_calibration`, `preview_r2r_calibration`, and `save_r2r_calibration` tools. Every
 request binds both registered robot bundles. The source robot's zero-configuration FK becomes the

@@ -11,6 +11,7 @@ from hhtools.contracts import (
     AssetCategory,
     AssetRegistrationRequest,
     BackendCapability,
+    CalibrationValidationReport,
     CapabilityResponse,
     DeviceCapability,
     OutputPolicy,
@@ -21,10 +22,43 @@ from hhtools.contracts import (
 from hhtools.robot.registry import preset_from_dir
 from hhtools.services.asset_service import AgentAssetService
 from hhtools.services.assets import AssetRegistry
+from hhtools.services.calibration_validation import calibration_validation_identity
 from hhtools.services.plans import PlanStore
 from hhtools.services.preflight import PreflightService
 
 NOW = datetime(2026, 8, 31, 2, 0, tzinfo=UTC)
+
+
+def _record_assessment(
+    service: PreflightService,
+    robot_asset_id: str,
+    digest: str,
+    *,
+    valid: bool = True,
+) -> None:
+    # These structural-preflight fixtures contain a minimal one-joint robot.
+    # Supply explicit FK evidence; real geometry is covered by calibration E2E.
+    service._calibration_validations.put(
+        calibration_validation_identity(
+            robot_id="test_robot",
+            robot_asset_id=robot_asset_id,
+            reference="smpl",
+            calibration_digest=digest,
+        ),
+        CalibrationValidationReport(
+            valid=valid,
+            score=1.0 if valid else 0.0,
+            changed_joint_count=0,
+            mapped_slots=16,
+            checks=[
+                {
+                    "code": "CALIBRATION_POSE_ALIGNED",
+                    "level": "pass" if valid else "error",
+                    "message": "Fixture geometry assessment.",
+                }
+            ],
+        ),
+    )
 
 
 def _write_motion(
@@ -173,6 +207,7 @@ def _setup(
     calibration_robot: str = "test_robot",
     motion_frame_count: int = 48,
     motion_frame_rate_hz: float = 30.0,
+    validation_recorded: bool = True,
 ) -> tuple[PreflightService, str, str, str | None]:
     motion_root = tmp_path / "motions"
     robot_root = tmp_path / "robots"
@@ -226,7 +261,27 @@ def _setup(
         clock=lambda: NOW,
         request_id_provider=lambda: "req_test",
     )
+    if calibration_id is not None and validation_recorded:
+        _record_assessment(service, robot_bundle.asset_id, calibration_id.rsplit(":", 1)[-1])
     return service, motion.asset_id, robot_bundle.asset_id, calibration_id
+
+
+def test_preflight_requires_current_valid_geometric_evidence(tmp_path: Path) -> None:
+    service, motion_id, robot_id, calibration_id = _setup(tmp_path, validation_recorded=False)
+    request = _request(motion_id, robot_id)
+    missing = service.preflight_retarget(request)
+    assert missing.status is PreflightStatus.HUMAN_ACTION_REQUIRED
+    assert missing.plan is None
+    assert missing.required_actions[0].action == "get_calibration_status"
+    assert missing.checks[-1].code == "CALIBRATION_VALIDATION_REQUIRED"
+    digest = calibration_id.rsplit(":", 1)[-1]
+    _record_assessment(service, robot_id, digest, valid=False)
+    invalid = service.preflight_retarget(request)
+    assert invalid.plan is None
+    assert invalid.checks[-1].code == "CALIBRATION_VALIDATION_FAILED"
+    assert not any(check.code == "CALIBRATION_MATCH" for check in invalid.checks)
+    _record_assessment(service, robot_id, digest)
+    assert service.preflight_retarget(request).status is PreflightStatus.READY
 
 
 def _request(
@@ -322,7 +377,7 @@ def test_effective_parameter_change_changes_plan_identity(tmp_path: Path) -> Non
 def test_calibration_content_change_changes_plan_identity(tmp_path: Path) -> None:
     service, motion_id, robot_id, _ = _setup(tmp_path)
     baseline = service.preflight_retarget(_request(motion_id, robot_id))
-    _write_calibration(tmp_path / "robots" / "test_robot", value=0.5)
+    updated_calibration_id = _write_calibration(tmp_path / "robots" / "test_robot", value=0.5)
 
     # Calibration is executable robot configuration.  Updating it requires a
     # new content-addressed robot bundle before another plan can be issued.
@@ -335,6 +390,12 @@ def test_calibration_content_change_changes_plan_identity(tmp_path: Path) -> Non
         )
     )
 
+    _record_assessment(
+        service,
+        updated_robot.asset_id,
+        updated_calibration_id.rsplit(":", 1)[-1],
+    )
+
     changed = service.preflight_retarget(_request(motion_id, updated_robot.asset_id))
 
     assert baseline.plan is not None and changed.plan is not None
@@ -342,22 +403,26 @@ def test_calibration_content_change_changes_plan_identity(tmp_path: Path) -> Non
     assert baseline.plan.calibration_digest != changed.plan.calibration_digest
 
 
+@pytest.mark.parametrize("shared_robot_root", [False, True])
 def test_user_calibration_overlay_is_content_bound_without_robot_reregistration(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    shared_robot_root: bool,
 ) -> None:
     service, motion_id, robot_id, _ = _setup(tmp_path, calibration=False)
-    user_root = tmp_path / "user-robots"
-    calibration = user_root / "test_robot" / "retarget_calibration_smpl.yaml"
+    user_root = tmp_path / ("robots" if shared_robot_root else "user-robots")
+    relative = "test_robot/retarget_calibration_smpl.yaml"
+    if shared_robot_root:
+        relative = f".calibration-overlays/{relative}"
+    calibration = user_root / relative
     calibration.parent.mkdir(parents=True)
     calibration.write_text(
-        "robot: test_robot\n"
-        "reference: smpl\n"
-        "calibrated_joint_q:\n"
-        "  hip: 0.0\n",
+        "robot: test_robot\nreference: smpl\ncalibrated_joint_q:\n  hip: 0.0\n",
         encoding="utf-8",
     )
     monkeypatch.setenv("HHTOOLS_ROBOT_DIR", str(user_root))
+
+    _record_assessment(service, robot_id, hashlib.sha256(calibration.read_bytes()).hexdigest())
 
     first = service.preflight_retarget(_request(motion_id, robot_id))
 
@@ -367,7 +432,7 @@ def test_user_calibration_overlay_is_content_bound_without_robot_reregistration(
     profile = first_payload["retarget_profile"]
     assert isinstance(profile, dict)
     assert profile["storage"] == "user_calibration"
-    assert profile["relative_path"] == "test_robot/retarget_calibration_smpl.yaml"
+    assert profile["relative_path"] == relative
     assert first.plan.calibration_id == (
         f"cal:sha256:{hashlib.sha256(calibration.read_bytes()).hexdigest()}"
     )
@@ -376,6 +441,10 @@ def test_user_calibration_overlay_is_content_bound_without_robot_reregistration(
         calibration.read_text(encoding="utf-8").replace("hip: 0.0", "hip: 0.5"),
         encoding="utf-8",
     )
+    stale_evidence = service.preflight_retarget(_request(motion_id, robot_id))
+    assert stale_evidence.plan is None
+    assert stale_evidence.checks[-1].code == "CALIBRATION_VALIDATION_REQUIRED"
+    _record_assessment(service, robot_id, hashlib.sha256(calibration.read_bytes()).hexdigest())
     changed = service.preflight_retarget(_request(motion_id, robot_id))
 
     assert changed.status is PreflightStatus.READY
@@ -393,10 +462,7 @@ def test_invalid_user_calibration_override_does_not_fall_back_to_bundle(
     calibration = user_root / "test_robot" / "retarget_calibration_smpl.yaml"
     calibration.parent.mkdir(parents=True)
     calibration.write_text(
-        "robot: another_robot\n"
-        "reference: smpl\n"
-        "calibrated_joint_q:\n"
-        "  hip: 0.0\n",
+        "robot: another_robot\nreference: smpl\ncalibrated_joint_q:\n  hip: 0.0\n",
         encoding="utf-8",
     )
     monkeypatch.setenv("HHTOOLS_ROBOT_DIR", str(user_root))

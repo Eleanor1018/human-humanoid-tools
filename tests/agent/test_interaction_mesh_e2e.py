@@ -129,6 +129,7 @@ def test_agent_runs_self_contained_interaction_mesh_plan_to_verified_artifacts(
 
     async def exercise() -> None:
         async with runtime.lifespan():
+
             @asynccontextmanager
             async def runtime_factory() -> AsyncIterator[AgentRuntime]:
                 yield AgentRuntime.from_services(runtime.services)
@@ -156,6 +157,17 @@ def test_agent_runs_self_contained_interaction_mesh_plan_to_verified_artifacts(
                         }
                     },
                 )
+                calibration = await client.call_tool(
+                    "get_calibration_status",
+                    {
+                        "request": {
+                            "robot_id": model.preset.name,
+                            "robot_asset_id": robot_result.structured_content["asset_id"],
+                            "reference": "smpl" if scene_kind == "terrain" else "smplx",
+                        }
+                    },
+                )
+                assert calibration.structured_content["state"] == "valid"
                 preflight_result = await client.call_tool(
                     "preflight_retarget",
                     {

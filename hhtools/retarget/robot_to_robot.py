@@ -1063,6 +1063,19 @@ def _resolve_r2r_calibration(
         user_root=user_root,
     )
     bundled_path = r2r_calibration_path(target_path, source)
+    from hhtools.utils.paths import user_calibration_overlay_dir
+
+    overlay_directory = user_calibration_overlay_dir(
+        _safe_target_component(inferred_target), user_root=user_root
+    )
+    overlay_path = _path_below(overlay_directory, _calibration_filename(source))
+    if overlay_path.exists() or overlay_path.is_symlink():
+        _stored_target, joint_q, _notes = _read_r2r_payload(
+            overlay_path,
+            source_robot=source,
+            target_robot=expected_target,
+        )
+        return overlay_path, joint_q
 
     # A canonical user override is authoritative.  If it exists but is invalid,
     # surface that error rather than silently falling back to a bundled default.
@@ -1265,6 +1278,22 @@ def save_r2r_calibration(
         payload["notes"] = notes
     sibling = r2r_calibration_path(target_dir, source)
     user_path = r2r_user_calibration_path(target, source, user_root=user_root)
+    from hhtools.utils.paths import user_calibration_overlay_dir
+
+    overlay_directory = user_calibration_overlay_dir(
+        _safe_target_component(target), user_root=user_root
+    )
+    overlay_path = _path_below(overlay_directory, _calibration_filename(source))
+    bundled_directory = Path(target_dir).expanduser().resolve(strict=False)
+    overlaps_bundle = (
+        user_path.parent.is_relative_to(bundled_directory)
+        or bundled_directory.is_relative_to(user_path.parent)
+    )
+    if _user_r2r_override_exists(overlay_path) or (prefer_user_overlay and overlaps_bundle):
+        if overlay_directory.is_relative_to(bundled_directory):
+            raise ValueError("calibration overlay must be outside the registered robot bundle")
+        _atomic_write_r2r_payload(overlay_path, payload)
+        return overlay_path
 
     # Once a user override exists it remains authoritative, even in a source
     # checkout whose sibling directory becomes writable again.
