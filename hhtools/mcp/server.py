@@ -1044,6 +1044,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-batch-items", type=int, default=None)
     parser.add_argument("--max-batch-total-frames", type=int, default=None)
     parser.add_argument("--web-ui-url", default="http://127.0.0.1:8009")
+    parser.add_argument("--endpoint", help="Connect to a resident local or HTTPS Runtime.")
+    parser.add_argument("--token-env", default="HHTOOLS_RUNTIME_TOKEN")
+    parser.add_argument("--ephemeral", action="store_true", help="Explicit legacy exclusive mode.")
     return parser
 
 
@@ -1092,6 +1095,21 @@ def main(argv: Sequence[str] | None = None) -> None:
     """Console entry point. stdout remains exclusively owned by MCP framing."""
 
     arguments = _parser().parse_args(argv)
+    if not arguments.ephemeral:
+        import asyncio
+        import os
+
+        from hhtools.client import RuntimeClient
+        from hhtools.client.discovery import connect_or_start
+        from hhtools.mcp.client_server import run_client_server
+
+        client = (
+            RuntimeClient(arguments.endpoint, token=os.environ.get(arguments.token_env))
+            if arguments.endpoint
+            else connect_or_start(arguments.save_dir, source=arguments.source)
+        )
+        asyncio.run(run_client_server(client))
+        return
     for name in (
         "max_running_jobs",
         "max_queued_jobs",

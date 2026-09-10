@@ -27,6 +27,7 @@ app = typer.Typer(
 
 # (cli name, module path, help text)
 _SUBCOMMANDS: list[tuple[str, str, str]] = [
+    ("runtime", "hhtools.cli.runtime", "Manage or connect to a persistent HHTools Runtime."),
     ("convert", "hhtools.cli.convert", "Convert BVH / GLB to the unified NPZ."),
     (
         "import",

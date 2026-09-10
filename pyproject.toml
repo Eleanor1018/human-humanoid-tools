@@ -53,6 +53,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+runtime = [
+    "fastapi>=0.111",
+    "uvicorn[standard]>=0.30",
+    "python-multipart>=0.0.9",
+]
 # HTML / three.js front-end shared by browser and desktop. Includes robot
 # + SMPL deps the UI needs (URDF load, AMASS mesh baking). Retarget IK still
 # needs the separate ``retarget`` extra (``uv sync --extra web --extra retarget``).
@@ -100,10 +105,12 @@ retarget-interaction = [
     "osqp>=0.6",
 ]
 mcp = [
-    # The stdio host assembles the transport-neutral application runtime.
-    # Keep execution dependencies explicit without pulling FastAPI, Uvicorn,
-    # or multipart parsing into an MCP-only installation.
+    # The default stdio adapter connects to or starts a resident HTTP Runtime.
     "mcp>=2.1.1,<3",
+    "jsonschema>=4.23",
+    "fastapi>=0.111",
+    "uvicorn[standard]>=0.30",
+    "python-multipart>=0.0.9",
     "yourdfpy>=0.0.56",
     "mujoco>=3.1",
     "smplx>=0.1.28",

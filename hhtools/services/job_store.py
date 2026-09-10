@@ -1112,6 +1112,67 @@ class JobStore:
             ) from exc
         return [self._decode_row(row) for row in rows]
 
+    def list_jobs(self, *, limit: int = 100, offset: int = 0) -> tuple[list[StoredJob], int]:
+        """Read a bounded shared history, including terminal and recovered jobs."""
+        if not 1 <= limit <= 500 or offset < 0:
+            raise _error("INVALID_PARAMETER", "Invalid job page.", stage=ErrorStage.REQUEST)
+        with self._connect() as connection:
+            total = connection.execute("SELECT count(*) FROM jobs").fetchone()[0]
+            rows = connection.execute(
+                f"{_SELECT_JOB} ORDER BY submitted_at DESC, job_id DESC LIMIT ? OFFSET ?",
+                (limit, offset),
+            ).fetchall()
+        return [self._decode_row(row) for row in rows], total
+
+    def enable_events(self) -> None:
+        """Commit global events in the same SQLite transaction as every job revision."""
+        with self._connect() as connection:
+            connection.executescript("""
+                CREATE TABLE IF NOT EXISTS runtime_events (
+                    cursor INTEGER PRIMARY KEY AUTOINCREMENT,
+                    job_id TEXT NOT NULL,
+                    revision INTEGER NOT NULL,
+                    state TEXT NOT NULL,
+                    UNIQUE(job_id, revision)
+                );
+                CREATE TRIGGER IF NOT EXISTS runtime_job_created AFTER INSERT ON jobs
+                BEGIN
+                    INSERT INTO runtime_events(job_id, revision, state)
+                    VALUES(NEW.job_id, NEW.revision, NEW.state);
+                END;
+                CREATE TRIGGER IF NOT EXISTS runtime_job_changed AFTER UPDATE ON jobs
+                WHEN NEW.revision != OLD.revision
+                BEGIN
+                    INSERT INTO runtime_events(job_id, revision, state)
+                    VALUES(NEW.job_id, NEW.revision, NEW.state);
+                END;
+                INSERT OR IGNORE INTO runtime_events(job_id, revision, state)
+                    SELECT job_id, revision, state FROM jobs ORDER BY submitted_at, job_id;
+            """)
+
+    def events(self, *, after: int = 0, limit: int = 100) -> dict[str, Any]:
+        """Return a workspace cursor independent of individual job revisions."""
+        if after < 0 or not 1 <= limit <= 500:
+            raise _error("INVALID_PARAMETER", "Invalid event page.", stage=ErrorStage.REQUEST)
+        with self._connect() as connection:
+            latest = connection.execute(
+                "SELECT coalesce(max(cursor), 0) FROM runtime_events"
+            ).fetchone()[0]
+            if after > latest:
+                raise _error("EVENT_CURSOR_INVALID", "The event cursor belongs to another history.")
+            rows = connection.execute(
+                "SELECT cursor, job_id, revision, state FROM runtime_events WHERE cursor > ? "
+                "ORDER BY cursor LIMIT ?",
+                (after, limit),
+            ).fetchall()
+        events = [dict(row) for row in rows]
+        return {
+            "events": events,
+            "cursor": events[-1]["cursor"] if events else after,
+            "latest_cursor": latest,
+            "has_more": bool(events and events[-1]["cursor"] < latest),
+        }
+
     @staticmethod
     def _state(value: JobState | str) -> JobState:
         try:

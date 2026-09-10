@@ -640,6 +640,7 @@ dependencies = [
 all = [
     { name = "chumpy" },
     { name = "fastapi" },
+    { name = "jsonschema" },
     { name = "mcp" },
     { name = "mujoco" },
     { name = "newton" },
@@ -664,13 +665,17 @@ formats = [
 ]
 mcp = [
     { name = "chumpy" },
+    { name = "fastapi" },
+    { name = "jsonschema" },
     { name = "mcp" },
     { name = "mujoco" },
     { name = "newton" },
     { name = "osqp" },
     { name = "pygltflib" },
+    { name = "python-multipart" },
     { name = "smplx" },
     { name = "torch" },
+    { name = "uvicorn", extra = ["standard"] },
     { name = "warp-lang" },
     { name = "yourdfpy" },
 ]
@@ -689,6 +694,11 @@ robot = [
     { name = "mujoco" },
     { name = "osqp" },
     { name = "yourdfpy" },
+]
+runtime = [
+    { name = "fastapi" },
+    { name = "python-multipart" },
+    { name = "uvicorn", extra = ["standard"] },
 ]
 smpl = [
     { name = "chumpy" },
@@ -713,8 +723,11 @@ requires-dist = [
     { name = "chumpy", marker = "extra == 'mcp'", specifier = ">=0.70" },
     { name = "chumpy", marker = "extra == 'smpl'", specifier = ">=0.70" },
     { name = "chumpy", marker = "extra == 'web'", specifier = ">=0.70" },
+    { name = "fastapi", marker = "extra == 'mcp'", specifier = ">=0.111" },
+    { name = "fastapi", marker = "extra == 'runtime'", specifier = ">=0.111" },
     { name = "fastapi", marker = "extra == 'web'", specifier = ">=0.111" },
     { name = "hhtools", extras = ["formats", "mcp", "retarget", "retarget-interaction", "robot", "smpl", "web"], marker = "extra == 'all'" },
+    { name = "jsonschema", marker = "extra == 'mcp'", specifier = ">=4.23" },
     { name = "mcp", marker = "extra == 'dev'", specifier = ">=2.1.1,<3" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=2.1.1,<3" },
     { name = "mujoco", marker = "extra == 'mcp'", specifier = ">=3.1" },
@@ -740,6 +753,8 @@ requires-dist = [
     { name = "pygltflib", marker = "extra == 'web'", specifier = ">=1.16" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.2" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },
+    { name = "python-multipart", marker = "extra == 'mcp'", specifier = ">=0.0.9" },
+    { name = "python-multipart", marker = "extra == 'runtime'", specifier = ">=0.0.9" },
     { name = "python-multipart", marker = "extra == 'web'", specifier = ">=0.0.9" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "rich", specifier = ">=13.7" },
@@ -756,6 +771,8 @@ requires-dist = [
     { name = "tqdm", specifier = ">=4.66" },
     { name = "trimesh", specifier = ">=4.3" },
     { name = "typer", specifier = ">=0.12" },
+    { name = "uvicorn", extras = ["standard"], marker = "extra == 'mcp'", specifier = ">=0.30" },
+    { name = "uvicorn", extras = ["standard"], marker = "extra == 'runtime'", specifier = ">=0.30" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'web'", specifier = ">=0.30" },
     { name = "warp-lang", marker = "extra == 'mcp'", specifier = ">=1.3" },
     { name = "warp-lang", marker = "extra == 'retarget'", specifier = ">=1.3" },
@@ -765,7 +782,7 @@ requires-dist = [
     { name = "yourdfpy", marker = "extra == 'robot'", specifier = ">=0.0.56" },
     { name = "yourdfpy", marker = "extra == 'web'", specifier = ">=0.0.56" },
 ]
-provides-extras = ["web", "formats", "smpl", "robot", "retarget", "retarget-interaction", "mcp", "dev", "all"]
+provides-extras = ["runtime", "web", "formats", "smpl", "robot", "retarget", "retarget-interaction", "mcp", "dev", "all"]
 
 [[package]]
 name = "httpcore"

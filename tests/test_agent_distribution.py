@@ -25,7 +25,7 @@ def test_mcp_extra_owns_its_product_runtime_dependencies() -> None:
     }
 
     assert {"mcp", *execution_runtime_names} <= names
-    assert {"fastapi", "uvicorn", "python-multipart"}.isdisjoint(names)
+    assert {"fastapi", "uvicorn", "python-multipart", "jsonschema"} <= names
     assert all(not requirement.startswith("hhtools[") for requirement in requirements)
 
 

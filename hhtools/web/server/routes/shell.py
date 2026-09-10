@@ -125,7 +125,9 @@ def register_shell_routes(
                     legacy_detail="Invalid desktop origin",
                 )
 
-        elif request.method in _STATE_CHANGING_METHODS:
+        elif request.method in _STATE_CHANGING_METHODS and not getattr(
+            request.state, "runtime_authorized", False
+        ):
             boundary_failure = _local_write_boundary_failure(request)
             if boundary_failure is not None:
                 return boundary_failure

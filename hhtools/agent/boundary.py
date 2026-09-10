@@ -231,7 +231,8 @@ class AgentBoundaryMiddleware:
 
         client = scope.get("client")
         client_host = client[0] if isinstance(client, tuple) and client else None
-        if not _is_loopback_literal(client_host):
+        runtime_authorized = scope.get("state", {}).get("runtime_authorized", False)
+        if not runtime_authorized and not _is_loopback_literal(client_host):
             await agent_error_response(
                 status_code=403,
                 code="LOOPBACK_REQUIRED",
@@ -240,7 +241,7 @@ class AgentBoundaryMiddleware:
             return
 
         headers = list(scope.get("headers", []))
-        if not _loopback_host(headers):
+        if not runtime_authorized and not _loopback_host(headers):
             await agent_error_response(
                 status_code=400,
                 code="INVALID_HOST",
@@ -251,7 +252,7 @@ class AgentBoundaryMiddleware:
         # CLI clients normally omit Origin.  When a browser supplies one, a
         # second loopback check prevents a public site from issuing a simple
         # cross-origin mutation against this unauthenticated localhost API.
-        if not _loopback_origin(headers):
+        if not runtime_authorized and not _loopback_origin(headers):
             await agent_error_response(
                 status_code=403,
                 code="ORIGIN_FORBIDDEN",
