@@ -249,7 +249,7 @@ def _error_response(error: ApiError, *, status_code: int | None = None) -> JSONR
 
 
 def _portable_response(response: Response) -> Response:
-    content_type = response.headers.get("content-type", "").partition(";")[0].strip()
+    content_type = response.headers.get("content-type", "").partition(";")[0].strip().lower()
     if content_type != "application/json" and not content_type.endswith("+json"):
         return response
     body = getattr(response, "body", None)

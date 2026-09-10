@@ -10,7 +10,7 @@ import re
 import stat
 from collections.abc import Iterator
 
-from starlette.responses import StreamingResponse
+from starlette.responses import Response, StreamingResponse
 
 from hhtools.contracts import ApiError, ArtifactDescriptor, ErrorStage
 from hhtools.services.artifacts import StoredArtifact
@@ -56,20 +56,26 @@ def _validated_descriptor(stored: StoredArtifact) -> ArtifactDescriptor:
         ) from exc
 
 
-def verified_artifact_response(stored: StoredArtifact) -> StreamingResponse:
+def verified_artifact_response(stored: StoredArtifact) -> Response:
     """Hash and stream bytes through one open file handle.
 
     ``FileResponse`` opens a path later, after route authorization and optional
     verification.  A path swap in that interval could make the response serve
     different bytes.  This helper opens once, verifies SHA-256 and length on
     that exact descriptor, rewinds it, and gives the same handle to
-    ``StreamingResponse``.  It intentionally does not implement Range or the
-    ASGI ``pathsend`` extension.
+    ``StreamingResponse``. JSON artifacts retain the exact verified bytes in a
+    buffered response so the route can apply its strict JSON portability guard.
+    It intentionally does not implement Range or the ASGI ``pathsend`` extension.
     """
 
     descriptor = _validated_descriptor(stored)
     if descriptor.sha256 is None or descriptor.size_bytes is None:
         raise _internal_failure("The managed artifact is missing required integrity metadata.")
+    media_type = descriptor.media_type or "application/octet-stream"
+    content_type = media_type.partition(";")[0].strip().lower()
+    json_chunks: list[bytes] | None = (
+        [] if content_type == "application/json" or content_type.endswith("+json") else None
+    )
 
     try:
         handle = stored.path.open("rb")
@@ -89,6 +95,8 @@ def verified_artifact_response(stored: StoredArtifact) -> StreamingResponse:
         while chunk := handle.read(_READ_CHUNK_BYTES):
             observed_size += len(chunk)
             digest.update(chunk)
+            if json_chunks is not None:
+                json_chunks.append(chunk)
         after = os.fstat(handle.fileno())
         stable_identity = (
             before.st_dev,
@@ -111,7 +119,10 @@ def verified_artifact_response(stored: StoredArtifact) -> StreamingResponse:
             raise _artifact_failure(
                 "The managed artifact no longer matches its canonical descriptor."
             )
-        handle.seek(0)
+        if json_chunks is None:
+            handle.seek(0)
+        else:
+            handle.close()
     except Exception:
         handle.close()
         raise
@@ -138,10 +149,17 @@ def verified_artifact_response(stored: StoredArtifact) -> StreamingResponse:
         "X-HHTools-Artifact-Id": descriptor.artifact_id,
         "X-HHTools-Job-Id": descriptor.job_id,
     }
+    if json_chunks is not None:
+        return Response(
+            content=b"".join(json_chunks),
+            status_code=200,
+            media_type=media_type,
+            headers=headers,
+        )
     return StreamingResponse(
         stream_same_handle(),
         status_code=200,
-        media_type=descriptor.media_type or "application/octet-stream",
+        media_type=media_type,
         headers=headers,
     )
 
