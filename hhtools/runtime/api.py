@@ -14,12 +14,17 @@ from hhtools.contracts import (
     AgentJobView,
     ArtifactDescriptor,
     ArtifactExportReceipt,
+    CalibrationPreview,
+    CalibrationPreviewRequest,
     JobLookupRequest,
     JobRetryRequest,
     JobStartRequest,
+    R2RCalibrationPreview,
+    R2RCalibrationPreviewRequest,
 )
 from hhtools.contracts.runtime import (
     RuntimeBudget,
+    RuntimeEventPage,
     RuntimeIdentity,
     RuntimeJobList,
     RuntimeShutdown,
@@ -43,9 +48,9 @@ def register_runtime_routes(app, runtime, control, *, shutdown=None):
         return control.scoped_key(request.state.runtime_principal["subject"], operation, key)
 
     @router.get("/identity", response_model=RuntimeIdentity)
-    def runtime_identity():
+    def runtime_identity(request: Request):
         """Read persistent instance identity before using saved resource IDs."""
-        return control.identity
+        return control.identity.model_copy(update={"endpoint": str(request.base_url).rstrip("/")})
 
     @router.get("/operations")
     def runtime_operations() -> dict[str, Any]:
@@ -74,7 +79,25 @@ def register_runtime_routes(app, runtime, control, *, shutdown=None):
             offset=offset,
         )
 
-    @router.get("/events")
+    @router.get("/legacy/jobs")
+    def runtime_legacy_jobs(limit: Annotated[int, Query(ge=1, le=500)] = 100) -> dict:
+        """Expose old Web history without inventing replayable inputs for session tokens."""
+        history = runtime.state.job_history.list_records(limit=limit)
+        return {
+            "jobs": [
+                {
+                    "legacy_job_id": str(item["id"]),
+                    "kind": str(item.get("kind", "unknown")),
+                    "state": str(item.get("status", "unknown")),
+                    "read_only": True,
+                    "replayable": False,
+                    "reason": "legacy_inputs_require_asset_registration",
+                }
+                for item in history
+            ]
+        }
+
+    @router.get("/events", response_model=RuntimeEventPage)
     def runtime_events(
         after: Annotated[int, Query(ge=0)] = 0, limit: Annotated[int, Query(ge=1, le=500)] = 100
     ) -> dict[str, Any]:
@@ -118,12 +141,10 @@ def register_runtime_routes(app, runtime, control, *, shutdown=None):
 
     @router.post("/jobs/{job_id}/retry", response_model=AgentJobView)
     def runtime_retry_job(request: Request, job_id: str, body: JobRetryRequest):
-        if manager.get_job(job_id).attempt >= control.budget.max_retry_attempts:
-            raise RuntimeServiceError(
-                "RETRY_BUDGET_EXCEEDED", "The retry chain exhausted its attempt budget."
-            )
         return manager.retry_job(
-            job_id, idempotency_key=scoped(request, body.idempotency_key, "retry")
+            job_id,
+            idempotency_key=scoped(request, body.idempotency_key, "retry"),
+            max_attempts=control.budget.max_retry_attempts,
         )
 
     @router.get("/jobs/{job_id}/artifacts")
@@ -215,9 +236,19 @@ def register_runtime_routes(app, runtime, control, *, shutdown=None):
     def runtime_budget():
         return control.budget
 
+    @router.post("/calibrations/preview-document", response_model=CalibrationPreview)
+    def runtime_calibration_preview_document(body: CalibrationPreviewRequest):
+        return services.agent_calibration_service.preview(body)[0]
+
+    @router.post("/calibrations/r2r/preview-document", response_model=R2RCalibrationPreview)
+    def runtime_r2r_calibration_preview_document(body: R2RCalibrationPreviewRequest):
+        return services.agent_r2r_calibration_service.preview(body)[0]
+
     @router.put("/admin/budget", response_model=RuntimeBudget)
     def runtime_set_budget(body: RuntimeBudget):
         with runtime.job_settings_update_lock:
+            if runtime.scheduler.snapshot().closed:
+                raise RuntimeServiceError("SCHEDULER_UNAVAILABLE", "Runtime admission is closed.")
             control.save_budget(body)
             runtime.scheduler.reconfigure(
                 max_running_jobs=body.max_running_jobs, max_queued_jobs=body.max_queued_jobs
@@ -249,11 +280,16 @@ def register_runtime_routes(app, runtime, control, *, shutdown=None):
 
         def stop():
             if body.policy == "cancel":
+                runtime.scheduler.shutdown(wait=False)
                 for row in store.list_active():
                     manager.cancel_job(row.job_id)
-            runtime.scheduler.shutdown(wait=True)
+                runtime.scheduler.shutdown(wait=True)
+            else:
+                runtime.scheduler.drain()
             shutdown()
 
+        with runtime.job_settings_update_lock:
+            runtime.scheduler.stop_accepting()
         threading.Thread(target=stop, name="hhtools-runtime-shutdown", daemon=True).start()
         return {"stopping": True, "policy": body.policy}
 

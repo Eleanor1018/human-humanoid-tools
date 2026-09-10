@@ -18,11 +18,13 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workspace", type=Path, required=True)
     parser.add_argument("--source", type=Path)
+    parser.add_argument("--robot-root", type=Path)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--remote", action="store_true")
     parser.add_argument("--ssl-certfile")
     parser.add_argument("--ssl-keyfile")
+    parser.add_argument("--allow-origin", action="append", default=[])
     arguments = parser.parse_args(argv)
     if arguments.remote and not (arguments.ssl_certfile and arguments.ssl_keyfile):
         parser.error("Remote mode requires --ssl-certfile and --ssl-keyfile.")
@@ -31,11 +33,13 @@ def main(argv=None):
     workspace = arguments.workspace.resolve()
     source = (arguments.source or workspace / "source").resolve()
     source.mkdir(parents=True, exist_ok=True)
+    from hhtools.utils.paths import user_robot_dir
+
     paths = ApplicationPaths(
         source_root=source,
         save_dir=workspace,
         cache_dir=workspace / "cache",
-        robot_root=workspace / "robots",
+        robot_root=(arguments.robot_root or user_robot_dir()).resolve(),
         motion_library_root=workspace / "motion-library",
         motion_library_settings_path=workspace / "settings/motion-library.json",
         job_history_dir=workspace / "history",
@@ -50,14 +54,24 @@ def main(argv=None):
             server.should_exit = True
 
     try:
-        app = create_runtime_app(paths, remote=arguments.remote, shutdown=shutdown)
+        app = create_runtime_app(
+            paths,
+            remote=arguments.remote,
+            shutdown=shutdown,
+            allowed_origins=tuple(arguments.allow_origin),
+        )
     except RuntimeLeaseError as error:
         print(error.code, file=__import__("sys").stderr)
         return 3
     sock = socket.socket(socket.AF_INET6 if ":" in arguments.host else socket.AF_INET)
     connection_path = workspace / ".hhtools-agent/runtime-connection.json"
     try:
-        sock.bind((arguments.host, arguments.port))
+        try:
+            sock.bind((arguments.host, arguments.port))
+        except OSError:
+            if arguments.remote or arguments.port == 0:
+                raise
+            sock.bind((arguments.host, 0))
         sock.listen(128)
         identity = app.state.runtime_control.identity
         hostname = f"[{arguments.host}]" if ":" in arguments.host else arguments.host

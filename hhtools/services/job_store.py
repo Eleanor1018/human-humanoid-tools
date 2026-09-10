@@ -41,6 +41,7 @@ from hhtools.contracts import (
     JobState,
     NextAction,
 )
+from hhtools.contracts.workflows import WorkflowJobSpec, parse_job_spec
 
 _IDEMPOTENCY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._~:-]{0,255}$")
 _JOB_ID_PATTERN = re.compile(r"^job:[A-Za-z0-9][A-Za-z0-9._~-]{0,251}$")
@@ -231,7 +232,7 @@ def _canonical_json(document: Any) -> str:
 
 
 def _encode_spec(spec: JobSpecV2) -> tuple[str, JobSpecV2]:
-    if not isinstance(spec, JobSpecV2):
+    if not isinstance(spec, JobSpecV2 | WorkflowJobSpec):
         raise _error(
             "INVALID_PARAMETER",
             "A valid JobSpec v2 is required to create a job.",
@@ -239,7 +240,7 @@ def _encode_spec(spec: JobSpecV2) -> tuple[str, JobSpecV2]:
         )
     try:
         encoded = _canonical_json(spec.model_dump(mode="json"))
-        restored = JobSpecV2.model_validate_json(encoded)
+        restored = parse_job_spec(encoded)
         if _canonical_json(restored.model_dump(mode="json")) != encoded:
             raise _InvalidStoredJobError("JobSpec v2 did not survive a canonical round trip")
     except (_InvalidStoredJobError, TypeError, ValueError, ValidationError) as exc:
@@ -259,6 +260,8 @@ def compute_request_fingerprint(spec: JobSpecV2) -> str:
 
 
 def _summary_for_spec(spec: JobSpecV2) -> dict[str, Any]:
+    if isinstance(spec, WorkflowJobSpec):
+        return {"input_count": len(spec.inputs), "workflow": spec.kind, "backend": spec.backend}
     summary: dict[str, Any] = {
         "input_count": len(spec.inputs),
         "robot_id": spec.robot.robot_id,
@@ -494,12 +497,16 @@ class JobStore:
         *,
         clock: Callable[[], datetime] | None = None,
         job_id_provider: Callable[[], str] | None = None,
+        read_only: bool = False,
     ) -> None:
         self._data_dir = Path(data_dir)
         self._database_path = self._data_dir / "jobs.sqlite3"
         self._clock = clock or (lambda: datetime.now(UTC))
         self._job_id_provider = job_id_provider or (lambda: f"job:{uuid.uuid4().hex}")
         self._changes = threading.Condition()
+        self._read_only = read_only
+        if read_only:
+            return
         try:
             self._data_dir.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
@@ -524,7 +531,13 @@ class JobStore:
             self._changes.notify_all()
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self._database_path, timeout=30.0)
+        connection = (
+            sqlite3.connect(
+                self._database_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=30.0
+            )
+            if self._read_only
+            else sqlite3.connect(self._database_path, timeout=30.0)
+        )
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys=ON")
         connection.execute("PRAGMA busy_timeout=30000")
@@ -669,7 +682,7 @@ class JobStore:
             actual_spec_sha256 = hashlib.sha256(spec_json.encode("utf-8")).hexdigest()
             if spec_sha256 != actual_spec_sha256 or request_fingerprint != spec_sha256:
                 raise _InvalidStoredJobError("persisted JobSpec identity is inconsistent")
-            spec = JobSpecV2.model_validate(spec_document)
+            spec = parse_job_spec(spec_document)
 
             if isinstance(attempt, bool) or not isinstance(attempt, int) or attempt < 1:
                 raise _InvalidStoredJobError("persisted retry attempt is invalid")

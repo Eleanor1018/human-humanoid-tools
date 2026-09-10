@@ -6,12 +6,13 @@ import hashlib
 import ipaddress
 import json
 import os
+import ssl
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlsplit
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, HTTPSHandler, Request, build_opener
 
 from hhtools.contracts import ApiError, ErrorStage
 
@@ -55,6 +56,7 @@ class RuntimeClient:
         runtime_id: str | None = None,
         workspace_id: str | None = None,
         timeout: float = 35.0,
+        ca_file: Path | None = None,
     ):
         parsed = urlsplit(endpoint)
         if (
@@ -80,7 +82,10 @@ class RuntimeClient:
         self.runtime_id = runtime_id
         self.workspace_id = workspace_id
         self.timeout = timeout
-        self._opener = build_opener(_NoRedirect())
+        authority_file = ca_file or os.environ.get("HHTOOLS_RUNTIME_CA")
+        self._opener = build_opener(
+            _NoRedirect(), HTTPSHandler(context=ssl.create_default_context(cafile=authority_file))
+        )
         self._operations: dict[str, dict[str, Any]] | None = None
 
     def _open(self, method: str, path: str, *, query=None, payload=None, headers=None):
@@ -183,6 +188,7 @@ class RuntimeClient:
         destination = Path(destination)
         destination.parent.mkdir(parents=True, exist_ok=True)
         partial = destination.with_name(destination.name + ".hhtools-part")
+        partial.touch(exist_ok=True)
         offset = partial.stat().st_size if partial.exists() else 0
         headers = {"Accept": "application/octet-stream"}
         if offset and offset < descriptor["size_bytes"]:
@@ -197,6 +203,10 @@ class RuntimeClient:
                 with partial.open("ab" if offset else "wb") as stream:
                     while chunk := response.read(1024**2):
                         stream.write(chunk)
+                        if stream.tell() > descriptor["size_bytes"]:
+                            raise client_error(
+                                "ARTIFACT_HASH_MISMATCH", "Artifact exceeds its declared size."
+                            )
                     stream.flush()
                     os.fsync(stream.fileno())
         with partial.open("rb") as stream:
@@ -206,3 +216,85 @@ class RuntimeClient:
             raise client_error("ARTIFACT_HASH_MISMATCH", "Downloaded artifact failed verification.")
         os.replace(partial, destination)
         return descriptor
+
+    def upload(
+        self, source: Path, *, kind: str, upload_id: str | None = None, on_session=None
+    ) -> dict:
+        """Upload a file or bundle. Persist on_session's ID to resume after disconnect."""
+        if not self.runtime_id:
+            self.connect()
+        source = Path(source)
+        if source.is_symlink():
+            raise client_error("INVALID_ASSET", "Uploads must not contain symbolic links.")
+        paths = sorted(source.rglob("*")) if source.is_dir() else [source]
+        if any(path.is_symlink() for path in paths):
+            raise client_error("INVALID_ASSET", "Uploads must not contain symbolic links.")
+        files = []
+        local = {}
+        for path in paths:
+            if not path.is_file():
+                continue
+            name = path.relative_to(source).as_posix() if source.is_dir() else path.name
+            with path.open("rb") as stream:
+                digest = hashlib.file_digest(stream, "sha256").hexdigest()
+            files.append(
+                {
+                    "relative_path": name,
+                    "sha256": digest,
+                    "size_bytes": path.stat().st_size,
+                    "role": "other",
+                }
+            )
+            local[name] = path
+        if upload_id is None:
+            session = self.request(
+                "POST",
+                PREFIX + "/uploads",
+                document={
+                    "kind": kind,
+                    "files": files,
+                    "entry_point": None if source.is_dir() else source.name,
+                    "display_name": source.name,
+                },
+            )
+        else:
+            session = self.request("GET", PREFIX + "/uploads/" + quote(upload_id, safe=""))
+
+            def identity(items):
+                return {
+                    (item["relative_path"], item["sha256"], item["size_bytes"]) for item in items
+                }
+
+            if identity(files) != identity(session["files"]):
+                raise client_error(
+                    "UPLOAD_SOURCE_CHANGED", "Local files no longer match the upload manifest."
+                )
+        upload_id = session["upload_id"]
+        if on_session:
+            on_session(upload_id)
+        try:
+            for member in session["files"]:
+                with local[member["relative_path"]].open("rb") as stream:
+                    offset = member["offset"]
+                    stream.seek(offset)
+                    while payload := stream.read(session["chunk_bytes"]):
+                        with self._open(
+                            "PUT",
+                            PREFIX + f"/uploads/{upload_id}/content",
+                            query={"member": member["relative_path"], "offset": offset},
+                            payload=payload,
+                            headers={"Content-Type": "application/octet-stream"},
+                        ) as response:
+                            offset = json.loads(response.read(4096))["offset"]
+                    if member["size_bytes"] == 0 and session["state"] != "completed":
+                        with self._open(
+                            "PUT",
+                            PREFIX + f"/uploads/{upload_id}/content",
+                            query={"member": member["relative_path"], "offset": 0},
+                            payload=b"",
+                        ):
+                            pass
+            return self.request("POST", PREFIX + f"/uploads/{upload_id}/complete")
+        except RuntimeClientError as error:
+            error.api_error.details["upload_id"] = upload_id
+            raise

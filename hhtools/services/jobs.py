@@ -38,6 +38,7 @@ from hhtools.contracts import (
     NextAction,
     SchedulerMode,
 )
+from hhtools.contracts.workflows import WorkflowJobManifest, WorkflowJobSpec, parse_job_spec
 
 from .admission import (
     AdmissionClosedError,
@@ -212,7 +213,7 @@ class JobExecutionContext:
         shared_artifact_lock: threading.Lock | None = None,
     ) -> None:
         self.job_id = job_id
-        self.spec = JobSpecV2.model_validate_json(spec.model_dump_json())
+        self.spec = parse_job_spec(spec.model_dump_json())
         self._artifact_store = artifact_store
         self._cancellation_event = cancellation_event
         self._progress_callback = progress_callback
@@ -387,6 +388,16 @@ class JobManager:
     def execution_available(self) -> bool:
         return self._executor is not None
 
+    def configure_execution(self, *, plan_service, executor: JobExecutor) -> None:
+        """Install host execution adapters before admitting work to this manager."""
+        with self._submission_lock:
+            if self._job_store.list_active():
+                raise _error(
+                    "JOB_CONFLICT", "Execution adapters cannot change while jobs are active."
+                )
+            self._retarget_service = plan_service
+            self._executor = executor
+
     @contextmanager
     def _mutating(self, job_id: str) -> Iterator[None]:
         """Serialize lifecycle mutations for one job in this process."""
@@ -496,7 +507,7 @@ class JobManager:
                     job_id=created.job_id,
                     kind="job_spec",
                     document=spec.model_dump(mode="json"),
-                    metadata={"schema_version": "2"},
+                    metadata={"schema_version": str(spec.schema_version)},
                 )
                 created = self._job_store.attach_artifacts(
                     created.job_id,
@@ -729,7 +740,9 @@ class JobManager:
                 self._finalize_cancelled(job_id, context=None)
             return self._project_view(self._job_store.get(job_id))
 
-    def retry_job(self, job_id: str, *, idempotency_key: str) -> AgentJobView:
+    def retry_job(
+        self, job_id: str, *, idempotency_key: str, max_attempts: int | None = None
+    ) -> AgentJobView:
         """Create one explicit child attempt without mutating its parent."""
 
         try:
@@ -742,11 +755,21 @@ class JobManager:
                 "Only a terminal job can be retried.",
                 details={"job_id": parent.job_id, "state": parent.view.state.value},
             )
-        return self.start_job(
-            parent.spec.plan_id,
-            idempotency_key=idempotency_key,
-            parent_job_id=parent.job_id,
-        )
+        with self._submission_lock:
+            existing = self._existing_submission(
+                idempotency_key=idempotency_key, plan_id=parent.spec.plan_id, parent_job_id=job_id
+            )
+            if existing is not None:
+                return self._project_view(existing)
+            if max_attempts is not None and parent.view.attempt >= max_attempts:
+                raise _error(
+                    "RETRY_BUDGET_EXCEEDED",
+                    "The retry chain exhausted its attempt budget.",
+                    stage=ErrorStage.ADMISSION,
+                )
+            return self.start_job(
+                parent.spec.plan_id, idempotency_key=idempotency_key, parent_job_id=parent.job_id
+            )
 
     def _run_job(self, job_id: str) -> None:
         context: JobExecutionContext | None = None
@@ -1137,7 +1160,10 @@ class JobManager:
     ) -> JobManifest:
         baseline = current.view.started_at or current.view.submitted_at
         completed_at = max(completed_at, baseline)
-        return JobManifest(
+        manifest_type = (
+            WorkflowJobManifest if isinstance(current.spec, WorkflowJobSpec) else JobManifest
+        )
+        return manifest_type(
             job_id=current.job_id,
             parent_job_id=current.view.parent_job_id,
             root_job_id=current.view.root_job_id,

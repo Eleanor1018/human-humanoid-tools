@@ -59,6 +59,7 @@ def _mount_web_app(
     agent_rest_available: bool = True,
     agent_json_cli_available: bool = True,
     runtime: ApplicationRuntime,
+    runtime_shell: bool = False,
 ):
     """Mount HTTP adapters onto an application-owned runtime."""
     from fastapi import FastAPI
@@ -146,7 +147,13 @@ def _mount_web_app(
         desktop_session_secret=desktop_session_secret,
         desktop_allowed_host=desktop_allowed_host,
         desktop_allowed_origin=desktop_allowed_origin,
+        runtime_shell=runtime_shell,
     )
+    if runtime_shell:
+        if static_dir.is_dir():
+            app.mount("/", StaticFiles(directory=str(static_dir), html=True), name="static")
+        install_agent_boundary(app)
+        return app
     register_system_routes(
         app,
         state=state,

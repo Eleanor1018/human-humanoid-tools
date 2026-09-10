@@ -30,7 +30,7 @@ def discover(workspace: Path) -> RuntimeClient | None:
 
 
 def connect_or_start(
-    workspace: Path, *, source: Path | None = None, timeout: float = 45
+    workspace: Path, *, source: Path | None = None, timeout: float = 45, port: int = 0
 ) -> RuntimeClient:
     """Competing launches are resolved by the existing workspace ownership lease."""
     workspace = Path(workspace).resolve()
@@ -40,6 +40,8 @@ def connect_or_start(
     directory = workspace / ".hhtools-agent"
     directory.mkdir(parents=True, exist_ok=True)
     command = [sys.executable, "-m", "hhtools.runtime.daemon", "--workspace", str(workspace)]
+    if port:
+        command.extend(["--port", str(port)])
     if source is not None:
         command.extend(["--source", str(Path(source).resolve())])
     options = (

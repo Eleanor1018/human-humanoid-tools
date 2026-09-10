@@ -8,6 +8,7 @@ do not need to exchange host paths or reimplement bundle assembly.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from hhtools.contracts import (
@@ -22,6 +23,7 @@ from hhtools.contracts import (
     AssetRegistrationRequest,
     AssetSearchResponse,
     ErrorStage,
+    InspectionStatus,
 )
 
 from .asset_inspection import (
@@ -34,6 +36,7 @@ from .assets import (
     AssetServiceError,
     DiscoveredAsset,
     DiscoveredAssetFile,
+    _default_discovery,
 )
 from .r2r_asset_inspection import (
     R2RTrajectoryDiscoveryError,
@@ -155,6 +158,7 @@ class AgentAssetService:
         self._inspector = inspector or MotionAssetInspector()
         self._robot_inspector = robot_inspector or RobotAssetInspector()
         self._r2r_inspector = r2r_inspector or R2RTrajectoryInspector()
+        self.execution_guard = None
 
     @property
     def allowed_root_ids(self) -> tuple[str, ...]:
@@ -189,6 +193,28 @@ class AgentAssetService:
         """Discover and persist one motion bundle below an allowlisted root."""
 
         candidate = self._registry.resolve_registration_path(request)
+        if request.kind in {AssetKind.VIDEO, AssetKind.DATASET_BUNDLE}:
+            discovery = _default_discovery(candidate, recursive=request.recursive)
+            if request.kind is AssetKind.VIDEO and (
+                not candidate.is_file()
+                or candidate.suffix.lower() not in {".mp4", ".mov", ".avi", ".mkv", ".webm"}
+            ):
+                raise AssetServiceError(
+                    ApiError(
+                        code="UNSUPPORTED_VIDEO",
+                        message="A supported video file is required.",
+                        stage=ErrorStage.ASSET_REGISTRATION,
+                    )
+                )
+            if request.kind is AssetKind.DATASET_BUNDLE and not candidate.is_dir():
+                raise AssetServiceError(
+                    ApiError(
+                        code="INVALID_DATASET",
+                        message="A dataset bundle must be a directory.",
+                        stage=ErrorStage.ASSET_REGISTRATION,
+                    )
+                )
+            return self._registry.register(request, discovery=replace(discovery, kind=request.kind))
         kind = _registration_kind(request, candidate)
         r2r_discovery = None
         explicitly_r2r = (
@@ -334,6 +360,8 @@ class AgentAssetService:
         paths instead of exposing this application-internal absolute path.
         """
 
+        if self.execution_guard is not None:
+            self.execution_guard(asset_id)
         return self._registry.resolve_file(
             asset_id,
             relative_path,
@@ -367,6 +395,22 @@ class AgentAssetService:
         """Inspect a registered bundle after re-resolving its trusted base path."""
 
         bundle = self._registry.get(request.asset_id)
+        if bundle.kind in {AssetKind.VIDEO, AssetKind.DATASET_BUNDLE}:
+            for item in bundle.files:
+                self._registry.resolve_file(
+                    bundle.asset_id, item.relative_path, verify_hash=request.verify_hashes
+                )
+            return AssetInspection(
+                asset_id=bundle.asset_id,
+                status=InspectionStatus.VALID,
+                kind=bundle.kind,
+                category=bundle.category,
+                metadata={
+                    "file_count": len(bundle.files),
+                    "content_parsed": False,
+                    "parse_operation": "hhtools_workflow_preflight",
+                },
+            )
         primary = self._registry.resolve_file(
             bundle.asset_id,
             bundle.primary_file,

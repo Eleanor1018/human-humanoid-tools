@@ -22,6 +22,9 @@ We welcome suggestions and ideas — please open an issue or discussion anytime.
 
 ## Highlights
 
+- **Resident Runtime (0.2)**: shared GUI/Agent jobs, authenticated remote access, resumable
+  resource transfer, supervised workers, and optional WebRTC previews. Start with
+  `hhtools runtime start`; see the [Runtime guide](docs/runtime.md).
 - **Fast retarget** — Web UI or **CLI** (`hhtools retarget` / `scripts/batch_*_retarget.py`); **Newton IK** + **MPC-SQP** interaction mesh.
 - **Human formats** — BVH / GLB / SMPL family; adapters for AMASS, GVHMR, LAFAN, 100STYLE, OMOMO, OmniContact, PHUMA, intermimic, meshmimic, …
 - **Any URDF** — upload any robot in the Web UI: drag in the URDF, drag in meshes; auto-detected, no manual tuning.

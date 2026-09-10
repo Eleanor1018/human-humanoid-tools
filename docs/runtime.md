@@ -26,6 +26,10 @@ stdio mode, whose lifetime owns its jobs. Use a separate workspace for that mode
 
 Stop a persistent service explicitly with `hhtools runtime stop --workspace ...`.
 The default policy drains work; `--cancel` requests cancellation before shutdown.
+`hhtools web` and Electron connect to a resident service by default. `hhtools web --legacy`
+and `HHTOOLS_LEGACY_SIDECAR=1` retain the previous UI. The resident host does not mount
+the old session-owned business routes. Electron can use `HHTOOLS_RUNTIME_ENDPOINT` and
+`HHTOOLS_RUNTIME_TOKEN` to connect without a local Python runtime.
 
 ## SDK And Discovery
 
@@ -58,6 +62,76 @@ resumes an incomplete byte transfer, verifies size and SHA-256, and only then
 publishes the destination. The versioned Runtime data channel is separate from
 the existing v1 compact-JSON artifact boundary.
 
+## Resource Workflows
+
+H2R, R2R, Batch, and calibration retain their v1 contracts and v2 specifications.
+Analysis, Video2Motion, analysis exports, and rendered media use v3 specifications
+and v2 manifests in the same stores and JobManager.
+
+```python
+plan = client.call("hhtools_workflow_preflight", {"request": {
+    "workflow": "analysis", "asset_ids": [asset_id],
+}})
+job = client.call("hhtools_runtime_start_job", {"request": {
+    "plan_id": plan["plan_id"], "idempotency_key": "analysis-001",
+}})
+```
+
+Use the same preflight with `workflow="video_to_motion"` and video asset IDs.
+GVHMR remains an optional external environment with licensed body-model files.
+Availability reports configuration checks; execution validates the inference
+environment. Administrators configure locations with `hhtools_runtime_configure_backends`.
+New workflow plans bind configuration and GVHMR checkpoint digests.
+
+Analysis produces an `analysis_report`, evaluation, and manifest. Use
+`hhtools_runtime_select_analysis` for filtering/subsets,
+`hhtools_runtime_compare_analysis` for comparison, and
+`hhtools_analysis_export_preflight` for durable JSON/CSV manifests or robot ZIPs.
+`hhtools_runtime_import_member` registers a selected dataset member;
+`hhtools_runtime_import_artifact` continues from a prior job output.
+
+`client.upload(path, kind="motion_bundle", on_session=save_upload_id)` uploads
+a file or folder. Pass its saved `upload_id` to resume. The corresponding CLI
+commands are `hhtools runtime upload PATH --kind KIND` and
+`hhtools runtime download JOB_ID ARTIFACT_ID --output PATH`.
+
+Workers open metadata stores read-only. The controller verifies worker generation,
+job ownership, staging boundaries, length, and digest before publishing outputs.
+Cancellation and timeout wait for worker termination before publishing a terminal
+state. Restart recovery provides a new whole-plan retry, not checkpoint continuation.
+
+## Preview Modes
+
+Install `uv sync --locked --extra mcp --extra preview` for server rendering.
+
+```python
+session = client.call("hhtools_runtime_create_preview", {"request": {
+    "source": {"asset_id": asset_id}, "mode": "webrtc",
+    "width": 960, "height": 540, "fps": 24, "ttl_seconds": 120,
+}})
+```
+
+The same source can use `mode="data"` for client R3F playback. Job previews use
+`job_id` plus `artifact_id`; raw robot trajectories may supply their exact
+`robot_asset_id`. Data declares Z-up metres, radians, XYZW quaternions, row-major
+transforms, frame indices, and original duration. Sampling is capped at 600 frames.
+Robot/prop meshes and triangulated terrain stay in the scene; props without a
+mesh are explicitly marked as bounding geometry.
+
+The server renderer uses MuJoCo 3.7+ and aiortc for kinematic playback, not physics
+evaluation. A session has one media connection, a renewable lease, and its own
+process. Orbit, zoom, seek, play, and pause use the WebRTC data channel.
+Session/resource management uses the separate HTTP control API.
+
+`hhtools_preview_render_preflight` creates durable PNG or short MP4 jobs.
+Artifacts carry source identity and sampling settings. MCP offers
+`preview_snapshot` for a session frame and `inspect_artifact_image` for a
+published PNG/JPEG. Binary trajectories and continuous video stay out of tool text.
+
+Direct ICE connectivity is the default. Configure `HHTOOLS_ICE_SERVERS` as an
+aiortc ICE-server JSON list when STUN/TURN is needed. DTLS/SRTP media is separate
+from HTTPS signaling; allow the relevant UDP paths or provide a TURN relay.
+
 ## Remote Service
 
 Start locally first, issue a scoped token with `hhtools_runtime_issue_token`,
@@ -76,9 +150,20 @@ uv run hhtools runtime serve --workspace /srv/hhtools/workspace \
 
 Remote mode requires TLS and a valid bearer credential. Forwarded headers are
 not trusted. Credentials do not belong in URLs, plans, logs, or manifests.
-Legacy Web routes accepting host paths remain restricted to local administrators;
-remote operations use the versioned machine resource APIs. Agent v1 operations
-retain their schemas and receive the same scoped authentication in this host.
+The resident host exposes the versioned machine APIs. Agent v1 operations retain their
+schemas and receive the same scoped authentication. Private CAs can be supplied through
+`RuntimeClient(..., ca_file=...)` or `HHTOOLS_RUNTIME_CA`. Direct daemon deployment
+supports explicit `--allow-origin` values; cross-origin clients still need authentication.
+A TLS-terminating proxy must also use TLS to the Runtime.
+
+Uploaded code-capable or host-bound serialization requires per-content administrator
+authorization through `hhtools_runtime_trust_asset`. Host roots are operator-configured.
+Process supervision is a failure-isolation boundary, not an OS security sandbox.
+
+`hhtools_runtime_plan_cleanup` returns a reviewable staging cleanup plan. Applying its
+ID rejects changed uploads and removes incomplete upload sessions. Registered assets,
+plans, jobs, and artifacts are retained; automatic persistent-data garbage collection
+is disabled in this release.
 
 ## Migration And Implementation Record
 
@@ -103,11 +188,23 @@ decoded motion and preview sessions are replaceable caches. Playback position,
 camera and panel layout belong to clients. Do not make browser tokens identities
 for new durable workflows.
 
-The initial implementation commit covers service discovery/lifecycle, shared job
-history/events, scoped credentials, an operation catalog, SDK, resumable artifact
-delivery, and the default MCP client. Subsequent commits on this branch supply
-the workflow and preview migrations; this paragraph is not a claim that those
-stages are already complete.
+The first Runtime start backs up existing Agent SQLite databases under
+`before-runtime-v1` while holding the workspace lease. Existing IDs and records are
+retained; new workflow records use explicit specification and manifest versions.
+`hhtools_runtime_legacy_jobs` exposes old Web history with a non-replayable marker.
+A rollback should stop the Runtime and restore its pre-migration backup; do not
+open v3 records with an older writer.
+
+Validation covers concurrent discovery, identity mismatch, scoped authentication,
+real HTTPS transfers, upload recovery, immutable plans, events, process failures,
+timeout/cancellation, H2R/Batch execution, real offscreen pixels, and WebRTC frames.
+GPU rendering tests run with an NVIDIA device, or with `HHTOOLS_TEST_RENDER=1`
+for another configured offscreen renderer.
+
+Local validation used an RTX 5060 with 8 GiB VRAM and 960x540 loopback streaming at
+24 fps. Browser frame cadence is not isolated GPU render time or end-to-end input
+latency. WAN impairment, multi-host scheduling, training, and checkpoint resume
+are not claimed by this release.
 
 ## Rendering Reference
 

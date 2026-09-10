@@ -142,12 +142,10 @@ the CLI or manufacture a v2 document inside this skill.
 
 ## Current boundary
 
-The MCP stdio process assembles the same transport-neutral application services directly; it is
-not a REST client and does not need `hhtools web` running. H2R and R2R pair-calibration status,
-proposals, validation, visual preview, and validated silent save run inside this same owner. The
-model hint and visual-review declaration are audit metadata, not proof of client identity. A given `save_dir`
-still has exactly one local runtime owner; never request a WebUI session token or run MCP and Web
-concurrently against the same directory. There is no authenticated remote MCP
-transport, multi-user authorization, cross-process native-worker resume, or guaranteed actual-GPU
-provenance in this phase. `lookup_job` can recover the persisted identity and truthful status of a
-known submission; it cannot resume interrupted native execution.
+The default MCP stdio process is a thin client of the resident Runtime. It connects to or starts
+the service; closing stdio does not stop jobs. GUI and MCP may connect concurrently to the same
+workspace. H2R/R2R calibration and all execution remain inside the Runtime ownership boundary.
+The model hint is audit metadata, not proof of identity. Authenticated remote HTTP uses workspace
+scopes; stdio remains the MCP transport. Recovery restores records and supports whole-job retry,
+not checkpoint resume. New workflow and preview schemas are available from the live operation
+catalog described in the [Runtime guide](../../../../docs/runtime.md).

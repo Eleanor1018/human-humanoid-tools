@@ -30,6 +30,7 @@ class ApplicationPaths:
     job_history_dir: Path | None = None
     job_settings_path: Path | None = None
     workspace_robot_root: Path | None = None
+    asset_roots: dict[str, Path] | None = None
 
     @classmethod
     def isolated(cls, root: Path, *, source_root: Path | None = None) -> ApplicationPaths:
@@ -156,6 +157,7 @@ def build_application_runtime(
             agent_json_cli_available=agent_json_cli_available,
             max_batch_items=max_batch_items,
             max_batch_total_frames=max_batch_total_frames,
+            additional_asset_roots=paths.asset_roots,
         )
         lifecycle = RuntimeLifecycle(state, scheduler, settings_lock, lease)
         return ApplicationRuntime(

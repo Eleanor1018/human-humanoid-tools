@@ -46,13 +46,13 @@ jobs:
         run: >-
           uv run --no-sync ruff check
           hhtools/application hhtools/contracts hhtools/mcp hhtools/services
-          hhtools/web/server
+          hhtools/web/server hhtools/runtime hhtools/client hhtools/cli/runtime.py
 
       - name: Check maintained Python formatting
         run: >-
           uv run --no-sync ruff format --check
           hhtools/application hhtools/contracts hhtools/mcp hhtools/services
-          hhtools/web/server
+          hhtools/web/server hhtools/runtime hhtools/client hhtools/cli/runtime.py
 
       - name: Run complete Python regression suite
         run: uv run --no-sync python -m pytest -q

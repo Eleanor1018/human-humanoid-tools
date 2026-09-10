@@ -44,6 +44,7 @@ export interface StageTerrainPayload {
 }
 
 export interface StageObjectPayload {
+  readonly glb_base64?: string | null;
   readonly name?: string;
   readonly color?: readonly [number, number, number] | null;
   readonly extents: StageVec3;

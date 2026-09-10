@@ -26,8 +26,61 @@ def run_web(
     max_batch_items: int | None = None,
     max_batch_total_frames: int | None = None,
     job_settings_path: Path | None = None,
+    legacy: bool = False,
 ) -> None:
-    """Launch the uvicorn server (blocking)."""
+    """Open a client of the resident Runtime; client exit does not own its jobs."""
+    if legacy:
+        return _run_legacy_web(
+            source_root=source_root,
+            save_dir=save_dir,
+            cache_dir=cache_dir,
+            host=host,
+            port=port,
+            max_running_jobs=max_running_jobs,
+            max_queued_jobs=max_queued_jobs,
+            max_batch_items=max_batch_items,
+            max_batch_total_frames=max_batch_total_frames,
+            job_settings_path=job_settings_path,
+        )
+    require_web_runtime_dependencies()
+    if host not in {"127.0.0.1", "localhost", "::1"}:
+        raise ValueError("Use hhtools runtime serve --remote with TLS for remote binding.")
+    import webbrowser
+
+    from hhtools.client.discovery import connect_or_start
+
+    client = connect_or_start(save_dir, source=source_root, port=port)
+    changes = {
+        key: value
+        for key, value in {
+            "max_running_jobs": max_running_jobs,
+            "max_queued_jobs": max_queued_jobs,
+            "max_batch_items": max_batch_items,
+            "max_batch_total_frames": max_batch_total_frames,
+        }.items()
+        if value is not None
+    }
+    if changes:
+        budget = client.request("GET", "/api/runtime/v1/budget")
+        client.request("PUT", "/api/runtime/v1/admin/budget", document={**budget, **changes})
+    print(f"HHTools Runtime: {client.endpoint}")
+    webbrowser.open(client.endpoint)
+
+
+def _run_legacy_web(
+    *,
+    source_root: Path,
+    save_dir: Path,
+    cache_dir: Path | None = None,
+    host: str = "127.0.0.1",
+    port: int = 8009,
+    max_running_jobs: int | None = None,
+    max_queued_jobs: int | None = None,
+    max_batch_items: int | None = None,
+    max_batch_total_frames: int | None = None,
+    job_settings_path: Path | None = None,
+) -> None:
+    """Explicit compatibility host for the previous browser workspace."""
     require_web_runtime_dependencies()
     import uvicorn
 

@@ -29,7 +29,7 @@ def test_mcp_extra_owns_its_product_runtime_dependencies() -> None:
     assert all(not requirement.startswith("hhtools[") for requirement in requirements)
 
 
-def test_codex_project_mcp_uses_portable_isolated_runtime_paths() -> None:
+def test_codex_project_mcp_uses_the_shared_resident_workspace() -> None:
     config = tomllib.loads((REPO_ROOT / ".codex" / "config.toml").read_text(encoding="utf-8"))
     server = config["mcp_servers"]["hhtools"]
 
@@ -39,13 +39,8 @@ def test_codex_project_mcp_uses_portable_isolated_runtime_paths() -> None:
     assert server["required"] is True
     assert server["default_tools_approval_mode"] == "writes"
     assert server["args"][:4] == ["run", "--frozen", "--no-sync", "hhtools-mcp"]
-    assert server["args"][server["args"].index("--save-dir") + 1] == ".hhtools/agent/save"
-    assert server["args"][server["args"].index("--cache") + 1] == ".hhtools/agent/cache"
-    assert (
-        server["args"][server["args"].index("--job-settings") + 1]
-        == ".hhtools/agent/job-settings.json"
-    )
-    assert server["args"][server["args"].index("--web-ui-url") + 1].endswith(":8010")
+    assert server["args"][server["args"].index("--save-dir") + 1] == "assets/save_npz"
+    assert "--ephemeral" not in server["args"]
     assert all(not Path(value).is_absolute() for value in server["args"] if "://" not in value)
     assert ".hhtools/" in (REPO_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
 

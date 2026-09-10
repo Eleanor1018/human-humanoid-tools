@@ -1034,20 +1034,11 @@ def retry_retarget_job(
 ) -> AgentJobView:
     """Create an idempotent child attempt for one terminal parent job."""
     control = getattr(request.app.state, "runtime_control", None)
-    if (
-        control is not None
-        and _job_manager(request).get_job(job_id).attempt >= control.budget.max_retry_attempts
-    ):
-        raise JobManagerError(
-            ApiError(
-                code="RETRY_BUDGET_EXCEEDED",
-                message="The retry chain exhausted its attempt budget.",
-                stage=ErrorStage.ADMISSION,
-            )
-        )
+    options = {"max_attempts": control.budget.max_retry_attempts} if control is not None else {}
     return _job_manager(request).retry_job(
         job_id,
         idempotency_key=_submission_key(request, retry.idempotency_key, "retry"),
+        **options,
     )
 
 

@@ -1095,6 +1095,17 @@ def main(argv: Sequence[str] | None = None) -> None:
     """Console entry point. stdout remains exclusively owned by MCP framing."""
 
     arguments = _parser().parse_args(argv)
+    limits = {
+        name: getattr(arguments, name)
+        for name in (
+            "max_running_jobs",
+            "max_queued_jobs",
+            "max_batch_items",
+            "max_batch_total_frames",
+        )
+    }
+    if any(value is not None and value < 0 for value in limits.values()):
+        _parser().error("Runtime limits must be non-negative")
     if not arguments.ephemeral:
         import asyncio
         import os
@@ -1103,11 +1114,18 @@ def main(argv: Sequence[str] | None = None) -> None:
         from hhtools.client.discovery import connect_or_start
         from hhtools.mcp.client_server import run_client_server
 
+        endpoint = arguments.endpoint or os.environ.get("HHTOOLS_RUNTIME_ENDPOINT")
         client = (
-            RuntimeClient(arguments.endpoint, token=os.environ.get(arguments.token_env))
-            if arguments.endpoint
+            RuntimeClient(endpoint, token=os.environ.get(arguments.token_env))
+            if endpoint
             else connect_or_start(arguments.save_dir, source=arguments.source)
         )
+        explicit_limits = {name: value for name, value in limits.items() if value is not None}
+        if explicit_limits:
+            budget = client.request("GET", "/api/runtime/v1/budget")
+            client.request(
+                "PUT", "/api/runtime/v1/admin/budget", document={**budget, **explicit_limits}
+            )
         asyncio.run(run_client_server(client))
         return
     for name in (

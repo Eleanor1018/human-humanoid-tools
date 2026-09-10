@@ -37,7 +37,7 @@ ALLOWED_DEPENDENCIES: dict[str, frozenset[str]] = {
     "__root__": frozenset({"_version"}),
     "_version": frozenset(),
     "client": frozenset({"contracts"}),
-    "runtime": frozenset({"application", "agent", "contracts", "services"}),
+    "runtime": frozenset({"application", "agent", "contracts", "services", "utils"}),
     "utils": frozenset(),
     "contracts": frozenset(),
     "core": frozenset(),
@@ -49,6 +49,7 @@ ALLOWED_DEPENDENCIES: dict[str, frozenset[str]] = {
             "contracts",
             "core",
             "io",
+            "integrations",
             "retarget",
             "robot",
             "services",
@@ -65,6 +66,7 @@ ALLOWED_DEPENDENCIES: dict[str, frozenset[str]] = {
     "services": frozenset({"_version", "contracts", "core", "io", "retarget", "robot", "utils"}),
     "web": frozenset(
         {
+            "client",
             "analysis",
             "agent",
             "application",

@@ -102,3 +102,53 @@ def stop(workspace: Path = typer.Option(Path("assets/save_npz")), cancel: bool =
             "hhtools_runtime_shutdown", {"request": {"policy": "cancel" if cancel else "drain"}}
         )
     )
+
+
+@app.command()
+def upload(
+    source: Path,
+    kind: str = "motion_bundle",
+    endpoint: str | None = None,
+    workspace: Path = typer.Option(Path("assets/save_npz")),
+    upload_id: str | None = None,
+    token_env: str = "HHTOOLS_RUNTIME_TOKEN",
+):
+    """Upload a local file or bundle, with an optional prior session ID for resumption."""
+    from hhtools.client import RuntimeClient, RuntimeClientError
+    from hhtools.client.discovery import connect_or_start
+
+    try:
+        client = (
+            RuntimeClient(endpoint, token=os.environ.get(token_env))
+            if endpoint
+            else connect_or_start(workspace)
+        )
+        _print(client.upload(source, kind=kind, upload_id=upload_id))
+    except RuntimeClientError as error:
+        _print(error.api_error.model_dump(mode="json"))
+        raise typer.Exit(1) from None
+
+
+@app.command()
+def download(
+    job_id: str,
+    artifact_id: str,
+    output: Path = typer.Option(..., "--output"),
+    endpoint: str | None = None,
+    workspace: Path = typer.Option(Path("assets/save_npz")),
+    token_env: str = "HHTOOLS_RUNTIME_TOKEN",
+):
+    """Resume a download and publish the local file only after integrity verification."""
+    from hhtools.client import RuntimeClient, RuntimeClientError
+    from hhtools.client.discovery import connect_or_start
+
+    try:
+        client = (
+            RuntimeClient(endpoint, token=os.environ.get(token_env))
+            if endpoint
+            else connect_or_start(workspace)
+        )
+        _print(client.download(job_id, artifact_id, output))
+    except RuntimeClientError as error:
+        _print(error.api_error.model_dump(mode="json"))
+        raise typer.Exit(1) from None

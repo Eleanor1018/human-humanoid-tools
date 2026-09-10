@@ -178,3 +178,21 @@ def test_verified_artifact_supports_range(runtime_app, monkeypatch, tmp_path):
     assert response.status_code == 206
     assert response.content == content[9:]
     assert response.headers["etag"] == '"' + descriptor.sha256 + '"'
+
+
+def test_drain_finishes_queued_work_and_rejects_new_admission():
+    import threading
+
+    from hhtools.services.job_scheduler import JobScheduler, JobSchedulerClosedError
+
+    scheduler = JobScheduler(max_running_jobs=1, max_queued_jobs=2)
+    gate = threading.Event()
+    finished = []
+    scheduler.submit(lambda: gate.wait(5))
+    scheduler.submit(lambda: finished.append("queued"))
+    scheduler.stop_accepting()
+    with pytest.raises(JobSchedulerClosedError):
+        scheduler.reserve()
+    gate.set()
+    assert scheduler.drain(timeout=5)
+    assert finished == ["queued"]

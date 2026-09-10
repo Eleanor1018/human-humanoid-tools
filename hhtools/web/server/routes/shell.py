@@ -29,12 +29,16 @@ def register_shell_routes(
     desktop_session_secret: str | None,
     desktop_allowed_host: str | None,
     desktop_allowed_origin: str | None,
+    runtime_shell: bool = False,
 ) -> None:
     UI_BUILD_ID = ui_build_id
 
     def _render_index_html() -> str:
         raw = (static_dir / "index.html").read_text(encoding="utf-8")
-        return raw.replace("{{UI_BUILD}}", UI_BUILD_ID)
+        raw = raw.replace("{{UI_BUILD}}", UI_BUILD_ID)
+        if runtime_shell:
+            raw = raw.replace("</head>", '<meta name="hhtools-runtime" content="1"></head>')
+        return raw
 
     @app.get("/")
     @app.get("/index.html")

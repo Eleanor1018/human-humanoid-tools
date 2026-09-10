@@ -160,10 +160,13 @@ def _hash_stream(stream: BinaryIO, target: BinaryIO) -> tuple[str, int]:
 class ArtifactStore:
     """SQLite-indexed, immutable artifact bytes below one managed root."""
 
-    def __init__(self, data_dir: Path) -> None:
+    def __init__(self, data_dir: Path, *, read_only: bool = False) -> None:
         self._data_dir = Path(data_dir)
         self._object_root = self._data_dir / "artifact-objects"
         self._database_path = self._data_dir / "artifacts.sqlite3"
+        self._read_only = read_only
+        if read_only:
+            return
         try:
             self._object_root.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
@@ -182,7 +185,13 @@ class ArtifactStore:
         return self._database_path
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self._database_path, timeout=30.0)
+        connection = (
+            sqlite3.connect(
+                self._database_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=30.0
+            )
+            if self._read_only
+            else sqlite3.connect(self._database_path, timeout=30.0)
+        )
         connection.row_factory = sqlite3.Row
         return connection
 
@@ -333,6 +342,8 @@ class ArtifactStore:
         metadata: Mapping[str, Any] | None,
         stability_check: Callable[[int], bool] | None = None,
     ) -> ArtifactDescriptor:
+        if self._read_only:
+            raise _error("READ_ONLY_STORE", "Workers cannot publish artifacts directly.")
         _validate_job_id(job_id)
         _validate_kind(kind)
         _validate_format(format)

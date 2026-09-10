@@ -8,10 +8,10 @@ editing a candidate document, reading host files, or switching transports.
 
 | Signal | Required action | Forbidden action |
 |---|---|---|
-| `MCP unavailable` | Stop and explain that the local HHTools MCP integration must be configured. | Do not invoke shell, JSON CLI, REST, or direct Python services as a fallback. |
-| `RUNTIME_ALREADY_ACTIVE` | Stop and explain that another local runtime owns the same `save_dir`; have the human close that owner before reconnecting the intended runtime. | Do not bypass the lease, start MCP and Web together, or switch directories to hide the conflict. |
+| `MCP unavailable` | Use another configured public Runtime client when the user's workflow permits it; otherwise report the missing integration. | Do not bypass authorization through direct store access. |
+| `RUNTIME_ALREADY_ACTIVE` | Connect to the existing resident Runtime for the same `save_dir`; default MCP and Web clients may share it. | Do not bypass the lease, start a second writer, or close the service just to switch clients. |
 | `RUNTIME_LEASE_UNAVAILABLE` | Stop and present the runtime lease/storage error for human investigation. | Do not delete the lease file, disable locking, or continue without exclusive ownership. |
-| `human_action_required` | Do not start a job. For `CALIBRATION_REQUIRED` or `R2R_CALIBRATION_REQUIRED` with advertised matching tools, use the in-process automatic flow below; otherwise pause and present every `required_action`. | Do not call `start_job`, invent an action, run MCP and Web against the same directory, or request a WebUI session token. |
+| `human_action_required` | Do not start a job before resolving its prerequisites. For `CALIBRATION_REQUIRED` or `R2R_CALIBRATION_REQUIRED`, use the shared automatic flow below. Follow an authorized `actor: agent` action; pause for a genuinely missing human decision and present its `required_action`. | Do not call `start_job` before preflight is ready, invent an action, start another writer, or request a WebUI session token. |
 | `CALIBRATION_REQUIRED` | Call H2R status → propose → validate → optional GPT preview → validated silent save, then perform a new preflight. | Do not guess joint values, edit a candidate id, save an invalid candidate, or treat calibration save as full-run approval. |
 | `R2R_CALIBRATION_REQUIRED` | Call R2R pair status → propose → validate → optional GPT preview → validated silent save, then perform a new R2R preflight. | Do not guess target joint values, edit a candidate id, exchange a pair member, save an invalid candidate, or treat calibration save as full-run approval. |
 | `CALIBRATION_VALIDATION_FAILED` | Inspect error checks, revise from the exact parent candidate with bounded overrides, and revalidate; stop after three visual iterations. | Do not weaken limits, fabricate a passing visual review, or save the rejected pose through another transport. |
@@ -25,12 +25,12 @@ editing a candidate document, reading host files, or switching transports.
 | `ambiguous start` | Call `lookup_job` with the exact recorded `plan_id` and idempotency key. Continue the recovered job when found; only on explicit `JOB_NOT_FOUND` replay the same start operation with that same pair. | Do not substitute `retry_job`, generate a new key, replay before lookup, or assume the first start failed. |
 | `ambiguous retry` | Replay the exact same `retry_job` call with the same parent `job_id` and retry idempotency key, then inspect the returned child. | Do not generate a new key or create another child attempt. |
 | `JOB_CONFLICT` | Stop and report that the idempotency key is already bound to a different plan or retry parent; reconcile the original logical request with the user. | Do not evade the conflict by inventing another key or submit a duplicate job. |
-| `JOB_INTERRUPTED` | Explain that the prior process ended, then wait for explicit user approval before `retry_job`; the retry is a new whole-plan child attempt. | Do not claim resume, continue an active process, or retry automatically. |
+| `JOB_INTERRUPTED` | Explain that the prior process ended. Retry within the user's existing retry authorization and Runtime budget; otherwise request the missing decision. A retry is a new whole-plan child attempt. | Do not claim checkpoint resume or bypass the retry budget. |
 | `JOB_CANCEL_UNSUPPORTED` / `INVALID_JOB_TRANSITION` | Report the current lifecycle state and available `next_action`; poll an active job only at the advised interval. | Do not force termination, mutate state, or conceal a late cancellation. |
 | `cancel requested` | Poll until the service reports `cancelled` or another truthful terminal state; running native work cancels cooperatively at safe points. | Do not claim immediate cancellation merely because `cancel_job` returned. |
 | `ARTIFACT_HASH_MISMATCH` | Stop artifact delivery, preserve the error, and ask the user whether to investigate or rerun. | Do not present the artifact as valid, skip verification, or read a host path directly. |
 | `partial` | Read the failure and evaluation reports, summarize successful and failed portions, and pause for the user's decision. | Do not label the whole result successful or automatically retry a subset; retry is whole-plan only. |
-| `review_required` | Read and present the evaluation plus manifest, then pause for explicit quality approval. | Do not preflight or start a full run and do not equate `completed` with accepted quality. |
+| `review_required` | Read the evaluation and manifest against the user's criteria; request explicit quality approval only for a decision outside the existing authorization. | Do not preflight or start a full run outside the authorized quality policy, and do not equate `completed` with accepted quality. |
 | `rejected outcome` | Present the evaluation evidence and stop. | Do not promote the result to full or real-robot use. |
 
 ## Idempotency versus retry
@@ -63,5 +63,6 @@ Use both lifecycle and semantic outcome:
 | `failed` | none | Read the structured error and failure/manifest resources when present. |
 | `cancelled` | none | Cancellation reached a truthful terminal state; do not deliver it as a completed result. |
 
-Before any full preflight, show the smoke evaluation, output identity, and limitations and obtain
-explicit approval. Never send an offline trajectory to a physical robot from this workflow.
+Before a full preflight, inspect the smoke evaluation and confirm that the full run is within
+the user's authorized scope. Existing explicit approval need not be requested again. Never send
+an offline trajectory to a physical robot from this workflow.

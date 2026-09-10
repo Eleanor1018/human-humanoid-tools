@@ -7,6 +7,7 @@ from typing import Annotated, Any, Literal
 from pydantic import AwareDatetime, Field
 
 from .common import ContractModel
+from .jobs import AgentJobView
 
 ScopeName = Literal["read", "write", "calibrate", "admin"]
 
@@ -20,6 +21,7 @@ class RuntimeIdentity(ContractModel):
     started_at: AwareDatetime
     mode: Literal["local", "remote"]
     persistent: bool = True
+    endpoint: str | None = None
     checkpoint_resume: bool = False
 
 
@@ -40,15 +42,15 @@ class OperationDescriptor(ContractModel):
 
 
 class RuntimeBudget(ContractModel):
-    max_running_jobs: Annotated[int, Field(ge=0)] = 2
-    max_queued_jobs: Annotated[int, Field(ge=0)] = 64
-    max_batch_items: Annotated[int, Field(ge=0)] = 1000
-    max_batch_total_frames: Annotated[int, Field(ge=0)] = 0
-    max_job_seconds: Annotated[int, Field(ge=0)] = 3600
-    max_upload_bytes: Annotated[int, Field(ge=1)] = 10 * 1024**3
-    max_staging_bytes: Annotated[int, Field(ge=1)] = 20 * 1024**3
-    max_preview_sessions: Annotated[int, Field(ge=0)] = 1
-    max_retry_attempts: Annotated[int, Field(ge=1, le=100)] = 3
+    max_running_jobs: Annotated[int, Field(ge=0, strict=True)] = 2
+    max_queued_jobs: Annotated[int, Field(ge=0, strict=True)] = 64
+    max_batch_items: Annotated[int, Field(ge=0, strict=True)] = 1000
+    max_batch_total_frames: Annotated[int, Field(ge=0, strict=True)] = 0
+    max_job_seconds: Annotated[int, Field(ge=0, strict=True)] = 3600
+    max_upload_bytes: Annotated[int, Field(ge=1, strict=True)] = 10 * 1024**3
+    max_staging_bytes: Annotated[int, Field(ge=1, strict=True)] = 20 * 1024**3
+    max_preview_sessions: Annotated[int, Field(ge=0, strict=True)] = 1
+    max_retry_attempts: Annotated[int, Field(ge=1, le=100, strict=True)] = 3
 
 
 class RuntimeShutdown(ContractModel):
@@ -70,7 +72,33 @@ class RuntimeTokenReceipt(ContractModel):
 class RuntimeJobList(ContractModel):
     runtime_id: str
     workspace_id: str
-    jobs: list[dict[str, Any]]
+    jobs: list[AgentJobView]
     offset: int
     limit: int
     total: int
+
+
+class RuntimeEvent(ContractModel):
+    cursor: int
+    job_id: str
+    revision: int
+    state: str
+
+
+class RuntimeEventPage(ContractModel):
+    runtime_id: str
+    workspace_id: str
+    events: list[RuntimeEvent]
+    cursor: int
+    latest_cursor: int
+    has_more: bool
+
+
+class BackendConfiguration(ContractModel):
+    gvhmr_root: str | None = None
+    gvhmr_python: str | None = None
+    body_models_root: str | None = None
+
+
+class CleanupRequest(ContractModel):
+    cleanup_id: str

@@ -7,6 +7,7 @@ import hmac
 import json
 import os
 import secrets
+import sqlite3
 import tempfile
 import threading
 import uuid
@@ -64,6 +65,16 @@ class RuntimeControl:
         if self._path.exists():
             self._document = json.loads(self._path.read_text(encoding="utf-8"))
         else:
+            backup = self.data_dir / "before-runtime-v1"
+            backup.mkdir(parents=True, exist_ok=True)
+            for database in self.data_dir.glob("*.sqlite3"):
+                destination = backup / database.name
+                if not destination.exists():
+                    with (
+                        sqlite3.connect(database) as source,
+                        sqlite3.connect(destination) as target,
+                    ):
+                        source.backup(target)
             self._document = {
                 "runtime_id": f"runtime:{uuid.uuid4().hex}",
                 "workspace_id": f"workspace:{uuid.uuid4().hex}",
@@ -72,6 +83,7 @@ class RuntimeControl:
             }
             atomic_private_json(self._path, self._document)
         self.budget = RuntimeBudget.model_validate(self._document["budget"])
+        self._apply_backend_configuration()
         self.identity = RuntimeIdentity(
             runtime_id=self._document["runtime_id"],
             workspace_id=self._document["workspace_id"],
@@ -129,3 +141,41 @@ class RuntimeControl:
     def scoped_key(self, subject: str, operation: str, key: str) -> str:
         payload = [self.identity.workspace_id, subject, operation, key]
         return "runtime:" + hashlib.sha256(json.dumps(payload).encode()).hexdigest()
+
+    def asset_trusted(self, asset_id: str) -> bool:
+        with self._lock:
+            return asset_id in self._document.get("trusted_assets", [])
+
+    def trust_asset(self, asset_id: str) -> dict:
+        with self._lock:
+            trusted = self._document.setdefault("trusted_assets", [])
+            if asset_id not in trusted:
+                trusted.append(asset_id)
+                atomic_private_json(self._path, self._document)
+        return {"asset_id": asset_id, "execution_authorized": True}
+
+    def _apply_backend_configuration(self) -> None:
+        for key, variable in {
+            "gvhmr_root": "HHTOOLS_GVHMR_ROOT",
+            "gvhmr_python": "HHTOOLS_GVHMR_PYTHON",
+            "body_models_root": "HHTOOLS_GVHMR_BODY_MODELS",
+        }.items():
+            value = self._document.get("backend_configuration", {}).get(key)
+            if value:
+                os.environ[variable] = value
+                if key == "body_models_root":
+                    os.environ["HHTOOLS_BODY_MODELS"] = value
+
+    def configure_backends(self, request) -> dict[str, bool]:
+        document = request.model_dump(exclude_none=True)
+        for value in document.values():
+            if not Path(value).is_absolute() or not Path(value).exists():
+                raise RuntimeServiceError(
+                    "BACKEND_PATH_UNAVAILABLE",
+                    "Configured backend paths must exist on the Runtime host.",
+                )
+        with self._lock:
+            self._document.setdefault("backend_configuration", {}).update(document)
+            atomic_private_json(self._path, self._document)
+            self._apply_backend_configuration()
+        return {key: True for key in document}

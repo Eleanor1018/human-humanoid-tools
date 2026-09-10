@@ -22,6 +22,8 @@
 
 ## 亮点
 
+- **常驻 Runtime（0.2）**：GUI 与 Agent 共享任务，支持认证远程连接、资源续传、独立 worker
+  和可选 WebRTC 预览。使用 `hhtools runtime start` 启动，详见 [Runtime 指南](docs/runtime.md)。
 - **快速重映射**：Web UI 或 **CLI**（`hhtools retarget` / `scripts/batch_*_retarget.py`）；**Newton IK** + **MPC-SQP** 交互网格。
 - **多源人体数据**：BVH / GLB / SMPL 系；适配 AMASS、GVHMR、LAFAN、100STYLE、OMOMO、OmniContact、PHUMA、intermimic、meshmimic 等。
 - **任意 URDF**：Web 上传任意其他机器人。拖入 URDF，拖入 mesh，自动识别，无需调参。

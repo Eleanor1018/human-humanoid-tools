@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 from fastapi.exceptions import RequestValidationError
@@ -15,12 +16,15 @@ from hhtools.services.assets import AssetServiceError
 from hhtools.services.job_store import JobStoreError
 from hhtools.services.jobs import JobManagerError
 from hhtools.services.plans import PlanStoreError
+from hhtools.services.retarget import RetargetServiceError
 from hhtools.services.runtime_control import RuntimeControl, RuntimeServiceError
 from hhtools.services.runtime_lease import AgentRuntimeLease
 from hhtools.web.server.factory import _mount_web_app
 
 from .api import register_runtime_routes
 from .boundary import RuntimeBoundary
+from .previews import install_previews
+from .workflows import install_workflows
 
 
 def create_runtime_app(
@@ -39,6 +43,9 @@ def create_runtime_app(
             if root is not None:
                 Path(root).mkdir(parents=True, exist_ok=True)
         control = RuntimeControl(data_dir, remote=remote)
+        managed = data_dir / "managed"
+        managed.mkdir(parents=True, exist_ok=True)
+        paths = replace(paths, asset_roots={**(paths.asset_roots or {}), "runtime": managed})
         runtime = build_application_runtime(
             paths,
             agent_runtime_lease=lease,
@@ -53,11 +60,14 @@ def create_runtime_app(
             save_dir=paths.save_dir,
             cache_dir=paths.cache_dir,
             runtime=runtime,
+            runtime_shell=True,
         )
         mounts = [route for route in app.routes if isinstance(route, Mount) and route.path == ""]
         app.router.routes[:] = [route for route in app.routes if route not in mounts]
         app.state.runtime_control = control
         register_runtime_routes(app, runtime, control, shutdown=shutdown)
+        install_workflows(app, runtime, control)
+        install_previews(app, runtime, control)
         app.router.routes.extend(mounts)
 
         @app.exception_handler(RequestValidationError)
@@ -83,6 +93,8 @@ def create_runtime_app(
             status = 500 if code == "INTERNAL_ERROR" else 422
             if code.endswith("NOT_FOUND"):
                 status = 404
+            elif code.endswith("FORBIDDEN"):
+                status = 403
             elif code in {
                 "PLAN_STALE",
                 "JOB_CONFLICT",
@@ -107,10 +119,27 @@ def create_runtime_app(
             PlanStoreError,
             AssetServiceError,
             ArtifactExportError,
+            RetargetServiceError,
         ):
             app.add_exception_handler(error_type, runtime_error)
 
         app.add_middleware(RuntimeBoundary, control=control, allowed_origins=allowed_origins)
+        if allowed_origins:
+            from starlette.middleware.cors import CORSMiddleware
+
+            app.add_middleware(
+                CORSMiddleware,
+                allow_origins=list(allowed_origins),
+                allow_methods=["GET", "POST", "PUT", "DELETE"],
+                allow_headers=[
+                    "Authorization",
+                    "Content-Type",
+                    "X-HHTools-Runtime",
+                    "X-HHTools-Workspace",
+                    "Range",
+                    "If-Range",
+                ],
+            )
         return app
     except BaseException:
         if runtime is not None:

@@ -145,9 +145,7 @@ def _local_environment(config: GvhmrConfig) -> dict[str, str]:
     if config.python_executable is not None:
         current_path = environment.get("PATH", "")
         environment["PATH"] = os.pathsep.join(
-            part
-            for part in (str(Path(_local_python_command(config)).parent), current_path)
-            if part
+            part for part in (str(Path(_local_python_command(config)).parent), current_path) if part
         )
     if config.cuda_visible_devices:
         environment["CUDA_VISIBLE_DEVICES"] = config.cuda_visible_devices
@@ -228,9 +226,7 @@ def gvhmr_status(
         python = cfg.python_executable
         python_command = _local_python_command(cfg) if python is not None else None
         local_environment = _local_environment(cfg)
-        checks["python_executable"] = (
-            python_command is not None and Path(python_command).is_file()
-        )
+        checks["python_executable"] = python_command is not None and Path(python_command).is_file()
         checks["ffmpeg"] = shutil.which("ffmpeg", path=local_environment.get("PATH")) is not None
         if not checks["ffmpeg"]:
             missing.append("ffmpeg executable in the GVHMR environment PATH")
@@ -510,7 +506,18 @@ def _stop_runtime_process(
     command: list[str],
 ) -> None:
     if process.poll() is None:
-        if config.runtime == "local" and os.name == "posix":
+        if (
+            config.runtime == "local"
+            and os.name == "posix"
+            and os.environ.get("HHTOOLS_SUPERVISED_WORKER") == "1"
+        ):
+            # The supervised worker owns this session; include its inference descendants.
+            os.killpg(os.getpgrp(), signal.SIGTERM)
+        elif (
+            config.runtime == "local"
+            and os.name == "posix"
+            and os.environ.get("HHTOOLS_SUPERVISED_WORKER") != "1"
+        ):
             try:
                 os.killpg(process.pid, signal.SIGKILL)
             except ProcessLookupError:
@@ -535,6 +542,7 @@ def run_gvhmr(
     f_mm: int | None = None,
     config: GvhmrConfig | None = None,
     progress: Callable[[float, str], None] | None = None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> Path:
     """Run GVHMR and return the generated ``hmr4d_results.pt`` path."""
 
@@ -556,7 +564,9 @@ def run_gvhmr(
         errors="replace",
         cwd=cfg.root if local else None,
         env=_local_environment(cfg) if local else None,
-        start_new_session=local and os.name == "posix",
+        start_new_session=(
+            local and os.name == "posix" and os.environ.get("HHTOOLS_SUPERVISED_WORKER") != "1"
+        ),
     )
     published_result_path: str | None = None
     recent: list[str] = []
@@ -576,6 +586,8 @@ def run_gvhmr(
     timed_out = False
     try:
         while True:
+            if cancelled is not None and cancelled():
+                raise InterruptedError("GVHMR inference was cancelled")
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 timed_out = True

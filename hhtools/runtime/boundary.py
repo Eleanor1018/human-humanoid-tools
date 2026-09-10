@@ -26,7 +26,17 @@ def required_scope(method: str, path: str) -> str:
         return "calibrate"
     if method in {"GET", "HEAD"}:
         return "read"
-    if path.endswith(("/status", "/validate", "/preview", "/lookup")):
+    if path.endswith(
+        (
+            "/status",
+            "/validate",
+            "/preview",
+            "/lookup",
+            "/preview-document",
+            "/analysis/select",
+            "/analysis/compare",
+        )
+    ):
         return "read"
     return "write"
 
@@ -55,6 +65,9 @@ class RuntimeBoundary:
             and _loopback_host(headers)
             and _loopback_origin(headers)
         )
+        if self.control.identity.mode == "remote" and scope.get("scheme") != "https":
+            await reject("TLS_REQUIRED", "Remote Runtime requests require TLS.")
+            return
         authorization = header_map.get("authorization", "")
         if sum(k.lower() == b"authorization" for k, _ in headers) > 1:
             await reject("UNAUTHORIZED", "Exactly one credential is required.", 401)
