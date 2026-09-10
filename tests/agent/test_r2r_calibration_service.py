@@ -51,13 +51,14 @@ def _service(
     grounding_robot_pair,
     *,
     bundled_calibration: bool = False,
+    shared_robot_root: bool = False,
 ):
     source_model, target_model = grounding_robot_pair
     robot_root = tmp_path / "robots"
     source_path = _write_robot_bundle(source_model, robot_root)
     target_path = _write_robot_bundle(target_model, robot_root)
-    user_root = tmp_path / "user-robots"
-    user_root.mkdir()
+    user_root = robot_root if shared_robot_root else tmp_path / "user-robots"
+    user_root.mkdir(exist_ok=True)
     if bundled_calibration:
         save_r2r_calibration(
             target_path,
@@ -102,6 +103,59 @@ def _service(
         target_robot_asset_id=target_bundle.asset_id,
     )
     return service, identity, source_path, target_path, user_root
+
+
+@pytest.mark.parametrize("replace_existing", [False, True])
+def test_library_r2r_save_keeps_both_assets_and_survives_restart(
+    tmp_path: Path,
+    grounding_robot_pair,
+    replace_existing: bool,
+) -> None:
+    service, identity, source, target, user_root = _service(
+        tmp_path,
+        grounding_robot_pair,
+        shared_robot_root=True,
+        bundled_calibration=replace_existing,
+    )
+    before = {p: p.read_bytes() for root in (source, target) for p in root.iterdir() if p.is_file()}
+    proposal = service.propose(R2RCalibrationProposalRequest(**identity.model_dump()))
+    request = R2RCalibrationSaveRequest(
+        candidate_id=proposal.candidate.candidate_id,
+        save_mode="validated_silent",
+    )
+    receipt = service.save(request)
+    restarted = R2RCalibrationService(
+        AgentAssetService(AssetRegistry(tmp_path / "agent-state", {"robots": user_root})),
+        CalibrationCandidateStore(tmp_path / "agent-state"),
+        robot_provider=service._robot_provider,
+        materialize_robot=service._materialize_robot,
+        release_robot=lambda _model: None,
+        user_robot_root=user_root,
+    )
+    assert restarted.save(request) == receipt
+    status = restarted.status(identity)
+    assert status.state.value == "valid"
+    assert status.source_robot_asset_id == identity.source_robot_asset_id
+    assert status.target_robot_asset_id == identity.target_robot_asset_id
+    assert status.calibration_digest == receipt.calibration_digest
+    assert receipt.previous_calibration_archived is replace_existing
+    assert {
+        p: p.read_bytes() for root in (source, target) for p in root.iterdir() if p.is_file()
+    } == before
+    for root, asset_id in (
+        (source, identity.source_robot_asset_id),
+        (target, identity.target_robot_asset_id),
+    ):
+        assert (
+            restarted._asset_service.register(
+                AssetRegistrationRequest(
+                    root_id="robots",
+                    relative_path=root.name,
+                    kind="robot_bundle",
+                )
+            ).asset_id
+            == asset_id
+        )
 
 
 def test_r2r_proposal_preview_and_silent_save_round_trip(

@@ -212,7 +212,12 @@ async def test_robot_registration_next_action_replays_unchanged_through_live_mcp
     assert registered.is_error is False
     assert registered.structured_content["kind"] == "robot_bundle"
     assert ready.is_error is False
-    assert ready.structured_content["status"] == "ready"
+    assert ready.structured_content["status"] == "human_action_required"
+    assert ready.structured_content["required_actions"][0]["action"] == "get_calibration_status"
+    assert (
+        ready.structured_content["required_actions"][0]["parameters"]["request"]["robot_asset_id"]
+        == registered.structured_content["asset_id"]
+    )
     tool_schemas = json.dumps(
         [{"name": tool.name, "input_schema": tool.input_schema} for tool in tools.tools]
     )

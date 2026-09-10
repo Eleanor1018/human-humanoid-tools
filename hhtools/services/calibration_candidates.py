@@ -13,6 +13,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from hhtools.contracts import CalibrationCandidate, R2RCalibrationCandidate
+from hhtools.services.calibration_validation import CalibrationValidationStore
 
 
 class CalibrationCandidateStoreError(RuntimeError):
@@ -58,6 +59,7 @@ class CalibrationCandidateStore:
     """Persist candidates across MCP reconnects without exposing host paths."""
 
     def __init__(self, data_dir: Path) -> None:
+        self.validation_store = CalibrationValidationStore(data_dir)
         self._root = Path(data_dir) / "calibration-candidates"
         self._history_root = Path(data_dir) / "calibration-history"
         self._lock = threading.RLock()

@@ -47,6 +47,35 @@ def user_robot_dir() -> Path:
     return p
 
 
+def user_calibration_overlay_dir(
+    robot_component: str,
+    *,
+    user_root: str | Path | None = None,
+) -> Path:
+    """Return a separate mutable layer beside the registered robot bundles.
+
+    Callers supply their validated/encoded robot directory component. Overlay
+    directories may not be symlinks: even a link within the library could point
+    back into a registered bundle and invalidate its content identity on save.
+    This read-only helper does not create the layer.
+    """
+
+    if (
+        not robot_component
+        or robot_component in {".", ".."}
+        or any(character in robot_component for character in "/\\:")
+    ):
+        raise ValueError("unsafe calibration robot directory")
+    root = (Path(user_root).expanduser() if user_root is not None else user_robot_dir()).resolve(
+        strict=False
+    )
+    overlays = root / ".calibration-overlays"
+    directory = overlays / robot_component
+    if overlays.is_symlink() or directory.is_symlink():
+        raise ValueError("calibration overlay directories must not be symlinks")
+    return directory
+
+
 def user_job_history_dir() -> Path:
     """Return the persistent per-user Web job-history directory.
 
@@ -128,6 +157,7 @@ __all__ = [
     "HHTOOLS_ROBOT_DIR_ENV",
     "HHTOOLS_WEB_SETTINGS_PATH_ENV",
     "hhtools_cache_dir",
+    "user_calibration_overlay_dir",
     "user_job_history_dir",
     "user_motion_library_root",
     "user_motion_library_settings_path",

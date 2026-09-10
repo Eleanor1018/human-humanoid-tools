@@ -60,6 +60,50 @@ def test_user_calibration_overrides_bundled_file(tmp_path: Path) -> None:
     assert load_calibration(resolved).calibrated_joint_q["hip_joint"] == 0.75
 
 
+def test_library_overlay_preserves_bundle_and_receives_later_ui_saves(tmp_path: Path) -> None:
+    preset = _preset(tmp_path)
+    user_root = preset.root_dir.parent
+    bundled = preset.urdf_path.parent / "retarget_calibration_smpl.yaml"
+    save_calibration(_calibration(preset), bundled)
+    previous = bundled.read_bytes()
+    calibration = _calibration(preset)
+    calibration.calibrated_joint_q["hip_joint"] = 0.5
+    saved = save_calibration_for_preset(
+        calibration,
+        preset,
+        user_robot_root=user_root,
+        prefer_user_overlay=True,
+    )
+    assert saved == user_root / ".calibration-overlays" / preset.name / bundled.name
+    assert resolve_preset_calibration_file(preset, "smpl", user_root) == saved
+    calibration.calibrated_joint_q["hip_joint"] = 0.75
+    assert save_calibration_for_preset(calibration, preset, user_robot_root=user_root) == saved
+    assert load_calibration(saved).calibrated_joint_q["hip_joint"] == 0.75
+    assert bundled.read_bytes() == previous
+    saved.write_text("invalid: [")
+    with pytest.raises(ValueError, match="invalid retarget calibration"):
+        resolve_preset_calibration_file(preset, "smpl", user_root)
+
+
+@pytest.mark.parametrize("link_layer", [True, False])
+def test_separate_overlay_cannot_link_back_into_robot_bundle(
+    tmp_path: Path,
+    link_layer: bool,
+) -> None:
+    from hhtools.utils.paths import user_calibration_overlay_dir
+
+    preset = _preset(tmp_path)
+    user_root = preset.root_dir.parent
+    layer = user_root / ".calibration-overlays"
+    if link_layer:
+        layer.symlink_to(user_root, target_is_directory=True)
+    else:
+        layer.mkdir()
+        (layer / preset.name).symlink_to(preset.root_dir, target_is_directory=True)
+    with pytest.raises(ValueError, match="must not be symlinks"):
+        user_calibration_overlay_dir(preset.name, user_root=user_root)
+
+
 def test_bundled_file_is_read_only_fallback_when_user_override_is_absent(
     tmp_path: Path,
 ) -> None:

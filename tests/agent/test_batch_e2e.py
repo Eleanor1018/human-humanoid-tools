@@ -178,6 +178,17 @@ def test_agent_executes_bounded_two_item_batch_with_portable_archive(
                 for path in input_paths:
                     input_asset_id = await _register(client, "source", path.name)
                     if workflow == "h2r":
+                        calibration = await client.call_tool(
+                            "get_calibration_status",
+                            {
+                                "request": {
+                                    "robot_id": target_model.preset.name,
+                                    "robot_asset_id": target_asset_id,
+                                    "reference": "smpl",
+                                }
+                            },
+                        )
+                        assert calibration.structured_content["state"] == "valid"
                         result = await client.call_tool(
                             "preflight_retarget",
                             {

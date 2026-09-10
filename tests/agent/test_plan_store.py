@@ -198,14 +198,24 @@ def test_retarget_profile_storage_must_match_the_profile_source(
     _assert_code(captured, "PLAN_CONFLICT")
 
 
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        "other_robot/retarget_calibration_smpl.yaml",
+        ".calibration-overlays/other_robot/retarget_calibration_smpl.yaml",
+        ".calibration-overlays/test_robot/retarget_calibration_smplx.yaml",
+        ".calibration-overlays/nested/test_robot/retarget_calibration_smpl.yaml",
+    ],
+)
 def test_user_calibration_path_must_match_plan_robot_and_reference(
     tmp_path: Path,
+    relative_path: str,
 ) -> None:
     payload = _retarget_payload()
     profile = payload["retarget_profile"]
     assert isinstance(profile, dict)
     profile["storage"] = "user_calibration"
-    profile["relative_path"] = "other_robot/retarget_calibration_smpl.yaml"
+    profile["relative_path"] = relative_path
     plan = _retarget_plan(payload)
 
     with pytest.raises(PlanStoreError) as captured:

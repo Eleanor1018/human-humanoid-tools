@@ -113,6 +113,38 @@ def test_agent_save_can_force_the_user_overlay_in_a_writable_checkout(
     assert not (target_dir / saved.name).exists()
 
 
+def test_library_r2r_overlay_is_authoritative_for_subsequent_ui_saves(tmp_path: Path) -> None:
+    user_root = tmp_path / "robots"
+    target_dir = user_root / "target_bot"
+    bundled = target_dir / "r2r_calibration_source_bot.yaml"
+    _write(bundled, _payload())
+    previous = bundled.read_bytes()
+    request = dict(
+        target_robot="target_bot",
+        source_robot="source_bot",
+        calibrated_joint_q={"hip": 0.75},
+        user_root=user_root,
+    )
+    saved = r2r.save_r2r_calibration(target_dir, **request, prefer_user_overlay=True)
+    assert saved == user_root / ".calibration-overlays" / "target_bot" / bundled.name
+    assert r2r.save_r2r_calibration(target_dir, **request) == saved
+    assert r2r.load_r2r_calibration(
+        target_dir,
+        "source_bot",
+        target_robot="target_bot",
+        user_root=user_root,
+    ) == {"hip": 0.75}
+    assert bundled.read_bytes() == previous
+    saved.write_text("invalid: [")
+    with pytest.raises(ValueError):
+        r2r.load_r2r_calibration(
+            target_dir,
+            "source_bot",
+            target_robot="target_bot",
+            user_root=user_root,
+        )
+
+
 def test_existing_user_override_wins_and_receives_later_saves(tmp_path: Path) -> None:
     target_dir = tmp_path / "target_bot"
     target_dir.mkdir()

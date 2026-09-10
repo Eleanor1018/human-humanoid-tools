@@ -50,6 +50,11 @@ from hhtools.contracts import (
 from hhtools.robot.base import RobotPreset
 from hhtools.services.asset_service import AgentAssetService
 from hhtools.services.assets import AssetServiceError
+from hhtools.services.calibration_validation import (
+    CALIBRATION_VALIDATION_VERSION,
+    CalibrationValidationStore,
+    calibration_validation_identity,
+)
 from hhtools.services.plans import PlanStore, PlanStoreError, compute_plan_id
 from hhtools.utils.paths import user_robot_dir
 
@@ -1281,6 +1286,7 @@ class PreflightService:
             robot_provider = list_presets_readonly
         self._asset_service = asset_service
         self._plan_store = plan_store
+        self._calibration_validations = CalibrationValidationStore(plan_store.database_path.parent)
         self._capabilities_provider = capabilities_provider
         self._robot_provider = robot_provider
         self._clock = clock
@@ -1394,6 +1400,48 @@ class PreflightService:
                 limits=joint_limits,
                 robot_bundle=robot_bundle,
             )
+            if profile_source == "calibration":
+                validation = self._calibration_validations.get(
+                    calibration_validation_identity(
+                        robot_id=preset.name,
+                        robot_asset_id=robot_bundle.asset_id,
+                        reference=reference,
+                        calibration_digest=profile_digest,
+                        motion_asset_id=request.motion_asset_id,
+                    )
+                )
+                if validation is None or not validation.valid:
+                    action = _calibration_action(
+                        preset.name,
+                        robot_bundle.asset_id,
+                        reference,
+                        motion_asset_id=request.motion_asset_id if reference == "glb" else None,
+                    )
+                    _fail(
+                        "CALIBRATION_VALIDATION_REQUIRED"
+                        if validation is None
+                        else "CALIBRATION_VALIDATION_FAILED",
+                        "Validate the current calibration before preflight."
+                        if validation is None
+                        else "The current calibration failed validation.",
+                        details={
+                            "robot_id": preset.name,
+                            "reference": reference,
+                            "calibration_digest": profile_digest,
+                        },
+                        next_action=action,
+                    )
+                checks.append(
+                    _check(
+                        "CALIBRATION_VALIDATED",
+                        PreflightCheckLevel.PASS,
+                        "The current calibration has matching valid geometric evidence.",
+                        details={
+                            "calibration_digest": profile_digest,
+                            "validation_version": CALIBRATION_VALIDATION_VERSION,
+                        },
+                    )
+                )
             checks.append(
                 _check(
                     "CALIBRATION_MATCH",
@@ -1463,6 +1511,9 @@ class PreflightService:
                     "calibration_id": calibration_id,
                     "digest": profile_digest,
                     "relative_path": profile_relative_path,
+                    "validation_version": (
+                        CALIBRATION_VALIDATION_VERSION if profile_source == "calibration" else None
+                    ),
                 },
                 "output": {
                     "format": output_format,
@@ -1516,7 +1567,11 @@ class PreflightService:
             )
         except _PreflightFailureError as failure:
             checks.append(failure.check)
-            if failure.error.code == "CALIBRATION_REQUIRED":
+            if failure.error.code in {
+                "CALIBRATION_REQUIRED",
+                "CALIBRATION_VALIDATION_REQUIRED",
+                "CALIBRATION_VALIDATION_FAILED",
+            }:
                 assert failure.error.next_action is not None
                 return PreflightResponse(
                     request_id=request_id,

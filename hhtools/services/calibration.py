@@ -48,9 +48,11 @@ from .calibration_candidates import (
     CalibrationCandidateStoreError,
     compute_calibration_candidate_id,
 )
+from .calibration_validation import calibration_validation_identity
 from .preflight import (
     _bundled_scaler,
     _manual_calibration,
+    _parse_stable_file,
     _PreflightFailureError,
     _robot_bundle_and_preset,
 )
@@ -350,6 +352,37 @@ class CalibrationService:
         except _PreflightFailureError as error:
             _raise_preflight(error)
 
+    def _record_validation(
+        self,
+        *,
+        path: Path,
+        digest: str,
+        robot_id: str,
+        robot_asset_id: str,
+        reference: str,
+        motion_asset_id: str | None,
+        validation: CalibrationValidationReport,
+    ) -> None:
+        try:
+            if _sha256_file(path) != digest:
+                raise ValueError("calibration changed during validation")
+            self._candidate_store.validation_store.put(
+                calibration_validation_identity(
+                    robot_id=robot_id,
+                    robot_asset_id=robot_asset_id,
+                    reference=reference,
+                    calibration_digest=digest,
+                    motion_asset_id=motion_asset_id,
+                ),
+                validation,
+            )
+        except (OSError, ValueError) as error:
+            raise _error(
+                "CALIBRATION_VALIDATION_UNAVAILABLE",
+                "The current calibration validation could not be recorded; retry status.",
+                retryable=True,
+            ) from error
+
     def status(self, request: CalibrationStatusRequest) -> CalibrationStatusResponse:
         bundle, preset, limits = self._resolve_robot(request)
         manual = self._manual_profile(preset, request.reference.value, limits, bundle)
@@ -367,7 +400,16 @@ class CalibrationService:
             from hhtools.retarget.calibration import load_calibration
 
             path, digest, calibration_id, storage = manual
-            calibration = load_calibration(path)
+            try:
+                calibration, _ = _parse_stable_file(
+                    path, load_calibration, expected_digests={digest}
+                )
+            except (OSError, TypeError, ValueError) as error:
+                raise _error(
+                    "CALIBRATION_VALIDATION_UNAVAILABLE",
+                    "The calibration changed before validation; retry status.",
+                    retryable=True,
+                ) from error
             model = self._materialize_robot(preset.name, bundle.asset_id)
             try:
                 joint_q, _unknown, _missing, _violations = normalized_joint_q(
@@ -387,6 +429,15 @@ class CalibrationService:
                 current_validation = self._report(assessment, candidate_id=None)
             finally:
                 self._release_robot(model)
+            self._record_validation(
+                path=path,
+                digest=digest,
+                robot_id=preset.name,
+                robot_asset_id=bundle.asset_id,
+                reference=request.reference.value,
+                motion_asset_id=request.motion_asset_id,
+                validation=current_validation,
+            )
             state = CalibrationState.VALID if current_validation.valid else CalibrationState.INVALID
             source = storage
         elif scaler is not None:
@@ -719,18 +770,22 @@ class CalibrationService:
                 calibrated_joint_q=dict(candidate.joint_q),
                 notes=notes,
             )
-            derived = derive_calibration_params(
-                calibration,
-                model,
-                reference_motion=motion,
-            )
-            path = save_calibration_for_preset(
-                calibration,
-                preset,
-                derived=derived,
-                user_robot_root=self._user_robot_root,
-                prefer_user_overlay=True,
-            )
+            if idempotent_replay:
+                assert previous is not None
+                path = previous
+            else:
+                derived = derive_calibration_params(
+                    calibration,
+                    model,
+                    reference_motion=motion,
+                )
+                path = save_calibration_for_preset(
+                    calibration,
+                    preset,
+                    derived=derived,
+                    user_robot_root=self._user_robot_root,
+                    prefer_user_overlay=True,
+                )
         except CalibrationServiceError:
             raise
         except (OSError, TypeError, ValueError) as error:
@@ -742,13 +797,29 @@ class CalibrationService:
         finally:
             self._release_robot(model)
         try:
-            digest = _sha256_file(path)
-        except OSError as error:
+            saved_calibration, digest = _parse_stable_file(path, load_calibration)
+            if (
+                saved_calibration.robot != candidate.robot_id
+                or saved_calibration.reference != candidate.reference.value
+                or saved_calibration.calibrated_joint_q != candidate.joint_q
+                or saved_calibration.notes != notes
+            ):
+                raise ValueError("saved calibration differs from validated candidate")
+        except (OSError, TypeError, ValueError) as error:
             raise _error(
                 "CALIBRATION_SAVE_FAILED",
                 "The saved calibration could not be verified.",
                 retryable=True,
             ) from error
+        self._record_validation(
+            path=path,
+            digest=digest,
+            robot_id=preset.name,
+            robot_asset_id=bundle.asset_id,
+            reference=candidate.reference.value,
+            motion_asset_id=candidate.motion_asset_id,
+            validation=validation,
+        )
         return CalibrationSaveReceipt(
             candidate_id=candidate.candidate_id,
             calibration_id=f"cal:sha256:{digest}",

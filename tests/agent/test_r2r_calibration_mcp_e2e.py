@@ -8,6 +8,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
+import pytest
 import yaml
 from mcp import Client
 
@@ -15,6 +16,7 @@ from hhtools.application.runtime import ApplicationPaths, build_application_runt
 from hhtools.io.robot_csv import save_robot_csv
 from hhtools.mcp.runtime import AgentRuntime
 from hhtools.mcp.server import create_mcp_server
+from hhtools.services.retarget import RetargetServiceError
 
 
 def _write_robot_bundle(model, root: Path) -> Path:
@@ -38,15 +40,17 @@ def _write_robot_bundle(model, root: Path) -> Path:
     return target
 
 
+@pytest.mark.parametrize("shared_robot_root", [False, True])
 def test_vision_agent_can_silently_calibrate_r2r_then_preflight(
     tmp_path: Path,
     monkeypatch,
     grounding_robot_pair,
+    shared_robot_root: bool,
 ) -> None:
     source_model, target_model = grounding_robot_pair
     source_root = tmp_path / "source"
     robot_root = tmp_path / "robots"
-    user_robot_root = tmp_path / "user-robots"
+    user_robot_root = robot_root if shared_robot_root else tmp_path / "user-robots"
     source_root.mkdir()
     user_robot_root.mkdir()
     monkeypatch.setenv("HHTOOLS_ROBOT_DIR", str(user_robot_root))
@@ -185,6 +189,24 @@ def test_vision_agent_can_silently_calibrate_r2r_then_preflight(
                     "preflight_r2r",
                     {"request": preflight_request},
                 )
+                assert (
+                    ready.structured_content["plan"]["calibration_digest"]
+                    == (saved.structured_content["calibration_digest"])
+                )
+                plan_id = ready.structured_content["plan"]["plan_id"]
+                projector = runtime.services.agent_r2r_retarget_service
+                spec = projector.get_job_spec(plan_id)
+                assert spec.calibration.sha256 == saved.structured_content["calibration_digest"]
+                directory = (
+                    user_robot_root
+                    / (".calibration-overlays" if shared_robot_root else ".")
+                    / target_model.preset.name
+                )
+                calibration = directory / f"r2r_calibration_{source_model.preset.name}.yaml"
+                calibration.write_bytes(calibration.read_bytes() + b"\n# changed after preflight\n")
+                with pytest.raises(RetargetServiceError) as stale:
+                    projector.get_job_spec(plan_id)
+                assert stale.value.code == "PLAN_STALE"
 
         assert capabilities.structured_content["features"]["r2r_calibration_status"] is True
         assert blocked.structured_content["status"] == "human_action_required"
@@ -207,6 +229,7 @@ def test_vision_agent_can_silently_calibrate_r2r_then_preflight(
 
     assert (
         user_robot_root
+        / (".calibration-overlays" if shared_robot_root else ".")
         / target_model.preset.name
         / f"r2r_calibration_{source_model.preset.name}.yaml"
     ).is_file()
