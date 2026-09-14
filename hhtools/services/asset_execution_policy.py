@@ -25,7 +25,14 @@ class AssetExecutionPolicy:
         from numpy.lib import format as npformat
 
         version = npformat.read_magic(stream)
-        _, _, dtype = npformat._read_array_header(stream, version)
+        reader = {
+            (1, 0): npformat.read_array_header_1_0,
+            (2, 0): npformat.read_array_header_2_0,
+        }.get(version)
+        # Versions without a public header reader need explicit operator trust.
+        if reader is None:
+            return True
+        _, _, dtype = reader(stream)
         return dtype.hasobject
 
     @staticmethod
