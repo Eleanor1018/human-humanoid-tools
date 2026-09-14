@@ -102,7 +102,9 @@ def updated_motion_library_settings(
     return validate_motion_library_settings(patch["root"])
 
 
-def effective_motion_library_root(settings: MotionLibrarySettings) -> Path:
+def effective_motion_library_root(
+    settings: MotionLibrarySettings, *, default_root: Path | None = None
+) -> Path:
     """Resolve environment, persistent, and platform defaults in precedence order."""
 
     override = os.environ.get(HHTOOLS_MOTION_LIBRARY_ROOT_ENV)
@@ -112,7 +114,7 @@ def effective_motion_library_root(settings: MotionLibrarySettings) -> Path:
         return root
     if settings.root is not None:
         return settings.root
-    return user_motion_library_root().expanduser().resolve(strict=False)
+    return (default_root or user_motion_library_root()).expanduser().resolve(strict=False)
 
 
 def motion_library_marker_path(root: str | Path) -> Path:

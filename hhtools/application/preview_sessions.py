@@ -16,6 +16,8 @@ from hhtools.services.runtime_control import RuntimeServiceError
 
 
 class PreviewSessions:
+    namespace = "previews"
+
     def __init__(self, paths, control):
         self.paths = paths
         self.control = control
@@ -58,17 +60,15 @@ class PreviewSessions:
                     "PREVIEW_BUDGET_EXCEEDED", "All preview slots are occupied."
                 )
             session_id = uuid.uuid4().hex
-            directory = self.control.data_dir / "previews" / session_id
-            directory.mkdir(parents=True)
+            directory = self.control.data_dir / self.namespace / session_id
+            directory.mkdir(parents=True, mode=0o700)
             spawn = multiprocessing.get_context("spawn")
             parent, child = spawn.Pipe()
-            process = spawn.Process(
-                target=run_preview_worker,
-                args=(child, self.paths, request.model_dump(mode="json"), directory),
-            )
-            process.start()
-            child.close()
+            process = None
             try:
+                process = self._worker(spawn, child, request, directory)
+                process.start()
+                child.close()
                 if not parent.poll(45):
                     raise RuntimeServiceError(
                         "PREVIEW_START_TIMEOUT", "Preview initialization timed out."
@@ -97,11 +97,27 @@ class PreviewSessions:
                 self._sessions[session_id] = session
                 return self._view(session)
             except BaseException:
-                SupervisedExecutor._stop(process)
+                if process is not None:
+                    self._stop_worker(process)
+                    process.close()
                 parent.close()
-                process.close()
                 shutil.rmtree(directory, ignore_errors=True)
+                self._released(session_id)
                 raise
+            finally:
+                child.close()
+
+    def _worker(self, spawn, child, request, directory):
+        return spawn.Process(
+            target=run_preview_worker,
+            args=(child, self.paths, request.model_dump(mode="json"), directory),
+        )
+
+    def _released(self, session_id):
+        pass
+
+    def _stop_worker(self, process):
+        SupervisedExecutor._stop(process)
 
     def _session(self, session_id, subject):
         with self._lock:
@@ -180,12 +196,13 @@ class PreviewSessions:
                 session["process"].join(2)
             except (OSError, EOFError):
                 pass
-            SupervisedExecutor._stop(session["process"])
+            self._stop_worker(session["process"])
             session["connection"].close()
             session["process"].close()
             session["state"] = "expired" if reason == "expired" else "closed"
             session["reason"] = reason
             shutil.rmtree(session["directory"], ignore_errors=True)
+            self._released(session_id)
             return self._view(session)
 
     def _expire(self):

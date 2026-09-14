@@ -76,6 +76,11 @@ def main(argv=None):
         identity = app.state.runtime_control.identity
         hostname = f"[{arguments.host}]" if ":" in arguments.host else arguments.host
         endpoint = f"{'https' if arguments.remote else 'http'}://{hostname}:{sock.getsockname()[1]}"
+        app.state.gui_sessions.origin = (
+            f"{'https' if arguments.remote else 'http'}://127.0.0.1:{sock.getsockname()[1]}"
+            if arguments.host == "0.0.0.0"
+            else endpoint
+        )
         if not arguments.remote:
             atomic_private_json(
                 connection_path,

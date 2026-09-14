@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from http.cookies import CookieError, SimpleCookie
 from urllib.parse import urlsplit
 
 from starlette.types import ASGIApp, Receive, Scope, Send
@@ -20,6 +21,8 @@ PREFIX = "/api/runtime/v1"
 
 
 def required_scope(method: str, path: str) -> str:
+    if path.startswith(PREFIX + "/gui-sessions"):
+        return "admin"
     if path.startswith(PREFIX + "/admin/"):
         return "admin"
     if path.endswith("/calibrations/save") or path.endswith("/calibrations/r2r/save"):
@@ -75,6 +78,17 @@ class RuntimeBoundary:
         principal = None
         if authorization.startswith("Bearer "):
             principal = self.control.authenticate(authorization[7:])
+        elif not authorization and "cookie" in header_map:
+            credential = None
+            try:
+                cookies = SimpleCookie(header_map["cookie"])
+                credential = cookies.get("hhtools_gui_session")
+                if credential is not None:
+                    principal = self.control.authenticate_session_token(credential.value)
+            except CookieError:
+                pass
+            if credential is None and local and self.control.identity.mode == "local":
+                principal = {"subject": "local", "scopes": ["read", "write", "calibrate", "admin"]}
         elif not authorization and local and self.control.identity.mode == "local":
             principal = {"subject": "local", "scopes": ["read", "write", "calibrate", "admin"]}
         if principal is None:
@@ -98,9 +112,9 @@ class RuntimeBoundary:
                 await reject("RUNTIME_MISMATCH", "The endpoint serves another workspace.", 409)
                 return
         machine_path = path.startswith((PREFIX + "/", "/api/agent/v1/"))
-        if not machine_path and (not local or "admin" not in principal["scopes"]):
+        if not machine_path and "admin" not in principal["scopes"]:
             await reject(
-                "LEGACY_LOCAL_ONLY", "This legacy operation requires local administration."
+                "GUI_ADMIN_REQUIRED", "The complete GUI requires workspace administration."
             )
             return
         required = required_scope(scope["method"], path)

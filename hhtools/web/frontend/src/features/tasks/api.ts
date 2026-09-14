@@ -1,12 +1,13 @@
 import { requestJson, type Fetcher } from "@/lib/api";
 import { createRequestCache } from "@/lib/requestCache";
 
-export type TaskStatus = "pending" | "running" | "done" | "error";
+export type TaskStatus = "pending" | "running" | "done" | "error" | "cancelled";
 
 export interface TaskRecord {
   readonly id: string;
   readonly kind: string;
   readonly status: TaskStatus;
+  readonly outcome?: "success" | "partial" | "review_required" | "rejected" | null;
   readonly progress: number;
   readonly message?: string | null;
   readonly error?: string | null;
@@ -15,6 +16,9 @@ export interface TaskRecord {
   readonly parameters: Readonly<Record<string, unknown>>;
   readonly result_summary: Readonly<Record<string, unknown>>;
   readonly can_download: boolean;
+  readonly can_cancel?: boolean;
+  readonly can_retry?: boolean;
+  readonly can_open?: boolean;
 }
 
 interface TaskListResponse {
@@ -24,6 +28,9 @@ interface TaskListResponse {
 const taskListCache = createRequestCache<readonly TaskRecord[]>(250);
 
 const RESULT_TASK_KINDS: ReadonlySet<string> = new Set([
+  "retarget_export",
+  "analysis_export",
+  "preview_render",
   "video_to_motion",
   "retarget",
   "r2r_retarget",

@@ -54,6 +54,7 @@ export interface DatasetSummary {
 }
 
 export interface DatasetAnalysisResult {
+  readonly runtime_report?: { readonly job_id: string; readonly artifact_id: string };
   readonly meta: {
     readonly source_root: string;
     readonly embedding: AnalysisEmbedding | string;

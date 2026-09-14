@@ -5,11 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from hhtools.application.agent_services import assemble_agent_services
+from hhtools.application.runtime import resolve_motion_library
 from hhtools.application.state import SessionState
 from hhtools.services.artifacts import ArtifactStore
 from hhtools.services.job_store import JobStore
 from hhtools.services.motion_cache import EphemeralCache
-from hhtools.services.motion_library_links import motions_library_root
 from hhtools.services.resource_reports import ResourceReports
 
 
@@ -25,7 +25,7 @@ def build_worker_services(paths, staging: Path):
     services = assemble_agent_services(
         state=state,
         scheduler=None,
-        motion_library_root_provider=lambda: paths.motion_library_root or motions_library_root(),
+        motion_library_root_provider=lambda: resolve_motion_library(paths),
         workspace_robot_root=paths.workspace_robot_root
         or Path(__file__).resolve().parents[2] / "configs/robots",
         agent_mcp_available=False,

@@ -42,6 +42,7 @@ def register_shell_routes(
 
     @app.get("/")
     @app.get("/index.html")
+    @app.get("/stream")
     def serve_index():
         return HTMLResponse(
             _render_index_html(),

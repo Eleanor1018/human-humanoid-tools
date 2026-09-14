@@ -1,0 +1,164 @@
+.stream-client {
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  color: #e6e8e7;
+  background: #181b1c;
+  font:
+    13px system-ui,
+    sans-serif;
+  letter-spacing: 0;
+}
+.stream-toolbar {
+  min-height: 48px;
+  padding: 6px 12px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  border-bottom: 1px solid #3b4143;
+  background: #272b2c;
+}
+.stream-toolbar strong {
+  font-size: 16px;
+}
+.stream-state {
+  color: #b8bfc2;
+  overflow-wrap: anywhere;
+}
+.stream-state[data-connected="true"] {
+  color: #6fdbb3;
+}
+.stream-tools {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+.stream-client button {
+  min-height: 32px;
+  padding: 5px 10px;
+  border: 1px solid #4d5558;
+  border-radius: 4px;
+  background: #33393b;
+  color: inherit;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.stream-client button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.stream-client button:hover:enabled {
+  background: #434c4f;
+}
+.stream-client button:focus-visible,
+.stream-client input:focus-visible {
+  outline: 2px solid #64bddd;
+  outline-offset: 2px;
+}
+.stream-tools button {
+  width: 32px;
+  padding: 6px;
+}
+.stream-icon {
+  display: inline-block;
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  background: currentColor;
+  mask-size: contain;
+  mask-position: center;
+  mask-repeat: no-repeat;
+}
+.stream-connect {
+  width: min(100% - 40px, 360px);
+  margin: auto;
+  display: grid;
+  gap: 18px;
+}
+.stream-connect h1 {
+  font-size: 28px;
+  margin: 0 0 10px;
+}
+.stream-connect label {
+  display: grid;
+  gap: 6px;
+}
+.stream-client input:not([hidden]) {
+  min-width: 0;
+  width: 100%;
+  border: 1px solid #50595c;
+  border-radius: 4px;
+  padding: 8px 10px;
+  background: #222729;
+  color: inherit;
+}
+.stream-connect button {
+  background: #2f6678;
+  border-color: #4f8da2;
+}
+.stream-surface {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  outline: none;
+  touch-action: none;
+  overflow: hidden;
+}
+.stream-surface[hidden] {
+  display: none;
+}
+.stream-surface video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+  background: #111415;
+}
+.stream-transfer,
+.stream-downloads {
+  display: flex;
+  gap: 8px;
+  padding: 8px 12px;
+  flex-wrap: wrap;
+  align-items: center;
+  border-top: 1px solid #454d50;
+}
+.stream-transfer input:not([hidden]) {
+  flex: 1;
+}
+.stream-downloads {
+  max-height: 100px;
+  overflow: auto;
+}
+.stream-downloads button {
+  overflow-wrap: anywhere;
+  min-width: 0;
+  max-width: 100%;
+  text-align: left;
+}
+.stream-error {
+  color: #ffc3ba;
+  background: #4b2f30;
+  padding: 8px 12px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  overflow-wrap: anywhere;
+}
+.stream-error button {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+@media (max-width: 560px) {
+  .stream-toolbar {
+    gap: 8px;
+    padding: 6px 8px;
+  }
+  .stream-state {
+    font-size: 11px;
+  }
+}

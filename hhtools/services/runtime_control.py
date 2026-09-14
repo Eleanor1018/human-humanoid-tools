@@ -96,10 +96,36 @@ class RuntimeControl:
     def authenticate(self, token: str) -> dict[str, Any] | None:
         digest = hashlib.sha256(token.encode()).hexdigest()
         with self._lock:
+            for record in getattr(self, "_session_tokens", {}).values():
+                if hmac.compare_digest(record["sha256"], digest):
+                    return {"subject": record["subject"], "scopes": ["admin"]}
             for record in self._document["tokens"]:
                 if hmac.compare_digest(record["sha256"], digest):
                     return {"subject": record["subject"], "scopes": list(record["scopes"])}
         return None
+
+    def issue_session_token(self, session_id: str):
+        token = secrets.token_urlsafe(48)
+        with self._lock:
+            if not hasattr(self, "_session_tokens"):
+                self._session_tokens = {}
+            self._session_tokens[session_id] = {
+                "sha256": hashlib.sha256(token.encode()).hexdigest(),
+                "subject": "gui-session:" + session_id,
+            }
+        return token
+
+    def authenticate_session_token(self, token: str):
+        digest = hashlib.sha256(token.encode()).hexdigest()
+        with self._lock:
+            for record in getattr(self, "_session_tokens", {}).values():
+                if hmac.compare_digest(record["sha256"], digest):
+                    return {"subject": record["subject"], "scopes": ["admin"]}
+        return None
+
+    def revoke_session_token(self, session_id: str):
+        with self._lock:
+            getattr(self, "_session_tokens", {}).pop(session_id, None)
 
     def issue_token(self, request: RuntimeTokenRequest) -> RuntimeTokenReceipt:
         token = secrets.token_urlsafe(48)

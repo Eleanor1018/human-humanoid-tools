@@ -37,6 +37,20 @@ from .boundary import PREFIX
 from .catalog import operation_catalog
 
 
+def apply_budget(runtime, control, body):
+    with runtime.job_settings_update_lock:
+        if runtime.scheduler.snapshot().closed:
+            raise RuntimeServiceError("SCHEDULER_UNAVAILABLE", "Runtime admission is closed.")
+        control.save_budget(body)
+        runtime.scheduler.reconfigure(
+            max_running_jobs=body.max_running_jobs, max_queued_jobs=body.max_queued_jobs
+        )
+        runtime.services.agent_batch_limit_policy.reconfigure(
+            max_batch_items=body.max_batch_items, max_batch_total_frames=body.max_batch_total_frames
+        )
+    return body
+
+
 def register_runtime_routes(app, runtime, control, *, shutdown=None):
     router = APIRouter(prefix=PREFIX, tags=["runtime"])
     services = runtime.services
@@ -246,18 +260,7 @@ def register_runtime_routes(app, runtime, control, *, shutdown=None):
 
     @router.put("/admin/budget", response_model=RuntimeBudget)
     def runtime_set_budget(body: RuntimeBudget):
-        with runtime.job_settings_update_lock:
-            if runtime.scheduler.snapshot().closed:
-                raise RuntimeServiceError("SCHEDULER_UNAVAILABLE", "Runtime admission is closed.")
-            control.save_budget(body)
-            runtime.scheduler.reconfigure(
-                max_running_jobs=body.max_running_jobs, max_queued_jobs=body.max_queued_jobs
-            )
-            services.agent_batch_limit_policy.reconfigure(
-                max_batch_items=body.max_batch_items,
-                max_batch_total_frames=body.max_batch_total_frames,
-            )
-        return body
+        return apply_budget(runtime, control, body)
 
     @router.get("/admin/tokens")
     def runtime_list_tokens() -> dict:

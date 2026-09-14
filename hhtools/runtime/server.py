@@ -67,7 +67,13 @@ def create_runtime_app(
         app.state.runtime_control = control
         register_runtime_routes(app, runtime, control, shutdown=shutdown)
         install_workflows(app, runtime, control)
+        from .gui import install_gui
+
+        install_gui(app, runtime, control)
         install_previews(app, runtime, control)
+        from .streaming import install_streaming
+
+        install_streaming(app, runtime, control)
         app.router.routes.extend(mounts)
 
         @app.exception_handler(RequestValidationError)

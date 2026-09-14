@@ -95,9 +95,18 @@ def test_calibration_and_h2r_run_in_supervised_process(
             time.sleep(0.05)
             job = client.get("/api/runtime/v1/jobs/" + job["job_id"]).json()
         assert job["state"] == "completed", job
-        assert {"preview", "retargeted_motion", "evaluation_report", "manifest"} <= {
+        assert {"preview", "retarget_state", "retargeted_motion", "evaluation_report", "manifest"} <= {
             item["kind"] for item in job["artifacts"]
         }
+        opened = client.post(f"/api/job/{job['job_id']}/open")
+        assert opened.status_code == 200, opened.text
+        assert opened.json()["result"]["trajectory"]["frames"]
+        assert opened.json()["motion"]["token"]
+        exported = client.get(f"/api/export/{job['job_id']}?fmt=pkl&fps=30")
+        assert exported.status_code == 200, exported.text[:300]
+        assert exported.content
+        gui_jobs = client.get("/api/jobs").json()["jobs"]
+        assert any(item["kind"] == "retarget_export" and item["status"] == "done" for item in gui_jobs)
         batch = client.post(
             root + "/preflight/batch",
             json={"workflow": "h2r", "item_plan_ids": [preflight["plan"]["plan_id"]]},

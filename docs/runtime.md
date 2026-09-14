@@ -1,7 +1,7 @@
 # Resident HHTools Runtime
 
 The Runtime owns one workspace, one scheduler, and one durable job history.
-HTTP, the Python SDK, CLI, MCP, and browser clients share resource identities.
+HTTP, the Python SDK, CLI, MCP, and the existing HHTools GUI share resource identities.
 Closing a client does not stop the service. No LLM credentials are required.
 
 ## Local Service
@@ -27,9 +27,57 @@ stdio mode, whose lifetime owns its jobs. Use a separate workspace for that mode
 Stop a persistent service explicitly with `hhtools runtime stop --workspace ...`.
 The default policy drains work; `--cancel` requests cancellation before shutdown.
 `hhtools web` and Electron connect to a resident service by default. `hhtools web --legacy`
-and `HHTOOLS_LEGACY_SIDECAR=1` retain the previous UI. The resident host does not mount
-the old session-owned business routes. Electron can use `HHTOOLS_RUNTIME_ENDPOINT` and
+and `HHTOOLS_LEGACY_SIDECAR=1` retain the previous session-owned backend. There is one
+business GUI: the original Motion, Robot, H2R, R2R, Batch, Analysis and Video pages.
+Its compatibility HTTP adapters submit persistent workflow plans to the same
+JobManager used by Agent clients. Model loading and view preparation remain
+replaceable session caches. Electron can use `HHTOOLS_RUNTIME_ENDPOINT` and
 `HHTOOLS_RUNTIME_TOKEN` to connect without a local Python runtime.
+
+## Whole Application Streaming
+
+The Runtime's `/` serves the single HHTools GUI. `/stream` serves a thin WebRTC
+client with connection, input and file-transfer controls. It contains no motion,
+robot, calibration, retargeting or analysis business pages.
+
+```bash
+uv sync --locked --extra streaming --extra mcp
+uv run playwright install chromium
+uv run hhtools runtime start --workspace assets/save_npz --source assets/motions
+```
+
+Open `/stream` on a Runtime origin, enter the target Runtime origin and an operator
+token, and connect. Remote signaling requires HTTPS and `admin` scope because the
+GUI grants full workspace control. A server Chromium process opens the same `/`
+page over a configured loopback origin. The daemon sets that origin from its bound
+socket; embedding applications must set `app.state.gui_sessions.origin` themselves.
+The browser uses a temporary HttpOnly session cookie. Its credential record stays
+in server memory and is revoked when the session closes. A Runtime restart
+invalidates it, and closing the session removes its browser profile.
+
+Chromium screencast frames are encoded by aiortc. This release uses software video
+encoding, not NVIDIA NVENC or Isaac Sim's proprietary client protocol. An existing
+Chromium executable can be selected with `HHTOOLS_CHROMIUM_EXECUTABLE`; otherwise
+Playwright uses its installed browser. [Playwright's CDP session API](https://playwright.dev/python/docs/api/class-cdpsession)
+provides the browser capture and input integration.
+
+One remote operator owns the GUI session at a time. Reconnecting as the same
+principal reuses the browser and its current layout. Keyboard, pointer, wheel,
+paste and text entry travel over the data channel; the text control supports IME
+input. File pickers, folder pickers, file drops and downloads use authenticated,
+bounded HTTP transfers. Uploads preserve relative paths, use 8 MiB chunks and
+have a 4 GiB session budget. A single media connection can be replaced without
+restarting the browser or cancelling work. The default lease is 300 seconds;
+the connected client renews it every 30 seconds. Closing or expiring the GUI
+process does not cancel durable jobs.
+
+Both human and Agent jobs appear in the existing task drawer. The drawer can
+cancel, retry, download or open supported completed results in their original
+workflow views. H2R and R2R publish a lossless `retarget_state` artifact, so CSV/PKL
+exports can change frame rate or time range after a service restart without
+re-running IK. `POST /api/runtime/v1/workflows/retarget-export/preflight` exposes
+the same export operation to Agent clients. Whole-application streaming is
+independent of the resource-preview APIs described below.
 
 ## SDK And Discovery
 
@@ -178,14 +226,15 @@ multi-host execution remain separate extensions.
 | Analysis | Existing `analysis.dataset_analysis` algorithms | Durable resource inputs, jobs and reports |
 | Video2Motion | Existing isolated GVHMR integration | Durable video import, jobs and exported motion |
 | Motion/robot management | Existing asset registry and root-relative bundles | Verified resumable upload and managed resources |
-| R3F playback | Existing client frame loop | Resource-based handoff; keep per-frame work local |
+| HHTools GUI | One existing React/R3F application | Direct local access or whole-application WebRTC streaming |
+| R3F playback | Existing frame loop in the GUI browser | Runs on the user's machine locally or in server Chromium remotely |
 | Server preview | Existing PNG calibration renderer | Preview leases, render backend and media connection |
 | Settings | Existing admission settings and library configuration | Discoverable authorized configuration |
 
 Persistent state consists of input manifests, plans, jobs, events, candidate and
 validation records, published artifacts and Runtime identity. Loaded models,
 decoded motion and preview sessions are replaceable caches. Playback position,
-camera and panel layout belong to clients. Do not make browser tokens identities
+camera and panel layout belong to GUI sessions. Do not make browser tokens identities
 for new durable workflows.
 
 The first Runtime start backs up existing Agent SQLite databases under

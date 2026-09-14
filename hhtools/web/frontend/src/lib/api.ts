@@ -81,8 +81,8 @@ export class ApiError extends Error {
 async function responseError(response: Response): Promise<ApiError> {
   let message = `${response.status} ${response.statusText}`.trim();
   try {
-    const body = (await response.json()) as { detail?: unknown };
-    message = apiDetailMessage(body.detail) || message;
+    const body = (await response.json()) as { detail?: unknown; message?: string };
+    message = body.message || apiDetailMessage(body.detail) || message;
   } catch {
     // Some proxy/server failures are plain text or empty responses.
   }
