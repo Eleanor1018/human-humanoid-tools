@@ -7,6 +7,13 @@ import {
 } from "react";
 
 import { RuntimeConnection } from "./api";
+import {
+  clientIceServers,
+  configuredStreamPort,
+  runtimeEndpoint,
+  streamDimensions,
+  type StreamResolution,
+} from "./connectionSettings";
 import { collectDroppedFiles } from "@/lib/dropFiles";
 import type { UploadFile } from "@/lib/api";
 import "./stream.css";
@@ -47,7 +54,14 @@ function Icon({ name }: { name: string }) {
 
 /** No workflow state lives here: the connected browser runs the existing App. */
 export function StreamClient() {
-  const [endpoint, setEndpoint] = useState(window.location.origin);
+  const [server, setServer] = useState(window.location.hostname);
+  const [signalPort, setSignalPort] = useState(
+    window.location.port ||
+      (window.location.protocol === "https:" ? "443" : "80"),
+  );
+  const [streamPort, setStreamPort] = useState<string | null>(null);
+  const [detectedStreamPort, setDetectedStreamPort] = useState("");
+  const [resolution, setResolution] = useState<StreamResolution>("1280x720");
   const [token, setToken] = useState("");
   const [state, setState] = useState("Disconnected");
   const [error, setError] = useState("");
@@ -66,6 +80,19 @@ export function StreamClient() {
   const picker = useRef<HTMLInputElement>(null);
   const generation = useRef(0);
   const move = useRef<Record<string, unknown> | null>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void new RuntimeConnection(window.location.origin)
+      .response(`${API}/capabilities`, { signal: controller.signal })
+      .then((response) => response.json())
+      .then((capabilities: { ice_servers: RTCIceServer[] }) => {
+        if (!controller.signal.aborted)
+          setDetectedStreamPort(configuredStreamPort(capabilities.ice_servers));
+      })
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, []);
 
   function send(event: Record<string, unknown>) {
     if (
@@ -134,19 +161,18 @@ export function StreamClient() {
     if (!session || !surface.current) return;
     const observer = new ResizeObserver(([entry]) => {
       if (!entry) return;
-      const width = Math.max(
-        320,
-        Math.min(1920, Math.round(entry.contentRect.width)),
-      );
-      const height = Math.max(
-        320,
-        Math.min(1080, Math.round(entry.contentRect.height)),
-      );
-      send({ action: "resize", width, height });
+      send({
+        action: "resize",
+        ...streamDimensions(
+          resolution,
+          entry.contentRect.width,
+          entry.contentRect.height,
+        ),
+      });
     });
     observer.observe(surface.current);
     return () => observer.disconnect();
-  }, [session, state]);
+  }, [session, state, resolution]);
 
   useEffect(() => {
     const element = surface.current;
@@ -171,7 +197,10 @@ export function StreamClient() {
     setState("Connecting");
     dispose();
     try {
-      const client = new RuntimeConnection(endpoint, token);
+      const client = new RuntimeConnection(
+        runtimeEndpoint(server, signalPort, window.location.protocol),
+        token,
+      );
       await client.connect();
       const capabilities = await client.json<{
         webrtc: { available: boolean; reason?: string };
@@ -181,18 +210,20 @@ export function StreamClient() {
         throw new Error(
           capabilities.webrtc.reason || "Streaming backend unavailable",
         );
+      setDetectedStreamPort(configuredStreamPort(capabilities.ice_servers));
+      const iceServers = clientIceServers(capabilities.ice_servers, streamPort);
       const created = await client.json<Session>(API, "POST", {
-        width: Math.max(320, Math.min(1920, window.innerWidth)),
-        height: Math.max(320, Math.min(1080, window.innerHeight - 48)),
+        ...streamDimensions(
+          resolution,
+          window.innerWidth,
+          window.innerHeight - 48,
+        ),
       });
       if (attempt !== generation.current) return;
       connection.current = client;
       setSession(created);
       const rtc = new RTCPeerConnection({
-        iceServers: capabilities.ice_servers.map((item) => ({
-          ...item,
-          urls: item.urls,
-        })),
+        iceServers,
       });
       peer.current = rtc;
       rtc.addTransceiver("video", { direction: "recvonly" });
@@ -202,13 +233,10 @@ export function StreamClient() {
         if (surface.current)
           send({
             action: "resize",
-            width: Math.max(
-              320,
-              Math.min(1920, Math.round(surface.current.clientWidth)),
-            ),
-            height: Math.max(
-              320,
-              Math.min(1080, Math.round(surface.current.clientHeight)),
+            ...streamDimensions(
+              resolution,
+              surface.current.clientWidth,
+              surface.current.clientHeight,
             ),
           });
       };
@@ -449,78 +477,173 @@ export function StreamClient() {
         setTimeout(() => URL.revokeObjectURL(url), 1000);
       }
     } catch (reason) {
-      if (reason instanceof DOMException && reason.name === "AbortError") return;
+      if (reason instanceof DOMException && reason.name === "AbortError")
+        return;
       setError(String(reason));
     }
   }
 
   return (
-    <main className="stream-client">
-      <header className="stream-toolbar">
-        <strong>HHTools</strong>
-        <span className="stream-state" data-connected={state === "Connected"}>
-          {state}
-        </span>
-        <div className="stream-tools">
-          {session && (
+    <main className={`stream-client${session ? "" : " stream-client--login"}`}>
+      {session && (
+        <header className="stream-toolbar">
+          <strong>HHTools</strong>
+          <span className="stream-state" data-connected={state === "Connected"}>
+            {state}
+          </span>
+          <div className="stream-tools">
+            {session && (
+              <button
+                title="Text input"
+                aria-label="Text input"
+                onClick={() => setTyping((value) => !value)}
+              >
+                T
+              </button>
+            )}
             <button
-              title="Text input"
-              aria-label="Text input"
-              onClick={() => setTyping((value) => !value)}
+              title="Reconnect"
+              aria-label="Reconnect"
+              disabled={busy}
+              onClick={() => void connect()}
             >
-              T
+              <Icon name="common/refresh-cw" />
             </button>
-          )}
-          <button
-            title="Reconnect"
-            aria-label="Reconnect"
-            disabled={busy}
-            onClick={() => void connect()}
-          >
-            <Icon name="common/refresh-cw" />
-          </button>
-          {session && (
-            <button
-              title="Close session"
-              aria-label="Close session"
-              onClick={() => void close()}
-            >
-              <Icon name="common/close" />
-            </button>
-          )}
-        </div>
-      </header>
+            {session && (
+              <button
+                title="Close session"
+                aria-label="Close session"
+                onClick={() => void close()}
+              >
+                <Icon name="common/close" />
+              </button>
+            )}
+          </div>
+        </header>
+      )}
       {!session && (
-        <form
-          className="stream-connect"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void connect();
-          }}
-        >
-          <h1>HHTools</h1>
-          <label>
-            Runtime
-            <input
-              type="url"
-              value={endpoint}
-              onChange={(event) => setEndpoint(event.target.value)}
-              required
-            />
-          </label>
-          <label>
-            Access token
-            <input
-              type="password"
-              autoComplete="off"
-              value={token}
-              onChange={(event) => setToken(event.target.value)}
-            />
-          </label>
-          <button type="submit" disabled={busy}>
-            {busy ? "Connecting" : "Connect"}
-          </button>
-        </form>
+        <section className="stream-login">
+          <h1>HHTools WebRTC Streaming Client</h1>
+          <form
+            className="stream-connect"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void connect();
+            }}
+          >
+            <div className="stream-login-row">
+              <label className="stream-login-label" htmlFor="stream-server">
+                Server:
+              </label>
+              <div className="stream-login-field">
+                <input
+                  id="stream-server"
+                  type="text"
+                  spellCheck={false}
+                  value={server}
+                  onChange={(event) => {
+                    setServer(event.target.value);
+                    setDetectedStreamPort("");
+                  }}
+                  disabled={busy}
+                  required
+                />
+              </div>
+            </div>
+            <div
+              className="stream-login-row stream-login-ports"
+              role="group"
+              aria-label="Ports"
+            >
+              <span className="stream-login-label">Ports:</span>
+              <div className="stream-login-port">
+                <label htmlFor="stream-signal-port">Signal</label>
+                <input
+                  id="stream-signal-port"
+                  title="Runtime API port"
+                  type="number"
+                  min="1"
+                  max="65535"
+                  step="1"
+                  required
+                  disabled={busy}
+                  value={signalPort}
+                  onChange={(event) => {
+                    setSignalPort(event.target.value);
+                    setDetectedStreamPort("");
+                  }}
+                />
+              </div>
+              <span className="stream-port-divider" aria-hidden="true">
+                /
+              </span>
+              <div className="stream-login-port">
+                <label htmlFor="stream-media-port">Stream</label>
+                <input
+                  id="stream-media-port"
+                  title="TURN port"
+                  type="number"
+                  min="1"
+                  max="65535"
+                  step="1"
+                  placeholder="Auto"
+                  disabled={busy}
+                  value={streamPort ?? detectedStreamPort}
+                  onChange={(event) => setStreamPort(event.target.value)}
+                />
+              </div>
+            </div>
+            <div className="stream-login-row">
+              <label className="stream-login-label" htmlFor="stream-resolution">
+                Resolution:
+              </label>
+              <div className="stream-login-field">
+                <select
+                  id="stream-resolution"
+                  value={resolution}
+                  disabled={busy}
+                  onChange={(event) =>
+                    setResolution(event.target.value as StreamResolution)
+                  }
+                >
+                  <option value="1280x720">1280 x 720 (HD)</option>
+                  <option value="1920x1080">1920 x 1080 (FHD)</option>
+                  <option value="2560x1440" disabled>
+                    2560 x 1440 (QHD)
+                  </option>
+                  <option value="3840x2160" disabled>
+                    3840 x 2160 (4K UHD)
+                  </option>
+                  <option value="auto">Fit to window</option>
+                </select>
+              </div>
+            </div>
+            <details className="stream-auth">
+              <summary>Authentication</summary>
+              <label htmlFor="stream-token">Access token</label>
+              <input
+                id="stream-token"
+                type="password"
+                autoComplete="off"
+                disabled={busy}
+                value={token}
+                onChange={(event) => setToken(event.target.value)}
+              />
+            </details>
+            <button
+              className="stream-connect-button"
+              type="submit"
+              disabled={busy}
+            >
+              {busy ? "Connecting" : "Connect"}
+            </button>
+            {error && (
+              <p className="stream-login-error" role="alert">
+                {error}
+              </p>
+            )}
+          </form>
+        </section>
       )}
       <div
         ref={surface}
@@ -611,7 +734,7 @@ export function StreamClient() {
           ))}
         </div>
       )}
-      {error && (
+      {error && session && (
         <div className="stream-error" role="alert">
           {error}
           <button
