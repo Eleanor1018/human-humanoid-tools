@@ -79,6 +79,33 @@ re-running IK. `POST /api/runtime/v1/workflows/retarget-export/preflight` expose
 the same export operation to Agent clients. Whole-application streaming is
 independent of the resource-preview APIs described below.
 
+### Access Tokens And SSH
+
+For a local-mode Runtime on loopback, the stream client's Access token can be
+left empty. When a token is supplied, its scope is enforced: a complete GUI
+session requires an `admin` token issued by that Runtime. Direct remote-mode
+connections require both HTTPS and a valid token.
+
+A Runtime bound to loopback can also be reached through authenticated SSH.
+Keep it in local mode and forward its HTTP port. To carry WebRTC media over the
+same connection, run an authenticated TURN server on the Runtime host, listening
+on loopback with a relay address reachable by the Runtime. Forward its TCP
+listener as well. For example, with HTTP on 58800 and TURN on 58820:
+
+```bash
+ssh -N \
+  -L 127.0.0.1:58800:127.0.0.1:58800 \
+  -L 127.0.0.1:58820:127.0.0.1:58820 user@build-host
+```
+
+Set `HHTOOLS_ICE_SERVERS` on that Runtime to a private JSON configuration using
+`turn:127.0.0.1:58820?transport=tcp` and the TURN username/credential. Both ends
+then use the same URL: the browser reaches the forwarded listener and the Runtime
+reaches its local listener. Open `http://127.0.0.1:58800/stream` and leave Access
+token empty for this SSH-protected local-mode setup. Forwarding HTTP alone does
+not forward WebRTC media. This connection uses TURN over SSH/TCP, so measure its
+behavior separately from a direct UDP deployment.
+
 ## SDK And Discovery
 
 ```python
