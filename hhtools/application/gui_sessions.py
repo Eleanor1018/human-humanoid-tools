@@ -19,6 +19,20 @@ class GuiSessions(PreviewSessions):
     namespace = "gui-sessions"
     origin = None
 
+    def __init__(self, paths, control):
+        super().__init__(paths, control)
+        control.add_token_revocation_listener(self._operator_revoked)
+
+    def _operator_revoked(self, token_id):
+        with self._lock:
+            for session in self._sessions.values():
+                if session.get("token_id") == token_id:
+                    self.close(session["session_id"], session["subject"], reason="token_revoked")
+
+    def shutdown(self):
+        super().shutdown()
+        self.control.remove_token_revocation_listener(self._operator_revoked)
+
     @staticmethod
     def capabilities():
         available = all(
@@ -36,7 +50,7 @@ class GuiSessions(PreviewSessions):
             }
         }
 
-    def create(self, request, subject):
+    def create(self, request, subject, *, token_id=None):
         if not self.origin:
             raise RuntimeServiceError(
                 "GUI_ORIGIN_UNAVAILABLE",
@@ -57,23 +71,27 @@ class GuiSessions(PreviewSessions):
             )
         with self._lock:
             for session in self._sessions.values():
-                if session["state"] == "ready":
+                with session["lock"]:
+                    if session["state"] != "ready":
+                        continue
                     if (
                         session["expires_at"] <= datetime.now(UTC)
                         or not session["process"].is_alive()
                     ):
-                        self.close(session["session_id"], session["subject"], reason="expired")
+                        self._close(session, reason="expired")
                         continue
-                    if session["subject"] == subject:
+                    if session["subject"] == subject and session.get("token_id") == token_id:
                         return self._view(session)
                     raise RuntimeServiceError(
                         "GUI_SESSION_IN_USE",
                         "The application's control session belongs to another operator.",
                     )
-            return super().create(request, subject)
+            created = super().create(request, subject, token_id=token_id)
+            self._sessions[created["session_id"]]["token_id"] = token_id
+            return created
 
-    def _worker(self, spawn, child, request, directory):
-        token = self.control.issue_session_token(directory.name)
+    def _worker(self, spawn, child, request, directory, *, token_id=None):
+        token = self.control.issue_session_token(directory.name, token_id=token_id)
         return spawn.Process(
             target=run_gui_worker,
             args=(child, self.origin, token, request.model_dump(mode="json"), directory),
@@ -197,4 +215,5 @@ class GuiSessions(PreviewSessions):
     def _view(self, session):
         view = super()._view(session)
         view.pop("transfers", None)
+        view.pop("token_id", None)
         return view

@@ -7,6 +7,7 @@ import {
 } from "react";
 
 import { RuntimeConnection } from "./api";
+import { waitForPeer } from "./peerState";
 import {
   clientIceServers,
   configuredStreamPort,
@@ -79,14 +80,22 @@ export function StreamClient() {
   const surface = useRef<HTMLDivElement>(null);
   const picker = useRef<HTMLInputElement>(null);
   const generation = useRef(0);
+  const attemptController = useRef<AbortController | null>(null);
+  const activeSession = useRef<{
+    client: RuntimeConnection;
+    session: Session;
+  } | null>(null);
+  const cleanup = useRef<Promise<void>>(Promise.resolve());
   const move = useRef<Record<string, unknown> | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
     void new RuntimeConnection(window.location.origin)
-      .response(`${API}/capabilities`, { signal: controller.signal })
-      .then((response) => response.json())
-      .then((capabilities: { ice_servers: RTCIceServer[] }) => {
+      .json<{ ice_servers: RTCIceServer[] }>(
+        `${API}/capabilities`, "GET", undefined,
+        { signal: controller.signal, timeoutMs: 10000 },
+      )
+      .then((capabilities) => {
         if (!controller.signal.aborted)
           setDetectedStreamPort(configuredStreamPort(capabilities.ice_servers));
       })
@@ -108,7 +117,22 @@ export function StreamClient() {
     peer.current?.close();
     channel.current = null;
     peer.current = null;
+    move.current = null;
     if (video.current) video.current.srcObject = null;
+  }
+
+  function release(owned: typeof activeSession.current): Promise<void> {
+    if (!owned) return cleanup.current;
+    const pending = cleanup.current.then(async () => {
+      await owned.client.json(
+        `${API}/${owned.session.session_id}`,
+        "DELETE",
+        undefined,
+        { timeoutMs: 10000 },
+      );
+    });
+    cleanup.current = pending.catch(() => undefined);
+    return pending;
   }
 
   useEffect(() => {
@@ -120,42 +144,60 @@ export function StreamClient() {
     }, 25);
     return () => {
       generation.current++;
+      attemptController.current?.abort();
       clearInterval(tick);
       dispose();
+      void release(activeSession.current).catch(() => undefined);
+      activeSession.current = null;
     };
   }, []);
 
   useEffect(() => {
-    if (!session) return;
+    if (!session || state !== "Connected") return;
+    const client = connection.current!;
+    const controller = new AbortController();
     let active = true;
     const refresh = async () => {
       try {
-        const status = await connection.current!.json<Status>(
+        const status = await client.json<Status>(
           `${API}/${session.session_id}`,
+          "GET",
+          undefined,
+          { signal: controller.signal, timeoutMs: 10000 },
         );
         if (active) {
           setChooser(status.chooser);
           setDownloads(status.downloads);
         }
       } catch (reason) {
-        if (active) setError(String(reason));
+        if (active) void close(String(reason));
       }
     };
     const poll = setInterval(() => void refresh(), 4000);
     const renew = setInterval(() => {
-      void connection
-        .current!.json(`${API}/${session.session_id}/renew`, "POST")
+      void client
+        .json(`${API}/${session.session_id}/renew`, "POST", undefined, {
+          signal: controller.signal,
+          timeoutMs: 10000,
+        })
         .catch((reason) => {
-          if (active) setError(String(reason));
+          if (active) void close(String(reason));
         });
     }, 30000);
     void refresh();
     return () => {
       active = false;
+      controller.abort();
       clearInterval(poll);
       clearInterval(renew);
     };
-  }, [session]);
+  }, [session, state]);
+
+  useEffect(() => {
+    if (state !== "disconnected") return;
+    const timer = setTimeout(() => void close("WebRTC connection lost"), 15000);
+    return () => clearTimeout(timer);
+  }, [state]);
 
   useEffect(() => {
     if (!session || !surface.current) return;
@@ -191,36 +233,68 @@ export function StreamClient() {
   }, [session]);
 
   async function connect() {
+    if (busy) return;
     const attempt = ++generation.current;
+    attemptController.current?.abort();
+    const controller = new AbortController();
+    attemptController.current = controller;
+    const signal = controller.signal;
+    const deadline = setTimeout(
+      () => controller.abort(
+        new DOMException("Connection attempt timed out", "TimeoutError"),
+      ),
+      120000,
+    );
+    signal.addEventListener(
+      "abort",
+      () => {
+        if (attempt === generation.current) void close(String(signal.reason));
+      },
+      { once: true },
+    );
+    const previous = activeSession.current;
     setBusy(true);
     setError("");
     setState("Connecting");
+    setSession(previous?.session ?? null);
+    setChooser(null);
+    setDownloads([]);
     dispose();
     try {
-      const client = new RuntimeConnection(
+      await cleanup.current;
+      signal.throwIfAborted();
+      const client = previous?.client ?? new RuntimeConnection(
         runtimeEndpoint(server, signalPort, window.location.protocol),
         token,
       );
-      await client.connect();
+      await client.connect(undefined, { signal, timeoutMs: 10000 });
       const capabilities = await client.json<{
         webrtc: { available: boolean; reason?: string };
         ice_servers: RTCIceServer[];
-      }>(`${API}/capabilities`);
+      }>(`${API}/capabilities`, "GET", undefined, { signal, timeoutMs: 10000 });
       if (!capabilities.webrtc.available)
         throw new Error(
           capabilities.webrtc.reason || "Streaming backend unavailable",
         );
       setDetectedStreamPort(configuredStreamPort(capabilities.ice_servers));
       const iceServers = clientIceServers(capabilities.ice_servers, streamPort);
-      const created = await client.json<Session>(API, "POST", {
-        ...streamDimensions(
+      const created = previous?.session ?? await client.json<Session>(
+        API,
+        "POST",
+        streamDimensions(
           resolution,
           window.innerWidth,
           window.innerHeight - 48,
         ),
-      });
-      if (attempt !== generation.current) return;
+        { signal, timeoutMs: 50000 },
+      );
+      if (attempt !== generation.current || signal.aborted) {
+        await release({ client, session: created });
+        signal.throwIfAborted();
+        return;
+      }
       connection.current = client;
+      activeSession.current = { client, session: created };
       setSession(created);
       const rtc = new RTCPeerConnection({
         iceServers,
@@ -230,6 +304,7 @@ export function StreamClient() {
       const input = rtc.createDataChannel("gui-input", { ordered: true });
       channel.current = input;
       input.onopen = () => {
+        if (attempt !== generation.current) return;
         if (surface.current)
           send({
             action: "resize",
@@ -241,6 +316,7 @@ export function StreamClient() {
           });
       };
       input.onmessage = (event) => {
+        if (attempt !== generation.current) return;
         try {
           const message = JSON.parse(String(event.data)) as {
             chooser?: Chooser | null;
@@ -261,70 +337,68 @@ export function StreamClient() {
         }
       };
       rtc.ontrack = (event) => {
+        if (attempt !== generation.current) return;
         if (video.current) {
           video.current.srcObject = new MediaStream([event.track]);
           void video.current.play().catch(() => undefined);
         }
       };
       rtc.onconnectionstatechange = () => {
-        if (attempt === generation.current)
+        if (attempt === generation.current) {
+          if (["failed", "closed"].includes(rtc.connectionState)) {
+            void close("WebRTC connection failed");
+            return;
+          }
           setState(
             rtc.connectionState === "connected"
               ? "Connected"
               : rtc.connectionState,
           );
+        }
       };
       await rtc.setLocalDescription(await rtc.createOffer());
-      if (rtc.iceGatheringState !== "complete")
-        await new Promise<void>((resolve, reject) => {
-          const timeout = setTimeout(() => {
-            rtc.removeEventListener("icegatheringstatechange", update);
-            reject(new Error("ICE gathering timed out"));
-          }, 15000);
-          const update = () => {
-            if (rtc.iceGatheringState === "complete") {
-              clearTimeout(timeout);
-              rtc.removeEventListener("icegatheringstatechange", update);
-              resolve();
-            }
-          };
-          rtc.addEventListener("icegatheringstatechange", update);
-          update();
-        });
+      await waitForPeer(rtc, "icegatheringstatechange", signal);
       const answer = await client.json<RTCSessionDescriptionInit>(
         `${API}/${created.session_id}/offer`,
         "POST",
         rtc.localDescription,
+        { signal, timeoutMs: 25000 },
       );
-      if (attempt === generation.current)
-        await rtc.setRemoteDescription(answer);
+      signal.throwIfAborted();
+      await rtc.setRemoteDescription(answer);
+      await waitForPeer(rtc, "connectionstatechange", signal);
     } catch (reason) {
-      if (attempt === generation.current) {
-        setError(String(reason));
-        setState("Disconnected");
-        dispose();
-      }
+      if (attempt === generation.current) await close(String(reason));
     } finally {
+      clearTimeout(deadline);
       if (attempt === generation.current) setBusy(false);
     }
   }
 
-  async function close() {
-    generation.current++;
+  async function close(message = "") {
+    const closedGeneration = ++generation.current;
+    attemptController.current?.abort();
+    attemptController.current = null;
+    const owned = activeSession.current;
+    activeSession.current = null;
     dispose();
-    try {
-      if (session)
-        await connection.current!.json(
-          `${API}/${session.session_id}`,
-          "DELETE",
-        );
-    } catch (reason) {
-      setError(String(reason));
-    }
     setSession(null);
+    setBusy(false);
     setState("Disconnected");
     setChooser(null);
     setDownloads([]);
+    setTyping(false);
+    setError(message);
+    try {
+      await release(owned);
+    } catch (reason) {
+      if (closedGeneration === generation.current)
+        setError(
+          [message, `Session cleanup failed: ${String(reason)}`]
+            .filter(Boolean)
+            .join(". "),
+        );
+    }
   }
 
   function coordinates(clientX: number, clientY: number) {
@@ -637,6 +711,16 @@ export function StreamClient() {
             >
               {busy ? "Connecting" : "Connect"}
             </button>
+            {busy && (
+              <button
+                type="button"
+                className="stream-cancel-button"
+                onClick={() => void close()}
+              >
+                <Icon name="common/close" />
+                Cancel
+              </button>
+            )}
             {error && (
               <p className="stream-login-error" role="alert">
                 {error}

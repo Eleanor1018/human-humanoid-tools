@@ -52,12 +52,18 @@ export interface RuntimeJob {
   attempt: number;
 }
 
+export interface RuntimeRequestOptions {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+}
+
 export class RuntimeConnection {
   identity: RuntimeIdentity | null = null;
-  constructor(
-    readonly endpoint: string,
-    private readonly token = "",
-  ) {
+  readonly endpoint: string;
+  private readonly token: string;
+  constructor(endpoint: string, token = "") {
+    this.endpoint = endpoint;
+    this.token = token;
     const url = new URL(endpoint);
     if (
       !["http:", "https:"].includes(url.protocol) ||
@@ -100,22 +106,49 @@ export class RuntimeConnection {
     return response;
   }
 
-  async json<T>(path: string, method = "GET", document?: unknown): Promise<T> {
-    return (
-      await this.response(path, {
-        method,
-        headers: { "Content-Type": "application/json" },
-        body: document === undefined ? undefined : JSON.stringify(document),
-      })
-    ).json() as Promise<T>;
+  async json<T>(
+    path: string,
+    method = "GET",
+    document?: unknown,
+    options: RuntimeRequestOptions = {},
+  ): Promise<T> {
+    const controller = new AbortController();
+    const abort = () => controller.abort(options.signal?.reason);
+    options.signal?.addEventListener("abort", abort, { once: true });
+    if (options.signal?.aborted) abort();
+    const timer = options.timeoutMs === undefined
+      ? undefined
+      : setTimeout(
+          () => controller.abort(
+            new DOMException("Runtime request timed out", "TimeoutError"),
+          ),
+          options.timeoutMs,
+        );
+    try {
+      controller.signal.throwIfAborted();
+      return await (
+        await this.response(path, {
+          method,
+          headers: { "Content-Type": "application/json" },
+          body: document === undefined ? undefined : JSON.stringify(document),
+          signal: controller.signal,
+        })
+      ).json() as T;
+    } finally {
+      clearTimeout(timer);
+      options.signal?.removeEventListener("abort", abort);
+    }
   }
 
-  async connect(expected?: {
-    runtime_id?: string;
-    workspace_id?: string;
-  }): Promise<RuntimeIdentity> {
+  async connect(
+    expected?: { runtime_id?: string; workspace_id?: string },
+    options: RuntimeRequestOptions = {},
+  ): Promise<RuntimeIdentity> {
     const identity = await this.json<RuntimeIdentity>(
       "/api/runtime/v1/identity",
+      "GET",
+      undefined,
+      options,
     );
     if (
       (expected?.runtime_id && identity.runtime_id !== expected.runtime_id) ||

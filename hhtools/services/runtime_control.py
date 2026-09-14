@@ -61,6 +61,8 @@ class RuntimeControl:
     def __init__(self, data_dir: Path, *, remote: bool = False):
         self.data_dir = Path(data_dir)
         self._lock = threading.RLock()
+        self._session_tokens = {}
+        self._token_revocation_listeners = set()
         self._path = self.data_dir / "runtime-control.json"
         if self._path.exists():
             self._document = json.loads(self._path.read_text(encoding="utf-8"))
@@ -98,20 +100,31 @@ class RuntimeControl:
         with self._lock:
             for record in getattr(self, "_session_tokens", {}).values():
                 if hmac.compare_digest(record["sha256"], digest):
-                    return {"subject": record["subject"], "scopes": ["admin"]}
+                    return {
+                        "subject": record["subject"],
+                        "scopes": ["admin"],
+                        "token_id": record["token_id"],
+                    }
             for record in self._document["tokens"]:
                 if hmac.compare_digest(record["sha256"], digest):
-                    return {"subject": record["subject"], "scopes": list(record["scopes"])}
+                    return {
+                        "subject": record["subject"],
+                        "scopes": list(record["scopes"]),
+                        "token_id": record["token_id"],
+                    }
         return None
 
-    def issue_session_token(self, session_id: str):
+    def issue_session_token(self, session_id: str, *, token_id: str | None = None):
         token = secrets.token_urlsafe(48)
         with self._lock:
-            if not hasattr(self, "_session_tokens"):
-                self._session_tokens = {}
+            if token_id is not None and not any(
+                record["token_id"] == token_id for record in self._document["tokens"]
+            ):
+                raise RuntimeServiceError("UNAUTHORIZED", "The operator credential was revoked.")
             self._session_tokens[session_id] = {
                 "sha256": hashlib.sha256(token.encode()).hexdigest(),
                 "subject": "gui-session:" + session_id,
+                "token_id": token_id,
             }
         return token
 
@@ -120,7 +133,11 @@ class RuntimeControl:
         with self._lock:
             for record in getattr(self, "_session_tokens", {}).values():
                 if hmac.compare_digest(record["sha256"], digest):
-                    return {"subject": record["subject"], "scopes": ["admin"]}
+                    return {
+                        "subject": record["subject"],
+                        "scopes": ["admin"],
+                        "token_id": record["token_id"],
+                    }
         return None
 
     def revoke_session_token(self, session_id: str):
@@ -148,7 +165,24 @@ class RuntimeControl:
                 item for item in self._document["tokens"] if item["token_id"] != token_id
             ]
             atomic_private_json(self._path, self._document)
+            self._session_tokens = {
+                key: record
+                for key, record in self._session_tokens.items()
+                if record["token_id"] != token_id
+            }
+            listeners = tuple(self._token_revocation_listeners)
+        # Closing workers can wait on GUI requests that also authenticate here.
+        for listener in listeners:
+            listener(token_id)
         return {"revoked": True}
+
+    def add_token_revocation_listener(self, listener):
+        with self._lock:
+            self._token_revocation_listeners.add(listener)
+
+    def remove_token_revocation_listener(self, listener):
+        with self._lock:
+            self._token_revocation_listeners.discard(listener)
 
     def list_tokens(self) -> list[dict[str, Any]]:
         with self._lock:

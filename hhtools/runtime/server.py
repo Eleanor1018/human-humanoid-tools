@@ -97,7 +97,9 @@ def create_runtime_app(
                 )
             code = error.code
             status = 500 if code == "INTERNAL_ERROR" else 422
-            if code.endswith("NOT_FOUND"):
+            if code == "UNAUTHORIZED":
+                status = 401
+            elif code.endswith("NOT_FOUND"):
                 status = 404
             elif code.endswith("FORBIDDEN"):
                 status = 403

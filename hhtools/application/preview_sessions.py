@@ -48,7 +48,7 @@ class PreviewSessions:
             },
         }
 
-    def create(self, request: PreviewCreateRequest, subject: str):
+    def create(self, request: PreviewCreateRequest, subject: str, **worker_options):
         if request.mode == "webrtc" and not self.capabilities()["webrtc"]["available"]:
             raise RuntimeServiceError(
                 "PREVIEW_BACKEND_UNAVAILABLE", "Install the optional preview backend."
@@ -66,7 +66,7 @@ class PreviewSessions:
             parent, child = spawn.Pipe()
             process = None
             try:
-                process = self._worker(spawn, child, request, directory)
+                process = self._worker(spawn, child, request, directory, **worker_options)
                 process.start()
                 child.close()
                 if not parent.poll(45):
@@ -160,6 +160,7 @@ class PreviewSessions:
             try:
                 _send(session["connection"], {"operation": operation, **arguments})
                 if not session["connection"].poll(20):
+                    self._close(session, reason="backend_timeout")
                     raise RuntimeServiceError("PREVIEW_TIMEOUT", "Preview backend did not respond.")
                 response = _receive(session["connection"])
                 if response.get("error"):
@@ -168,6 +169,7 @@ class PreviewSessions:
                     response["payload"] = (session["directory"] / "snapshot.png").read_bytes()
                 return response
             except (OSError, EOFError) as error:
+                self._close(session, reason="backend_disconnected")
                 raise RuntimeServiceError(
                     "PREVIEW_DISCONNECTED", "Preview backend disconnected."
                 ) from error
@@ -189,36 +191,37 @@ class PreviewSessions:
     def close(self, session_id, subject, *, reason="closed"):
         session = self._session(session_id, subject)
         with session["lock"]:
-            if session["state"] != "ready":
-                return self._view(session)
-            try:
-                _send(session["connection"], {"operation": "close"})
-                session["process"].join(2)
-            except (OSError, EOFError):
-                pass
-            self._stop_worker(session["process"])
-            session["connection"].close()
-            session["process"].close()
-            session["state"] = "expired" if reason == "expired" else "closed"
-            session["reason"] = reason
-            shutil.rmtree(session["directory"], ignore_errors=True)
-            self._released(session_id)
+            return self._close(session, reason=reason)
+
+    def _close(self, session, *, reason):
+        """Release a worker while holding its session lock, including on RPC failure."""
+        if session["state"] != "ready":
             return self._view(session)
+        try:
+            _send(session["connection"], {"operation": "close"})
+            session["process"].join(2)
+        except (OSError, EOFError):
+            pass
+        self._stop_worker(session["process"])
+        session["connection"].close()
+        session["process"].close()
+        session["state"] = "expired" if reason == "expired" else "closed"
+        session["reason"] = reason
+        shutil.rmtree(session["directory"], ignore_errors=True)
+        self._released(session["session_id"])
+        return self._view(session)
 
     def _expire(self):
         while not self._closed.wait(1):
             with self._lock:
                 sessions = list(self._sessions.values())
             for session in sessions:
-                if session["state"] == "ready":
-                    expired = session["expires_at"] <= datetime.now(UTC)
-                    exited = not session["process"].is_alive()
-                    if expired or exited:
-                        self.close(
-                            session["session_id"],
-                            session["subject"],
-                            reason="expired" if expired else "backend_exited",
-                        )
+                with session["lock"]:
+                    if session["state"] == "ready":
+                        expired = session["expires_at"] <= datetime.now(UTC)
+                        exited = not session["process"].is_alive()
+                        if expired or exited:
+                            self._close(session, reason="expired" if expired else "backend_exited")
             with self._lock:
                 closed = [key for key, item in self._sessions.items() if item["state"] != "ready"]
                 for key in closed[:-100]:

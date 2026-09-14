@@ -4,8 +4,10 @@ import json
 import os
 from contextlib import asynccontextmanager
 
+import anyio
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import FileResponse, Response
+from starlette.concurrency import run_in_threadpool
 
 from hhtools.application.gui_sessions import GuiSessions
 from hhtools.contracts.gui import GuiInput, GuiSessionRequest, GuiUploadRequest
@@ -41,8 +43,26 @@ def install_streaming(app, runtime, control):
         }
 
     @router.post("")
-    def create(request: Request, body: GuiSessionRequest):
-        return sessions.create(body, subject(request))
+    async def create(request: Request, body: GuiSessionRequest):
+        created = await run_in_threadpool(
+            sessions.create,
+            body,
+            subject(request),
+            token_id=request.state.runtime_principal.get("token_id"),
+        )
+        disconnected = False
+        # Unlike is_disconnected(), allow middleware receive checkpoints to run.
+        # The request body has already been consumed by FastAPI.
+        with anyio.move_on_after(0.05):
+            disconnected = (await request.receive())["type"] == "http.disconnect"
+        if disconnected:
+            await run_in_threadpool(
+                sessions.close,
+                created["session_id"],
+                subject(request),
+                reason="client_disconnected",
+            )
+        return created
 
     @router.get("")
     def listing(request: Request):

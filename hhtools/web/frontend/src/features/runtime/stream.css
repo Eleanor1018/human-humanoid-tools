@@ -244,6 +244,11 @@
   background: #0b5ed7;
   border-color: #0a58ca;
 }
+.stream-client--login .stream-cancel-button {
+  height: 38px;
+  margin: 12px 0 0 12px;
+  font: inherit;
+}
 .stream-auth {
   color: #aeb4ba;
   font-size: 12px;
