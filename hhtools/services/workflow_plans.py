@@ -94,6 +94,7 @@ class WorkflowPlanService:
                 "video_to_motion": "gvhmr",
                 "analysis_export": "analysis_export",
                 "preview_render": "mujoco",
+                "retarget_export": "retarget_export",
             }[kind],
             effective_parameters=parameters,
             provenance=provenance,

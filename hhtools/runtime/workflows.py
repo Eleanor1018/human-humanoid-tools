@@ -26,6 +26,7 @@ from hhtools.contracts.workflows import (
     AnalysisCompareRequest,
     AnalysisExportParameters,
     AnalysisSelectionRequest,
+    RetargetExportParameters,
     WorkflowJobSpec,
     WorkflowPreflightRequest,
 )
@@ -72,6 +73,7 @@ def install_workflows(app, runtime, control):
     services.runtime_workflow_plans = plans
     services.runtime_workflow_executor = executor
     uploads = UploadService(control.data_dir, services.agent_asset_service, control)
+    services.runtime_uploads = uploads
     router = APIRouter(prefix=PREFIX, tags=["resource workflows"])
 
     def subject(request):
@@ -145,6 +147,25 @@ def install_workflows(app, runtime, control):
             parameters.artifact_sha256 = artifact.descriptor.sha256
             inputs = job.spec.inputs
         return plans.create("preview_render", inputs, parameters.model_dump(mode="json"))
+
+    @router.post("/workflows/retarget-export/preflight", response_model=WorkflowJobSpec)
+    def retarget_export_preflight(body: RetargetExportParameters):
+        artifact = reports.artifact(body.job_id, body.artifact_id)
+        if artifact.descriptor.kind != "retarget_state":
+            raise RuntimeServiceError("ARTIFACT_KIND_MISMATCH", "Select a full retarget state.")
+        source = services.agent_job_store.get_spec(body.job_id)
+        if source.kind not in {"retarget", "r2r_retarget"}:
+            raise RuntimeServiceError("EXPORT_UNSUPPORTED", "Select a single retarget job.")
+        inputs = {item.asset_id: item for item in source.inputs}
+        for robot in (source.robot, source.source_robot):
+            if robot:
+                inputs[robot.asset_id] = JobSpecInput(
+                    asset_id=robot.asset_id, sha256=robot.config_sha256
+                )
+        parameters = body.model_copy(update={"artifact_sha256": artifact.descriptor.sha256})
+        return plans.create(
+            "retarget_export", list(inputs.values()), parameters.model_dump(mode="json")
+        )
 
     @router.get("/plans/{plan_id}")
     def runtime_get_plan(plan_id: str) -> dict:

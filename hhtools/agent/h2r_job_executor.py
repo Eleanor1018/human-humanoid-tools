@@ -513,6 +513,9 @@ class H2RJobExecutor:
             context.raise_if_cancelled()
 
             stage = "export"
+            from hhtools.application.retarget_state import publish_retarget_state
+
+            publish_retarget_state(context, retargeted, yellow_foot_z=preview.yellow_foot_z)
             context.raise_if_cancelled()
             self._temporary_root.mkdir(parents=True, exist_ok=True)
             with tempfile.TemporaryDirectory(
@@ -530,6 +533,7 @@ class H2RJobExecutor:
                     backend=spec.backend,
                     source_path=source_path,
                     yellow_foot_z=preview.yellow_foot_z,
+                    **({"export_options": parameters.export} if parameters.export else {}),
                 )
                 context.raise_if_cancelled()
                 try:

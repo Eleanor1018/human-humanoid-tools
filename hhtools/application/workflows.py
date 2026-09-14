@@ -152,6 +152,10 @@ class ResourceWorkflowExecutor:
             root = Path(name)
             if spec.kind == "preview_render":
                 return self._render(spec, context, root)
+            if spec.kind == "retarget_export":
+                from hhtools.application.retarget_exports import export_retarget_state
+
+                return export_retarget_state(self.services, spec.effective_parameters, context, root)
             snapshots = self._snapshot(spec, root / "inputs")
             if spec.kind == "analysis_export":
                 return self._analysis_export(spec, context, snapshots, root)

@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pytest
 
 from hhtools.agent.r2r_job_executor import (
@@ -45,6 +46,9 @@ class _Motion:
 
 @dataclass
 class _Retargeted:
+    name: str = "walk"
+    root_coord_count: int = 7
+    dof_names: tuple[str, ...] = ("joint",)
     num_frames: int = 2
     sample_rate: float = 50.0
     meta: dict[str, Any] | None = None
@@ -61,6 +65,12 @@ class _Retargeted:
                     "fallback_used": False,
                 }
             }
+
+    @property
+    def joint_q(self):
+        coordinates = np.zeros((self.num_frames, 8))
+        coordinates[:, 6] = 1
+        return coordinates
 
 
 def _spec() -> JobSpecV2:
@@ -284,8 +294,8 @@ def test_r2r_executor_preserves_pair_identity_and_publishes_managed_artifacts(
     assert any(item.phase == "solving" for item, _delay in progress)
 
     published = context.published_artifacts()
-    assert [item.kind for item in published] == ["preview", "retargeted_motion"]
-    exported = artifacts.get(published[1].artifact_id, verify=True)
+    assert [item.kind for item in published] == ["preview", "retarget_state", "retargeted_motion"]
+    exported = artifacts.get(published[2].artifact_id, verify=True)
     assert exported.path.read_text(encoding="utf-8") == "time,root_x\n0,0\n"
     assert exported.descriptor.metadata["source_robot_asset_id"] == SOURCE_ID
     assert exported.descriptor.metadata["target_robot_asset_id"] == TARGET_ID
@@ -352,4 +362,4 @@ def test_r2r_export_failure_is_structured_and_path_free(tmp_path: Path) -> None:
     assert captured.value.error.code == "OUTPUT_WRITE_FAILED"
     assert captured.value.error.retryable is True
     assert str(tmp_path) not in captured.value.error.model_dump_json()
-    assert [item.kind for item in context.published_artifacts()] == ["preview"]
+    assert [item.kind for item in context.published_artifacts()] == ["preview", "retarget_state"]

@@ -145,6 +145,8 @@ def assemble_agent_services(
                 presets.append(preset)
         return presets
 
+    services.agent_robot_provider = _agent_robot_provider
+
     services.agent_legacy_root_locator = DynamicRootLocator(
         motion_roots=agent_motion_roots,
         robot_roots=agent_robot_roots,
@@ -639,6 +641,7 @@ def assemble_agent_services(
         backend: str,
         source_path: Path,
         yellow_foot_z: float | None,
+        export_options=None,
     ) -> Path:
         return Path(
             _write_export(
@@ -647,12 +650,14 @@ def assemble_agent_services(
                 source_motion,
                 output_root,
                 stem=stem,
-                fps=None,
+                fps=export_options.fps if export_options else None,
                 fmt=output_format,
                 backend=backend,
-                csv_header=True,
+                csv_header=export_options.csv_header if export_options else True,
                 source_path=source_path,
                 yellow_foot_z=yellow_foot_z,
+                t_start=export_options.t_start if export_options else None,
+                t_end=export_options.t_end if export_options else None,
             )
         )
 
@@ -822,6 +827,7 @@ def assemble_agent_services(
         output_format: str,
         backend: str,
         yellow_foot_z: float | None,
+        export_options=None,
     ) -> Path:
         entry = {
             "source_path": str(resolved.source_path),
@@ -840,10 +846,12 @@ def assemble_agent_services(
                 calibrated_joint_q=calibration,
                 entry=entry,
                 stem=resolved.stem,
-                fps=None,
+                fps=export_options.fps if export_options else None,
                 fmt=output_format,
-                csv_header=True,
+                csv_header=export_options.csv_header if export_options else True,
                 yellow_foot_z=yellow_foot_z,
+                t_start=export_options.t_start if export_options else None,
+                t_end=export_options.t_end if export_options else None,
             )
         )
 

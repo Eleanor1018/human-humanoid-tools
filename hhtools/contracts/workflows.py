@@ -9,6 +9,7 @@ from pydantic import AwareDatetime, ConfigDict, Field, model_validator
 
 from .artifacts import JobManifest
 from .common import AssetId, ContractModel, PlanId, Sha256Hex
+from .execution import TrajectoryExportOptions
 from .job_spec import JobSpecInput, JobSpecProvenance, JobSpecV2
 from .preflight import OutputPolicy
 from .previews import PreviewRenderParameters
@@ -17,7 +18,7 @@ WORKFLOW_SEMANTICS = "hhtools.workflow.plan.v1"
 
 
 class AnalysisParameters(ContractModel):
-    embedding: Literal["handcrafted"] = "handcrafted"
+    embedding: Literal["handcrafted", "pae"] = "handcrafted"
     metric_config: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -45,7 +46,9 @@ class WorkflowPreflightRequest(ContractModel):
 class WorkflowJobSpec(ContractModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     schema_version: Literal[3] = 3
-    kind: Literal["analysis", "video_to_motion", "analysis_export", "preview_render"]
+    kind: Literal[
+        "analysis", "video_to_motion", "analysis_export", "preview_render", "retarget_export"
+    ]
     plan_id: PlanId
     inputs: Annotated[list[JobSpecInput], Field(min_length=1, max_length=1000)]
     backend: str
@@ -63,6 +66,7 @@ class WorkflowJobSpec(ContractModel):
             "video_to_motion": (VideoParameters, "gvhmr"),
             "analysis_export": (AnalysisExportParameters, "analysis_export"),
             "preview_render": (PreviewRenderParameters, "mujoco"),
+            "retarget_export": (RetargetExportParameters, "retarget_export"),
         }[self.kind]
         model.model_validate(self.effective_parameters)
         if self.backend != expected:
@@ -114,3 +118,10 @@ class AnalysisExportParameters(AnalysisSelectionRequest):
 class AnalysisCompareRequest(ContractModel):
     left: AnalysisSelectionRequest
     right: AnalysisSelectionRequest
+
+
+class RetargetExportParameters(TrajectoryExportOptions):
+    job_id: str
+    artifact_id: str
+    artifact_sha256: Sha256Hex | None = None
+    format: Literal["csv", "pkl"] = "csv"
