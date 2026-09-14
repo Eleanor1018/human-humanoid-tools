@@ -153,6 +153,32 @@ def test_multiple_clients_reuse_daemon_and_adapter_exit_does_not_stop_it(tmp_pat
             client.request("POST", PREFIX + "/admin/shutdown", document={"policy": "drain"})
 
 
+def test_quick_restart_keeps_the_requested_port(tmp_path):
+    import os
+    import socket
+    import time
+
+    from hhtools.client.discovery import connect_or_start
+
+    if os.name != "posix":
+        pytest.skip("POSIX listener reuse")
+    with socket.socket() as available:
+        available.bind(("127.0.0.1", 0))
+        port = available.getsockname()[1]
+    marker = tmp_path / ".hhtools-agent/runtime-connection.json"
+    for _ in range(2):
+        client = connect_or_start(tmp_path, port=port, timeout=30)
+        try:
+            assert client.endpoint == f"http://127.0.0.1:{port}"
+            client.request("GET", PREFIX + "/identity")
+        finally:
+            client.request("POST", PREFIX + "/admin/shutdown", document={"policy": "drain"})
+            deadline = time.monotonic() + 10
+            while marker.exists() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            assert not marker.exists(), "Runtime did not stop"
+
+
 def test_verified_artifact_supports_range(runtime_app, monkeypatch, tmp_path):
     from hhtools.contracts import ArtifactDescriptor
     from hhtools.services.artifacts import StoredArtifact

@@ -64,6 +64,8 @@ def main(argv=None):
         print(error.code, file=__import__("sys").stderr)
         return 3
     sock = socket.socket(socket.AF_INET6 if ":" in arguments.host else socket.AF_INET)
+    if os.name == "posix":
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     connection_path = workspace / ".hhtools-agent/runtime-connection.json"
     try:
         try:
