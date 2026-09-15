@@ -220,6 +220,8 @@ Entry point: `uv run hhtools` (same package as the Web UI). Use this for large d
 | `hhtools doctor` | Check local Web, robot, retarget, MCP, body-model, and GVHMR readiness |
 | `hhtools h2r` / `hhtools r2r` | Persistent H2R / R2R preflight, jobs, wait and artifact download |
 | `hhtools analysis` / `hhtools video2motion` | Persistent dataset analysis / video motion generation |
+| `hhtools jobs` / `hhtools runs` | Task management and local execution recovery |
+| `hhtools analysis select` / `compare` / `export` | Filter, compare and export analysis reports |
 | `hhtools convert` | BVH / GLB → unified NPZ |
 | `hhtools import list` / `hhtools import` | List adapters; import a dataset root → NPZ |
 | `hhtools bodymodel check` / `setup` | SMPL-family weight paths / download hints |
@@ -245,8 +247,10 @@ uv run hhtools analysis --resume analysis-run.json
 
 These workflows connect to or start a persistent Runtime. They accept local inputs,
 registered asset IDs, or `--request` JSON. H2R/R2R default to smoke scope; `--mode full`
-requests a full plan. A receipt is saved before submission, so `--resume` can recover
-a lost response without submitting a second job. See [workflow CLI details](docs/runtime.md#workflow-cli).
+requests a full plan. Use `--batch` for an ordered H2R/R2R input list. Receipts are
+saved before upload, so `--resume` can recover transfers or a lost submission response.
+TTY output is readable with progress; `--json` keeps automation output strict and
+quiet. See [workflow CLI details](docs/runtime.md#workflow-cli).
 
 ```bash
 uv run hhtools convert assets/motions/mimic/LAFAN/dance1_subject2.bvh -o /tmp/npz --unit m

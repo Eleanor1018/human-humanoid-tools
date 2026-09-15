@@ -316,6 +316,64 @@ def test_actual_cli_analysis_upload_wait_download_and_resume(tmp_path, synthetic
         )
         assert resumed.returncode == 0, (resumed.stdout, resumed.stderr)
         assert json.loads(resumed.stdout)["job"]["job_id"] == result["job"]["job_id"]
+
+        def invoke(*args):
+            process = subprocess.run(
+                [sys.executable, "-m", "hhtools.cli.main", *args, "--endpoint", endpoint, "--json"],
+                capture_output=True,
+                text=True,
+                timeout=45,
+                check=False,
+            )
+            assert process.returncode == 0, (process.stdout, process.stderr)
+            return json.loads(process.stdout)
+
+        job_id = result["job"]["job_id"]
+        artifact_id = result["downloads"][0]["artifact_id"]
+        assert invoke("jobs", "list")["jobs"][0]["job_id"] == job_id
+        assert invoke("runtime", "jobs", "show", job_id)["job"]["state"] == "completed"
+        selected = invoke("analysis", "select", "--job", job_id, "--artifact", artifact_id)
+        assert selected["total"] == 1
+        compared = invoke(
+            "analysis",
+            "compare",
+            "--left-job",
+            job_id,
+            "--left-artifact",
+            artifact_id,
+            "--right-job",
+            job_id,
+            "--right-artifact",
+            artifact_id,
+        )
+        assert compared["left_count"] == compared["right_count"] == 1
+        exported = invoke(
+            "analysis",
+            "export",
+            "--job",
+            job_id,
+            "--artifact",
+            artifact_id,
+            "--format",
+            "csv",
+            "--receipt",
+            str(tmp_path / "export-run.json"),
+            "--output",
+            str(tmp_path / "csv"),
+        )
+        assert exported["job"]["state"] == "completed"
+        assert Path(exported["downloads"][0]["path"]).suffix == ".csv"
+        relocated = invoke(
+            "runs",
+            "resume",
+            str(tmp_path / "export-run.json"),
+            "--output",
+            str(tmp_path / "relocated"),
+        )
+        assert relocated["downloads"][0]["path"] != exported["downloads"][0]["path"]
+        redownloaded = invoke("runs", "resume", str(tmp_path / "export-run.json"))
+        assert redownloaded["downloads"] == relocated["downloads"]
+        assert invoke("runs", "list", "--directory", str(tmp_path))["total"] == 2
     finally:
         server.should_exit = True
         thread.join(15)

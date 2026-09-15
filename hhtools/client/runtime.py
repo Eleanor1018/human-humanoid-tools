@@ -201,6 +201,7 @@ class RuntimeClient:
         destination: Path,
         *,
         overwrite: bool = False,
+        on_progress=None,
     ) -> dict[str, Any]:
         """Resume into a partial file; publish only after size and SHA-256 verification."""
         if not self.runtime_id:
@@ -224,6 +225,7 @@ class RuntimeClient:
             "size_bytes": descriptor["size_bytes"],
             "sha256": descriptor["sha256"],
         }
+        total_bytes = descriptor["size_bytes"]
         if partial.is_symlink() or identity.is_symlink():
             raise client_error("INVALID_OUTPUT", "Download staging files must not be links.")
         try:
@@ -236,6 +238,8 @@ class RuntimeClient:
         identity.write_text(json.dumps(expected, sort_keys=True), encoding="utf-8")
         partial.touch(exist_ok=True)
         offset = partial.stat().st_size if partial.exists() else 0
+        if on_progress:
+            on_progress(min(offset, total_bytes), total_bytes)
         headers = {"Accept": "application/octet-stream"}
         if offset and offset < descriptor["size_bytes"]:
             headers["Range"] = f"bytes={offset}-"
@@ -250,6 +254,8 @@ class RuntimeClient:
                     with partial.open("ab" if offset else "wb") as stream:
                         while chunk := response.read(1024**2):
                             stream.write(chunk)
+                            if on_progress:
+                                on_progress(stream.tell(), total_bytes)
                             if stream.tell() > descriptor["size_bytes"]:
                                 raise client_error(
                                     "ARTIFACT_HASH_MISMATCH", "Artifact exceeds its declared size."
@@ -281,7 +287,13 @@ class RuntimeClient:
         return descriptor
 
     def upload(
-        self, source: Path, *, kind: str, upload_id: str | None = None, on_session=None
+        self,
+        source: Path,
+        *,
+        kind: str,
+        upload_id: str | None = None,
+        on_session=None,
+        on_progress=None,
     ) -> dict:
         """Upload a file or bundle. Persist on_session's ID to resume after disconnect."""
         if not self.runtime_id:
@@ -335,6 +347,10 @@ class RuntimeClient:
         upload_id = session["upload_id"]
         if on_session:
             on_session(upload_id)
+        total_bytes = sum(item["size_bytes"] for item in session["files"])
+        transferred_bytes = sum(item["offset"] for item in session["files"])
+        if on_progress:
+            on_progress(transferred_bytes, total_bytes)
         try:
             for member in session["files"]:
                 with local[member["relative_path"]].open("rb") as stream:
@@ -349,6 +365,9 @@ class RuntimeClient:
                             headers={"Content-Type": "application/octet-stream"},
                         ) as response:
                             offset = json.loads(response.read(4096))["offset"]
+                            transferred_bytes += len(payload)
+                            if on_progress:
+                                on_progress(transferred_bytes, total_bytes)
                     if member["size_bytes"] == 0 and session["state"] != "completed":
                         with self._open(
                             "PUT",

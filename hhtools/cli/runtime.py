@@ -11,6 +11,36 @@ import typer
 app = typer.Typer(help=__doc__, pretty_exceptions_show_locals=False)
 
 
+@app.command(
+    "jobs",
+    context_settings={
+        "allow_extra_args": True,
+        "ignore_unknown_options": True,
+        "help_option_names": [],
+    },
+)
+def jobs(ctx: typer.Context):
+    """List, inspect, watch, cancel, retry, or inspect job artifacts."""
+    from hhtools.cli.operations import run
+
+    raise typer.Exit(run("jobs", ctx.args))
+
+
+@app.command(
+    "runs",
+    context_settings={
+        "allow_extra_args": True,
+        "ignore_unknown_options": True,
+        "help_option_names": [],
+    },
+)
+def runs(ctx: typer.Context):
+    """List local execution receipts and resume workflows."""
+    from hhtools.cli.operations import run
+
+    raise typer.Exit(run("runs", ctx.args))
+
+
 def _print(value):
     typer.echo(json.dumps(value, ensure_ascii=False, allow_nan=False))
 

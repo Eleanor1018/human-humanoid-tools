@@ -13,7 +13,10 @@ service startup, resource transfer, Analysis, Video2Motion, and WebRTC previews.
 
 The workflow CLI also exposes `hhtools h2r`, `hhtools r2r`, `hhtools analysis`, and
 `hhtools video2motion` with automatic preflight/submission, JSON output, bounded
-waiting, optional verified downloads, and `--resume` recovery receipts. `run` is
+waiting, optional verified downloads, and `--resume` recovery receipts. Use `--json`
+for a strict result; interactive terminals otherwise show summaries and progress.
+`hhtools jobs` manages jobs, `hhtools runs` discovers/resumes local receipts, and
+`hhtools analysis select/compare/export` covers report post-processing. `run` is
 optional and remains compatible. See [workflow CLI](runtime.md#workflow-cli).
 
 The current Agent surface supports human-to-robot (H2R) retargeting—plain motion through Newton

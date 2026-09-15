@@ -248,7 +248,9 @@ hhtools analysis --resume analysis-run.json --output reports
 
 Inputs may be local files/bundles or registered `asset:sha256:...` IDs. Local inputs
 are uploaded; remote paths are never inferred from client paths. H2R/R2R accept one
-input bundle per invocation. Analysis and Video2Motion accept multiple inputs.
+input bundle by default, or an ordered list with `--batch`. Analysis and Video2Motion
+accept multiple inputs. Options and positional files can be interleaved. All local
+request/parameter files and required options are checked before connecting/uploading.
 Use `--request FILE` (or `--request -` for stdin) for a full preflight request, and
 `--parameters FILE` for parameter overrides. Installed robot IDs can be paired with
 `--robot-asset` / `--robot-bundle`, or the parallel source/target flags for R2R.
@@ -259,27 +261,75 @@ uploaded code, or a full run. H2R/R2R default to smoke unless `--mode full` is s
 
 Use `--endpoint` or `HHTOOLS_RUNTIME_ENDPOINT` for an existing server, with
 `HHTOOLS_RUNTIME_TOKEN` and `HHTOOLS_RUNTIME_CA` as needed. Otherwise `--workspace`
-selects the local Runtime, starting it when absent. JSON is always written to stdout;
-`--json` is accepted explicitly. Help is human-readable.
+selects the local Runtime, starting it when absent. Interactive terminals show a
+readable summary and upload/wait/download progress on stderr. Redirected/piped output
+preserves the existing JSON behavior. `--json` forces one strict JSON result without
+progress, `--human` forces readable output, and `--quiet` suppresses progress only.
+Help is human-readable.
 
-Before submitting, the CLI saves a private recovery receipt with Runtime/workspace
-IDs, endpoint, plan ID and idempotency key. It then adds the job ID when acknowledged.
+Before uploading, the CLI saves a private version-2 recovery receipt with Runtime/workspace
+IDs, endpoint, validated request data and idempotency key. Upload IDs are recorded as
+soon as received, then asset IDs, preflight plans and the acknowledged job ID are added.
+Existing version-1 submission receipts remain readable.
 The default location is `.hhtools-client/runs/<id>.json`; `--receipt` chooses a new
 file. Tokens are not saved. A lost response can be recovered with `--resume FILE`:
 the client first looks up the original submission and replays the same plan/key only
-if it is absent. Resume does not re-upload, re-plan, retry failed jobs, or change
-execution options. Use the same authenticated principal when recovering an
+if it is absent. Interrupted uploads resume their saved manifests and offsets; changed
+local source content is rejected. Resolved assets and plans are reused. Resume does
+not retry failed jobs or change execution options. Use the same authenticated principal when recovering an
 unacknowledged submission, because keys are scoped to that principal.
 
 Waiting defaults to at most 300 seconds. `--wait-timeout 0` waits indefinitely;
 `--no-wait` returns after submission. Timeout or Ctrl+C stops client waiting while
 the Runtime retains the job. `--output DIR` downloads completed primary artifacts
 with size/hash verification and stable names. Existing files need `--overwrite`.
+Files already acknowledged in the same receipt are verified and reused on resume.
 When returning before completion, use the receipt to resume waiting and download.
 Exit codes: `0` for accepted/nonfailed jobs, `1` for failed/cancelled/rejected/partial
 results, `2` for input/transport errors, `3` for non-ready preflight, and `130` for
 interrupted waiting. Always inspect job `state` and `outcome`; exit zero alone does
 not mean execution or quality review is complete.
+
+### Tasks And Recovery
+
+```bash
+hhtools jobs list --limit 20
+hhtools jobs show JOB_ID
+hhtools jobs watch JOB_ID --wait-timeout 300
+hhtools jobs cancel JOB_ID
+hhtools jobs retry JOB_ID --idempotency-key retry-001
+hhtools jobs artifacts JOB_ID
+hhtools runs list
+hhtools runs show .hhtools-client/runs/RECEIPT.json
+hhtools runs resume .hhtools-client/runs/RECEIPT.json
+```
+
+`runtime jobs` and `runtime runs` are aliases. Job commands use the same connection
+options as workflows. `runs list/show` inspect local receipts without contacting a
+Runtime; their prepared/submitted states describe the receipt, not current server
+execution. `jobs watch` stops waiting at its deadline or Ctrl+C without cancelling
+the job. Cancellation is a separate explicit command; inspect its resulting state.
+Retry requires a caller-owned idempotency key to recover an ambiguous response safely.
+
+### Batches And Analysis
+
+```bash
+hhtools h2r first.npz --robot g1 second.npz --batch --output batch-results
+hhtools r2r first.csv second.csv --batch --source-robot g1 --target-robot rp1
+hhtools analysis select --job JOB_ID --artifact REPORT_ID --tag walking
+hhtools analysis compare --left-job JOB_A --left-artifact REPORT_A \
+  --right-job JOB_B --right-artifact REPORT_B
+hhtools analysis export --job JOB_ID --artifact REPORT_ID --format csv --output reports
+```
+
+Batch mode preflights every input before submitting one ordered batch plan; a
+non-ready child prevents submission. Single plans remain resumable in the receipt.
+Batch output downloads the portable batch archive. Inputs are explicit files or
+bundles, not a recursive glob expansion performed by the CLI.
+Analysis selection also supports `--clip-id`, `--include-errors`, `--subset-size`,
+`--metric-ranges FILE` (JSON metric to `[minimum, maximum]` mapping), and pagination.
+Export supports JSON, CSV and robot ZIP through a durable job and its own receipt;
+use `runs resume` after interruption. These commands support `--json` and `--human`.
 
 ## Remote Service
 

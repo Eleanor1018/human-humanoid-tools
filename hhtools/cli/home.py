@@ -44,15 +44,17 @@ _WORKFLOWS = (
     ),
     HomeEntry(
         "Batch",
-        "Run H2R or R2R batches from the workspace.",
-        "hhtools web",
-        "WEB",
+        "Submit an ordered batch through Runtime.",
+        "hhtools h2r --batch",
+        "CLI",
     ),
     HomeEntry("Analysis", "Analyze motion files or datasets.", "hhtools analysis", "CLI"),
     HomeEntry("Video to Motion", "Generate motion from video.", "hhtools video2motion", "CLI"),
 )
 
 _TOOLS = (
+    HomeEntry("Tasks", "List, watch, cancel, or retry jobs.", "hhtools jobs", "CLI"),
+    HomeEntry("Recovery", "Find and resume execution receipts.", "hhtools runs", "CLI"),
     HomeEntry(
         "Convert Motion",
         "Convert BVH or GLB into unified NPZ.",
