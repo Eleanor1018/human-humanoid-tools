@@ -36,6 +36,8 @@ _UNRESOLVED_DYNAMIC_MODULE = "<unresolved-dynamic-import>"
 ALLOWED_DEPENDENCIES: dict[str, frozenset[str]] = {
     "__root__": frozenset({"_version"}),
     "_version": frozenset(),
+    "client": frozenset({"contracts"}),
+    "runtime": frozenset({"application", "agent", "contracts", "services", "utils"}),
     "utils": frozenset(),
     "contracts": frozenset(),
     "core": frozenset(),
@@ -47,6 +49,7 @@ ALLOWED_DEPENDENCIES: dict[str, frozenset[str]] = {
             "contracts",
             "core",
             "io",
+            "integrations",
             "retarget",
             "robot",
             "services",
@@ -60,11 +63,10 @@ ALLOWED_DEPENDENCIES: dict[str, frozenset[str]] = {
     "integrations": frozenset(),
     "retarget": frozenset({"bodymodels", "core", "io", "robot", "utils"}),
     "analysis": frozenset({"core", "io", "retarget", "robot", "services"}),
-    "services": frozenset(
-        {"_version", "contracts", "core", "io", "retarget", "robot", "utils"}
-    ),
+    "services": frozenset({"_version", "contracts", "core", "io", "retarget", "robot", "utils"}),
     "web": frozenset(
         {
+            "client",
             "analysis",
             "agent",
             "application",
@@ -79,14 +81,18 @@ ALLOWED_DEPENDENCIES: dict[str, frozenset[str]] = {
         }
     ),
     "viewer": frozenset({"core", "services"}),
-    "mcp": frozenset({"_version", "application", "contracts", "retarget", "services"}),
-    "cli": frozenset({"_version", "bodymodels", "contracts", "core", "io", "retarget", "robot"}),
+    "mcp": frozenset({"_version", "application", "client", "contracts", "retarget", "services"}),
+    "cli": frozenset(
+        {"_version", "bodymodels", "client", "contracts", "core", "io", "retarget", "robot"}
+    ),
 }
 
 # These command modules are composition roots that start a host.  The exception
 # is intentionally path-and-module-specific: even a launcher must not gain
 # blanket access to every Web or Viewer implementation module.
 CLI_HOST_LAUNCH_EXCEPTIONS: dict[str, frozenset[str]] = {
+    "hhtools/cli/runtime.py": frozenset({"hhtools.runtime.daemon"}),
+    "hhtools/runtime/server.py": frozenset({"hhtools.web.server.factory"}),
     "hhtools/cli/desktop_sidecar.py": frozenset({"hhtools.web.dependencies", "hhtools.web.server"}),
     "hhtools/cli/web.py": frozenset({"hhtools.web.dependencies", "hhtools.web.server"}),
 }
@@ -761,7 +767,7 @@ def test_dependency_policy_covers_packages_without_preapproving_edges() -> None:
 def test_dependency_policy_is_acyclic_and_keeps_hosts_at_the_edge() -> None:
     """Keep adapters out of reusable packages and the reviewed graph cycle-free."""
 
-    host_groups = {"cli", "mcp", "viewer", "web"}
+    host_groups = {"cli", "mcp", "viewer", "web", "runtime"}
     imports_of_hosts = sorted(
         (source, target)
         for source, targets in ALLOWED_DEPENDENCIES.items()
@@ -804,8 +810,8 @@ def test_cli_host_launch_exceptions_are_exact_and_current() -> None:
     invalid_directions = sorted(
         (source, target)
         for source, target in configured
-        if not source.startswith("hhtools/cli/")
-        or _dependency_group(target) not in {"viewer", "web"}
+        if not source.startswith(("hhtools/cli/", "hhtools/runtime/"))
+        or _dependency_group(target) not in {"viewer", "web", "runtime"}
     )
     unused = sorted(configured - observed)
 

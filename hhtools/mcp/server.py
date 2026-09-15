@@ -1044,6 +1044,20 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-batch-items", type=int, default=None)
     parser.add_argument("--max-batch-total-frames", type=int, default=None)
     parser.add_argument("--web-ui-url", default="http://127.0.0.1:8009")
+    parser.add_argument("--endpoint", help="Connect to a resident local or HTTPS Runtime.")
+    parser.add_argument("--token-env", default="HHTOOLS_RUNTIME_TOKEN")
+    parser.add_argument("--ephemeral", action="store_true", help="Explicit legacy exclusive mode.")
+    parser.add_argument(
+        "--transfer-root",
+        type=Path,
+        action="append",
+        help="Allowed local transfer directory (repeatable; default: current directory).",
+    )
+    parser.add_argument(
+        "--all-tools",
+        action="store_true",
+        help="List compatibility aliases as well as the default tools.",
+    )
     return parser
 
 
@@ -1092,6 +1106,43 @@ def main(argv: Sequence[str] | None = None) -> None:
     """Console entry point. stdout remains exclusively owned by MCP framing."""
 
     arguments = _parser().parse_args(argv)
+    limits = {
+        name: getattr(arguments, name)
+        for name in (
+            "max_running_jobs",
+            "max_queued_jobs",
+            "max_batch_items",
+            "max_batch_total_frames",
+        )
+    }
+    if any(value is not None and value < 0 for value in limits.values()):
+        _parser().error("Runtime limits must be non-negative")
+    if not arguments.ephemeral:
+        import asyncio
+        import os
+
+        from hhtools.client import RuntimeClient
+        from hhtools.client.discovery import connect_or_start
+        from hhtools.mcp.client_server import run_client_server
+
+        endpoint = arguments.endpoint or os.environ.get("HHTOOLS_RUNTIME_ENDPOINT")
+        client = (
+            RuntimeClient(endpoint, token=os.environ.get(arguments.token_env))
+            if endpoint
+            else connect_or_start(arguments.save_dir, source=arguments.source)
+        )
+        explicit_limits = {name: value for name, value in limits.items() if value is not None}
+        if explicit_limits:
+            budget = client.request("GET", "/api/runtime/v1/budget")
+            client.request(
+                "PUT", "/api/runtime/v1/admin/budget", document={**budget, **explicit_limits}
+            )
+        asyncio.run(
+            run_client_server(
+                client, transfer_roots=arguments.transfer_root, all_tools=arguments.all_tools
+            )
+        )
+        return
     for name in (
         "max_running_jobs",
         "max_queued_jobs",

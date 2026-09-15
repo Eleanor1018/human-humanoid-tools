@@ -112,7 +112,7 @@ def test_skill_has_minimal_repo_scoped_structure_and_trigger_metadata() -> None:
             {
                 "type": "mcp",
                 "value": "hhtools",
-                "description": "Local HHTools H2R/R2R/Batch and visual calibration MCP server",
+                "description": "HHTools resident Runtime MCP client",
                 "transport": "stdio",
                 "command": "uv",
                 "args": [
@@ -123,13 +123,7 @@ def test_skill_has_minimal_repo_scoped_structure_and_trigger_metadata() -> None:
                     "--source",
                     "assets/motions",
                     "--save-dir",
-                    ".hhtools/agent/save",
-                    "--cache",
-                    ".hhtools/agent/cache",
-                    "--job-settings",
-                    ".hhtools/agent/job-settings.json",
-                    "--web-ui-url",
-                    "http://127.0.0.1:8010",
+                    "assets/save_npz",
                 ],
                 "cwd": ".",
             }
@@ -193,7 +187,7 @@ async def test_contract_map_matches_tools_and_resources_discovered_from_mcp() ->
 def test_workflow_invariants_preserve_transport_and_execution_boundaries() -> None:
     rules = _markdown_table(SKILL_FILE.read_text(encoding="utf-8"), "Non-negotiable invariants")
     assert set(rules) == {
-        "MCP_ONLY",
+        "PUBLIC_CLIENTS",
         "ALLOWLISTED_ASSETS",
         "H2R_BACKEND_ROUTING",
         "R2R_INITIAL_SCOPE",
@@ -210,10 +204,10 @@ def test_workflow_invariants_preserve_transport_and_execution_boundaries() -> No
         "COOPERATIVE_CANCEL",
         "HONEST_PROVENANCE",
         "SINGLE_RUNTIME_OWNER",
-        "LOCAL_BOUNDARY",
+        "RUNTIME_BOUNDARY",
     }
     normalized = {key: " ".join(value).casefold() for key, value in rules.items()}
-    assert all(term in normalized["MCP_ONLY"] for term in ("mcp", "shell", "rest"))
+    assert all(term in normalized["PUBLIC_CLIENTS"] for term in ("mcp", "shell", "rest"))
     assert all(
         term in normalized["ALLOWLISTED_ASSETS"]
         for term in ("root_id", "relative_path", "absolute path")
@@ -276,16 +270,15 @@ def test_workflow_invariants_preserve_transport_and_execution_boundaries() -> No
     assert all(
         term in normalized["SINGLE_RUNTIME_OWNER"]
         for term in (
-            "one local runtime",
+            "one resident runtime",
             "save_dir",
-            "in-process calibration tools",
-            "never start",
-            "webui concurrently",
+            "clients may connect concurrently",
+            "second writer",
         )
     )
     assert all(
-        term in normalized["LOCAL_BOUNDARY"]
-        for term in ("local stdio", "no remote auth", "multi-user", "worker resume")
+        term in normalized["RUNTIME_BOUNDARY"]
+        for term in ("local stdio", "authenticated remote", "multi-user", "worker resume")
     )
 
 
@@ -298,13 +291,13 @@ def test_stop_matrix_blocks_unsafe_continuation_and_duplicate_work() -> None:
         for term in (
             "do not start a job",
             "calibration_required",
-            "in-process automatic flow",
+            "shared automatic flow",
             "pause",
             "required_action",
         )
     )
     assert "do not call `start_job`" in human_required
-    assert "run mcp and web against the same directory" in human_required
+    assert "start another writer" in human_required
     assert "request a webui session token" in human_required
 
     calibration_required = " ".join(rows["CALIBRATION_REQUIRED"]).casefold()
@@ -327,8 +320,8 @@ def test_stop_matrix_blocks_unsafe_continuation_and_duplicate_work() -> None:
     assert all(term in candidate_stale for term in ("discard", "propose again", "stale id"))
 
     active_runtime = " ".join(rows["RUNTIME_ALREADY_ACTIVE"]).casefold()
-    assert all(term in active_runtime for term in ("stop", "same `save_dir`", "close"))
-    assert all(term in active_runtime for term in ("do not bypass", "mcp and web together"))
+    assert all(term in active_runtime for term in ("connect", "same `save_dir`", "close"))
+    assert all(term in active_runtime for term in ("do not bypass", "mcp and web clients may share"))
 
     rejected = " ".join(rows["rejected"]).casefold()
     assert "stop" in rejected and "do not start a job" in rejected
@@ -375,9 +368,9 @@ def test_stop_matrix_blocks_unsafe_continuation_and_duplicate_work() -> None:
     interrupted = " ".join(rows["JOB_INTERRUPTED"]).casefold()
     assert all(
         term in interrupted
-        for term in ("explicit user approval", "`retry_job`", "whole-plan child attempt")
+        for term in ("existing retry authorization", "runtime budget", "whole-plan child attempt")
     )
-    assert "retry automatically" in interrupted
+    assert "do not claim checkpoint resume" in interrupted
 
     mismatch = " ".join(rows["ARTIFACT_HASH_MISMATCH"]).casefold()
     assert "stop artifact delivery" in mismatch
@@ -388,5 +381,5 @@ def test_stop_matrix_blocks_unsafe_continuation_and_duplicate_work() -> None:
     assert "do not preflight or start a full run" in review
 
     unavailable = " ".join(rows["MCP unavailable"]).casefold()
-    assert "stop" in unavailable
-    assert all(term in unavailable for term in ("shell", "json cli", "rest"))
+    assert "public runtime client" in unavailable
+    assert "do not bypass authorization" in unavailable

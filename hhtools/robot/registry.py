@@ -46,6 +46,8 @@ from __future__ import annotations
 
 import logging
 import os
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 
 import yaml
@@ -60,6 +62,16 @@ _log = logging.getLogger(__name__)
 # how rarely callers need more than one registry — and it matches how the
 # skeleton-preset / body-model registries in the rest of hhtools work.
 _CACHE: dict[str, RobotPreset] | None = None
+_preset_provider = ContextVar("hhtools_robot_provider", default=None)
+
+
+@contextmanager
+def use_robot_presets(provider):
+    token = _preset_provider.set(provider)
+    try:
+        yield
+    finally:
+        _preset_provider.reset(token)
 
 
 # --------------------------------------------------------------------------- public API
@@ -67,6 +79,8 @@ _CACHE: dict[str, RobotPreset] | None = None
 
 def list_presets() -> list[RobotPreset]:
     """All known robot presets, alphabetically by name."""
+    if (provider := _preset_provider.get()) is not None:
+        return provider()
     _ensure_loaded()
     assert _CACHE is not None
     return sorted(_CACHE.values(), key=lambda p: p.name)
@@ -101,6 +115,11 @@ def list_presets_in_root_readonly(root: Path) -> list[RobotPreset]:
 
 def get(name: str) -> RobotPreset:
     """Look up a preset by name.  Raises :class:`KeyError` if unknown."""
+    if (provider := _preset_provider.get()) is not None:
+        for preset in provider():
+            if preset.name == name:
+                return preset
+        raise KeyError(f"no robot preset named {name!r} in this workspace")
     _ensure_loaded()
     assert _CACHE is not None
     try:
@@ -118,6 +137,8 @@ def refresh() -> list[RobotPreset]:
     Call this after ``hhtools add-robot`` writes a new preset, or in tests
     that synthesise fake presets on disk.
     """
+    if (provider := _preset_provider.get()) is not None:
+        return provider()
     global _CACHE
     _CACHE = {}
     for root in _discovery_roots():

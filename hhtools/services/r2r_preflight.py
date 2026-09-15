@@ -53,6 +53,7 @@ R2R_PLAN_SEMANTICS = "hhtools.r2r.plan.v1"
 _PORTABLE_ROBOT_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _PARAMETERS = frozenset(
     {
+        "export",
         "run_mode",
         "limit_frames",
         "ik_iterations",
@@ -230,7 +231,7 @@ def _normalize_parameters(
             details={"parameter": "source_fps"},
         )
     retarget_fps = _positive_float(parameters, "retarget_fps", maximum=maximum_fps)
-    return {
+    normalized = {
         "run_mode": run_mode,
         "limit_frames": limit_frames,
         "ik_iterations": ik_iterations,
@@ -238,6 +239,14 @@ def _normalize_parameters(
         "retarget_fps": retarget_fps,
         "trajectory_profile": "mimic",
     }
+    if parameters.get("export") is not None:
+        from hhtools.contracts.execution import TrajectoryExportOptions
+
+        try:
+            normalized["export"] = TrajectoryExportOptions.model_validate(parameters["export"]).model_dump(mode="json")
+        except ValueError:
+            _fail("INVALID_PARAMETER", "Invalid trajectory export options.")
+    return normalized
 
 
 def _calibration_action(

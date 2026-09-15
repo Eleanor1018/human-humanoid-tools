@@ -40,6 +40,9 @@ def assemble_agent_services(
     agent_json_cli_available: bool,
     max_batch_items: int,
     max_batch_total_frames: int,
+    additional_asset_roots: dict[str, Path] | None = None,
+    execution_only: bool = False,
+    temporary_root: Path | None = None,
 ) -> SimpleNamespace:
     services = SimpleNamespace()
 
@@ -117,6 +120,7 @@ def assemble_agent_services(
     agent_motion_roots: dict[str, Path | Callable[[], Path]] = {
         "motion-library": motion_library_root_provider,
         "source": state.source_root,
+        **(additional_asset_roots or {}),
     }
     agent_robot_roots: dict[str, Path | Callable[[], Path]] = {
         "robot-library": state.robot_root,
@@ -141,14 +145,18 @@ def assemble_agent_services(
                 presets.append(preset)
         return presets
 
+    services.agent_robot_provider = _agent_robot_provider
+
     services.agent_legacy_root_locator = DynamicRootLocator(
         motion_roots=agent_motion_roots,
         robot_roots=agent_robot_roots,
     )
     agent_data_dir = state.save_dir / ".hhtools-agent"
+    execution_temporary_root = temporary_root or agent_data_dir / "temporary"
     agent_asset_registry = AssetRegistry(
         agent_data_dir,
         services.agent_legacy_root_locator.registry_root_providers(),
+        read_only=execution_only,
     )
     services.agent_asset_service = AgentAssetService(agent_asset_registry)
 
@@ -302,7 +310,7 @@ def assemble_agent_services(
             "workspace-robots",
         ),
     )
-    services.agent_plan_store = PlanStore(agent_data_dir)
+    services.agent_plan_store = PlanStore(agent_data_dir, read_only=execution_only)
     services.agent_h2r_retarget_service = RetargetService(
         services.agent_plan_store,
         services.agent_asset_service,
@@ -325,8 +333,9 @@ def assemble_agent_services(
         services.agent_single_retarget_service,
         services.agent_batch_retarget_service,
     )
-    services.agent_artifact_store = ArtifactStore(agent_data_dir)
-    services.agent_job_store = JobStore(agent_data_dir)
+    if not execution_only:
+        services.agent_artifact_store = ArtifactStore(agent_data_dir)
+        services.agent_job_store = JobStore(agent_data_dir)
 
     # The production Agent executor is intentionally a set of thin bindings to
     # the existing H2R Web path.  These closures perform no IK/calibration math;
@@ -454,7 +463,7 @@ def assemble_agent_services(
         # files in place.  Agent assets are content-addressed, so materialize
         # the exact manifest into a per-job writable workspace and confine all
         # loader plus Interaction-Mesh fallback writes to that snapshot.
-        workspace_parent = agent_data_dir / "temporary" / "robots"
+        workspace_parent = execution_temporary_root / "robots"
         workspace_parent.mkdir(parents=True, exist_ok=True)
         workspace = tempfile.TemporaryDirectory(
             prefix="agent-robot-",
@@ -632,6 +641,7 @@ def assemble_agent_services(
         backend: str,
         source_path: Path,
         yellow_foot_z: float | None,
+        export_options=None,
     ) -> Path:
         return Path(
             _write_export(
@@ -640,12 +650,14 @@ def assemble_agent_services(
                 source_motion,
                 output_root,
                 stem=stem,
-                fps=None,
+                fps=export_options.fps if export_options else None,
                 fmt=output_format,
                 backend=backend,
-                csv_header=True,
+                csv_header=export_options.csv_header if export_options else True,
                 source_path=source_path,
                 yellow_foot_z=yellow_foot_z,
+                t_start=export_options.t_start if export_options else None,
+                t_end=export_options.t_end if export_options else None,
             )
         )
 
@@ -815,6 +827,7 @@ def assemble_agent_services(
         output_format: str,
         backend: str,
         yellow_foot_z: float | None,
+        export_options=None,
     ) -> Path:
         entry = {
             "source_path": str(resolved.source_path),
@@ -833,10 +846,12 @@ def assemble_agent_services(
                 calibrated_joint_q=calibration,
                 entry=entry,
                 stem=resolved.stem,
-                fps=None,
+                fps=export_options.fps if export_options else None,
                 fmt=output_format,
-                csv_header=True,
+                csv_header=export_options.csv_header if export_options else True,
                 yellow_foot_z=yellow_foot_z,
+                t_start=export_options.t_start if export_options else None,
+                t_end=export_options.t_end if export_options else None,
             )
         )
 
@@ -853,7 +868,7 @@ def assemble_agent_services(
             write_export=_agent_write_export,
             release_robot_model=_agent_release_robot_model,
         ),
-        temporary_root=agent_data_dir / "temporary",
+        temporary_root=execution_temporary_root,
     )
     r2r_executor = R2RJobExecutor(
         R2RExecutorBindings(
@@ -869,16 +884,28 @@ def assemble_agent_services(
             write_export=_agent_write_r2r_export,
             release_robot_model=_agent_release_robot_model,
         ),
-        temporary_root=agent_data_dir / "temporary",
+        temporary_root=execution_temporary_root,
     )
 
     single_executor = WorkflowJobExecutor(h2r_executor, r2r_executor)
     batch_executor = BatchJobExecutor(
         single_executor,
         validate_spec=_agent_validate_spec,
-        temporary_root=agent_data_dir / "temporary",
+        temporary_root=execution_temporary_root,
     )
     agent_executor = WorkflowJobExecutor(h2r_executor, r2r_executor, batch_executor)
+    services.agent_executor = agent_executor
+    services.materialize_robot = _agent_materialize_robot
+    services.release_robot = _agent_release_robot_model
+    services.resolve_r2r_trajectory = _agent_resolve_r2r_trajectory
+    services.prepare_r2r_source = _agent_prepare_r2r_source
+
+    def load_motion_asset(asset_id: str) -> Any:
+        return _agent_load_motion(_agent_resolve_motion(asset_id))
+
+    services.load_motion_asset = load_motion_asset
+    if execution_only:
+        return services
 
     services.agent_job_manager = JobManager(
         services.agent_job_store,

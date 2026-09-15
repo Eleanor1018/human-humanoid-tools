@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pytest
 
 from hhtools.agent.h2r_job_executor import (
@@ -48,6 +49,9 @@ class _Motion:
 
 @dataclass
 class _Retargeted:
+    name: str = "walk"
+    root_coord_count: int = 7
+    dof_names: tuple[str, ...] = ("joint",)
     num_frames: int = 30
     sample_rate: float = 30.0
     meta: dict[str, Any] = field(
@@ -66,6 +70,12 @@ class _Retargeted:
             }
         }
     )
+
+    @property
+    def joint_q(self):
+        coordinates = np.zeros((self.num_frames, 8))
+        coordinates[:, 6] = 1
+        return coordinates
 
 
 def _spec(*, backend: str = "newton", **parameter_updates: Any) -> JobSpecV2:
@@ -327,9 +337,9 @@ def test_executor_maps_exact_job_spec_to_existing_h2r_chain_and_managed_artifact
     assert any(item.phase == "solving" and item.fraction == 0.5 for item, _ in progress)
 
     published = context.published_artifacts()
-    assert [item.kind for item in published] == ["preview", "retargeted_motion"]
+    assert [item.kind for item in published] == ["preview", "retarget_state", "retargeted_motion"]
     preview = artifact_store.get(published[0].artifact_id, verify=True)
-    exported = artifact_store.get(published[1].artifact_id, verify=True)
+    exported = artifact_store.get(published[2].artifact_id, verify=True)
     assert b'"trajectory":[[0.0]]' in preview.path.read_bytes()
     assert exported.path.read_bytes() == b"root_x,root_y\n0,0\n"
     assert exported.descriptor.metadata["filename"] == "walk.csv"
@@ -369,6 +379,7 @@ def test_executor_preserves_preflighted_interaction_mesh_identity_and_scene(
     assert calls["export"]["backend"] == "interaction_mesh"
     assert {item.kind for item in context.published_artifacts()} == {
         "preview",
+        "retarget_state",
         "retargeted_motion",
     }
 
@@ -485,7 +496,7 @@ def test_executor_maps_export_failure_without_leaking_host_path(
         "exception_type": "OSError",
     }
     assert str(tmp_path) not in raised.value.error.model_dump_json()
-    assert [item.kind for item in context.published_artifacts()] == ["preview"]
+    assert [item.kind for item in context.published_artifacts()] == ["preview", "retarget_state"]
     assert calls["released_models"] == [calls["preview_args"][0]]
 
 
@@ -561,7 +572,7 @@ def test_executor_rejects_exporter_path_escape(tmp_path: Path) -> None:
     assert raised.value.error.code == "OUTPUT_PATH_ESCAPE"
     assert raised.value.error.stage is ErrorStage.ARTIFACT
     assert (tmp_path / "outside.csv").read_bytes() == b"outside"
-    assert [item.kind for item in context.published_artifacts()] == ["preview"]
+    assert [item.kind for item in context.published_artifacts()] == ["preview", "retarget_state"]
 
 
 def test_executor_rejects_output_policy_without_a_managed_alias(tmp_path: Path) -> None:

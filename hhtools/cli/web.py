@@ -41,6 +41,7 @@ def launch(
         help="Per-session NPZ cache dir (defaults to a tempdir).",
     ),
     host: str = typer.Option("127.0.0.1", "--host"),
+    legacy: bool = typer.Option(False, "--legacy", help="Run the previous session-owned WebUI."),
     port: int = typer.Option(8009, "--port"),
     max_running_jobs: int | None = typer.Option(
         None,
@@ -56,9 +57,7 @@ def launch(
         min=0,
         envvar="HHTOOLS_MAX_QUEUED_JOBS",
         show_envvar=True,
-        help=(
-            "Waiting jobs when concurrency is limited; 0 means an unlimited queue."
-        ),
+        help=("Waiting jobs when concurrency is limited; 0 means an unlimited queue."),
     ),
     max_batch_items: int | None = typer.Option(
         None,
@@ -88,6 +87,7 @@ def launch(
             save_dir=save_dir,
             cache_dir=cache,
             host=host,
+            legacy=legacy,
             port=port,
             max_running_jobs=max_running_jobs,
             max_queued_jobs=max_queued_jobs,

@@ -8,17 +8,20 @@ its own; otherwise a submitted job would be owned by a short-lived CLI process.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import math
 import os
+import ssl
 import tempfile
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit, urlunsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPSHandler, Request, build_opener, urlopen
 
+from hhtools.client.runtime import _NoRedirect
 from hhtools.contracts import ApiError, ArtifactDescriptor, ErrorStage, NextAction
 from hhtools.contracts.portability import (
     PortableJsonError as ContractPortableJsonError,
@@ -222,6 +225,7 @@ class HttpAgentTransport:
         *,
         timeout_seconds: float = 30.0,
         max_json_bytes: int = _DEFAULT_MAX_JSON_BYTES,
+        token: str | None = None,
     ) -> None:
         self._base_url = _validate_base_url(base_url)
         if not 0.1 <= timeout_seconds <= 3_600:
@@ -233,6 +237,25 @@ class HttpAgentTransport:
             )
         self._timeout_seconds = float(timeout_seconds)
         self._max_json_bytes = int(max_json_bytes)
+        self._token = os.environ.get("HHTOOLS_RUNTIME_TOKEN") if token is None else token
+        self._opener = None
+        if self._token:
+            parsed = urlsplit(self._base_url)
+            try:
+                local = ipaddress.ip_address(parsed.hostname or "").is_loopback
+            except ValueError:
+                local = parsed.hostname == "localhost"
+            if parsed.scheme != "https" and not local:
+                raise _transport_error(
+                    "TLS_REQUIRED", "Credentials require HTTPS for remote services."
+                )
+            context = ssl.create_default_context(cafile=os.environ.get("HHTOOLS_RUNTIME_CA"))
+            self._opener = build_opener(_NoRedirect(), HTTPSHandler(context=context))
+
+    def _open(self, request: Request, *, timeout: float):
+        if self._opener is not None:
+            return self._opener.open(request, timeout=timeout)
+        return urlopen(request, timeout=timeout)  # noqa: S310
 
     def _url(
         self,
@@ -286,6 +309,8 @@ class HttpAgentTransport:
     ) -> Any:
         payload = None
         headers = {"Accept": "application/json", "User-Agent": "hhtools-agent-json/1"}
+        if self._token:
+            headers["Authorization"] = f"Bearer {self._token}"
         if document is not None:
             payload = json.dumps(
                 document,
@@ -302,7 +327,7 @@ class HttpAgentTransport:
             method=method.upper(),
         )
         try:
-            with urlopen(request, timeout=self._timeout_seconds) as response:  # noqa: S310
+            with self._open(request, timeout=self._timeout_seconds) as response:
                 body = response.read(self._max_json_bytes + 1)
         except HTTPError as error:
             self._raise_http_error(error)
@@ -369,6 +394,7 @@ class HttpAgentTransport:
             headers={
                 "Accept": "application/octet-stream",
                 "User-Agent": "hhtools-agent-json/1",
+                **({"Authorization": f"Bearer {self._token}"} if self._token else {}),
             },
             method="GET",
         )
@@ -387,7 +413,7 @@ class HttpAgentTransport:
             try:
                 with os.fdopen(temporary_fd, "wb") as stream:
                     try:
-                        with urlopen(  # noqa: S310
+                        with self._open(
                             request,
                             timeout=self._timeout_seconds,
                         ) as response:

@@ -9,7 +9,9 @@ from pathlib import Path
 import numpy as np
 import typer
 
-app = typer.Typer(no_args_is_help=True, help="Retarget an NPZ motion to a humanoid robot.")
+from hhtools.cli.default_command import default_command_app
+
+app = default_command_app("Retarget motion; interaction-mesh is also available as a subcommand.")
 
 _log = logging.getLogger(__name__)
 
@@ -416,10 +418,7 @@ def retarget(
     typer.echo(f"Done. {len(written)} CSV(s) written to {output}.", file=sys.stderr)
 
 
-_im = typer.Typer(
-    no_args_is_help=True,
-    help="Interaction-mesh (Laplacian) backend — same calibration/scaler as ``run``.",
-)
+_im = default_command_app("Interaction-mesh; precompute-laplacian is also available.")
 
 
 @_im.command("precompute-laplacian")

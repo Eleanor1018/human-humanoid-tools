@@ -8,13 +8,7 @@ args = [
     "--source",
     "assets/motions",
     "--save-dir",
-    ".hhtools/agent/save",
-    "--cache",
-    ".hhtools/agent/cache",
-    "--job-settings",
-    ".hhtools/agent/job-settings.json",
-    "--web-ui-url",
-    "http://127.0.0.1:8010",
+    "assets/save_npz",
 ]
 cwd = "."
 enabled = true

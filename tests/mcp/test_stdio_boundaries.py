@@ -73,6 +73,7 @@ def test_runtime_lease_conflict_has_one_sanitized_actionable_stderr_line(
             [
                 sys.executable,
                 str(fixture),
+                "--ephemeral",
                 "--save-dir",
                 str(save_dir),
             ],

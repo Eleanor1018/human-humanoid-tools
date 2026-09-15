@@ -201,6 +201,7 @@ function objectMeshUrl(
   object: StageObjectPayload,
   index: number,
 ): string | null {
+  if (object.glb_base64) return `data:model/gltf-binary;base64,${object.glb_base64}`;
   if (!object.has_mesh) return null;
   const source = motion.object_mesh_source ?? (
     motion.token ? { kind: "motion" as const, token: motion.token } : null

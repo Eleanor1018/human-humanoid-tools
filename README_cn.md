@@ -22,6 +22,9 @@
 
 ## 亮点
 
+- **常驻 Runtime（0.2）**：GUI 与 Agent 共享任务，支持认证远程连接、资源续传、独立 worker
+  和整应用 WebRTC 串流。直接访问与远程串流复用同一套 HHTools GUI，Agent 独立调用统一 API。
+  使用 `hhtools runtime start` 启动，详见 [Runtime 指南](docs/runtime.md)。
 - **快速重映射**：Web UI 或 **CLI**（`hhtools retarget` / `scripts/batch_*_retarget.py`）；**Newton IK** + **MPC-SQP** 交互网格。
 - **多源人体数据**：BVH / GLB / SMPL 系；适配 AMASS、GVHMR、LAFAN、100STYLE、OMOMO、OmniContact、PHUMA、intermimic、meshmimic 等。
 - **任意 URDF**：Web 上传任意其他机器人。拖入 URDF，拖入 mesh，自动识别，无需调参。
@@ -91,8 +94,33 @@ uv run hhtools web
 HHTools 提供供脚本使用的严格 JSON CLI，以及供兼容 Agent 使用的本机 stdio MCP server。
 当前 Agent 接口覆盖经过 preflight 的安全 H2R、无场景 R2R、可扩展 H2R/R2R Batch 任务、
 内容寻址的标定辅助、供 GPT 视觉检查的前/侧视预览，以及验证后的静默保存和产物导出，
-尚未覆盖 WebUI 的全部功能。安装方式、能力边界、smoke-first 流程、
+还支持 Analysis、Video2Motion、报告筛选/比较/导出、任务恢复、文件传输和预览。
+训练、带场景 R2R 和真实机器人部署仍不在本版范围内。安装方式、能力边界、smoke-first 流程、
 运行时目录所有权和仓库自带的 Codex 项目配置见 [Agent interfaces](docs/agent.md)。
+
+MCP 的 `upload_local_file` 和 `download_artifact` 在 MCP 所在主机读写文件，并通过 Runtime
+上传/下载接口传输字节；`export_artifact` 只在服务器生成副本。可重复使用 `--transfer-root`
+指定允许的本地目录，默认当前目录。通过 `hhtools_runtime_workflows` 查询后端就绪状态、
+默认参数和 schema；`--all-tools` 可在工具列表中显示兼容别名。
+
+### 整应用 WebRTC 串流
+
+```bash
+uv sync --locked --extra streaming --extra mcp
+uv run playwright install chromium
+uv run hhtools runtime start --workspace assets/save_npz --source assets/motions
+```
+
+打开启动结果中的地址并追加 `/stream`，填写 Server、Signal（Runtime API 端口）、
+可选的 Stream（TURN 端口）和分辨率。Access token 在 Authentication 中；本地回环模式
+可留空，直接连接远程模式需要 HTTPS 和该 Runtime 的 admin token。
+
+此页面不登录 SSH。SSH 密码或私钥由本机 OpenSSH 处理，HHTools token 是独立的应用凭证。
+SSH 部署还需为媒体配置 TURN 并转发其 TCP 端口，仅转发 HTTP 不足以承载 WebRTC。
+串流使用服务端 Chromium 与 aiortc 软件编码；并非 NVIDIA Isaac Sim 的专用客户端协议，
+目前未使用 NVENC。同一时间只有一个 GUI 控制会话，Agent 的持久任务与它的生命周期独立。
+操作员 token 被撤销时，相关串流与浏览器临时凭证会一起回收。
+详细部署见 [串流与 SSH](docs/runtime.md#access-tokens-and-ssh)。
 
 ### 桌面 GUI
 
@@ -147,24 +175,17 @@ npm run build
 
 生产构建写入 `hhtools/web/static`，FastAPI 与 Electron 原样复用这份产物。
 
-Web 后台任务默认不限制并发。共享服务器或显存紧张时，可以显式启用 FIFO 调度：
+新建常驻工作区默认允许 2 个运行任务、64 个排队任务，每个批量最多 1000 项，批量总帧数
+不设上限。GUI 与 Agent 共享工作区中持久保存的设置。共享服务器或显存紧张时，可降低并发：
 
 ```bash
 uv run hhtools web --max-running-jobs 1 --max-queued-jobs 32
 ```
 
-两个参数的 `0` 都表示不限；只有运行并发为正数时，等待队列设置才生效。也可以使用
-Agent Batch 的条目数和总帧数默认也不设上限；只有把 `--max-batch-items` 或
-`--max-batch-total-frames` 设为正数时才启用部署侧保护，设回 `0` 即恢复不限。对应环境变量为
-`HHTOOLS_MAX_RUNNING_JOBS`、`HHTOOLS_MAX_QUEUED_JOBS`、`HHTOOLS_MAX_BATCH_ITEMS` 和
-`HHTOOLS_MAX_BATCH_TOTAL_FRAMES`，Electron sidecar 与 MCP server 同样支持。
-也可以从本机 Web/Electron 或 SSH 本地回环隧道，在 **设置 → 后台任务调度** 中直接修改；
-在未实现远程管理鉴权前，普通远程浏览器会显示为只读。保存会热更新调度器，无需重启 Python 或
-Electron：降低并发不会中断正在运行的任务，提高上限会立即按 FIFO 补跑等待任务。后端会将
-配置写入平台用户配置目录，也可用 `HHTOOLS_WEB_SETTINGS_PATH` 指定文件。显式 CLI/环境变量
-仍是启动覆盖项，只要保留这些覆盖项，下次启动时就会再次覆盖 GUI 保存值。
-并发上限只约束调度器管理的 Web Job，不包含选择机器人时可选的 Warp/Newton 预热线程，
-因此它是任务准入控制，并非整个进程的严格 GPU 并发上限。
+并发和批量条目/帧数限制中的 `0` 表示不限。已有工作区可能使用不同设置，请用
+`hhtools runtime call hhtools_runtime_budget` 查询实际预算。管理员可在 **设置 → 后台任务调度**
+或 Runtime API 中修改；降低并发不会中断正在运行的任务。旧 Web 与临时 MCP 模式保留旧默认值，
+不能用其默认值推断常驻 Runtime。详见 [工作区预算](docs/runtime.md#workspace-budget)。
 
 | 面板 | 流程 |
 |------|------|
@@ -204,7 +225,7 @@ Windows 端仍是可选的 Docker 组件。用 `HHTOOLS_GVHMR_ROOT` 指向官方
 纯命令行用户也可直接将 GVHMR 输出目录转成 hhtools 统一 Motion 格式：
 
 ```bash
-hhtools import run --dataset gvhmr --root /path/to/gvhmr/output --out /path/to/motions
+hhtools import --dataset gvhmr --root /path/to/gvhmr/output --out /path/to/motions
 ```
 
 参数调优：改 [`configs/robots/unitree_g1/`](configs/robots/unitree_g1/) 或 `~/.config/hhtools/robots/<名称>/robot.yaml`，运行 `hhtools robot validate <名称>`。原理见 [framework.md](framework.md)。
@@ -216,29 +237,64 @@ hhtools import run --dataset gvhmr --root /path/to/gvhmr/output --out /path/to/m
 | 命令 | 作用 |
 |------|------|
 | `hhtools doctor` | 检查本机 Web、机器人、重映射、MCP、Body Model 与 GVHMR 就绪状态 |
-| `hhtools convert run` | BVH / GLB → 统一 NPZ |
-| `hhtools import list` / `import run` | 列出适配器；数据集根目录 → NPZ |
+| `hhtools h2r` / `hhtools r2r` | 通过 Runtime 预检查、提交、等待与下载重映射结果 |
+| `hhtools analysis` / `hhtools video2motion` | 持久数据集分析 / 视频转动作任务 |
+| `hhtools jobs` / `hhtools runs` | 任务管理 / 本地执行记录与恢复 |
+| `hhtools analysis select` / `compare` / `export` | 报告筛选、比较与导出 |
+| `hhtools convert` | BVH / GLB → 统一 NPZ |
+| `hhtools import list` / `hhtools import` | 列出适配器；数据集根目录 → NPZ |
 | `hhtools bodymodel check` / `setup` | SMPL 系权重路径 / 下载说明 |
 | `hhtools robot list` / `info` / `schema` / `validate` / `scaffold` / `add` | 机器人预设 |
-| `hhtools retarget run` | Newton IK → CSV（文件或目录） |
-| `hhtools retarget interaction-mesh run` | Interaction-mesh（地形/物体）→ CSV |
+| `hhtools retarget` | Newton IK → CSV（文件或目录） |
+| `hhtools retarget interaction-mesh` | Interaction-mesh（地形/物体）→ CSV |
 | `hhtools retarget interaction-mesh precompute-laplacian` | 预计算 Laplacian 目标（`.npz`） |
 | `hhtools web` | HTML / three.js UI（默认 `127.0.0.1:8009`） |
+
+**Runtime 工作流**
+
+执行现在是默认动作，可省略 `run`。原有 `convert run`、`import run`、`retarget run` 和
+`retarget interaction-mesh run` 命令仍兼容，新增四个工作流也接受可选的 `run`。
+
+```bash
+uv run hhtools h2r motion.npz --robot g1 --output results
+uv run hhtools r2r trajectory.csv --source-robot g1 --target-robot rp1 --source-fps 120
+uv run hhtools h2r first.npz second.npz --robot g1 --batch --output batch-results
+uv run hhtools analysis motions/ --receipt analysis-run.json --output reports
+uv run hhtools video2motion clip.mp4 --output generated-motion
+uv run hhtools jobs list --limit 20
+uv run hhtools jobs watch JOB_ID --wait-timeout 300
+uv run hhtools runs resume analysis-run.json
+```
+
+新工作流先校验参数和本地输入，再连接 Runtime、上传与预检查。H2R/R2R 默认 smoke，
+`--mode full` 请求完整执行；`--batch` 先逐项预检查，再提交一个有序批量任务。
+终端显示摘要和上传/等待/下载进度；重定向或管道保留 JSON，`--json` 强制静默的严格 JSON，
+`--human` 强制可读输出，`--quiet` 只隐藏进度。
+
+执行记录在上传前保存，默认位于 `.hhtools-client/runs/`，不保存 token。`runs list/show/resume`
+用于查找和恢复，旧版提交记录仍可读取。上传中断会使用已有 upload ID 续传，丢失提交响应时
+会查询原任务，不生成新键来重复提交。默认最多等待 300 秒，`--no-wait` 立即返回，
+`--wait-timeout 0` 无限等待；等待超时或 Ctrl+C 不会取消服务器任务。取消使用 `jobs cancel`，
+重试使用 `jobs retry JOB_ID --idempotency-key KEY`。
+
+`--output` 在新工作流中是目录，下载会验证大小和 SHA-256；已有文件需要 `--overwrite`，
+同一记录中已确认的下载在恢复时会校验后复用。历史 `retarget` 仍保留其单文件/目录语义。
+更多参数及退出码见 [工作流 CLI](docs/runtime.md#workflow-cli)。
 
 **转换与导入**
 
 ```bash
-uv run hhtools convert run assets/motions/mimic/LAFAN/dance1_subject2.bvh -o /tmp/npz --unit m
-uv run hhtools convert run assets/motions/mimic/GLB/cranberry.glb -o /tmp/npz
+uv run hhtools convert assets/motions/mimic/LAFAN/dance1_subject2.bvh -o /tmp/npz --unit m
+uv run hhtools convert assets/motions/mimic/GLB/cranberry.glb -o /tmp/npz
 
 uv run hhtools import list
-uv run hhtools import run --dataset lafan \
+uv run hhtools import --dataset lafan \
   --root assets/motions/mimic/LAFAN -o /tmp/lafan_npz \
   --sequence dance1_subject2.bvh
-uv run hhtools import run --dataset omomo \
+uv run hhtools import --dataset omomo \
   --root assets/motions/intermimic/OMOMO -o /tmp/omomo_npz \
   --sequence sub12_woodchair_000/sub12_woodchair_000.pkl
-uv run hhtools import run --dataset omnicontact \
+uv run hhtools import --dataset omnicontact \
   --root /path/to/OmniContact-Dataset -o /tmp/omnicontact_npz
 ```
 
@@ -267,12 +323,12 @@ uv run hhtools robot scaffold unitree_g1          # 已有 yaml 则跳过
 
 ```bash
 # Newton IK（平坦 / AMASS 类 NPZ）
-uv run hhtools retarget run path/to/clip.npz \
+uv run hhtools retarget path/to/clip.npz \
   --robot unitree_g1__g1_29dof -o /tmp/out.csv \
   --calibration-reference smpl --limit-frames 30
 
 # Interaction-mesh（OMOMO / OmniContact / 带地形）
-uv run hhtools retarget interaction-mesh run path/to/clip.pkl \
+uv run hhtools retarget interaction-mesh path/to/clip.pkl \
   --robot unitree_g1__g1_29dof -o /tmp/out_im.csv \
   --calibration-reference smpl --limit-frames 30
 ```

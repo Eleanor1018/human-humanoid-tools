@@ -361,6 +361,7 @@ class AssetRegistry:
         roots: Mapping[str, RootProvider],
         *,
         discoverer: AssetDiscoverer | None = None,
+        read_only: bool = False,
     ) -> None:
         self._data_dir = Path(data_dir)
         self._database_path = self._data_dir / "assets.sqlite3"
@@ -379,9 +380,11 @@ class AssetRegistry:
                 "Asset root identifiers must be portable names, not paths.",
             )
         self._discoverer = discoverer
-        self._data_dir.mkdir(parents=True, exist_ok=True)
-        self._artifact_root.mkdir(parents=True, exist_ok=True)
-        self._initialize_database()
+        self._read_only = read_only
+        if not read_only:
+            self._data_dir.mkdir(parents=True, exist_ok=True)
+            self._artifact_root.mkdir(parents=True, exist_ok=True)
+            self._initialize_database()
 
     @property
     def artifact_root(self) -> Path:
@@ -498,7 +501,11 @@ class AssetRegistry:
         return aliases
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self._database_path, timeout=30.0)
+        connection = (
+            sqlite3.connect(self._database_path.as_uri() + "?mode=ro", uri=True, timeout=30.0)
+            if self._read_only
+            else sqlite3.connect(self._database_path, timeout=30.0)
+        )
         connection.row_factory = sqlite3.Row
         return connection
 

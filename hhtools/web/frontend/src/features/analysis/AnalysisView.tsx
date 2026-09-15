@@ -42,6 +42,7 @@ type BusyAction = "scan" | "upload" | "remove" | "analyze" | "subset" | "preview
 export interface AnalysisViewProps {
   /** App-owned cache policy shared with Workspace Settings. */
   readonly forceAnalysis: boolean;
+  readonly runtimeResult?: DatasetAnalysisResult | null;
   /** Optional Stage handoff for human clips selected from the result table. */
   readonly onMotionLoaded?: (motion: StageMotionPayload | null) => void;
   /** Robot previews remain owned by Analysis instead of replacing a workspace robot. */
@@ -207,6 +208,7 @@ function SummaryCards({ summary }: { summary: DatasetSummary }) {
 
 export function AnalysisView({
   forceAnalysis,
+  runtimeResult,
   onMotionLoaded,
   onRobotPreviewLoaded,
 }: AnalysisViewProps) {
@@ -227,6 +229,7 @@ export function AnalysisView({
   const [uploadSource, setUploadSource] = useState<string | null>(null);
   const [embedding, setEmbedding] = useState<AnalysisEmbedding>("handcrafted");
   const [result, setResult] = useState<DatasetAnalysisResult | null>(null);
+  useEffect(() => { if (runtimeResult) { setResult(runtimeResult); setError(null); setSelectedIds(new Set()); setSubsetIds(new Set()); } }, [runtimeResult]);
   const [busy, setBusy] = useState<BusyAction>(null);
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState("");
@@ -561,6 +564,7 @@ export function AnalysisView({
     setError(null);
     try {
       const blob = await exportDatasetManifest({
+        runtime_report: result.runtime_report,
         clips: result.clips,
         ids: exportIds,
         analyze_source: result.meta.source_root,
@@ -577,7 +581,7 @@ export function AnalysisView({
     if (!result || !selectedRobotCount) return;
     setError(null);
     try {
-      const blob = await exportRobotSubset({ clips: result.clips, ids: exportIds });
+      const blob = await exportRobotSubset({ clips: result.clips, ids: exportIds, runtime_report: result.runtime_report });
       downloadBlob(blob, "robot_subset_export.zip");
       setStatus(text(
         `Exported ${selectedRobotCount} robot clips.`,

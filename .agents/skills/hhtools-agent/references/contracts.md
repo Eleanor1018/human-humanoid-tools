@@ -56,6 +56,18 @@ The returned request contains only a capability-advertised `root_id` and normali
 the returned bundle and rerun preflight with its `asset_id`. An unknown action or malformed
 parameter object is a stop condition, not permission to infer another tool or browse a root.
 
+For `query_runtime_backends`, verify `next_action.parameters.operation` is
+`hhtools_runtime_backends` and call that tool with `{}`. For
+`authorize_asset_execution`, verify the operation is `hhtools_runtime_trust_asset`
+and pass only the exact `asset_id`, within existing administrator trust authorization.
+
+Use `hhtools_runtime_workflows` to read current workflow readiness, defaults and
+parameter schemas. `upload_local_file` accepts a local `source_path`, `kind`, and
+optional `upload_id` for recovery. `download_artifact` accepts `job_id`, `artifact_id`,
+`destination_path`, and optional `overwrite`. Local paths must stay under the MCP
+adapter's `--transfer-root` directories (current directory by default), without links.
+The upload returns an asset bundle and the download a verified artifact descriptor.
+
 ## Read-only resources
 
 Use these exact URI shapes:
@@ -124,10 +136,12 @@ binary content.
   `artifact_count` and `list_job_artifacts` for canonical pagination.
 - Every artifact lookup requires the owning `job_id` and `artifact_id`; verify one descriptor by
   reading its exact job-scoped resource URI. Binary data is never embedded as Base64.
-- `export_artifact` is the MCP file-delivery boundary. It verifies canonical managed bytes, writes
+- `export_artifact` is a server-side export. It verifies canonical managed bytes, writes
   them only below the service-configured `agent-exports` root, and returns a portable
   `root_id + relative_path` receipt with size and SHA-256. It accepts no caller-selected host path
   and exposes neither the private content-addressed store nor file bytes.
+- `download_artifact` delivers files to the MCP host; server export receipts do not
+  download files to a remote client.
 
 ## Audit-only public schemas
 
@@ -142,12 +156,10 @@ the CLI or manufacture a v2 document inside this skill.
 
 ## Current boundary
 
-The MCP stdio process assembles the same transport-neutral application services directly; it is
-not a REST client and does not need `hhtools web` running. H2R and R2R pair-calibration status,
-proposals, validation, visual preview, and validated silent save run inside this same owner. The
-model hint and visual-review declaration are audit metadata, not proof of client identity. A given `save_dir`
-still has exactly one local runtime owner; never request a WebUI session token or run MCP and Web
-concurrently against the same directory. There is no authenticated remote MCP
-transport, multi-user authorization, cross-process native-worker resume, or guaranteed actual-GPU
-provenance in this phase. `lookup_job` can recover the persisted identity and truthful status of a
-known submission; it cannot resume interrupted native execution.
+The default MCP stdio process is a thin client of the resident Runtime. It connects to or starts
+the service; closing stdio does not stop jobs. GUI and MCP may connect concurrently to the same
+workspace. H2R/R2R calibration and all execution remain inside the Runtime ownership boundary.
+The model hint is audit metadata, not proof of identity. Authenticated remote HTTP uses workspace
+scopes; stdio remains the MCP transport. Recovery restores records and supports whole-job retry,
+not checkpoint resume. New workflow and preview schemas are available from the live operation
+catalog described in the [Runtime guide](../../../../docs/runtime.md).

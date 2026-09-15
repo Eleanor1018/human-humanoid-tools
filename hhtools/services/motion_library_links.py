@@ -11,6 +11,8 @@ from __future__ import annotations
 import os
 import re
 import shutil
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 
@@ -18,6 +20,16 @@ if TYPE_CHECKING:
     from hhtools.services.motion_library import LibraryEntry
 
 _DEFAULT_LOOSE_LABEL = "用户数据集"
+_library_provider = ContextVar("hhtools_motion_library_provider", default=None)
+
+
+@contextmanager
+def use_motion_library(provider):
+    token = _library_provider.set(provider)
+    try:
+        yield
+    finally:
+        _library_provider.reset(token)
 
 
 def motions_library_root() -> Path:
@@ -29,6 +41,13 @@ def motions_library_root() -> Path:
     value; the server serializes root changes with library publication.
     """
 
+    provider = _library_provider.get()
+    if provider is not None:
+        return provider()
+    return default_motions_library_root()
+
+
+def default_motions_library_root() -> Path:
     from hhtools.services.motion_library_settings import (
         MotionLibrarySettingsStore,
         effective_motion_library_root,

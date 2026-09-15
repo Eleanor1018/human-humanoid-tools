@@ -361,6 +361,12 @@ class R2RJobExecutor:
             )
 
             stage = "export"
+            from hhtools.application.retarget_state import publish_retarget_state
+
+            publish_retarget_state(
+                context, retargeted, yellow_foot_z=preview.yellow_foot_z,
+                export_context={"calibration_joint_q": calibration},
+            )
             self._temporary_root.mkdir(parents=True, exist_ok=True)
             with tempfile.TemporaryDirectory(
                 prefix="agent-r2r-",
@@ -378,6 +384,7 @@ class R2RJobExecutor:
                     output_format=parameters.output_format,
                     backend=spec.backend,
                     yellow_foot_z=preview.yellow_foot_z,
+                    **({"export_options": parameters.export} if parameters.export else {}),
                 )
                 context.raise_if_cancelled()
                 try:

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useLocale, useLocaleText } from "@/LocaleProvider";
-import { boundedProgress, displayFileName } from "@/lib/api";
+import { boundedProgress, displayFileName, requestJson } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 import {
@@ -27,6 +27,9 @@ const KIND_LABELS: Readonly<Record<string, readonly [string, string]>> = {
   r2r_retarget: ["Robot to Robot", "机器人到机器人"],
   r2r_basket_upload: ["Import Robot Batch", "导入机器人批处理"],
   r2r_batch: ["Robot to Robot Batch", "机器人到机器人批处理"],
+  retarget_export: ["Trajectory Export", "轨迹导出"],
+  analysis_export: ["Dataset Export", "数据集导出"],
+  preview_render: ["Preview Render", "预览渲染"],
 };
 
 const STATUS_LABELS: Readonly<Record<TaskStatus, readonly [string, string]>> = {
@@ -34,6 +37,7 @@ const STATUS_LABELS: Readonly<Record<TaskStatus, readonly [string, string]>> = {
   running: ["Running", "运行中"],
   done: ["Completed", "已完成"],
   error: ["Failed", "失败"],
+  cancelled: ["Cancelled", "已取消"],
 };
 
 const STATUS_STYLES: Readonly<
@@ -43,12 +47,17 @@ const STATUS_STYLES: Readonly<
   running: { dot: "bg-primary", label: "text-primary" },
   done: { dot: "bg-success", label: "text-success" },
   error: { dot: "bg-danger", label: "text-danger" },
+  cancelled: { dot: "bg-muted-foreground", label: "text-muted-foreground" },
 };
 
 const TASK_ACTION_CLASS =
   "inline-flex items-center gap-0.5 self-center shrink-0 border-0 bg-transparent p-0 text-[11px] text-primary transition-colors hover:text-primary/80 focus-visible:rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:cursor-default disabled:text-muted-foreground disabled:opacity-40 disabled:hover:text-muted-foreground max-[560px]:col-start-2 max-[560px]:justify-self-start";
 
-function ExportLabel({ text }: { readonly text: (en: string, zh: string) => string }) {
+function ExportLabel({
+  text,
+}: {
+  readonly text: (en: string, zh: string) => string;
+}) {
   return (
     <>
       <span>{text("Export", "导出")}</span>
@@ -134,7 +143,11 @@ function formatDuration(
 }
 
 /** Compact task history dock shared by the browser and Electron renderer. */
-export function TaskDrawer() {
+export function TaskDrawer({
+  onOpenResult,
+}: {
+  readonly onOpenResult?: (jobId: string) => Promise<void>;
+}) {
   const locale = useLocale();
   const text = useLocaleText();
   const [open, setOpen] = useState(false);
@@ -218,13 +231,14 @@ export function TaskDrawer() {
     fallback: string,
   ) => (labels ? text(labels[0], labels[1]) : fallback);
   const timeFormat = useMemo(
-    () => new Intl.DateTimeFormat(locale === "zh-CN" ? "zh-CN" : "en-US", {
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-    }),
+    () =>
+      new Intl.DateTimeFormat(locale === "zh-CN" ? "zh-CN" : "en-US", {
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      }),
     [locale],
   );
 
@@ -300,7 +314,10 @@ export function TaskDrawer() {
               {error}
             </p>
           ) : loading && tasks.length === 0 ? (
-            <p className="m-auto px-4 text-center text-xs text-muted-foreground" role="status">
+            <p
+              className="m-auto px-4 text-center text-xs text-muted-foreground"
+              role="status"
+            >
               {text("Loading tasks...", "正在读取任务...")}
             </p>
           ) : tasks.length === 0 ? (
@@ -328,7 +345,10 @@ export function TaskDrawer() {
                     className="grid grid-cols-[10px_minmax(0,1fr)_auto] items-start gap-2.5 border-b border-border-subtle px-3 py-2.5 last:border-b-0 max-[560px]:grid-cols-[10px_minmax(0,1fr)]"
                   >
                     <span
-                      className={cn("mt-1.5 size-2 rounded-full", statusStyle.dot)}
+                      className={cn(
+                        "mt-1.5 size-2 rounded-full",
+                        statusStyle.dot,
+                      )}
                       aria-hidden="true"
                     />
                     <div className="min-w-0">
@@ -344,6 +364,22 @@ export function TaskDrawer() {
                         >
                           {localized(STATUS_LABELS[task.status], task.status)}
                         </span>
+                        {task.outcome && task.outcome !== "success" && (
+                          <span
+                            className={cn(
+                              "text-[10px] font-semibold",
+                              task.outcome === "rejected"
+                                ? "text-danger"
+                                : "text-warning",
+                            )}
+                          >
+                            {task.outcome === "rejected"
+                              ? text("Rejected", "结果未通过")
+                              : task.outcome === "partial"
+                                ? text("Partial result", "部分完成")
+                                : text("Needs review", "待检查")}
+                          </span>
+                        )}
                         <time className="text-[10px] tabular-nums text-muted-foreground">
                           {createdAt}
                         </time>
@@ -383,7 +419,8 @@ export function TaskDrawer() {
                         <div className="mt-1 flex flex-wrap gap-x-2.5 gap-y-0.5 text-[10px] text-muted-foreground">
                           {facts.map(([key, value]) => (
                             <span key={key}>
-                              {localized(PARAMETER_LABELS[key], key)}: {String(value)}
+                              {localized(PARAMETER_LABELS[key], key)}:{" "}
+                              {String(value)}
                             </span>
                           ))}
                           {summary && (
@@ -394,28 +431,97 @@ export function TaskDrawer() {
                         </div>
                       )}
                     </div>
-                    {workflowResult &&
-                      (canExport ? (
-                        <a
+                    <div className="flex items-center gap-2 self-center max-[560px]:col-start-2">
+                      {workflowResult &&
+                        (canExport ? (
+                          <a
+                            className={TASK_ACTION_CLASS}
+                            href={taskDownloadUrl(task.id)}
+                            download={downloadName(task)}
+                          >
+                            <ExportLabel text={text} />
+                          </a>
+                        ) : (
+                          <button
+                            type="button"
+                            className={TASK_ACTION_CLASS}
+                            disabled
+                            title={text(
+                              "Available when the workflow completes",
+                              "工作流完成后可导出",
+                            )}
+                          >
+                            <ExportLabel text={text} />
+                          </button>
+                        ))}
+                      {task.can_open && onOpenResult && (
+                        <button
                           className={TASK_ACTION_CLASS}
-                          href={taskDownloadUrl(task.id)}
-                          download={downloadName(task)}
+                          title={text("Open result", "打开结果")}
+                          aria-label={text("Open result", "打开结果")}
+                          onClick={() => {
+                            void onOpenResult(task.id)
+                              .then(() => setOpen(false))
+                              .catch((reason: unknown) =>
+                                setError(
+                                  reason instanceof Error
+                                    ? reason.message
+                                    : String(reason),
+                                ),
+                              );
+                          }}
                         >
-                          <ExportLabel text={text} />
-                        </a>
-                      ) : (
+                          <span
+                            className="size-4 bg-current [mask:url(/icons/stage/eye.svg)_center/contain_no-repeat]"
+                            aria-hidden="true"
+                          />
+                        </button>
+                      )}
+                      {(task.can_cancel || task.can_retry) && (
                         <button
                           type="button"
                           className={TASK_ACTION_CLASS}
-                          disabled
-                          title={text(
-                            "Available when the workflow completes",
-                            "工作流完成后可导出",
-                          )}
+                          title={
+                            task.can_cancel
+                              ? text("Cancel", "取消")
+                              : text("Retry", "重试")
+                          }
+                          aria-label={
+                            task.can_cancel
+                              ? text("Cancel", "取消")
+                              : text("Retry", "重试")
+                          }
+                          onClick={() => {
+                            void requestJson(
+                              task.can_cancel
+                                ? `/api/job/${encodeURIComponent(task.id)}/cancel`
+                                : "/api/jobs/replay",
+                              {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ job_id: task.id }),
+                              },
+                            )
+                              .then(() => refresh(true))
+                              .catch((reason: unknown) =>
+                                setError(
+                                  reason instanceof Error
+                                    ? reason.message
+                                    : String(reason),
+                                ),
+                              );
+                          }}
                         >
-                          <ExportLabel text={text} />
+                          <span
+                            className="size-4 bg-current"
+                            style={{
+                              mask: `url(/icons/common/${task.can_cancel ? "close" : "refresh-cw"}.svg) center/contain no-repeat`,
+                            }}
+                            aria-hidden="true"
+                          />
                         </button>
-                      ))}
+                      )}
+                    </div>
                   </article>
                 );
               })}

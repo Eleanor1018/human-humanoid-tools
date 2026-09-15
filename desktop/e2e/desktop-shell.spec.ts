@@ -44,6 +44,7 @@ const test = base.extend<DesktopFixture>({
       ],
       cwd: desktopRoot,
       env: {
+        HHTOOLS_LEGACY_SIDECAR: '1',
         ...process.env,
         HHTOOLS_REPO_ROOT: repositoryRoot,
         HHTOOLS_WEB_SETTINGS_PATH: testInfo.outputPath('web-settings.json'),

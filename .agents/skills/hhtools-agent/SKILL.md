@@ -1,6 +1,6 @@
 ---
 name: hhtools-agent
-description: "Run local HHTools H2R through Newton or Interaction-Mesh, scene-free R2R, scalable H2R/R2R batches, and validated H2R or robot-pair calibration through the versioned MCP Agent interface: inspect allowlisted assets, generate content-bound calibration candidates, review front/side previews with GPT vision, silently save only validated poses, preflight immutable smoke/full plans, manage jobs, and review verified artifacts. Use for HHTools H2R/R2R/Batch/calibration execution, status, cancellation, retry, or result requests. Do not use for UI or solver-code edits, scene-bearing R2R, arbitrary filesystem access, remote service setup, or real-robot deployment."
+description: "Run HHTools H2R through Newton or Interaction-Mesh, scene-free R2R, Batch, calibration, Analysis, Video2Motion, and previews through a local or remote resident Runtime. Use for workflow execution, status, cancellation, retry, and result requests. Excludes UI or solver-code edits, scene-bearing R2R, remote service setup, and real-robot deployment."
 ---
 
 # HHTools Agent
@@ -26,12 +26,25 @@ claims.
 - For cancellation or retry, require an explicit user request and follow the lifecycle rules in
   [errors and stops](references/errors-and-stops.md).
 
-If the HHTools MCP tools are unavailable, stop and explain that the local MCP integration must
-be configured. Never substitute shell commands, the JSON CLI, REST calls, or direct filesystem
-reads. The stdio server owns its service runtime and does not require `hhtools web` to be
-running. Only one local runtime may own a given `save_dir`. Calibration tools run inside that
-same owner; do not start a second WebUI merely to calibrate. The WebUI remains a fallback for a
-human-only action and must never run concurrently or expose its session token.
+The default stdio adapter connects to a persistent Runtime and can start it on demand.
+GUI, SDK, CLI, and MCP clients may connect concurrently to the same workspace. Disconnecting
+a client does not stop jobs. Read `hhtools_runtime_identity` and retain its endpoint, Runtime ID,
+workspace ID, job IDs, and event cursor when handing work to another client.
+Use `upload_local_file` for a file or directory bundle under the MCP process's configured
+transfer roots; retain `upload_id` to resume. Use `download_artifact` to deliver a verified file
+to a local destination under those roots. Paths refer to the MCP host. Existing destinations
+require explicit `overwrite: true` within the user's authorization. Do not substitute direct
+store access or bypass Runtime authorization.
+
+For Analysis, Video2Motion, rendering, uploads, and administration, discover the live schemas
+with `hhtools_runtime_workflows` for live readiness, defaults and parameter schemas, or
+`hhtools_runtime_operations` for the complete catalog. Read the [Runtime guide](../../../docs/runtime.md) for these
+operations. Preflight the chosen workflow, submit its immutable plan, wait for the durable job,
+and inspect its artifacts. Analysis selection/export and PNG/MP4 rendering are available without
+a GUI. Preview sessions can use client data or WebRTC; close only the session when finished.
+Backend availability and authorization come from the Runtime. Do not authorize code-capable
+uploads merely to bypass a failure; content-specific trust needs an authorized administrator
+and a trusted input. No LLM API key is needed to run the infrastructure.
 
 ## Run a new H2R job
 
@@ -72,8 +85,8 @@ human-only action and must never run concurrently or expose its session token.
    `start_job(request={schema_version: "1.0", plan_id, idempotency_key})`; the nested request
    contains only the ready plan identity and key. `start_retarget` remains a compatibility alias.
    Persist the exact pair before submission. If the transport result is ambiguous, call
-   `lookup_job` with that pair before replaying the exact same start request; never enumerate jobs
-   or create a replacement key.
+   `lookup_job` with that pair before replaying the exact same start request. If context was lost,
+   use the authorized Runtime job listing to recover the record; do not create a replacement key.
 6. Wait with `wait_job(job_id, after_revision=<last revision>, timeout=30)`. Treat `queued` and
    `running` as nonterminal, retain the returned revision, and wait again without busy-polling.
    Use `get_job` only for an immediate snapshot when no wait is appropriate. Report
@@ -82,12 +95,14 @@ human-only action and must never run concurrently or expose its session token.
    `hhtools://jobs/{job_id}/artifacts/{artifact_id}` when one descriptor needs verification. Read
    `hhtools://jobs/{job_id}/evaluation`, `/manifest`, and `/failures` only when relevant.
    Resources expose verified structured reports or descriptors, not binary motion bytes. When the
-   user asks for an artifact file, call `export_artifact(job_id, artifact_id)`: it verifies and
-   materializes the file below the fixed `agent-exports` root and returns a portable receipt. Give
-   the receipt to the user; do not inspect private storage or request bytes in model context.
+   user asks for a local artifact file, call `download_artifact` with its job, artifact and local
+   destination. `export_artifact(job_id, artifact_id)` instead materializes a server-side copy
+   below `agent-exports`; its receipt does not deliver a file to a remote client. Do not inspect
+   private storage or request bytes in model context.
 8. Inspect both `state` and `outcome`. `completed` alone is not quality approval. For a completed
-   job, present the evaluation and manifest and pause on `review_required`, `partial`, or
-   `rejected`. For `failed` or `cancelled`, follow the error rules and read failure/manifest
+   job, evaluate the reports against the user's quality criteria. Pause when a quality decision
+   is outside the granted scope; do not automatically interpret a review flag as a new approval
+   requirement. For `failed` or `cancelled`, follow the error rules and read failure/manifest
    resources only when present.
 9. Start a full run only after explicit user approval of the smoke evidence. Perform a new
    preflight with `request.parameters.run_mode: full`, receive a different immutable full plan,
@@ -170,7 +185,8 @@ human-only action and must never run concurrently or expose its session token.
 2. Call `preflight_batch` with `schema_version: "1.0"`, `workflow: h2r` or `r2r`, the ordered
    `item_plan_ids`, and `output_policy: create_new`. Do not pass asset paths or rebuild child
    identities. Batch item/frame caps are administrator settings where `0` means unlimited; the
-   default is unlimited. Items execute serially within the job.
+   fresh resident Runtime defaults are 1000 items and no total-frame cap. Query the effective
+   workspace budget before sizing a batch. Items execute serially within the job.
 3. Start only a `ready` batch plan with `start_job`. During `wait_job`, report
    `completed_items / total_items`; never expect an unbounded per-item array in job status.
 4. Cancellation is cooperative for the current child and prevents every not-yet-started child.
@@ -190,6 +206,8 @@ The automatic preflight recovery mappings are:
 | `actor: agent`, `action: register_asset_bundle` | `register_asset_bundle` | Pass `next_action.parameters` unchanged as the tool arguments. It must contain exactly one `request` matching `AssetRegistrationRequest`. Inspect the returned robot bundle, replace `robot_asset_id` with its `asset_id`, and perform a new preflight. |
 | `actor: agent`, `action: get_calibration_status` | `get_calibration_status` | Pass `next_action.parameters` unchanged. Continue through the automatic calibration workflow only for the exact returned robot bundle and reference. |
 | `actor: agent`, `action: get_r2r_calibration_status` | `get_r2r_calibration_status` | Pass `next_action.parameters` unchanged. Continue only with the exact returned source and target robot bundles. |
+| `actor: agent`, `action: query_runtime_backends` | `hhtools_runtime_backends` | Verify `parameters.operation` and call with `{}`. An unavailable backend is not a retryable execution failure. |
+| `actor: agent`, `action: authorize_asset_execution` | `hhtools_runtime_trust_asset` | Verify `parameters.operation` and pass only its exact `asset_id`. Requires an administrator-authorized trust decision; never grant it only to bypass an inspection error. |
 
 Do not translate semantic action names, derive a host path, enumerate directories, or repair a
 malformed action. If the action name, wrapper shape, `root_id`, or portable `relative_path` does
@@ -199,7 +217,7 @@ not validate against the live tool schema, stop and present the contract error.
 
 | ID | Rule |
 |---|---|
-| `MCP_ONLY` | Use HHTools MCP tools/resources only; never fall back to shell, JSON CLI, REST, or direct service imports. |
+| `PUBLIC_CLIENTS` | Use MCP, the public SDK, JSON CLI, or REST as appropriate; do not use shell or direct store access to bypass permissions or validation. |
 | `ALLOWLISTED_ASSETS` | Asset registration accepts only a capability-advertised `root_id` plus normalized `relative_path`, never an arbitrary or absolute path. |
 | `H2R_BACKEND_ROUTING` | Use `newton` only for inspected `plain_motion`; use `interaction_mesh` only for inspected object interaction or terrain scenes, and never bypass isolated content validation. |
 | `R2R_INITIAL_SCOPE` | R2R accepts only semantically inspected, scene-free robot trajectories whose declared source identity matches the selected source robot. |
@@ -208,15 +226,15 @@ not validate against the live tool schema, stop and present the contract error.
 | `OUTPUT_CREATE_NEW` | Use `output_policy: create_new`; other output policies are unsupported in the current Agent service. |
 | `IDEMPOTENT_START` | Persist the exact plan and idempotency key, recover with `lookup_job`, and replay an ambiguous start only with that same plan and idempotency key; never create a second key for the same logical submission. |
 | `IDEMPOTENT_RETRY` | Replay an ambiguous retry with the exact same parent job and retry idempotency key; never create a second child attempt. |
-| `NEW_FULL_PLAN` | A full run requires explicit approval, a new full preflight, a new plan, and a new idempotency key. |
+| `NEW_FULL_PLAN` | A full run requires explicit approval, which may already be provided by the user's task, plus a new full preflight, new plan, and new idempotency key. Do not ask again for authorization already granted. |
 | `JOB_SCOPED_ARTIFACTS` | List, resolve, or export an artifact with both `job_id` and `artifact_id`; never trust or expose an unbound artifact identity. |
-| `CONTROLLED_MEDIA_CONTEXT` | Keep binary motion, meshes, video, trajectories, and Base64 out of arguments and text; only `preview_calibration` and `preview_r2r_calibration` may return an MCP image block, while files use `export_artifact`. |
+| `CONTROLLED_MEDIA_CONTEXT` | Keep binary motion, meshes, video, trajectories, and Base64 out of arguments and text; `preview_calibration` and `preview_r2r_calibration` return an MCP image block, while the bounded `preview_snapshot` and `inspect_artifact_image` tools support image inspection. Files use `download_artifact`, `export_artifact`, or `upload_local_file`. |
 | `VALIDATED_CALIBRATION` | Never fabricate or edit a candidate id; save only a currently valid candidate, require a passing image review for `gpt_vision_silent`, record warnings, and run fresh preflight afterward. |
 | `SILENT_SAVE_SCOPE` | An automatic-calibration request permits validated calibration save without another prompt, but does not approve a full job, motion quality, or real-robot deployment. |
 | `COOPERATIVE_CANCEL` | Running cancellation is a request checked at safe points; do not claim cancellation until the returned job state is terminal. |
 | `HONEST_PROVENANCE` | Report only device and execution provenance present in capabilities or the manifest; never infer actual GPU use. |
-| `SINGLE_RUNTIME_OWNER` | One local runtime may own a `save_dir`; use in-process calibration tools while MCP owns it, and never start a same-directory WebUI concurrently. |
-| `LOCAL_BOUNDARY` | This skill covers local stdio only, with a loopback calibration UI. It provides no remote auth, multi-user isolation, worker resume, or real-robot deployment. |
+| `SINGLE_RUNTIME_OWNER` | One resident Runtime owns a `save_dir`; GUI and MCP clients may connect concurrently. Never start a second writer or stop the shared service merely to switch clients. |
+| `RUNTIME_BOUNDARY` | Local stdio can connect to authenticated remote HTTPS services. Enforce workspace scopes and budgets; enterprise multi-user isolation, checkpoint worker resume, and real-robot deployment are outside this version. |
 
 ## Load references progressively
 
@@ -231,5 +249,6 @@ Return a compact audit trail: selected input and robot asset IDs (including both
 mode and plan ID, job ID and lineage, final state/outcome, evaluation verdict, artifact IDs with hashes when
 available, calibration candidate/validation/save receipt when applicable, batch counts/report, any
 artifact export receipt requested by the user, and any remaining human action.
-Explicitly label unverified quality, unavailable actual-device provenance, and unsupported remote
-or real-robot steps.
+Explicitly label unverified quality, unavailable actual-device provenance, and unsupported backend
+or real-robot steps. Honor existing authorization and quality criteria when deciding whether to
+continue or request a decision; a review flag does not itself revoke previously granted scope.

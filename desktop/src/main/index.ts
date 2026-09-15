@@ -36,7 +36,8 @@ import {
   RuntimeNotFoundError,
   type RuntimeConfig
 } from './runtime-resolver'
-import { configureDesktopSession } from './security/configure-session'
+import { configureDesktopSession, configureResidentSession } from './security/configure-session'
+import { connectResidentRuntime } from './resident-runtime'
 import { SidecarSupervisor, type SidecarSnapshot } from './sidecar-supervisor'
 import { WindowStateStore } from './window-state-store'
 
@@ -138,6 +139,7 @@ let shutdownPromise: Promise<void> | undefined
 let crashDialogOpen = false
 let optionalComponents: OptionalComponentStore | undefined
 let installerCleanup: (() => void) | undefined
+let residentConnected = false
 
 function desktopPreloadPath(): string {
   return join(dirname(fileURLToPath(import.meta.url)), '../preload/index.cjs')
@@ -150,7 +152,7 @@ function installerPreloadPath(): string {
 function runtimeState(snapshot: SidecarSnapshot | undefined = supervisor?.snapshot): RuntimeState {
   return {
     appPhase: lifecycle.phase,
-    backendState: snapshot?.state ?? 'stopped',
+    backendState: snapshot?.state ?? (residentConnected ? 'ready' : 'stopped'),
     backendOrigin,
     backendPid: snapshot?.pid,
     error: snapshot?.error
@@ -198,6 +200,10 @@ async function startDesktop(): Promise<void> {
     localAppData: process.env.LOCALAPPDATA,
     env: process.env,
   })
+  if (process.env.HHTOOLS_LEGACY_SIDECAR !== '1') {
+    await startResidentDesktop(userData)
+    return
+  }
   runtime = resolveRuntime({
     appPath: app.getAppPath(),
     cwd: process.cwd(),
@@ -333,6 +339,51 @@ async function startDesktop(): Promise<void> {
   lifecycle.transition('after-window-open')
   broadcastRuntimeState()
   logger.info('Desktop window opened', { origin: backendOrigin })
+}
+
+async function startResidentDesktop(userData: string): Promise<void> {
+  const endpoint = process.env.HHTOOLS_RUNTIME_ENDPOINT
+  runtime = endpoint === undefined ? resolveRuntime({
+    appPath: app.getAppPath(), cwd: process.cwd(), userData, isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath, appVersion: app.getVersion(),
+  }) : undefined
+  logger = new DesktopLogger(runtime?.logDirectory ?? join(userData, 'logs'))
+  lifecycle.transition('backend-starting')
+  backendOrigin = await connectResidentRuntime({
+    runtime, endpoint, token: process.env.HHTOOLS_RUNTIME_TOKEN,
+    env: runtime ? {
+      ...buildSidecarEnvironment(runtime.repoRoot, process.env, runtime.bodyModelsRoot,
+        runtime.bundledRobotRoot, runtime.kind === 'checkout'),
+      ...optionalComponents?.sidecarEnvironment(),
+    } : process.env,
+  })
+  configureResidentSession(session.defaultSession, backendOrigin, process.env.HHTOOLS_RUNTIME_TOKEN)
+  const windowResult = createMainWindow({
+    iconPath: desktopIconPath(), preloadPath: desktopPreloadPath(), trustedOrigin: backendOrigin,
+    stateStore: new WindowStateStore(join(userData, 'window-state.json')), logger,
+  })
+  mainWindow = windowResult.window
+  const tutorial = new DesktopTutorialState(userData)
+  const removeHandlers = registerDesktopHandlers({
+    mainWindow, trustedOrigin: backendOrigin, getRuntimeState: () => runtimeState(),
+    getOptionalComponents: () => optionalComponents!.getState(),
+    hasSeenTutorial: () => tutorial.hasSeenTutorial(), markTutorialSeen: () => tutorial.markTutorialSeen(),
+    restartBackend: async () => {
+      await connectResidentRuntime({ endpoint: backendOrigin, token: process.env.HHTOOLS_RUNTIME_TOKEN })
+      return runtimeState()
+    },
+    setupGvhmr: () => runGvhmrSetup({ mainWindow: mainWindow!, store: optionalComponents!,
+      onConfigured: async () => undefined }),
+  })
+  lifecycle.registerShutdownJoiner('desktop-ipc', removeHandlers)
+  residentConnected = true
+  lifecycle.transition('ready')
+  await mainWindow.loadURL(backendOrigin)
+  await windowResult.readyToShow
+  if (!mainWindow.isDestroyed()) mainWindow.show()
+  lifecycle.transition('after-window-open')
+  broadcastRuntimeState()
+  logger.info('Desktop connected to resident Runtime', { origin: backendOrigin })
 }
 
 async function showStartupFailure(reason: unknown): Promise<void> {

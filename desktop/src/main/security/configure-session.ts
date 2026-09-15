@@ -11,3 +11,12 @@ export function configureDesktopSession(session: Session, origin: string, secret
     callback({ requestHeaders: details.requestHeaders })
   })
 }
+
+export function configureResidentSession(session: Session, origin: string, token?: string): void {
+  session.setPermissionCheckHandler(() => false)
+  session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
+  session.webRequest.onBeforeSendHeaders({ urls: [`${origin}/*`] }, (details, callback) => {
+    if (token) details.requestHeaders.Authorization = `Bearer ${token}`
+    callback({ requestHeaders: details.requestHeaders })
+  })
+}

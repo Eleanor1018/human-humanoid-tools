@@ -18,6 +18,7 @@ import json
 import math
 import pickle
 import pickletools
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -267,6 +268,19 @@ def _logical_primary_candidates(directory: Path) -> list[Path]:
     return candidates
 
 
+@contextmanager
+def _npz_dependency_archive(path: Path):
+    try:
+        with np.load(path, mmap_mode="r", allow_pickle=False) as archive:
+            yield archive
+    except MotionAssetDiscoveryError:
+        raise
+    except (OSError, EOFError, ValueError, TypeError) as error:
+        raise MotionAssetDiscoveryError(
+            "BUNDLE_INCOMPLETE", "The NPZ dependency metadata cannot be read safely."
+        ) from error
+
+
 def discover_motion_sidecars(
     primary_path: str | Path,
     *,
@@ -290,6 +304,47 @@ def discover_motion_sidecars(
         resolved = path.resolve()
         if resolved not in values:
             values.append(resolved)
+
+    if primary.suffix.lower() == ".npz":
+        with _npz_dependency_archive(primary) as archive:
+            add(AssetFileRole.OTHER, primary.with_suffix(".pkl"))
+            if "name" in archive.files and _npz_member_within_limit(archive, "name"):
+                name = np.asarray(archive["name"])
+                if name.shape == () and name.dtype.kind in {"S", "U"}:
+                    candidate = (directory / f"{name.item()}.pkl").resolve()
+                    if not candidate.is_relative_to(directory):
+                        raise MotionAssetDiscoveryError(
+                            "ASSET_OUTSIDE_ALLOWED_ROOT",
+                            "NPZ terrain reference leaves the clip directory.",
+                        )
+                    add(AssetFileRole.OTHER, candidate)
+            if "objects_mesh_paths" in archive.files and _npz_member_within_limit(
+                archive, "objects_mesh_paths"
+            ):
+                references = np.asarray(archive["objects_mesh_paths"])
+                if references.ndim != 1 or references.dtype.kind not in {"S", "U"}:
+                    raise MotionAssetDiscoveryError(
+                        "BUNDLE_INCOMPLETE", "NPZ mesh references must be a string vector."
+                    )
+                for reference in references.tolist():
+                    if not reference:
+                        continue
+                    candidate = (directory / str(reference)).resolve()
+                    if not candidate.is_relative_to(directory):
+                        raise MotionAssetDiscoveryError(
+                            "ASSET_OUTSIDE_ALLOWED_ROOT",
+                            "NPZ mesh reference leaves the clip directory.",
+                        )
+                    if not candidate.is_file():
+                        raise MotionAssetDiscoveryError(
+                            "BUNDLE_INCOMPLETE", "A referenced NPZ scene mesh is missing."
+                        )
+                    role = (
+                        AssetFileRole.TERRAIN_MESH
+                        if "terrain" in candidate.stem.casefold()
+                        else AssetFileRole.OBJECT_MESH
+                    )
+                    add(role, candidate)
 
     if dataset_name == "omomo":
         for path in sorted(directory.glob("*_cleaned_simplified.obj")):

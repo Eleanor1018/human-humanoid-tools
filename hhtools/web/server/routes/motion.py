@@ -116,6 +116,8 @@ def register_motion_routes(
                 src_path = Path(picked)
         ref = _suggest_reference(motion, dataset, source_path=src_path)
         motion_rec: dict = {"motion": motion, "reference": ref, "origin": origin}
+        if src_path is not None:
+            motion_rec["source_path"] = str(src_path)
         if library_entry is not None and library_entry.get("source_path"):
             motion_rec["source_path"] = library_entry["source_path"]
             motion_rec["library_entry"] = _snapshot_job_request(library_entry)

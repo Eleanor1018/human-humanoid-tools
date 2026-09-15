@@ -59,6 +59,7 @@ def _mount_web_app(
     agent_rest_available: bool = True,
     agent_json_cli_available: bool = True,
     runtime: ApplicationRuntime,
+    runtime_shell: bool = False,
 ):
     """Mount HTTP adapters onto an application-owned runtime."""
     from fastapi import FastAPI
@@ -109,12 +110,20 @@ def _mount_web_app(
         max_request_bytes=max_upload_request_bytes,
     )
 
-    jobs = WebJobRuntime(
+    job_type = WebJobRuntime
+    if runtime_shell:
+        from hhtools.web.server.runtime_jobs import RuntimeGuiJobs
+
+        job_type = RuntimeGuiJobs
+    jobs = job_type(
         state=state,
         scheduler=scheduler,
         max_retained_jobs=max_retained_jobs,
         job_ttl_seconds=job_ttl_seconds,
     )
+    if runtime_shell:
+        jobs.runtime = runtime
+        app.state.gui_jobs = jobs
 
     motion_library_settings_store = runtime.motion_library_settings_store
     app.state.motion_library_settings_store = motion_library_settings_store
@@ -146,6 +155,7 @@ def _mount_web_app(
         desktop_session_secret=desktop_session_secret,
         desktop_allowed_host=desktop_allowed_host,
         desktop_allowed_origin=desktop_allowed_origin,
+        runtime_shell=runtime_shell,
     )
     register_system_routes(
         app,
@@ -173,6 +183,8 @@ def _mount_web_app(
         uploads=uploads,
         motion_library_publish_lock=motion_library_publish_lock,
     )
+    if runtime_shell:
+        app.state.gui_motion_operations = motion_operations
     robot_operations = register_robot_routes(app, state=state, uploads=uploads)
     h2r_operations = register_h2r_routes(app, state=state, jobs=jobs)
     batch_operations = register_batch_routes(app, state=state, jobs=jobs)

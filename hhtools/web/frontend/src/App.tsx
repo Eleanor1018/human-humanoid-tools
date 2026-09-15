@@ -34,7 +34,8 @@ import {
   type WorkspaceLocale,
 } from "./localization";
 import { AnalysisView } from "./features/analysis/AnalysisView";
-import type { AnalysisRobotPreview } from "./features/analysis/api";
+import type { AnalysisRobotPreview, DatasetAnalysisResult } from "./features/analysis/api";
+import { requestJson } from "./lib/api";
 import {
   storedForceReanalysis,
   storeForceReanalysis,
@@ -223,6 +224,7 @@ export function App() {
   const [stageScaledMotion, setStageScaledMotion] =
     useState<StageMotionPayload | null>(null);
   const [h2rResult, setH2rResult] = useState<H2rResult | null>(null);
+  const [runtimeAnalysisResult, setRuntimeAnalysisResult] = useState<DatasetAnalysisResult | null>(null);
   const [h2rPreview, setH2rPreview] = useState<H2rScaledPreview | null>(null);
   const [h2rCalibrationReference, setH2rCalibrationReference] =
     useState<StageMotionPayload | null>(null);
@@ -775,13 +777,47 @@ export function App() {
         </div>
         <div className={activeView === "dataset-viz" ? "h-full" : "hidden"}>
           <AnalysisView
+            runtimeResult={runtimeAnalysisResult}
             forceAnalysis={forceAnalysis}
             onMotionLoaded={publishAnalysisMotion}
             onRobotPreviewLoaded={publishAnalysisRobotPreview}
           />
         </div>
       </Inspector>
-      <TaskDrawer />
+      <TaskDrawer
+        onOpenResult={async (jobId) => {
+          const payload = await requestJson<{
+            kind: string;
+            result: H2rResult | R2rRetargetResult | DatasetAnalysisResult;
+            robot?: StageRobotPayload;
+            motion?: StageMotionPayload;
+            source_robot?: StageRobotPayload;
+            source_result?: R2rSourceResult;
+          }>(`/api/job/${encodeURIComponent(jobId)}/open`, { method: "POST" });
+          if (payload.kind === "retarget" && payload.robot && payload.motion) {
+            publishRobot(payload.robot);
+            publishMotion(payload.motion);
+            setH2rResult(payload.result as H2rResult);
+            setActiveView("h2r");
+          } else if (
+            payload.kind === "r2r_retarget" && payload.robot &&
+            payload.source_robot && payload.source_result
+          ) {
+            publishR2rTargetRobot(payload.robot);
+            publishR2rSourceRobot(payload.source_robot);
+            setR2rSourceResult(payload.source_result);
+            setR2rResult(payload.result as R2rRetargetResult);
+            setActiveView("r2r");
+          } else if (payload.kind === "dataset_analyze") {
+            setRuntimeAnalysisResult(payload.result as DatasetAnalysisResult);
+            setActiveView("dataset-viz");
+          } else if (payload.kind === "video_to_motion" && payload.motion) {
+            publishMotion(payload.motion);
+            noteMotionLibraryChanged();
+            setActiveView("motion");
+          }
+        }}
+      />
       <a
         ref={exportLink}
         className="hidden"

@@ -1,13 +1,23 @@
 # Agent interfaces
 
-HHTools exposes the same versioned H2R, scene-free R2R, and scalable Batch Agent contracts
-through two local adapters. Use the JSON CLI from scripts and use MCP when a compatible coding
-agent should discover and call tools directly.
+HHTools exposes persistent workflows through one resident Runtime. GUI, Python SDK, CLI, and
+MCP clients share its assets, plans, jobs, events, evaluation, and artifacts. Local and authenticated
+remote deployments use the same operation contracts. See the [Runtime guide](runtime.md) for
+service startup, resource transfer, Analysis, Video2Motion, and WebRTC previews.
 
 | Adapter | Runtime | Entry point |
 |---|---|---|
-| JSON CLI | Client of a running WebUI Agent API | `uv run hhtools agent ...` |
-| MCP | Own local stdio process; no WebUI required | `uv run --extra mcp hhtools-mcp` |
+| Runtime CLI / SDK | Client of the resident Runtime | `uv run hhtools runtime ...` / `RuntimeClient` |
+| JSON CLI | Compatibility client of the v1 Agent API | `uv run hhtools agent ...` |
+| MCP | Thin stdio client; connects or starts the daemon | `uv run --extra mcp hhtools-mcp` |
+
+The workflow CLI also exposes `hhtools h2r`, `hhtools r2r`, `hhtools analysis`, and
+`hhtools video2motion` with automatic preflight/submission, JSON output, bounded
+waiting, optional verified downloads, and `--resume` recovery receipts. Use `--json`
+for a strict result; interactive terminals otherwise show summaries and progress.
+`hhtools jobs` manages jobs, `hhtools runs` discovers/resumes local receipts, and
+`hhtools analysis select/compare/export` covers report post-processing. `run` is
+optional and remains compatible. See [workflow CLI](runtime.md#workflow-cli).
 
 The current Agent surface supports human-to-robot (H2R) retargeting—plain motion through Newton
 and safely inspectable object-interaction or terrain-scene bundles through Interaction-Mesh—and
@@ -15,10 +25,10 @@ scene-free robot-to-robot (R2R) trajectories through Newton, plus ordered H2R/R2
 includes content-bound H2R and R2R pair-calibration status, constrained proposals, deterministic
 validation, front/side visual previews, validated silent save, capability and robot
 discovery, allowlisted asset registration and inspection, workflow-specific preflight, jobs,
-revision-aware waiting, verified artifacts, and export. Scene-bearing R2R, Video2Motion, Analysis,
-remote service access, and robot deployment are not part of this interface. Code-capable
-source formats still require safe content inspection; the Agent never bypasses an
-isolated-validation requirement.
+revision-aware waiting, verified artifacts, and export. The Runtime catalog additionally exposes
+Analysis, Video2Motion, resumable transfer, configuration, and resource-bound previews. Scene-bearing
+R2R, training, and physical robot deployment remain outside this release. Uploaded code-capable
+serialization needs content-specific administrator trust; changing transport does not bypass it.
 
 ## Install
 
@@ -28,8 +38,15 @@ Use any compatible Python 3.12 or newer and install the adapter you need:
 # JSON CLI plus the resident WebUI service
 uv sync --locked --extra web --extra retarget
 
-# Self-contained local MCP H2R/R2R server
+# Resident Runtime and its MCP client
 uv sync --locked --extra mcp
+
+# Optional offscreen images, videos, and WebRTC
+uv sync --locked --extra mcp --extra preview
+
+# Whole-application GUI streaming
+uv sync --locked --extra mcp --extra streaming
+uv run playwright install chromium
 ```
 
 After installation, `uv run hhtools doctor --require mcp` provides a
@@ -62,10 +79,20 @@ allowlisted `root_id` and portable `relative_path`, never a host path.
 
 `hhtools-mcp` is a stdio server, so start it through an MCP client rather than
 an interactive terminal. Its available options can be inspected with
-`uv run --extra mcp hhtools-mcp --help`. Batch caps default to `0` (unlimited); server
-administrators may opt into positive `--max-batch-items` and
-`--max-batch-total-frames` values. Web, desktop-sidecar, and MCP startup all load the same
-persisted setting fields unless an explicit CLI or environment value overrides them.
+`uv run --extra mcp hhtools-mcp --help`. The resident Runtime publishes its effective budget;
+`0` retains unlimited semantics for supported concurrency and batch fields. A fresh
+resident workspace defaults to 2 running jobs, 64 queued jobs and 1000 items per
+batch; query `hhtools_runtime_budget` for the effective policy. Update it through
+`hhtools_runtime_set_budget` with an admin credential. Explicit MCP job-limit options
+update the same policy.
+
+For remote file delivery, use `upload_local_file` and `download_artifact`. These
+operate on the MCP host under `--transfer-root` directories (current directory by
+default). `export_artifact` instead creates a copy on the Runtime host. Downloads
+verify hashes and preserve existing outputs unless overwrite is explicit. Query
+`hhtools_runtime_workflows` for Analysis/Video2Motion readiness, defaults and schemas.
+`--all-tools` includes compatibility aliases in the tool listing; existing tool
+names remain callable with the default listing.
 
 ## Safe H2R, R2R, and Batch workflows
 
@@ -75,7 +102,7 @@ pair calibration. Call the matching preflight with `run_mode: smoke`, then submi
 plan returned with `status: ready` through `start_job`; retain its `plan_id` and caller-owned key.
 Wait by revision and review the evaluation and manifest before considering a
 full run. Validated H2R and R2R pair calibrations may be saved automatically; final motion quality
-and full-run approval remain human decisions.
+and any quality decision outside the user's existing authorization require a human decision.
 
 H2R calibration assistance is available before preflight or after a
 `CALIBRATION_REQUIRED` response. Bind every request to the exact registered robot bundle and
@@ -127,7 +154,8 @@ audit-note persistence, and fresh-preflight requirement apply. R2R preflight ret
 Batch composition happens only after every single item already has a ready H2R or R2R plan.
 Call `preflight_batch` with one workflow and the ordered child `plan_id` list. The service rejects
 mixed run modes, mixed robot identities, and duplicate inputs. Batch item/frame settings use
-`0` for unlimited and default to unlimited; positive administrator-selected values become
+`0` for unlimited; a fresh resident Runtime defaults to 1000 items and no total-frame
+cap. Query the effective workspace budget rather than assuming legacy defaults. Positive values become
 content-bound plan limits. Execution is serial so cancellation can stop the current child and
 guarantee later children never start. Job status carries only `completed_items / total_items`;
 the complete per-item report and portable ZIP are stored as `batch_report` and `batch_archive`
@@ -135,18 +163,15 @@ artifacts. The MCP report resource is intended for model-sized reports; if it ex
 context budget, export the verified artifact instead. A retry always creates a new whole-batch
 attempt rather than silently selecting failed items.
 
-Only one local runtime may own a `save-dir`. MCP normally owns its directory
-for its entire stdio connection. H2R and R2R automatic calibration run inside that owner and
-therefore do not require a WebUI handoff. If a proposal cannot pass after bounded revisions, or a workflow
-still requires human-only calibration, disconnect MCP before opening the WebUI against the same
-directory; close WebUI before reconnecting. Never run both concurrently.
+Only one local runtime may own a `save-dir`. All clients may share that service concurrently.
+Closing MCP, a browser, or Electron does not terminate jobs. `--ephemeral` selects the explicit
+legacy stdio-owned mode; use a separate workspace for that compatibility mode.
 
 ## Codex
 
 This repository includes a project-scoped [Codex configuration](../.codex/config.toml).
-It starts the `hhtools` stdio server with `uv` and keeps its save/cache state in
-the ignored `.hhtools/agent/` directory, separate from the default WebUI. Its
-job-admission settings live in that directory too. Open a new Codex session from
+It starts the `hhtools` stdio client with `uv` and uses `assets/save_npz`, the same workspace
+as the default `hhtools web` command. Open a new Codex session from
 a trusted checkout after installing the `mcp` extra, then use `/mcp` or
 `codex mcp list` to confirm that `hhtools` connected.
 
@@ -154,17 +179,17 @@ The checked-in launcher uses `uv run --frozen --no-sync`, so opening Codex never
 changes the repository environment. Run the explicit `uv sync --extra mcp`
 installation command again after dependency updates.
 
-Codex should normally use the in-process H2R or R2R calibration tools. For a human-only fallback,
-first disconnect the MCP server and run:
+Use the shared H2R/R2R calibration tools. A human can connect to the same workspace while the
+agent stays connected:
 
 ```bash
-HHTOOLS_WEB_SETTINGS_PATH=.hhtools/agent/job-settings.json \
 uv run --frozen --no-sync hhtools web \
-  --save-dir .hhtools/agent/save \
-  --cache .hhtools/agent/cache \
-  --port 8010
+  --save-dir assets/save_npz
 ```
 
-Close that WebUI before reconnecting MCP. Project-level MCP configuration and
+The command prints the actual endpoint, including when a preferred port was occupied. Use
+`--base-url <endpoint>/api/agent/v1` with the v1 JSON CLI when its default port differs.
+`HHTOOLS_RUNTIME_TOKEN` supplies remote credentials and `HHTOOLS_RUNTIME_CA` can select a private CA.
+Project-level MCP configuration and
 the supported stdio fields are documented in the
 [official Codex MCP guide](https://developers.openai.com/codex/mcp).

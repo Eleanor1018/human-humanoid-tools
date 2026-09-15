@@ -13,7 +13,7 @@ from hhtools.application.state import SessionState, _cleanup_session_state
 from hhtools.services.job_scheduler import JobScheduler
 from hhtools.services.job_settings import JobAdmissionSettingsStore
 from hhtools.services.motion_cache import EphemeralCache
-from hhtools.services.motion_library_links import ensure_motions_library, motions_library_root
+from hhtools.services.motion_library_links import ensure_motions_library
 from hhtools.services.motion_library_settings import MotionLibrarySettingsStore
 from hhtools.services.runtime_lease import AgentRuntimeLease
 from hhtools.services.web_job_history import JobHistoryStore
@@ -30,6 +30,7 @@ class ApplicationPaths:
     job_history_dir: Path | None = None
     job_settings_path: Path | None = None
     workspace_robot_root: Path | None = None
+    asset_roots: dict[str, Path] | None = None
 
     @classmethod
     def isolated(cls, root: Path, *, source_root: Path | None = None) -> ApplicationPaths:
@@ -63,6 +64,16 @@ class ApplicationRuntime:
     async def lifespan(self):
         async with self.lifecycle.lifespan(self):
             yield self
+
+
+def resolve_motion_library(paths: ApplicationPaths) -> Path:
+    from hhtools.services.motion_library_settings import effective_motion_library_root
+    from hhtools.utils.paths import user_motion_library_settings_path
+
+    settings = MotionLibrarySettingsStore(
+        paths.motion_library_settings_path or user_motion_library_settings_path()
+    ).load()
+    return effective_motion_library_root(settings, default_root=paths.motion_library_root)
 
 
 def build_application_runtime(
@@ -126,22 +137,11 @@ def build_application_runtime(
             if paths.motion_library_settings_path is not None
             else user_motion_library_settings_path(),
         )
-        if paths.motion_library_root is not None:
-            library_root = ensure_motions_library(paths.motion_library_root)
 
-            def library_provider() -> Path:
-                return library_root
+        def library_provider() -> Path:
+            return resolve_motion_library(paths)
 
-        elif paths.motion_library_settings_path is not None:
-            from hhtools.services.motion_library_settings import effective_motion_library_root
-
-            def library_provider() -> Path:
-                return effective_motion_library_root(library_settings.load())
-
-            ensure_motions_library(library_provider())
-        else:
-            library_provider = motions_library_root
-            ensure_motions_library()
+        ensure_motions_library(library_provider())
         services = assemble_agent_services(
             state=state,
             scheduler=scheduler,
@@ -156,8 +156,10 @@ def build_application_runtime(
             agent_json_cli_available=agent_json_cli_available,
             max_batch_items=max_batch_items,
             max_batch_total_frames=max_batch_total_frames,
+            additional_asset_roots=paths.asset_roots,
         )
         lifecycle = RuntimeLifecycle(state, scheduler, settings_lock, lease)
+        services.motion_library_root_provider = library_provider
         return ApplicationRuntime(
             paths,
             state,

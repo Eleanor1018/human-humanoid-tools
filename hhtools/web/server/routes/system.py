@@ -141,7 +141,6 @@ def register_system_routes(
     def _motion_library_settings_payload(
         request: Request,
     ) -> dict[str, str | bool | None]:
-        settings = motion_library_settings_store.load()
         environment_override = bool(os.environ.get(HHTOOLS_MOTION_LIBRARY_ROOT_ENV))
         local_request = _job_settings_editable(request)
         editable = local_request and not environment_override
@@ -149,8 +148,11 @@ def register_system_routes(
         if not editable:
             readonly_reason = "environment_override" if environment_override else "remote"
         return {
-            "root": str(effective_motion_library_root(settings)),
-            "default_root": str(user_motion_library_root().expanduser().resolve(strict=False)),
+            "root": str(motions_library_root()),
+            "default_root": str(
+                app.state.application_runtime.paths.motion_library_root
+                or user_motion_library_root().expanduser().resolve(strict=False)
+            ),
             # An environment override is an administrator-owned launch setting;
             # writing a lower-priority JSON value would misleadingly appear to
             # succeed while leaving the effective root unchanged.
@@ -193,9 +195,14 @@ def register_system_routes(
             current = motion_library_settings_store.load()
             try:
                 updated = updated_motion_library_settings(current, payload)
-                selected_root = effective_motion_library_root(updated)
+                selected_root = effective_motion_library_root(
+                    updated, default_root=app.state.application_runtime.paths.motion_library_root
+                )
                 current_root = motions_library_root()
-                default_root = user_motion_library_root().expanduser().resolve(strict=False)
+                default_root = (
+                    app.state.application_runtime.paths.motion_library_root
+                    or user_motion_library_root().expanduser().resolve(strict=False)
+                )
                 if selected_root != current_root:
                     # Mark the root we are leaving before changing the resolver.
                     # This preserves a safe return path even if platform-default

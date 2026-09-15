@@ -106,7 +106,7 @@ export interface VideoToMotionJob {
   readonly message?: string;
   readonly error?: string | null;
   readonly result?: MotionResult | null;
-  readonly scope?: "current_session" | "persistent";
+  readonly scope?: "current_session" | "persistent" | "runtime";
 }
 
 export interface DesktopGvhmrSetupResult {
@@ -359,6 +359,10 @@ export async function waitForVideoToMotion(
     }
 
     if (job.status === "done") {
+      if (job.scope === "runtime") {
+        const opened = await requestJson<{ motion: MotionResult }>(`/api/job/${encodeURIComponent(jobId)}/open`, { method: "POST", signal: options.signal }, fetcher);
+        return opened.motion;
+      }
       if (job.scope === "persistent") {
         throw new Error("This completed job no longer has a live motion result.");
       }

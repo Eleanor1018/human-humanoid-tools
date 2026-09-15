@@ -19,11 +19,12 @@ from typing import Any, NoReturn
 from pydantic import ValidationError
 
 from hhtools.contracts import ApiError, BatchPlan, ErrorStage, R2RPlan, RetargetPlan
+from hhtools.contracts.workflows import WORKFLOW_SEMANTICS, WorkflowJobSpec, workflow_payload
 
 _RETARGET_PLAN_SEMANTICS = "hhtools.retarget.plan.v1"
 _R2R_PLAN_SEMANTICS = "hhtools.r2r.plan.v1"
 _BATCH_PLAN_SEMANTICS = "hhtools.batch.plan.v1"
-ExecutionPlan = RetargetPlan | R2RPlan | BatchPlan
+ExecutionPlan = RetargetPlan | R2RPlan | BatchPlan | WorkflowJobSpec
 
 
 class PlanStoreError(RuntimeError):
@@ -460,6 +461,10 @@ def _validate_plan_projection(
     canonical_payload: Mapping[str, Any],
 ) -> None:
     semantics = canonical_payload.get("semantics")
+    if semantics == WORKFLOW_SEMANTICS:
+        if not isinstance(plan, WorkflowJobSpec) or canonical_payload != workflow_payload(plan):
+            raise _InvalidDocumentError("workflow plan does not match its execution description")
+        return
     if semantics == _BATCH_PLAN_SEMANTICS:
         if not isinstance(plan, BatchPlan):
             raise _InvalidDocumentError("batch semantics require a batch plan document")
@@ -478,9 +483,12 @@ def _validate_plan_projection(
 class PlanStore:
     """SQLite-backed immutable store for content-bound retarget plans."""
 
-    def __init__(self, data_dir: Path) -> None:
+    def __init__(self, data_dir: Path, *, read_only: bool = False) -> None:
         self._data_dir = Path(data_dir)
         self._database_path = self._data_dir / "plans.sqlite3"
+        self._read_only = read_only
+        if read_only:
+            return
         try:
             self._data_dir.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
@@ -499,7 +507,11 @@ class PlanStore:
         return self._database_path
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self._database_path, timeout=30.0)
+        connection = (
+            sqlite3.connect(self._database_path.as_uri() + "?mode=ro", uri=True, timeout=30.0)
+            if self._read_only
+            else sqlite3.connect(self._database_path, timeout=30.0)
+        )
         connection.row_factory = sqlite3.Row
         return connection
 
@@ -550,7 +562,9 @@ class PlanStore:
                 raise _InvalidDocumentError("persisted documents are not canonical JSON")
 
             plan_model = (
-                BatchPlan
+                WorkflowJobSpec
+                if payload_document.get("semantics") == WORKFLOW_SEMANTICS
+                else BatchPlan
                 if payload_document.get("semantics") == _BATCH_PLAN_SEMANTICS
                 else R2RPlan
                 if payload_document.get("semantics") == _R2R_PLAN_SEMANTICS

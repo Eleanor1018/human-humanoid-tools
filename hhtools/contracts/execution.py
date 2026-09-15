@@ -30,6 +30,19 @@ class HumanRetargetExecutionOptions(SolverExecutionOptions):
     foot_clamp_anti_penetration: Annotated[bool, Field(strict=True)] = False
 
 
+class TrajectoryExportOptions(ContractModel):
+    fps: Annotated[float | None, Field(default=None, gt=0, le=1000, allow_inf_nan=False)]
+    t_start: Annotated[float | None, Field(default=None, ge=0, allow_inf_nan=False)]
+    t_end: Annotated[float | None, Field(default=None, ge=0, allow_inf_nan=False)]
+    csv_header: bool = True
+
+    @model_validator(mode="after")
+    def validate_window(self):
+        if self.t_end is not None and self.t_end <= (self.t_start or 0):
+            raise ValueError("Export end must be after its start")
+        return self
+
+
 class AgentH2RExecutionParameters(HumanRetargetExecutionOptions):
     """Fully resolved H2R parameters persisted in an immutable Agent JobSpec."""
 
@@ -38,6 +51,7 @@ class AgentH2RExecutionParameters(HumanRetargetExecutionOptions):
     foot_clamp_anti_penetration: Annotated[bool, Field(strict=True)]
     retarget_profile: ExecutionIdentifier
     output_format: Literal["csv", "pkl"]
+    export: TrajectoryExportOptions | None = None
 
     @model_validator(mode="after")
     def validate_run_scope(self) -> AgentH2RExecutionParameters:
@@ -56,6 +70,7 @@ class AgentR2RExecutionParameters(SolverExecutionOptions):
     source_fps: PositiveExecutionFloat | None = None
     output_format: Literal["csv", "pkl"]
     trajectory_profile: Literal["mimic"] = "mimic"
+    export: TrajectoryExportOptions | None = None
 
     @model_validator(mode="after")
     def validate_run_scope(self) -> AgentR2RExecutionParameters:
@@ -109,4 +124,5 @@ __all__ = [
     "PositiveExecutionFloat",
     "PositiveExecutionInt",
     "SolverExecutionOptions",
+    "TrajectoryExportOptions",
 ]

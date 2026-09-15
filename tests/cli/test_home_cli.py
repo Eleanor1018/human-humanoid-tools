@@ -38,7 +38,8 @@ def test_homepage_has_the_planned_sections_and_only_real_destinations() -> None:
     assert "OPEN" in output
     assert "WebUI" in output
     assert "Desktop GUI" in output
-    assert "$ hhtools retarget run" in output
+    assert "$ hhtools h2r" in output
+    assert "$ hhtools r2r" in output
     assert "$ hhtools web" in output
     assert "$ hhtools-desktop" in output
     assert "\x1b[" not in output
@@ -48,8 +49,11 @@ def test_homepage_keeps_every_command_visible_on_a_narrow_terminal() -> None:
     output = _render(width=52)
 
     for command in (
-        "hhtools retarget run",
-        "hhtools convert run",
+        "hhtools h2r",
+        "hhtools r2r",
+        "hhtools analysis",
+        "hhtools video2motion",
+        "hhtools convert",
         "hhtools robot list",
         "hhtools doctor",
         "hhtools web",
@@ -63,7 +67,7 @@ def test_homepage_does_not_stretch_across_an_ultrawide_terminal() -> None:
     output = _render(width=180)
 
     assert max(len(line) for line in output.splitlines()) <= 104
-    assert "$ hhtools retarget run" in output
+    assert "$ hhtools h2r" in output
     assert "$ hhtools-desktop" in output
 
 

@@ -29,15 +29,20 @@ def register_shell_routes(
     desktop_session_secret: str | None,
     desktop_allowed_host: str | None,
     desktop_allowed_origin: str | None,
+    runtime_shell: bool = False,
 ) -> None:
     UI_BUILD_ID = ui_build_id
 
     def _render_index_html() -> str:
         raw = (static_dir / "index.html").read_text(encoding="utf-8")
-        return raw.replace("{{UI_BUILD}}", UI_BUILD_ID)
+        raw = raw.replace("{{UI_BUILD}}", UI_BUILD_ID)
+        if runtime_shell:
+            raw = raw.replace("</head>", '<meta name="hhtools-runtime" content="1"></head>')
+        return raw
 
     @app.get("/")
     @app.get("/index.html")
+    @app.get("/stream")
     def serve_index():
         return HTMLResponse(
             _render_index_html(),
@@ -125,7 +130,9 @@ def register_shell_routes(
                     legacy_detail="Invalid desktop origin",
                 )
 
-        elif request.method in _STATE_CHANGING_METHODS:
+        elif request.method in _STATE_CHANGING_METHODS and not getattr(
+            request.state, "runtime_authorized", False
+        ):
             boundary_failure = _local_write_boundary_failure(request)
             if boundary_failure is not None:
                 return boundary_failure

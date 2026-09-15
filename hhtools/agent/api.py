@@ -566,6 +566,14 @@ def _job_manager(request: Request) -> _JobProvider:
     return cast("_JobProvider", service)
 
 
+def _submission_key(request: Request, key: str, operation: str = "submit") -> str:
+    control = getattr(request.app.state, "runtime_control", None)
+    principal = getattr(request.state, "runtime_principal", None)
+    if control is not None and principal is not None:
+        return control.scoped_key(principal["subject"], operation, key)
+    return key
+
+
 def _legacy_upgrade_service(request: Request) -> _LegacyUpgradeProvider:
     service = getattr(request.app.state, "agent_legacy_job_upgrade_service", None)
     if service is None or not callable(getattr(service, "upgrade", None)):
@@ -914,7 +922,7 @@ def start_retarget_job(
     start = getattr(jobs, "start_job", jobs.start_retarget)
     return start(
         submission.plan_id,
-        idempotency_key=submission.idempotency_key,
+        idempotency_key=_submission_key(request, submission.idempotency_key),
     )
 
 
@@ -946,7 +954,7 @@ def lookup_retarget_job(
 
     return _job_manager(request).lookup_job(
         lookup.plan_id,
-        idempotency_key=lookup.idempotency_key,
+        idempotency_key=_submission_key(request, lookup.idempotency_key),
         after_revision=lookup.after_revision,
     )
 
@@ -1025,10 +1033,12 @@ def retry_retarget_job(
     ],
 ) -> AgentJobView:
     """Create an idempotent child attempt for one terminal parent job."""
-
+    control = getattr(request.app.state, "runtime_control", None)
+    options = {"max_attempts": control.budget.max_retry_attempts} if control is not None else {}
     return _job_manager(request).retry_job(
         job_id,
-        idempotency_key=retry.idempotency_key,
+        idempotency_key=_submission_key(request, retry.idempotency_key, "retry"),
+        **options,
     )
 
 

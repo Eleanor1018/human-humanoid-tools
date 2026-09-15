@@ -119,12 +119,13 @@ class JobScheduler:
         self._running = 0
         self._cancelling = 0
         self._closed = False
+        self._draining = False
 
     def reserve(self) -> JobReservation:
         """Reserve admission, allowing upload routes to fail before writing data."""
 
         with self._condition:
-            if self._closed:
+            if self._closed or self._draining:
                 raise JobSchedulerClosedError("job scheduler is shutting down")
             if self.max_running_jobs > 0 and self.max_queued_jobs > 0:
                 admitted = self._running + len(self._pending) + len(self._reservations)
@@ -162,7 +163,7 @@ class JobScheduler:
                 queued_jobs=len(self._pending),
                 reserved_jobs=len(self._reservations),
                 cancelling_jobs=self._cancelling,
-                closed=self._closed,
+                closed=self._closed or self._draining,
             )
 
     def reconfigure(
@@ -257,6 +258,25 @@ class JobScheduler:
                     break
                 self._condition.wait(timeout=remaining)
             return self._running == 0 and self._cancelling == 0
+
+    def stop_accepting(self) -> None:
+        """Close admission while allowing already-admitted calls to advance."""
+        with self._condition:
+            self._draining = True
+            self._condition.notify_all()
+
+    def drain(self, *, timeout: float | None = None) -> bool:
+        """Finish queued and running calls without converting queued work to cancellation."""
+        deadline = None if timeout is None else time.monotonic() + max(0.0, timeout)
+        with self._condition:
+            self._draining = True
+            while self._running or self._pending or self._reservations or self._cancelling:
+                remaining = None if deadline is None else deadline - time.monotonic()
+                if remaining is not None and remaining <= 0:
+                    return False
+                self._condition.wait(timeout=remaining)
+            self._closed = True
+            return True
 
     def _submit_reserved(
         self,

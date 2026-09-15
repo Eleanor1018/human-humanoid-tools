@@ -62,6 +62,7 @@ _PLAN_SEMANTICS = "hhtools.retarget.plan.v1"
 _SUPPORTED_OUTPUT_FORMATS = frozenset({"csv", "pkl"})
 _PARAMETERS = frozenset(
     {
+        "export",
         "run_mode",
         "limit_frames",
         "ik_iterations",
@@ -515,6 +516,13 @@ def _normalize_parameters(
     }
     if ik_iterations is not None:
         normalized["ik_iterations"] = ik_iterations
+    if raw.get("export") is not None:
+        from hhtools.contracts.execution import TrajectoryExportOptions
+
+        try:
+            normalized["export"] = TrajectoryExportOptions.model_validate(raw["export"]).model_dump(mode="json")
+        except ValueError:
+            _fail("INVALID_PARAMETER", "Invalid trajectory export options.")
     return normalized
 
 
