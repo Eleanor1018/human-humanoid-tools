@@ -46,13 +46,16 @@ uv run playwright install chromium
 uv run hhtools runtime start --workspace assets/save_npz --source assets/motions
 ```
 
-Open `/stream` on a Runtime origin, enter the target Runtime origin and an operator
-token, and connect. Remote signaling requires HTTPS and `admin` scope because the
-GUI grants full workspace control. A server Chromium process opens the same `/`
+Open `/stream` on a Runtime origin and fill in **Server**, **Signal** (Runtime API
+port), optional **Stream** (TURN port override), and **Resolution**. The Access token
+is under **Authentication**. HD, FHD and Fit to window are supported. Remote
+signaling requires HTTPS and `admin` scope because the GUI grants full workspace
+control. A server Chromium process opens the same `/`
 page over a configured loopback origin. The daemon sets that origin from its bound
 socket; embedding applications must set `app.state.gui_sessions.origin` themselves.
 The browser uses a temporary HttpOnly session cookie. Its credential record stays
-in server memory and is revoked when the session closes. A Runtime restart
+in server memory and is bound to the creating operator token. Revoking that token
+removes the delegated credential and closes the GUI stream. A Runtime restart
 invalidates it, and closing the session removes its browser profile.
 
 Chromium screencast frames are encoded by aiortc. This release uses software video
@@ -61,15 +64,20 @@ Chromium executable can be selected with `HHTOOLS_CHROMIUM_EXECUTABLE`; otherwis
 Playwright uses its installed browser. [Playwright's CDP session API](https://playwright.dev/python/docs/api/class-cdpsession)
 provides the browser capture and input integration.
 
-One remote operator owns the GUI session at a time. Reconnecting as the same
-principal reuses the browser and its current layout. Keyboard, pointer, wheel,
-paste and text entry travel over the data channel; the text control supports IME
+One remote operator owns the GUI session at a time. Reconnecting with the same
+principal and creating credential reuses the browser and its current layout.
+Keyboard, pointer, wheel, paste and text entry travel over the data channel; the text control supports IME
 input. File pickers, folder pickers, file drops and downloads use authenticated,
 bounded HTTP transfers. Uploads preserve relative paths, use 8 MiB chunks and
 have a 4 GiB session budget. A single media connection can be replaced without
 restarting the browser or cancelling work. The default lease is 300 seconds;
 the connected client renews it every 30 seconds. Closing or expiring the GUI
 process does not cancel durable jobs.
+
+Connection attempts have HTTP/ICE deadlines and a cancellation control. Failed
+attempts stop renewing and release their sessions; a client that disconnects while
+the server starts its browser is also cleaned up. Worker RPC timeout or pipe failure
+closes that worker/session to prevent late responses from being consumed by later calls.
 
 Both human and Agent jobs appear in the existing task drawer. The drawer can
 cancel, retry, download or open supported completed results in their original
@@ -85,6 +93,13 @@ For a local-mode Runtime on loopback, the stream client's Access token can be
 left empty. When a token is supplied, its scope is enforced: a complete GUI
 session requires an `admin` token issued by that Runtime. Direct remote-mode
 connections require both HTTPS and a valid token.
+
+The stream page does not log in over SSH or accept SSH passwords/private keys.
+OpenSSH handles server authentication when establishing the tunnel, using a password,
+local key or ssh-agent. The private key stays on the client. The page's Access token
+is a separate HHTools credential; TURN credentials are supplied by the Runtime's ICE
+configuration. Empty-token loopback access trusts whoever can reach the forwarded
+port, so use application tokens as well when browser users need distinct identities.
 
 A Runtime bound to loopback can also be reached through authenticated SSH.
 Keep it in local mode and forward its HTTP port. To carry WebRTC media over the
@@ -105,6 +120,20 @@ reaches its local listener. Open `http://127.0.0.1:58800/stream` and leave Acces
 token empty for this SSH-protected local-mode setup. Forwarding HTTP alone does
 not forward WebRTC media. This connection uses TURN over SSH/TCP, so measure its
 behavior separately from a direct UDP deployment.
+
+## Workspace Budget
+
+A fresh resident workspace defaults to 2 running jobs, 64 queued jobs, 1000 items
+per batch, no batch total-frame cap, and a 3600-second job deadline. Upload and
+staging budgets are 10 GiB and 20 GiB. These are persisted workspace settings;
+an existing workspace may differ. Query `hhtools runtime call hhtools_runtime_budget`
+for the effective values. `0` means unlimited only for fields that explicitly
+support it, including job concurrency and batch item/frame limits.
+
+Authorized administrators can update the budget through Settings or
+`hhtools_runtime_set_budget`. GUI and Agent jobs share that policy. `hhtools web`
+also accepts explicit job/batch limit flags. Legacy Web and ephemeral MCP modes
+retain their older defaults; do not infer resident limits from those modes.
 
 ## SDK And Discovery
 
@@ -289,6 +318,11 @@ Exit codes: `0` for accepted/nonfailed jobs, `1` for failed/cancelled/rejected/p
 results, `2` for input/transport errors, `3` for non-ready preflight, and `130` for
 interrupted waiting. Always inspect job `state` and `outcome`; exit zero alone does
 not mean execution or quality review is complete.
+
+The new Runtime workflow commands use `--output` as a directory. Historical
+`hhtools retarget` preserves its file-or-directory output semantics and local
+execution options; omitting `run` does not change those semantics. Shell completion
+and named connection profiles are not provided by this CLI version.
 
 ### Tasks And Recovery
 

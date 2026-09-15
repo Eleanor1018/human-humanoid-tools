@@ -96,7 +96,10 @@ with the missing package names and the exact recovery command instead of an impo
 HHTools provides a strict JSON CLI for scripts and a local stdio MCP server for compatible agents.
 The current Agent interface covers safe, preflighted H2R, scene-free R2R, scalable H2R/R2R
 Batch jobs, and content-bound calibration assistance with GPT-visible front/side previews and
-validated silent save. It does not yet expose the full WebUI feature set. See
+validated silent save. Runtime operations also expose Analysis, Video2Motion,
+report filtering/comparison/export, job recovery, file transfers and previews.
+Local and remote users share one business GUI through direct access or `/stream`.
+Training, scene-bearing R2R and real-robot deployment remain outside this release. See
 [Agent interfaces](docs/agent.md) for installation, scope, the smoke-first workflow, runtime
 ownership, and the included Codex project configuration.
 
@@ -136,27 +139,20 @@ npm run build
 The production build is written to `hhtools/web/static`, which is served unchanged by both
 FastAPI and Electron.
 
-Web jobs are unlimited by default. To enable FIFO admission control on a shared or
-memory-constrained GPU, set positive concurrency and an optional queue capacity:
+Fresh resident workspaces default to 2 running jobs, 64 queued jobs, 1000 items per
+batch and no batch total-frame cap. GUI and Agent share these persisted limits.
+For a shared or memory-constrained GPU, select a smaller running limit:
 
 ```bash
 uv run hhtools web --max-running-jobs 1 --max-queued-jobs 32
 ```
 
-`0` means unlimited for both options; the queue setting only applies when running concurrency is
-limited. Agent batches likewise have no configured item or total-frame cap by default. Positive
-`--max-batch-items` and `--max-batch-total-frames` values opt into deployment-specific safeguards;
-`0` restores unlimited mode. The same settings are available as `HHTOOLS_MAX_RUNNING_JOBS`,
-`HHTOOLS_MAX_QUEUED_JOBS`, `HHTOOLS_MAX_BATCH_ITEMS`, and
-`HHTOOLS_MAX_BATCH_TOTAL_FRAMES` (including in the Electron sidecar and MCP server).
-They can also be edited under **Settings → Background-job scheduling** from local Web/Electron
-or an SSH loopback tunnel; ordinary remote-browser sessions are shown read-only until authenticated
-remote administration is implemented. Saving hot-applies the limits without restarting Python or Electron: lower running limits grandfather active jobs,
-while higher limits immediately promote FIFO waiters. The backend persists the values in the
-platform user-config directory; `HHTOOLS_WEB_SETTINGS_PATH` selects another file. Explicit CLI
-or environment values remain startup overrides and will win again on the next launch.
-The concurrency cap applies to scheduled Web jobs, not the optional Warp/Newton robot prewarm
-thread, so it is admission control rather than a process-wide GPU concurrency guarantee.
+`0` selects unlimited concurrency or batch item/frame limits. Existing workspaces may
+have different settings; read `hhtools runtime call hhtools_runtime_budget` first.
+Administrators can update the shared policy through **Settings → Background-job scheduling**
+or the Runtime API. A lower concurrency limit does not interrupt active jobs.
+Legacy Web and ephemeral MCP modes retain their older defaults. See the
+[Runtime guide](docs/runtime.md#workspace-budget) for the effective policy and remote authentication.
 
 | Panel | Flow |
 |-------|------|
@@ -231,7 +227,7 @@ Entry point: `uv run hhtools` (same package as the Web UI). Use this for large d
 | `hhtools retarget interaction-mesh precompute-laplacian` | Precompute Laplacian targets (`.npz`) |
 | `hhtools web` | HTML / three.js UI (default `127.0.0.1:8009`) |
 
-**Convert & import**
+**Runtime workflows**
 
 Execution is the default: `run` can be omitted. All previous `convert run`,
 `import run`, `retarget run`, and `retarget interaction-mesh run` commands remain
@@ -251,6 +247,8 @@ requests a full plan. Use `--batch` for an ordered H2R/R2R input list. Receipts 
 saved before upload, so `--resume` can recover transfers or a lost submission response.
 TTY output is readable with progress; `--json` keeps automation output strict and
 quiet. See [workflow CLI details](docs/runtime.md#workflow-cli).
+
+**Convert & import**
 
 ```bash
 uv run hhtools convert assets/motions/mimic/LAFAN/dance1_subject2.bvh -o /tmp/npz --unit m

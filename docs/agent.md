@@ -43,6 +43,10 @@ uv sync --locked --extra mcp
 
 # Optional offscreen images, videos, and WebRTC
 uv sync --locked --extra mcp --extra preview
+
+# Whole-application GUI streaming
+uv sync --locked --extra mcp --extra streaming
+uv run playwright install chromium
 ```
 
 After installation, `uv run hhtools doctor --require mcp` provides a
@@ -76,8 +80,19 @@ allowlisted `root_id` and portable `relative_path`, never a host path.
 `hhtools-mcp` is a stdio server, so start it through an MCP client rather than
 an interactive terminal. Its available options can be inspected with
 `uv run --extra mcp hhtools-mcp --help`. The resident Runtime publishes its effective budget;
-`0` retains the existing unlimited semantics. Update it through `hhtools_runtime_set_budget`
-with an admin credential. Explicit MCP job-limit options update the same policy.
+`0` retains unlimited semantics for supported concurrency and batch fields. A fresh
+resident workspace defaults to 2 running jobs, 64 queued jobs and 1000 items per
+batch; query `hhtools_runtime_budget` for the effective policy. Update it through
+`hhtools_runtime_set_budget` with an admin credential. Explicit MCP job-limit options
+update the same policy.
+
+For remote file delivery, use `upload_local_file` and `download_artifact`. These
+operate on the MCP host under `--transfer-root` directories (current directory by
+default). `export_artifact` instead creates a copy on the Runtime host. Downloads
+verify hashes and preserve existing outputs unless overwrite is explicit. Query
+`hhtools_runtime_workflows` for Analysis/Video2Motion readiness, defaults and schemas.
+`--all-tools` includes compatibility aliases in the tool listing; existing tool
+names remain callable with the default listing.
 
 ## Safe H2R, R2R, and Batch workflows
 
@@ -139,7 +154,8 @@ audit-note persistence, and fresh-preflight requirement apply. R2R preflight ret
 Batch composition happens only after every single item already has a ready H2R or R2R plan.
 Call `preflight_batch` with one workflow and the ordered child `plan_id` list. The service rejects
 mixed run modes, mixed robot identities, and duplicate inputs. Batch item/frame settings use
-`0` for unlimited and default to unlimited; positive administrator-selected values become
+`0` for unlimited; a fresh resident Runtime defaults to 1000 items and no total-frame
+cap. Query the effective workspace budget rather than assuming legacy defaults. Positive values become
 content-bound plan limits. Execution is serial so cancellation can stop the current child and
 guarantee later children never start. Job status carries only `completed_items / total_items`;
 the complete per-item report and portable ZIP are stored as `batch_report` and `batch_archive`

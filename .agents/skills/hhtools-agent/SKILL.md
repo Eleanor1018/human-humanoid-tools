@@ -185,7 +185,8 @@ and a trusted input. No LLM API key is needed to run the infrastructure.
 2. Call `preflight_batch` with `schema_version: "1.0"`, `workflow: h2r` or `r2r`, the ordered
    `item_plan_ids`, and `output_policy: create_new`. Do not pass asset paths or rebuild child
    identities. Batch item/frame caps are administrator settings where `0` means unlimited; the
-   default is unlimited. Items execute serially within the job.
+   fresh resident Runtime defaults are 1000 items and no total-frame cap. Query the effective
+   workspace budget before sizing a batch. Items execute serially within the job.
 3. Start only a `ready` batch plan with `start_job`. During `wait_job`, report
    `completed_items / total_items`; never expect an unbounded per-item array in job status.
 4. Cancellation is cooperative for the current child and prevents every not-yet-started child.
