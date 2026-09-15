@@ -11,6 +11,11 @@ service startup, resource transfer, Analysis, Video2Motion, and WebRTC previews.
 | JSON CLI | Compatibility client of the v1 Agent API | `uv run hhtools agent ...` |
 | MCP | Thin stdio client; connects or starts the daemon | `uv run --extra mcp hhtools-mcp` |
 
+The workflow CLI also exposes `hhtools h2r`, `hhtools r2r`, `hhtools analysis`, and
+`hhtools video2motion` with automatic preflight/submission, JSON output, bounded
+waiting, optional verified downloads, and `--resume` recovery receipts. `run` is
+optional and remains compatible. See [workflow CLI](runtime.md#workflow-cli).
+
 The current Agent surface supports human-to-robot (H2R) retargeting—plain motion through Newton
 and safely inspectable object-interaction or terrain-scene bundles through Interaction-Mesh—and
 scene-free robot-to-robot (R2R) trajectories through Newton, plus ordered H2R/R2R batches. It

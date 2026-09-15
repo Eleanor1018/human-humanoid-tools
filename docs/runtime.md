@@ -228,6 +228,59 @@ Direct ICE connectivity is the default. Configure `HHTOOLS_ICE_SERVERS` as an
 aiortc ICE-server JSON list when STUN/TURN is needed. DTLS/SRTP media is separate
 from HTTPS signaling; allow the relevant UDP paths or provide a TURN relay.
 
+## Workflow CLI
+
+`hhtools h2r`, `hhtools r2r`, `hhtools analysis` and `hhtools video2motion`
+perform preflight, durable submission and revision-aware waiting through the public
+Runtime client. Execution is the default; an optional `run` remains an alias.
+The historical `retarget`, `convert`, `import` and `retarget interaction-mesh`
+entry points likewise accept both spellings while retaining their existing behavior.
+Named subcommands such as `import list` and `interaction-mesh precompute-laplacian`
+remain available. Use `./run` or `-- run` for a positional file literally named `run`.
+
+```bash
+hhtools h2r motion.npz --robot g1 --mode smoke --output results
+hhtools r2r trajectory.csv --source-robot g1 --target-robot rp1 --source-fps 120
+hhtools analysis motions/ --receipt analysis-run.json --output reports
+hhtools video2motion clip.mp4 --moving-camera --output generated-motion
+hhtools analysis --resume analysis-run.json --output reports
+```
+
+Inputs may be local files/bundles or registered `asset:sha256:...` IDs. Local inputs
+are uploaded; remote paths are never inferred from client paths. H2R/R2R accept one
+input bundle per invocation. Analysis and Video2Motion accept multiple inputs.
+Use `--request FILE` (or `--request -` for stdin) for a full preflight request, and
+`--parameters FILE` for parameter overrides. Installed robot IDs can be paired with
+`--robot-asset` / `--robot-bundle`, or the parallel source/target flags for R2R.
+The CLI can follow server-provided robot registration and existing calibration
+status actions. Missing calibration or another unresolved prerequisite is returned
+as non-ready preflight JSON; the CLI does not silently authorize new calibrations,
+uploaded code, or a full run. H2R/R2R default to smoke unless `--mode full` is selected.
+
+Use `--endpoint` or `HHTOOLS_RUNTIME_ENDPOINT` for an existing server, with
+`HHTOOLS_RUNTIME_TOKEN` and `HHTOOLS_RUNTIME_CA` as needed. Otherwise `--workspace`
+selects the local Runtime, starting it when absent. JSON is always written to stdout;
+`--json` is accepted explicitly. Help is human-readable.
+
+Before submitting, the CLI saves a private recovery receipt with Runtime/workspace
+IDs, endpoint, plan ID and idempotency key. It then adds the job ID when acknowledged.
+The default location is `.hhtools-client/runs/<id>.json`; `--receipt` chooses a new
+file. Tokens are not saved. A lost response can be recovered with `--resume FILE`:
+the client first looks up the original submission and replays the same plan/key only
+if it is absent. Resume does not re-upload, re-plan, retry failed jobs, or change
+execution options. Use the same authenticated principal when recovering an
+unacknowledged submission, because keys are scoped to that principal.
+
+Waiting defaults to at most 300 seconds. `--wait-timeout 0` waits indefinitely;
+`--no-wait` returns after submission. Timeout or Ctrl+C stops client waiting while
+the Runtime retains the job. `--output DIR` downloads completed primary artifacts
+with size/hash verification and stable names. Existing files need `--overwrite`.
+When returning before completion, use the receipt to resume waiting and download.
+Exit codes: `0` for accepted/nonfailed jobs, `1` for failed/cancelled/rejected/partial
+results, `2` for input/transport errors, `3` for non-ready preflight, and `130` for
+interrupted waiting. Always inspect job `state` and `outcome`; exit zero alone does
+not mean execution or quality review is complete.
+
 ## Remote Service
 
 Start locally first, issue a scoped token with `hhtools_runtime_issue_token`,

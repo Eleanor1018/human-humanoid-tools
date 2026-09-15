@@ -8,9 +8,10 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from hhtools.cli.default_command import default_command_app
 from hhtools.io.datasets import registered_datasets
 
-app = typer.Typer(no_args_is_help=True, help="Import public SMPL-family motion datasets into NPZ.")
+app = default_command_app("Import datasets; use the list subcommand to discover adapters.")
 _console = Console()
 
 

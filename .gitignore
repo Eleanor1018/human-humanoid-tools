@@ -192,6 +192,7 @@ configs/robots/*
 *.avi
 
 # Temp
+.hhtools-client/
 .tmp/
 tmp/
 scratch/

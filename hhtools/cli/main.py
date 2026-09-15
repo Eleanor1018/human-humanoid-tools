@@ -58,7 +58,7 @@ def _subcommands_for_argv() -> list[tuple[str, str, str]]:
         # every command tree merely to advertise stable entry points.
         return []
     arg = sys.argv[1]
-    if arg == "agent":
+    if arg in {"agent", "h2r", "r2r", "analysis", "video2motion"}:
         # The strict Agent command is registered directly below and lazily
         # imports its transport adapter.  Do not import unrelated solver/UI
         # command trees for a lightweight JSON request.
@@ -77,6 +77,31 @@ def _subcommands_for_argv() -> list[tuple[str, str, str]]:
 
 for _name, _path, _help in _subcommands_for_argv():
     _attach(_name, _path, _help)
+
+
+def _workflow_command(name, description):
+    @app.command(
+        name,
+        help=description,
+        context_settings={
+            "allow_extra_args": True,
+            "ignore_unknown_options": True,
+            "help_option_names": [],
+        },
+    )
+    def execute(ctx: typer.Context):
+        from hhtools.cli.workflows import run
+
+        raise typer.Exit(run(name, ctx.args))
+
+
+for _workflow, _description in (
+    ("h2r", "Retarget human motion through the persistent Runtime."),
+    ("r2r", "Retarget a trajectory between two robots through the Runtime."),
+    ("analysis", "Analyze motion files or datasets through the Runtime."),
+    ("video2motion", "Generate motion from video through the Runtime."),
+):
+    _workflow_command(_workflow, _description)
 
 
 @app.command(

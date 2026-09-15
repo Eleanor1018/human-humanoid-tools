@@ -9,11 +9,12 @@ from rich.console import Console
 from rich.progress import Progress, TaskID
 from rich.table import Table
 
+from hhtools.cli.default_command import default_command_app
 from hhtools.core.resample import resample_motion
 from hhtools.io import bvh, npz
 from hhtools.io.base import load_motion
 
-app = typer.Typer(no_args_is_help=True, help="Convert BVH / GLB to the unified NPZ.")
+app = default_command_app("Convert BVH / GLB to the unified NPZ.")
 _console = Console()
 
 

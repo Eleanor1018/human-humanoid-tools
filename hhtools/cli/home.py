@@ -33,14 +33,14 @@ _WORKFLOWS = (
     HomeEntry(
         "Human → Robot",
         "Retarget human motion to a humanoid.",
-        "hhtools retarget run",
+        "hhtools h2r",
         "CLI",
     ),
     HomeEntry(
         "Robot → Robot",
-        "Open the source-to-target robot workspace.",
-        "hhtools web",
-        "WEB",
+        "Retarget a source robot onto a target robot.",
+        "hhtools r2r",
+        "CLI",
     ),
     HomeEntry(
         "Batch",
@@ -48,13 +48,15 @@ _WORKFLOWS = (
         "hhtools web",
         "WEB",
     ),
+    HomeEntry("Analysis", "Analyze motion files or datasets.", "hhtools analysis", "CLI"),
+    HomeEntry("Video to Motion", "Generate motion from video.", "hhtools video2motion", "CLI"),
 )
 
 _TOOLS = (
     HomeEntry(
         "Convert Motion",
         "Convert BVH or GLB into unified NPZ.",
-        "hhtools convert run",
+        "hhtools convert",
         "CLI",
     ),
     HomeEntry(

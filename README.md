@@ -218,29 +218,48 @@ Entry point: `uv run hhtools` (same package as the Web UI). Use this for large d
 | Command | Purpose |
 |---------|---------|
 | `hhtools doctor` | Check local Web, robot, retarget, MCP, body-model, and GVHMR readiness |
-| `hhtools convert run` | BVH / GLB → unified NPZ |
-| `hhtools import list` / `import run` | List adapters; import a dataset root → NPZ |
+| `hhtools h2r` / `hhtools r2r` | Persistent H2R / R2R preflight, jobs, wait and artifact download |
+| `hhtools analysis` / `hhtools video2motion` | Persistent dataset analysis / video motion generation |
+| `hhtools convert` | BVH / GLB → unified NPZ |
+| `hhtools import list` / `hhtools import` | List adapters; import a dataset root → NPZ |
 | `hhtools bodymodel check` / `setup` | SMPL-family weight paths / download hints |
 | `hhtools robot list` / `info` / `schema` / `validate` / `scaffold` / `add` | Robot presets |
-| `hhtools retarget run` | Newton IK → CSV (files or directory) |
-| `hhtools retarget interaction-mesh run` | Interaction-mesh (terrain / objects) → CSV |
+| `hhtools retarget` | Newton IK → CSV (files or directory) |
+| `hhtools retarget interaction-mesh` | Interaction-mesh (terrain / objects) → CSV |
 | `hhtools retarget interaction-mesh precompute-laplacian` | Precompute Laplacian targets (`.npz`) |
 | `hhtools web` | HTML / three.js UI (default `127.0.0.1:8009`) |
 
 **Convert & import**
 
+Execution is the default: `run` can be omitted. All previous `convert run`,
+`import run`, `retarget run`, and `retarget interaction-mesh run` commands remain
+compatible. The four Runtime workflow commands also accept an optional `run`.
+
 ```bash
-uv run hhtools convert run assets/motions/mimic/LAFAN/dance1_subject2.bvh -o /tmp/npz --unit m
-uv run hhtools convert run assets/motions/mimic/GLB/cranberry.glb -o /tmp/npz
+uv run hhtools h2r motion.npz --robot g1 --output results
+uv run hhtools r2r trajectory.csv --source-robot g1 --target-robot rp1 --source-fps 120
+uv run hhtools analysis motions/ --receipt analysis-run.json --output reports
+uv run hhtools video2motion clip.mp4 --output generated-motion
+uv run hhtools analysis --resume analysis-run.json
+```
+
+These workflows connect to or start a persistent Runtime. They accept local inputs,
+registered asset IDs, or `--request` JSON. H2R/R2R default to smoke scope; `--mode full`
+requests a full plan. A receipt is saved before submission, so `--resume` can recover
+a lost response without submitting a second job. See [workflow CLI details](docs/runtime.md#workflow-cli).
+
+```bash
+uv run hhtools convert assets/motions/mimic/LAFAN/dance1_subject2.bvh -o /tmp/npz --unit m
+uv run hhtools convert assets/motions/mimic/GLB/cranberry.glb -o /tmp/npz
 
 uv run hhtools import list
-uv run hhtools import run --dataset lafan \
+uv run hhtools import --dataset lafan \
   --root assets/motions/mimic/LAFAN -o /tmp/lafan_npz \
   --sequence dance1_subject2.bvh
-uv run hhtools import run --dataset omomo \
+uv run hhtools import --dataset omomo \
   --root assets/motions/intermimic/OMOMO -o /tmp/omomo_npz \
   --sequence sub12_woodchair_000/sub12_woodchair_000.pkl
-uv run hhtools import run --dataset omnicontact \
+uv run hhtools import --dataset omnicontact \
   --root /path/to/OmniContact-Dataset -o /tmp/omnicontact_npz
 ```
 
@@ -270,12 +289,12 @@ changes in the selected preset. Desktop bundles can point
 
 ```bash
 # Newton IK (flat / AMASS-style NPZ)
-uv run hhtools retarget run path/to/clip.npz \
+uv run hhtools retarget path/to/clip.npz \
   --robot unitree_g1__g1_29dof -o /tmp/out.csv \
   --calibration-reference smpl --limit-frames 30
 
 # Interaction-mesh (OMOMO / OmniContact / terrain clips)
-uv run hhtools retarget interaction-mesh run path/to/clip.pkl \
+uv run hhtools retarget interaction-mesh path/to/clip.pkl \
   --robot unitree_g1__g1_29dof -o /tmp/out_im.csv \
   --calibration-reference smpl --limit-frames 30
 ```
