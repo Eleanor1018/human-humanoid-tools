@@ -14,6 +14,7 @@ from pathlib import Path
 from hhtools.contracts import ApiError, ErrorStage, JobOutcome
 from hhtools.contracts.workflows import WorkflowJobSpec
 from hhtools.services.jobs import JobCancelledError, JobExecutionError, JobExecutionResult
+from hhtools.services.retarget import RetargetServiceError
 
 
 @lru_cache(maxsize=64)
@@ -95,7 +96,17 @@ def analysis_configuration(overrides: dict) -> dict:
             elif not isinstance(value, type(baseline)):
                 raise ValueError("Analysis configuration type mismatch")
 
-    check(overrides, defaults)
+    try:
+        check(overrides, defaults)
+    except ValueError as error:
+        raise RetargetServiceError(
+            ApiError(
+                code="INVALID_PARAMETER",
+                message="Analysis metric configuration is invalid.",
+                stage=ErrorStage.PREFLIGHT,
+                details={"field": "parameters.metric_config", "reason": str(error)},
+            )
+        ) from error
     return load_config(overrides)
 
 
@@ -155,7 +166,9 @@ class ResourceWorkflowExecutor:
             if spec.kind == "retarget_export":
                 from hhtools.application.retarget_exports import export_retarget_state
 
-                return export_retarget_state(self.services, spec.effective_parameters, context, root)
+                return export_retarget_state(
+                    self.services, spec.effective_parameters, context, root
+                )
             snapshots = self._snapshot(spec, root / "inputs")
             if spec.kind == "analysis_export":
                 return self._analysis_export(spec, context, snapshots, root)

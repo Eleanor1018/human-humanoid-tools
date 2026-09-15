@@ -137,6 +137,7 @@ def download(
     endpoint: str | None = None,
     workspace: Path = typer.Option(Path("assets/save_npz")),
     token_env: str = "HHTOOLS_RUNTIME_TOKEN",
+    overwrite: bool = typer.Option(False, "--overwrite", help="Replace an existing output file."),
 ):
     """Resume a download and publish the local file only after integrity verification."""
     from hhtools.client import RuntimeClient, RuntimeClientError
@@ -148,7 +149,7 @@ def download(
             if endpoint
             else connect_or_start(workspace)
         )
-        _print(client.download(job_id, artifact_id, output))
+        _print(client.download(job_id, artifact_id, output, overwrite=overwrite))
     except RuntimeClientError as error:
         _print(error.api_error.model_dump(mode="json"))
         raise typer.Exit(1) from None

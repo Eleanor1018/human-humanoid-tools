@@ -78,10 +78,21 @@ def create_runtime_app(
 
         @app.exception_handler(RequestValidationError)
         async def validation_error(_request, _error):
+            fields = []
+            for item in _error.errors():
+                location = [str(part) for part in item.get("loc", ()) if part != "body"]
+                fields.append(
+                    {
+                        "path": ".".join(location),
+                        "message": item.get("msg", "Invalid value"),
+                        "type": item.get("type", "value_error"),
+                    }
+                )
             error = ApiError(
                 code="INVALID_PARAMETER",
                 message="Request does not match its schema.",
                 stage=ErrorStage.REQUEST,
+                details={"fields": fields},
             )
             return JSONResponse(error.model_dump(mode="json"), status_code=422)
 

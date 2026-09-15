@@ -129,10 +129,19 @@ class RuntimeClient:
 
     def request(self, method: str, path: str, *, document=None, query=None) -> Any:
         payload = json.dumps(document, allow_nan=False).encode() if document is not None else None
-        with self._open(
-            method, path, query=query, payload=payload, headers={"Content-Type": "application/json"}
-        ) as response:
-            body = response.read(16 * 1024**2 + 1)
+        try:
+            with self._open(
+                method,
+                path,
+                query=query,
+                payload=payload,
+                headers={"Content-Type": "application/json"},
+            ) as response:
+                body = response.read(16 * 1024**2 + 1)
+        except (OSError, TimeoutError, URLError) as error:
+            raise client_error(
+                "RUNTIME_UNAVAILABLE", "Runtime response could not be read.", retryable=True
+            ) from error
         if len(body) > 16 * 1024**2:
             raise client_error("RESPONSE_TOO_LARGE", "Fetch large results through artifacts.")
         try:
@@ -179,7 +188,14 @@ class RuntimeClient:
             raise client_error("INVALID_PARAMETER", "Unknown operation parameters.")
         return self.request(descriptor["method"], path, document=document, query=query)
 
-    def download(self, job_id: str, artifact_id: str, destination: Path) -> dict[str, Any]:
+    def download(
+        self,
+        job_id: str,
+        artifact_id: str,
+        destination: Path,
+        *,
+        overwrite: bool = False,
+    ) -> dict[str, Any]:
         """Resume into a partial file; publish only after size and SHA-256 verification."""
         if not self.runtime_id:
             self.connect()
@@ -187,7 +203,27 @@ class RuntimeClient:
         descriptor = self.request("GET", path)
         destination = Path(destination)
         destination.parent.mkdir(parents=True, exist_ok=True)
+        if destination.exists() and not overwrite:
+            raise client_error(
+                "OUTPUT_EXISTS",
+                "The artifact output already exists; pass overwrite=True to replace it.",
+            )
         partial = destination.with_name(destination.name + ".hhtools-part")
+        identity = partial.with_suffix(partial.suffix + ".json")
+        expected = {
+            "job_id": job_id,
+            "artifact_id": artifact_id,
+            "size_bytes": descriptor["size_bytes"],
+            "sha256": descriptor["sha256"],
+        }
+        try:
+            if json.loads(identity.read_text(encoding="utf-8")) != expected:
+                partial.unlink(missing_ok=True)
+                identity.unlink(missing_ok=True)
+        except (FileNotFoundError, ValueError, OSError):
+            partial.unlink(missing_ok=True)
+            identity.unlink(missing_ok=True)
+        identity.write_text(json.dumps(expected, sort_keys=True), encoding="utf-8")
         partial.touch(exist_ok=True)
         offset = partial.stat().st_size if partial.exists() else 0
         headers = {"Accept": "application/octet-stream"}
@@ -197,24 +233,31 @@ class RuntimeClient:
         elif offset != descriptor["size_bytes"]:
             offset = 0
         if offset != descriptor["size_bytes"]:
-            with self._open("GET", path + "/content", headers=headers) as response:
-                if response.status != 206:
-                    offset = 0
-                with partial.open("ab" if offset else "wb") as stream:
-                    while chunk := response.read(1024**2):
-                        stream.write(chunk)
-                        if stream.tell() > descriptor["size_bytes"]:
-                            raise client_error(
-                                "ARTIFACT_HASH_MISMATCH", "Artifact exceeds its declared size."
-                            )
-                    stream.flush()
-                    os.fsync(stream.fileno())
+            try:
+                with self._open("GET", path + "/content", headers=headers) as response:
+                    if response.status != 206:
+                        offset = 0
+                    with partial.open("ab" if offset else "wb") as stream:
+                        while chunk := response.read(1024**2):
+                            stream.write(chunk)
+                            if stream.tell() > descriptor["size_bytes"]:
+                                raise client_error(
+                                    "ARTIFACT_HASH_MISMATCH", "Artifact exceeds its declared size."
+                                )
+                        stream.flush()
+                        os.fsync(stream.fileno())
+            except (OSError, TimeoutError, URLError) as error:
+                raise client_error(
+                    "RUNTIME_UNAVAILABLE", "Artifact download was interrupted.", retryable=True
+                ) from error
         with partial.open("rb") as stream:
             digest = hashlib.file_digest(stream, "sha256").hexdigest()
         if partial.stat().st_size != descriptor["size_bytes"] or digest != descriptor["sha256"]:
             partial.unlink(missing_ok=True)
+            identity.unlink(missing_ok=True)
             raise client_error("ARTIFACT_HASH_MISMATCH", "Downloaded artifact failed verification.")
         os.replace(partial, destination)
+        identity.unlink(missing_ok=True)
         return descriptor
 
     def upload(

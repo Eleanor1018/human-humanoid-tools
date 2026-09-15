@@ -30,7 +30,20 @@ class VideoParameters(ContractModel):
 class WorkflowPreflightRequest(ContractModel):
     workflow: Literal["analysis", "video_to_motion"]
     asset_ids: Annotated[list[AssetId], Field(min_length=1, max_length=1000)]
-    parameters: dict[str, Any] = Field(default_factory=dict)
+    parameters: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Workflow-specific parameters. Analysis accepts embedding handcrafted/pae and a "
+            "validated metric_config object; video_to_motion accepts static_camera and "
+            "focal_length_mm."
+        ),
+        json_schema_extra={
+            "oneOf": [
+                AnalysisParameters.model_json_schema(),
+                VideoParameters.model_json_schema(),
+            ]
+        },
+    )
 
     @model_validator(mode="after")
     def validate_parameters(self):

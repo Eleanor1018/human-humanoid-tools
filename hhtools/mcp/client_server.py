@@ -6,6 +6,7 @@ import asyncio
 import base64
 import hashlib
 import json
+from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit
 
 import jsonschema
@@ -86,6 +87,7 @@ async def create_client_server(client: RuntimeClient) -> Server:
             "required": ["session_id"],
             "additionalProperties": False,
         },
+        output_schema={"type": "object"},
         annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False),
     )
     tools["inspect_artifact_image"] = Tool(
@@ -97,13 +99,32 @@ async def create_client_server(client: RuntimeClient) -> Server:
             "required": ["job_id", "artifact_id"],
             "additionalProperties": False,
         },
+        output_schema={"type": "object"},
         annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False),
+    )
+    tools["upload_local_file"] = Tool(
+        name="upload_local_file",
+        description=(
+            "Upload one regular file visible to the local MCP process into the Runtime asset store."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "source_path": {"type": "string", "minLength": 1},
+                "kind": {"type": "string", "minLength": 1},
+            },
+            "required": ["source_path", "kind"],
+            "additionalProperties": False,
+        },
+        output_schema={"type": "object"},
+        annotations=ToolAnnotations(read_only_hint=False, open_world_hint=False),
     )
     for item in operations:
         tools[item["name"]] = Tool(
             name=item["name"],
             description=item["description"],
             input_schema=item["input_schema"],
+            output_schema=item["output_schema"],
             annotations=ToolAnnotations(
                 read_only_hint=item["execution"] == "query",
                 destructive_hint=item["scope"] == "admin",
@@ -114,11 +135,16 @@ async def create_client_server(client: RuntimeClient) -> Server:
     async def list_tools(_context, _params):
         return ListToolsResult(tools=list(tools.values()))
 
-    def call(name, arguments):
+    def call(name, arguments):  # noqa: PLR0911 - explicit public tool branches
         tool = tools.get(name)
         if tool is None:
             raise ValueError("Unknown operation")
         jsonschema.validate(arguments, tool.input_schema)
+        if name == "upload_local_file":
+            source = Path(arguments["source_path"]).expanduser()
+            if not source.is_file() or source.is_symlink():
+                raise ValueError("source_path must name a regular local file")
+            return client.upload(source, kind=arguments["kind"])
         if name == "inspect_artifact_image":
             descriptor = client.call("hhtools_runtime_get_artifact", arguments)
             if (
