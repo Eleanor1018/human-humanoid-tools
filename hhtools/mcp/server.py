@@ -1047,6 +1047,17 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--endpoint", help="Connect to a resident local or HTTPS Runtime.")
     parser.add_argument("--token-env", default="HHTOOLS_RUNTIME_TOKEN")
     parser.add_argument("--ephemeral", action="store_true", help="Explicit legacy exclusive mode.")
+    parser.add_argument(
+        "--transfer-root",
+        type=Path,
+        action="append",
+        help="Allowed local transfer directory (repeatable; default: current directory).",
+    )
+    parser.add_argument(
+        "--all-tools",
+        action="store_true",
+        help="List compatibility aliases as well as the default tools.",
+    )
     return parser
 
 
@@ -1126,7 +1137,11 @@ def main(argv: Sequence[str] | None = None) -> None:
             client.request(
                 "PUT", "/api/runtime/v1/admin/budget", document={**budget, **explicit_limits}
             )
-        asyncio.run(run_client_server(client))
+        asyncio.run(
+            run_client_server(
+                client, transfer_roots=arguments.transfer_root, all_tools=arguments.all_tools
+            )
+        )
         return
     for name in (
         "max_running_jobs",

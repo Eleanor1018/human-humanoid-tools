@@ -30,12 +30,15 @@ The default stdio adapter connects to a persistent Runtime and can start it on d
 GUI, SDK, CLI, and MCP clients may connect concurrently to the same workspace. Disconnecting
 a client does not stop jobs. Read `hhtools_runtime_identity` and retain its endpoint, Runtime ID,
 workspace ID, job IDs, and event cursor when handing work to another client.
-Use `upload_local_file` for one regular file visible to the local MCP process when the user has
-made that path available. Use the public SDK for directory bundles or resumable transfers; do not
-substitute direct store access or bypass Runtime authorization.
+Use `upload_local_file` for a file or directory bundle under the MCP process's configured
+transfer roots; retain `upload_id` to resume. Use `download_artifact` to deliver a verified file
+to a local destination under those roots. Paths refer to the MCP host. Existing destinations
+require explicit `overwrite: true` within the user's authorization. Do not substitute direct
+store access or bypass Runtime authorization.
 
 For Analysis, Video2Motion, rendering, uploads, and administration, discover the live schemas
-with `hhtools_runtime_operations`. Read the [Runtime guide](../../../docs/runtime.md) for these
+with `hhtools_runtime_workflows` for live readiness, defaults and parameter schemas, or
+`hhtools_runtime_operations` for the complete catalog. Read the [Runtime guide](../../../docs/runtime.md) for these
 operations. Preflight the chosen workflow, submit its immutable plan, wait for the durable job,
 and inspect its artifacts. Analysis selection/export and PNG/MP4 rendering are available without
 a GUI. Preview sessions can use client data or WebRTC; close only the session when finished.
@@ -92,9 +95,10 @@ and a trusted input. No LLM API key is needed to run the infrastructure.
    `hhtools://jobs/{job_id}/artifacts/{artifact_id}` when one descriptor needs verification. Read
    `hhtools://jobs/{job_id}/evaluation`, `/manifest`, and `/failures` only when relevant.
    Resources expose verified structured reports or descriptors, not binary motion bytes. When the
-   user asks for an artifact file, call `export_artifact(job_id, artifact_id)`: it verifies and
-   materializes the file below the fixed `agent-exports` root and returns a portable receipt. Give
-   the receipt to the user; do not inspect private storage or request bytes in model context.
+   user asks for a local artifact file, call `download_artifact` with its job, artifact and local
+   destination. `export_artifact(job_id, artifact_id)` instead materializes a server-side copy
+   below `agent-exports`; its receipt does not deliver a file to a remote client. Do not inspect
+   private storage or request bytes in model context.
 8. Inspect both `state` and `outcome`. `completed` alone is not quality approval. For a completed
    job, evaluate the reports against the user's quality criteria. Pause when a quality decision
    is outside the granted scope; do not automatically interpret a review flag as a new approval
@@ -201,8 +205,8 @@ The automatic preflight recovery mappings are:
 | `actor: agent`, `action: register_asset_bundle` | `register_asset_bundle` | Pass `next_action.parameters` unchanged as the tool arguments. It must contain exactly one `request` matching `AssetRegistrationRequest`. Inspect the returned robot bundle, replace `robot_asset_id` with its `asset_id`, and perform a new preflight. |
 | `actor: agent`, `action: get_calibration_status` | `get_calibration_status` | Pass `next_action.parameters` unchanged. Continue through the automatic calibration workflow only for the exact returned robot bundle and reference. |
 | `actor: agent`, `action: get_r2r_calibration_status` | `get_r2r_calibration_status` | Pass `next_action.parameters` unchanged. Continue only with the exact returned source and target robot bundles. |
-| `actor: agent`, `action: query_runtime_backends` | `hhtools_runtime_backends` | Query current backend readiness before retrying a preflight; an unavailable backend is not a retryable execution failure. |
-| `actor: agent`, `action: authorize_asset_execution` | `hhtools_runtime_trust_asset` | Requires an administrator-authorized trust decision for the exact asset; never grant it only to bypass an inspection error. |
+| `actor: agent`, `action: query_runtime_backends` | `hhtools_runtime_backends` | Verify `parameters.operation` and call with `{}`. An unavailable backend is not a retryable execution failure. |
+| `actor: agent`, `action: authorize_asset_execution` | `hhtools_runtime_trust_asset` | Verify `parameters.operation` and pass only its exact `asset_id`. Requires an administrator-authorized trust decision; never grant it only to bypass an inspection error. |
 
 Do not translate semantic action names, derive a host path, enumerate directories, or repair a
 malformed action. If the action name, wrapper shape, `root_id`, or portable `relative_path` does
@@ -223,7 +227,7 @@ not validate against the live tool schema, stop and present the contract error.
 | `IDEMPOTENT_RETRY` | Replay an ambiguous retry with the exact same parent job and retry idempotency key; never create a second child attempt. |
 | `NEW_FULL_PLAN` | A full run requires explicit approval, which may already be provided by the user's task, plus a new full preflight, new plan, and new idempotency key. Do not ask again for authorization already granted. |
 | `JOB_SCOPED_ARTIFACTS` | List, resolve, or export an artifact with both `job_id` and `artifact_id`; never trust or expose an unbound artifact identity. |
-| `CONTROLLED_MEDIA_CONTEXT` | Keep binary motion, meshes, video, trajectories, and Base64 out of arguments and text; `preview_calibration` and `preview_r2r_calibration` return an MCP image block, while the bounded `preview_snapshot` and `inspect_artifact_image` tools support image inspection. Files use `export_artifact` or `upload_local_file`. |
+| `CONTROLLED_MEDIA_CONTEXT` | Keep binary motion, meshes, video, trajectories, and Base64 out of arguments and text; `preview_calibration` and `preview_r2r_calibration` return an MCP image block, while the bounded `preview_snapshot` and `inspect_artifact_image` tools support image inspection. Files use `download_artifact`, `export_artifact`, or `upload_local_file`. |
 | `VALIDATED_CALIBRATION` | Never fabricate or edit a candidate id; save only a currently valid candidate, require a passing image review for `gpt_vision_silent`, record warnings, and run fresh preflight afterward. |
 | `SILENT_SAVE_SCOPE` | An automatic-calibration request permits validated calibration save without another prompt, but does not approve a full job, motion quality, or real-robot deployment. |
 | `COOPERATIVE_CANCEL` | Running cancellation is a request checked at safe points; do not claim cancellation until the returned job state is terminal. |

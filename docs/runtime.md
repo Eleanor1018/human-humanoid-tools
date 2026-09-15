@@ -170,6 +170,27 @@ a file or folder. Pass its saved `upload_id` to resume. The corresponding CLI
 commands are `hhtools runtime upload PATH --kind KIND` and
 `hhtools runtime download JOB_ID ARTIFACT_ID --output PATH`.
 
+Downloads preserve existing files by default. Use SDK `overwrite=True`, CLI
+`--overwrite`, or MCP `overwrite: true` only when replacement is intended.
+The SDK checks artifact identity before resuming a partial file and publishes
+without replacing a file created concurrently by another process.
+
+MCP provides `upload_local_file` for files or directory bundles and
+`download_artifact` for verified delivery to its own host. These operations stream
+bytes through the Runtime API without putting binary content in tool text.
+Use repeatable `hhtools-mcp --transfer-root PATH` options to select allowed local
+directories; the default is the MCP process's current directory. Links and paths
+outside these roots are rejected. A remote Runtime never receives these local paths.
+The existing `export_artifact` tool creates a copy on the Runtime host.
+
+The default MCP listing suppresses duplicate compatibility names; existing names
+remain callable and `--all-tools` lists them all. Generated tools carry the HTTP
+output schema (array results use a `result` wrapper) and scope metadata. Query
+`hhtools_runtime_workflows` for per-workflow readiness, defaults and parameter
+schemas before preflight. `hhtools_runtime_operations` retains the full HTTP
+catalog. Parameter failures contain bounded field paths and constraint types;
+network failures retain structured errors, including an upload ID when available.
+
 Workers open metadata stores read-only. The controller verifies worker generation,
 job ownership, staging boundaries, length, and digest before publishing outputs.
 Cancellation and timeout wait for worker termination before publishing a terminal

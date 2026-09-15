@@ -8,6 +8,8 @@ import json
 import os
 import ssl
 from collections.abc import Mapping
+from contextlib import contextmanager
+from http.client import HTTPException
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -88,6 +90,7 @@ class RuntimeClient:
         )
         self._operations: dict[str, dict[str, Any]] | None = None
 
+    @contextmanager
     def _open(self, method: str, path: str, *, query=None, payload=None, headers=None):
         if not path.startswith("/api/") or "//" in path or "?" in path or "#" in path:
             raise client_error("INVALID_ENDPOINT", "Invalid Runtime resource path.")
@@ -108,12 +111,13 @@ class RuntimeClient:
             self.endpoint + path + suffix, data=payload, headers=request_headers, method=method
         )
         try:
-            return self._opener.open(request, timeout=self.timeout)
+            with self._opener.open(request, timeout=self.timeout) as response:
+                yield response
         except HTTPError as error:
             try:
                 body = error.read(1024 * 1024)
                 failure = ApiError.model_validate_json(body)
-            except (ValueError, OSError):
+            except (ValueError, OSError, HTTPException):
                 failure = ApiError(
                     code="HTTP_ERROR",
                     message="Runtime request failed.",
@@ -121,8 +125,10 @@ class RuntimeClient:
                     retryable=error.code >= 500,
                     details={"status": error.code},
                 )
+            finally:
+                error.close()
             raise RuntimeClientError(failure) from None
-        except (OSError, URLError) as error:
+        except (OSError, URLError, HTTPException) as error:
             raise client_error(
                 "RUNTIME_UNAVAILABLE", "Runtime connection failed.", retryable=True
             ) from error
@@ -203,7 +209,7 @@ class RuntimeClient:
         descriptor = self.request("GET", path)
         destination = Path(destination)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        if destination.exists() and not overwrite:
+        if destination.is_symlink() or (destination.exists() and not overwrite):
             raise client_error(
                 "OUTPUT_EXISTS",
                 "The artifact output already exists; pass overwrite=True to replace it.",
@@ -211,11 +217,15 @@ class RuntimeClient:
         partial = destination.with_name(destination.name + ".hhtools-part")
         identity = partial.with_suffix(partial.suffix + ".json")
         expected = {
+            "runtime_id": self.runtime_id,
+            "workspace_id": self.workspace_id,
             "job_id": job_id,
             "artifact_id": artifact_id,
             "size_bytes": descriptor["size_bytes"],
             "sha256": descriptor["sha256"],
         }
+        if partial.is_symlink() or identity.is_symlink():
+            raise client_error("INVALID_OUTPUT", "Download staging files must not be links.")
         try:
             if json.loads(identity.read_text(encoding="utf-8")) != expected:
                 partial.unlink(missing_ok=True)
@@ -256,7 +266,17 @@ class RuntimeClient:
             partial.unlink(missing_ok=True)
             identity.unlink(missing_ok=True)
             raise client_error("ARTIFACT_HASH_MISMATCH", "Downloaded artifact failed verification.")
-        os.replace(partial, destination)
+        try:
+            if overwrite:
+                os.replace(partial, destination)
+            else:
+                # Publication must also refuse files created while the download was running.
+                os.link(partial, destination)
+                partial.unlink()
+        except FileExistsError as error:
+            raise client_error(
+                "OUTPUT_EXISTS", "The artifact output was created concurrently."
+            ) from error
         identity.unlink(missing_ok=True)
         return descriptor
 
@@ -338,6 +358,12 @@ class RuntimeClient:
                         ):
                             pass
             return self.request("POST", PREFIX + f"/uploads/{upload_id}/complete")
+        except (ValueError, KeyError, TypeError) as error:
+            failure = client_error(
+                "INVALID_RESPONSE", "Runtime returned an invalid upload acknowledgement."
+            )
+            failure.api_error.details["upload_id"] = upload_id
+            raise failure from error
         except RuntimeClientError as error:
             error.api_error.details["upload_id"] = upload_id
             raise

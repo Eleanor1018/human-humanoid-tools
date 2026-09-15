@@ -56,6 +56,18 @@ The returned request contains only a capability-advertised `root_id` and normali
 the returned bundle and rerun preflight with its `asset_id`. An unknown action or malformed
 parameter object is a stop condition, not permission to infer another tool or browse a root.
 
+For `query_runtime_backends`, verify `next_action.parameters.operation` is
+`hhtools_runtime_backends` and call that tool with `{}`. For
+`authorize_asset_execution`, verify the operation is `hhtools_runtime_trust_asset`
+and pass only the exact `asset_id`, within existing administrator trust authorization.
+
+Use `hhtools_runtime_workflows` to read current workflow readiness, defaults and
+parameter schemas. `upload_local_file` accepts a local `source_path`, `kind`, and
+optional `upload_id` for recovery. `download_artifact` accepts `job_id`, `artifact_id`,
+`destination_path`, and optional `overwrite`. Local paths must stay under the MCP
+adapter's `--transfer-root` directories (current directory by default), without links.
+The upload returns an asset bundle and the download a verified artifact descriptor.
+
 ## Read-only resources
 
 Use these exact URI shapes:
@@ -124,10 +136,12 @@ binary content.
   `artifact_count` and `list_job_artifacts` for canonical pagination.
 - Every artifact lookup requires the owning `job_id` and `artifact_id`; verify one descriptor by
   reading its exact job-scoped resource URI. Binary data is never embedded as Base64.
-- `export_artifact` is the MCP file-delivery boundary. It verifies canonical managed bytes, writes
+- `export_artifact` is a server-side export. It verifies canonical managed bytes, writes
   them only below the service-configured `agent-exports` root, and returns a portable
   `root_id + relative_path` receipt with size and SHA-256. It accepts no caller-selected host path
   and exposes neither the private content-addressed store nor file bytes.
+- `download_artifact` delivers files to the MCP host; server export receipts do not
+  download files to a remote client.
 
 ## Audit-only public schemas
 

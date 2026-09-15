@@ -5,8 +5,9 @@ from __future__ import annotations
 import json
 from typing import Annotated, Any, Literal
 
-from pydantic import AwareDatetime, ConfigDict, Field, model_validator
+from pydantic import AwareDatetime, ConfigDict, Field, field_validator, model_validator
 
+from .analysis_parameters import AnalysisMetricConfig
 from .artifacts import JobManifest
 from .common import AssetId, ContractModel, PlanId, Sha256Hex
 from .execution import TrajectoryExportOptions
@@ -19,41 +20,49 @@ WORKFLOW_SEMANTICS = "hhtools.workflow.plan.v1"
 
 class AnalysisParameters(ContractModel):
     embedding: Literal["handcrafted", "pae"] = "handcrafted"
-    metric_config: dict[str, Any] = Field(default_factory=dict)
+    metric_config: AnalysisMetricConfig = Field(default_factory=dict)
 
 
 class VideoParameters(ContractModel):
-    static_camera: bool = True
+    static_camera: Annotated[bool, Field(strict=True)] = True
     focal_length_mm: Annotated[int | None, Field(default=None, ge=1, le=1000)]
 
 
 class WorkflowPreflightRequest(ContractModel):
     workflow: Literal["analysis", "video_to_motion"]
     asset_ids: Annotated[list[AssetId], Field(min_length=1, max_length=1000)]
-    parameters: dict[str, Any] = Field(
-        default_factory=dict,
-        description=(
-            "Workflow-specific parameters. Analysis accepts embedding handcrafted/pae and a "
-            "validated metric_config object; video_to_motion accepts static_camera and "
-            "focal_length_mm."
-        ),
-        json_schema_extra={
-            "oneOf": [
-                AnalysisParameters.model_json_schema(),
-                VideoParameters.model_json_schema(),
-            ]
-        },
-    )
+    parameters: dict[str, Any] = Field(default_factory=dict, validate_default=True)
 
-    @model_validator(mode="after")
-    def validate_parameters(self):
-        if len(set(self.asset_ids)) != len(self.asset_ids):
+    @field_validator("asset_ids")
+    @classmethod
+    def unique_assets(cls, value):
+        if len(set(value)) != len(value):
             raise ValueError("Duplicate asset IDs")
-        model = AnalysisParameters if self.workflow == "analysis" else VideoParameters
-        object.__setattr__(
-            self, "parameters", model.model_validate(self.parameters).model_dump(mode="json")
-        )
-        return self
+        return value
+
+    @field_validator("parameters")
+    @classmethod
+    def validate_parameters(cls, value, info):
+        model = AnalysisParameters if info.data.get("workflow") == "analysis" else VideoParameters
+        return model.model_validate(value).model_dump(mode="json")
+
+    @classmethod
+    def __get_pydantic_json_schema__(cls, core_schema, handler):
+        schema = handler(core_schema)
+        branches = []
+        for workflow, model in (
+            ("analysis", AnalysisParameters),
+            ("video_to_motion", VideoParameters),
+        ):
+            parameters = handler(model.__pydantic_core_schema__)
+            branches.append(
+                {
+                    "if": {"properties": {"workflow": {"const": workflow}}},
+                    "then": {"properties": {"parameters": parameters}},
+                }
+            )
+        schema["allOf"] = branches
+        return schema
 
 
 class WorkflowJobSpec(ContractModel):

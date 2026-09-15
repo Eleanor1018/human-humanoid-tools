@@ -25,8 +25,10 @@ from hhtools.contracts.transfers import (
 from hhtools.contracts.workflows import (
     AnalysisCompareRequest,
     AnalysisExportParameters,
+    AnalysisParameters,
     AnalysisSelectionRequest,
     RetargetExportParameters,
+    VideoParameters,
     WorkflowJobSpec,
     WorkflowPreflightRequest,
 )
@@ -81,13 +83,45 @@ def install_workflows(app, runtime, control):
 
     @router.get("/backends")
     def runtime_backends() -> dict:
+        """Query live Analysis and Video2Motion backend readiness before preflight."""
         return {
             "analysis": workflow_availability("analysis"),
             "video_to_motion": workflow_availability("video_to_motion"),
         }
 
+    @router.get("/workflows")
+    def runtime_workflows() -> dict:
+        """Discover workflow-specific readiness, defaults, parameters, and recovery operations."""
+        return {
+            "workflows": [
+                {
+                    "workflow": name,
+                    **workflow_availability(name),
+                    "parameters_schema": model.model_json_schema(),
+                    "defaults": {
+                        **model().model_dump(mode="json"),
+                        **(
+                            {"metric_config": analysis_configuration({})}
+                            if name == "analysis"
+                            else {}
+                        ),
+                    },
+                    "preflight_operation": "hhtools_workflow_preflight",
+                    "required_scope": "write",
+                    "configuration_operation": "hhtools_runtime_configure_backends"
+                    if name == "video_to_motion"
+                    else None,
+                }
+                for name, model in (
+                    ("analysis", AnalysisParameters),
+                    ("video_to_motion", VideoParameters),
+                )
+            ]
+        }
+
     @router.post("/workflows/preflight", response_model=WorkflowJobSpec)
     def workflow_preflight(body: WorkflowPreflightRequest):
+        """Freeze Analysis or Video2Motion inputs; query runtime_workflows before preflight."""
         return plans.preflight(body)
 
     @router.post("/workflows/analysis-export/preflight", response_model=WorkflowJobSpec)
