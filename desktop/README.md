@@ -103,9 +103,10 @@ The desktop targets use different runtime delivery models:
   Installation and startup temporarily prevent macOS app suspension; the activity is released
   when the operation finishes or fails, so switching windows does not stall setup.
 
-All packages include only the 30 motions and six robot bundles selected by
-`configs/builtin-assets.json`. Before packaging, install the pinned robot bundles and point the
-stager at that library:
+All packages include only the 30 motions and seven robot bundles selected by
+`configs/builtin-assets.json`, including ROBOTO 01 (`rp1`) from the public
+`Roboparty/rp1_description` repository. Before packaging, install the pinned robot bundles
+into a release library and point the stager at that library:
 
 ```bash
 uv run python scripts/install_builtin_robots.py --destination /path/to/release-robots
@@ -115,10 +116,17 @@ export HHTOOLS_BUNDLED_ROBOT_DIR=/path/to/release-robots
 Then invoke electron-builder through the package scripts:
 
 ```bash
-npm run dist:linux   # release/hhtools-0.1.0-amd64.deb
-npm run dist:win     # release/hhtools-0.1.0-x64-setup.exe
-npm run dist:mac     # release/hhtools-0.1.0-mac-arm64.dmg (and .zip)
+npm run dist:linux   # release/hhtools-0.1.3-amd64.deb
+npm run dist:win     # release/hhtools-0.1.3-x64-setup.exe
+npm run dist:mac     # release/hhtools-0.1.3-mac-arm64.dmg (and .zip)
 ```
+
+All seven robots use the same installer and staging path. Staging verifies each pinned
+repository, commit, URDF and license list against `SOURCE.json`, then checks the size and
+SHA-256 of every declared file. It records the standard manifest in `.builtin/MANIFEST.json`;
+unlisted files, user calibrations, job outputs, caches and optional body-model weights are
+excluded. Keep this release library separate from users' Robot Libraries so their imported
+models and calibrations are not changed by packaging.
 
 `npm run dist:win` must run on Windows after `uv sync --extra all --no-dev`; the runtime stager
 rejects another host platform and excludes untracked files, development packages, caches, model
@@ -139,7 +147,9 @@ if re-signing uv for notarization, do so before `prepare-bootstrap` computes tho
 
 The pinned Warp build supports Apple Silicon CPU execution, not Metal/CUDA acceleration.
 Intel Mac packages are not provided because the pinned Warp wheel has no macOS x64 build.
-GVHMR's NVIDIA GPU pipeline is not supported locally on Apple Silicon. SMPL-family weights remain
+GVHMR's NVIDIA GPU pipeline is not supported locally on Apple Silicon. The macOS desktop app
+omits Video → Motion, video import, V2M batch processing, and GVHMR setup. Windows, Linux,
+and the standalone WebUI keep their existing workflows. SMPL-family weights remain
 a separate user installation, just as on the other platforms.
 
 To verify the actual macOS package in an isolated temporary home, without checkout or Python

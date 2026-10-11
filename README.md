@@ -71,6 +71,19 @@ uv run hhtools web
 Open `http://127.0.0.1:8009`. GVHMR and separately licensed SMPL-family model weights remain
 external; the `all` extra installs their Python integration libraries, not those model files.
 
+For **ROBOTO 01** in a source/WebUI installation, explicitly install the `rp1` preset before
+starting the WebUI:
+
+```bash
+uv run python scripts/install_builtin_robots.py --only rp1
+uv run hhtools web
+```
+
+The GitHub source repository contains the preset and download instructions, not the large robot
+model assets or SMPL-family weights. The installer downloads ROBOTO 01's URDF and referenced
+meshes from the pinned public [`Roboparty/rp1_description`](https://github.com/Roboparty/rp1_description/tree/84529a55649b5c9796d49093c266208c879f9f29)
+repository into the user Robot Library.
+
 For a smaller environment, install only the workflow you need. The core terminal commands require
 no extra:
 
@@ -130,8 +143,14 @@ without a checkout or system Python.
    Python 3.12 environment. No existing Python, source checkout, or Homebrew installation is needed;
    the runtime is installed for the current user without an administrator password.
 
-The macOS package includes the same 30 built-in motions and six robots as the other desktop packages.
-Warp retargeting runs on CPU; Intel Macs and the local NVIDIA GVHMR pipeline are unsupported.
+The published **0.1.0** packages linked above include 30 built-in motions and six robots.
+Builds from this branch add **ROBOTO 01** (`rp1`) as the seventh built-in robot, listed first,
+ahead of Unitree G1; **ROBOTO_ORIGIN** (`roboto_origin`) remains a separate model.
+On macOS, Warp retargeting runs on CPU; Intel Macs and the local NVIDIA GVHMR pipeline are unsupported.
+
+Current macOS desktop builds hide Video → Motion, video import, V2M batch, and GVHMR setup.
+H2R, R2R, existing-motion imports, and SMPL-family motion support remain available. Windows,
+Linux, and ordinary WebUI retain their video-to-motion entry points.
 
 GVHMR and separately licensed SMPL-family weights remain optional on all platforms. Build details are in
 [`desktop/README.md`](desktop/README.md#desktop-packages).
@@ -266,23 +285,25 @@ uv run hhtools import run --dataset omnicontact \
 **Robots**
 
 ```bash
-# Install all six curated robots into ~/.config/hhtools/robots.
+# Install all seven curated robots into the user Robot Library.
 uv run python scripts/install_builtin_robots.py
 # Install one preset only (repeat --only to select several).
-uv run python scripts/install_builtin_robots.py --only g1_29dof
+uv run python scripts/install_builtin_robots.py --only rp1
 
 uv run hhtools robot list
-uv run hhtools robot info g1_29dof --no-mjcf
-uv run hhtools robot schema g1_29dof -o /tmp/g1_header.csv
-uv run hhtools robot validate g1_29dof
+uv run hhtools robot info rp1 --no-mjcf
+uv run hhtools robot schema rp1 -o /tmp/rp1_header.csv
+uv run hhtools robot validate rp1
 uv run hhtools robot scaffold unitree_g1          # skip existing yaml
 # uv run hhtools robot add /path/to/urdf_or_dir  # ingest into configs/robots/
 ```
 
-The installer downloads pinned official archives (about 772 MiB total) and
-keeps about 237 MiB of referenced files. Each preset retains its upstream
-license and a checksummed `SOURCE.json`. `--replace` atomically replaces local
-changes in the selected preset. Desktop bundles can point
+The seven presets are ROBOTO 01 (`rp1`, 28 DoF), Unitree G1, ROBOTO_ORIGIN (RPO),
+AgiBot X2, Asimov 1, Fourier GR-2, and Berkeley Humanoid Lite. The installer downloads
+pinned official archives and keeps the selected URDFs, referenced meshes, and upstream
+license files where provided, plus a checksummed `SOURCE.json`. The pinned RP1 revision
+`84529a55649b5c9796d49093c266208c879f9f29` does not provide a `LICENSE` file.
+`--replace` atomically replaces local changes in the selected preset. Desktop bundles can point
 `HHTOOLS_BUNDLED_ROBOT_DIR` at an audited Robot Library.
 
 **Retarget (smoke with `--limit-frames`)**

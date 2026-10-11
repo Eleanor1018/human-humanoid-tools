@@ -69,6 +69,17 @@ uv run hhtools web
 浏览器打开 `http://127.0.0.1:8009`。GVHMR 与受单独许可约束的 SMPL 系模型权重仍由用户
 独立准备；`all` 安装的是对应 Python 集成库，不包含这些模型文件。
 
+源码 / WebUI 安装如需使用 **ROBOTO 01**，请在启动 WebUI 前显式安装 `rp1` 预设：
+
+```bash
+uv run python scripts/install_builtin_robots.py --only rp1
+uv run hhtools web
+```
+
+GitHub 源码仓库只包含预设和下载配置，不包含机器人模型大文件或 SMPL 系权重。
+安装器从公开的 [`Roboparty/rp1_description`](https://github.com/Roboparty/rp1_description/tree/84529a55649b5c9796d49093c266208c879f9f29)
+固定提交下载 ROBOTO 01 的 URDF 及其引用的 mesh，保存到用户 Robot Library。
+
 如果希望环境更小，可以只安装实际工作流。核心终端命令不需要 extra：
 
 ```bash
@@ -124,8 +135,14 @@ Windows 安装程序会直接打包 Python runtime 与应用源码，不需要�
 3. 按首次启动页提示完成安装，下载独立 Python 3.12 环境期间请保持联网。无需预装 Python、
    源码仓库或 Homebrew；运行环境仅安装到当前用户目录，不需要管理员密码。
 
-macOS 包与其他桌面版一样，包含 30 个内置动作和 6 款机器人。
-Warp 重定向使用 CPU；不支持 Intel Mac 或本机 GVHMR 的 NVIDIA GPU 流程。
+上方链接的已发布 **0.1.0** 安装包包含 30 个内置动作和 6 款机器人。
+本分支构建新增第七款内置机器人 **ROBOTO 01**（`rp1`），排列在 Unitree G1 前面的首位；
+**ROBOTO_ORIGIN**（`roboto_origin`）仍是独立模型。
+macOS 的 Warp 重定向使用 CPU；不支持 Intel Mac 或本机 GVHMR 的 NVIDIA GPU 流程。
+
+当前 macOS 桌面构建隐藏视频转动作、视频导入、V2M 批处理及 GVHMR 配置入口。
+H2R、R2R、已有动作导入及 SMPL 系动作支持继续保留；Windows、Linux 和普通 WebUI
+仍保留视频转动作入口。
 
 三端都不默认打包 GVHMR 和受单独许可约束的 SMPL 系权重。构建说明见
 [`desktop/README.md`](desktop/README.md#desktop-packages)。
@@ -245,22 +262,24 @@ uv run hhtools import run --dataset omnicontact \
 **机器人**
 
 ```bash
-# 将六个精选机器人安装到 ~/.config/hhtools/robots。
+# 将七个精选机器人安装到用户 Robot Library。
 uv run python scripts/install_builtin_robots.py
 # 也可以只安装一个；重复 --only 可选择多个。
-uv run python scripts/install_builtin_robots.py --only g1_29dof
+uv run python scripts/install_builtin_robots.py --only rp1
 
 uv run hhtools robot list
-uv run hhtools robot info g1_29dof --no-mjcf
-uv run hhtools robot schema g1_29dof -o /tmp/g1_header.csv
-uv run hhtools robot validate g1_29dof
+uv run hhtools robot info rp1 --no-mjcf
+uv run hhtools robot schema rp1 -o /tmp/rp1_header.csv
+uv run hhtools robot validate rp1
 uv run hhtools robot scaffold unitree_g1          # 已有 yaml 则跳过
 # uv run hhtools robot add /path/to/urdf_or_dir  # 写入 configs/robots/
 ```
 
-安装器下载固定提交的官方归档（合计约 772 MiB），只保留约 237 MiB 的引用
-文件；每个预设都会保留上游许可证和带校验和的 `SOURCE.json`。`--replace`
-会原子替换所选预设的本地修改。桌面包可用 `HHTOOLS_BUNDLED_ROBOT_DIR`
+七款预设为 ROBOTO 01（`rp1`，28 自由度）、Unitree G1、ROBOTO_ORIGIN（RPO）、
+AgiBot X2、Asimov 1、Fourier GR-2 和 Berkeley Humanoid Lite。安装器下载固定提交的
+官方归档，只保留所选 URDF、其引用的 mesh、上游实际提供的许可证文件，以及带校验和的
+`SOURCE.json`。RP1 本次固定提交 `84529a55649b5c9796d49093c266208c879f9f29` 未提供
+`LICENSE` 文件。`--replace` 会原子替换所选预设的本地修改。桌面包可用 `HHTOOLS_BUNDLED_ROBOT_DIR`
 指向审核后的 Robot Library。
 
 **重映射（可用 `--limit-frames` 冒烟）**
