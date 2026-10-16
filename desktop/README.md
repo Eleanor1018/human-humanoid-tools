@@ -116,9 +116,9 @@ export HHTOOLS_BUNDLED_ROBOT_DIR=/path/to/release-robots
 Then invoke electron-builder through the package scripts:
 
 ```bash
-npm run dist:linux   # release/hhtools-0.1.3-amd64.deb
-npm run dist:win     # release/hhtools-0.1.3-x64-setup.exe
-npm run dist:mac     # release/hhtools-0.1.3-mac-arm64.dmg (and .zip)
+npm run dist:linux   # release/hhtools-0.1.4-amd64.deb
+npm run dist:win     # release/hhtools-0.1.4-x64-setup.exe
+npm run dist:mac     # release/hhtools-0.1.4-mac-arm64.dmg (and .zip)
 ```
 
 All seven robots use the same installer and staging path. Staging verifies each pinned
