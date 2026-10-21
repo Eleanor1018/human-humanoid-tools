@@ -36,6 +36,8 @@ Apple Silicon macOS 桌面版使用 CPU 重定向。桌面打包要求见下方�
 
 ## 安装与启动
 
+[macOS 0.1.5 DMG（Apple Silicon）](https://github.com/Eleanor1018/human-humanoid-tools/releases/download/0.1.5/hhtools-0.1.5-mac-arm64.dmg) · [全部桌面下载](#桌面-gui)
+
 hhtools 有三种交互式运行方式，另提供一个 Agent 自动化接口。它们共享同一套动作、机器人与
 重映射核心，但安装和启动入口彼此独立：
 
@@ -107,13 +109,13 @@ HHTools 提供供脚本使用的严格 JSON CLI，以及供兼容 Agent 使用�
 
 ### 桌面 GUI
 
-按平台下载 **0.1.0 预览版**桌面安装包：
+按平台下载桌面预览版。[macOS 0.1.5](https://github.com/Eleanor1018/human-humanoid-tools/releases/tag/0.1.5) 已发布；Windows 和 Linux 的 0.1.5 安装包待对应设备完成打包。
 
-| 平台 | 下载 | 架构 |
-|------|------|------|
-| Windows | [EXE 安装程序](https://github.com/Eleanor1018/human-humanoid-tools/releases/download/v0.1.0%28beta%29/hhtools-0.1.0-x64-setup.exe) | x64 |
-| Linux | [Debian 安装包](https://github.com/Eleanor1018/human-humanoid-tools/releases/download/v0.1.0%28beta%29/hhtools-0.1.0-amd64.deb) | amd64 |
-| macOS 12+ | [DMG 安装包](https://github.com/Eleanor1018/human-humanoid-tools/releases/download/v0.1.0%28beta%29/hhtools-0.1.0-mac-arm64.dmg) | Apple Silicon（arm64） |
+| 平台 | 下载 | 架构 | 版本 |
+|------|------|------|------|
+| Windows | [EXE 安装程序](https://github.com/Eleanor1018/human-humanoid-tools/releases/download/v0.1.0%28beta%29/hhtools-0.1.0-x64-setup.exe) | x64 | 0.1.0 |
+| Linux | [Debian 安装包](https://github.com/Eleanor1018/human-humanoid-tools/releases/download/v0.1.0%28beta%29/hhtools-0.1.0-amd64.deb) | amd64 | 0.1.0 |
+| macOS 12+ | [DMG 安装包](https://github.com/Eleanor1018/human-humanoid-tools/releases/download/0.1.5/hhtools-0.1.5-mac-arm64.dmg) | Apple Silicon（arm64） | **0.1.5** |
 
 Debian 包包含 Electron、精选内置动作与机器人。首次启动页使用同一 deb 内置的 HHTools wheel、
 锁定依赖清单、uv 配置和 uv 二进制安装独立运行环境；推荐的当前用户安装不需要管理员密码，
@@ -135,8 +137,8 @@ Windows 安装程序会直接打包 Python runtime 与应用源码，不需要�
 3. 按首次启动页提示完成安装，下载独立 Python 3.12 环境期间请保持联网。无需预装 Python、
    源码仓库或 Homebrew；运行环境仅安装到当前用户目录，不需要管理员密码。
 
-上方链接的已发布 **0.1.0** 安装包包含 30 个内置动作和 6 款机器人。
-本分支构建新增第七款内置机器人 **ROBOTO 01**（`rp1`），排列在 Unitree G1 前面的首位；
+Windows 和 Linux 的 **0.1.0** 安装包包含 30 个内置动作和 6 款机器人。
+macOS **0.1.5** 安装包包含 30 个动作，并新增第七款内置机器人 **ROBOTO 01**（`rp1`），排列在 Unitree G1 前面的首位；
 **ROBOTO_ORIGIN**（`roboto_origin`）仍是独立模型。
 macOS 的 Warp 重定向使用 CPU；不支持 Intel Mac 或本机 GVHMR 的 NVIDIA GPU 流程。
 

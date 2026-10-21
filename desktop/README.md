@@ -79,8 +79,9 @@ a screenshot, closes the app, and verifies that the supervised Python process ex
 
 ## Desktop packages
 
-Prebuilt installers are available in the [0.1.0 preview release](https://github.com/Eleanor1018/human-humanoid-tools/releases/tag/v0.1.0%28beta%29).
-For macOS 12+ on Apple Silicon, [download the DMG](https://github.com/Eleanor1018/human-humanoid-tools/releases/download/v0.1.0%28beta%29/hhtools-0.1.0-mac-arm64.dmg),
+The latest macOS installer is available in the [0.1.5 preview release](https://github.com/Eleanor1018/human-humanoid-tools/releases/tag/0.1.5).
+Windows and Linux 0.1.5 builds are pending; their [0.1.0 installers](https://github.com/Eleanor1018/human-humanoid-tools/releases/tag/v0.1.0%28beta%29) remain available.
+For macOS 12+ on Apple Silicon, [download the DMG](https://github.com/Eleanor1018/human-humanoid-tools/releases/download/0.1.5/hhtools-0.1.5-mac-arm64.dmg),
 drag **Human-Humanoid Tools** into **Applications**, and launch it to complete the online first-run setup.
 See the signing and compatibility notes below before installing this preview.
 
@@ -113,12 +114,22 @@ uv run python scripts/install_builtin_robots.py --destination /path/to/release-r
 export HHTOOLS_BUNDLED_ROBOT_DIR=/path/to/release-robots
 ```
 
+Check out tag `0.1.5` for matching Windows and Linux builds. Build the shared frontend first:
+
+```bash
+cd hhtools/web/frontend
+npm ci
+npm run build
+cd ../../../desktop
+npm ci
+```
+
 Then invoke electron-builder through the package scripts:
 
 ```bash
-npm run dist:linux   # release/hhtools-0.1.4-amd64.deb
-npm run dist:win     # release/hhtools-0.1.4-x64-setup.exe
-npm run dist:mac     # release/hhtools-0.1.4-mac-arm64.dmg (and .zip)
+npm run dist:linux   # release/hhtools-0.1.5-amd64.deb
+npm run dist:win     # release/hhtools-0.1.5-x64-setup.exe
+npm run dist:mac     # release/hhtools-0.1.5-mac-arm64.dmg (and .zip)
 ```
 
 All seven robots use the same installer and staging path. Staging verifies each pinned
