@@ -117,12 +117,12 @@ ownership, and the included Codex project configuration.
 
 ### Desktop GUI
 
-Download the desktop preview for your platform. The [0.1.5 macOS release](https://github.com/Eleanor1018/human-humanoid-tools/releases/tag/0.1.5) is available now; Windows and Linux 0.1.5 installers are pending builds on those platforms.
+Download the desktop preview for your platform. The [0.1.5 release](https://github.com/Eleanor1018/human-humanoid-tools/releases/tag/0.1.5) includes a Linux package built on Ubuntu 22.04 and tested on Ubuntu 22.04, 24.04, and 26.04, plus the macOS preview.
 
 | Platform | Download | Architecture | Version |
 |----------|----------|--------------|---------|
 | Windows | [EXE installer](https://github.com/Eleanor1018/human-humanoid-tools/releases/download/v0.1.0%28beta%29/hhtools-0.1.0-x64-setup.exe) | x64 | 0.1.0 |
-| Linux | [Debian package](https://github.com/Eleanor1018/human-humanoid-tools/releases/download/v0.1.0%28beta%29/hhtools-0.1.0-amd64.deb) | amd64 | 0.1.0 |
+| Linux | [Debian package](https://github.com/Eleanor1018/human-humanoid-tools/releases/download/0.1.5/hhtools-0.1.5-amd64.deb) · [SHA-256](https://github.com/Eleanor1018/human-humanoid-tools/releases/download/0.1.5/hhtools-0.1.5-amd64.deb.sha256) | amd64 | **0.1.5** |
 | macOS 12+ | [DMG installer](https://github.com/Eleanor1018/human-humanoid-tools/releases/download/0.1.5/hhtools-0.1.5-mac-arm64.dmg) | Apple Silicon (arm64) | **0.1.5** |
 
 The Debian package contains Electron plus the curated built-in motions and robots. On first launch,
@@ -131,7 +131,7 @@ carried inside that same package. The recommended per-user option needs no admin
 while the all-users option opens the operating system authentication dialog:
 
 ```bash
-sudo apt install ./hhtools-0.1.0-amd64.deb
+sudo apt install ./hhtools-0.1.5-amd64.deb
 hhtools-desktop
 ```
 
@@ -147,8 +147,7 @@ without a checkout or system Python.
    Python 3.12 environment. No existing Python, source checkout, or Homebrew installation is needed;
    the runtime is installed for the current user without an administrator password.
 
-The Windows and Linux **0.1.0** packages include 30 built-in motions and six robots.
-The macOS **0.1.5** package includes 30 motions and adds **ROBOTO 01** (`rp1`) as the seventh built-in robot, listed first,
+The Windows **0.1.0** package includes 30 built-in motions and six robots. The Linux **0.1.5** package is built on Ubuntu 22.04, includes 30 motions and seven robots, and has been checked on Ubuntu 22.04, 24.04, and 26.04. The macOS **0.1.5** package includes 30 motions and adds **ROBOTO 01** (`rp1`) as the seventh built-in robot, listed first,
 ahead of Unitree G1; **ROBOTO_ORIGIN** (`roboto_origin`) remains a separate model.
 On macOS, Warp retargeting runs on CPU; Intel Macs and the local NVIDIA GVHMR pipeline are unsupported.
 

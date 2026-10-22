@@ -109,12 +109,12 @@ HHTools 提供供脚本使用的严格 JSON CLI，以及供兼容 Agent 使用�
 
 ### 桌面 GUI
 
-按平台下载桌面预览版。[macOS 0.1.5](https://github.com/Eleanor1018/human-humanoid-tools/releases/tag/0.1.5) 已发布；Windows 和 Linux 的 0.1.5 安装包待对应设备完成打包。
+按平台下载桌面预览版。[0.1.5 Release](https://github.com/Eleanor1018/human-humanoid-tools/releases/tag/0.1.5) 已包含 Linux 安装包（在 Ubuntu 22.04 构建，并在 Ubuntu 22.04、24.04、26.04 上验证）和 macOS 预览版。
 
 | 平台 | 下载 | 架构 | 版本 |
 |------|------|------|------|
 | Windows | [EXE 安装程序](https://github.com/Eleanor1018/human-humanoid-tools/releases/download/v0.1.0%28beta%29/hhtools-0.1.0-x64-setup.exe) | x64 | 0.1.0 |
-| Linux | [Debian 安装包](https://github.com/Eleanor1018/human-humanoid-tools/releases/download/v0.1.0%28beta%29/hhtools-0.1.0-amd64.deb) | amd64 | 0.1.0 |
+| Linux | [Debian 安装包](https://github.com/Eleanor1018/human-humanoid-tools/releases/download/0.1.5/hhtools-0.1.5-amd64.deb) · [SHA-256](https://github.com/Eleanor1018/human-humanoid-tools/releases/download/0.1.5/hhtools-0.1.5-amd64.deb.sha256) | amd64 | **0.1.5** |
 | macOS 12+ | [DMG 安装包](https://github.com/Eleanor1018/human-humanoid-tools/releases/download/0.1.5/hhtools-0.1.5-mac-arm64.dmg) | Apple Silicon（arm64） | **0.1.5** |
 
 Debian 包包含 Electron、精选内置动作与机器人。首次启动页使用同一 deb 内置的 HHTools wheel、
@@ -122,7 +122,7 @@ Debian 包包含 Electron、精选内置动作与机器人。首次启动页使�
 所有用户安装则使用操作系统认证窗口：
 
 ```bash
-sudo apt install ./hhtools-0.1.0-amd64.deb
+sudo apt install ./hhtools-0.1.5-amd64.deb
 hhtools-desktop
 ```
 
@@ -137,7 +137,7 @@ Windows 安装程序会直接打包 Python runtime 与应用源码，不需要�
 3. 按首次启动页提示完成安装，下载独立 Python 3.12 环境期间请保持联网。无需预装 Python、
    源码仓库或 Homebrew；运行环境仅安装到当前用户目录，不需要管理员密码。
 
-Windows 和 Linux 的 **0.1.0** 安装包包含 30 个内置动作和 6 款机器人。
+Windows 的 **0.1.0** 安装包包含 30 个内置动作和 6 款机器人。Linux **0.1.5** 安装包在 Ubuntu 22.04 构建，包含 30 个动作和 7 款机器人，并已在 Ubuntu 22.04、24.04、26.04 上验证。
 macOS **0.1.5** 安装包包含 30 个动作，并新增第七款内置机器人 **ROBOTO 01**（`rp1`），排列在 Unitree G1 前面的首位；
 **ROBOTO_ORIGIN**（`roboto_origin`）仍是独立模型。
 macOS 的 Warp 重定向使用 CPU；不支持 Intel Mac 或本机 GVHMR 的 NVIDIA GPU 流程。

@@ -79,8 +79,8 @@ a screenshot, closes the app, and verifies that the supervised Python process ex
 
 ## Desktop packages
 
-The latest macOS installer is available in the [0.1.5 preview release](https://github.com/Eleanor1018/human-humanoid-tools/releases/tag/0.1.5).
-Windows and Linux 0.1.5 builds are pending; their [0.1.0 installers](https://github.com/Eleanor1018/human-humanoid-tools/releases/tag/v0.1.0%28beta%29) remain available.
+The [0.1.5 release](https://github.com/Eleanor1018/human-humanoid-tools/releases/tag/0.1.5) includes the Linux Debian package built on Ubuntu 22.04 and tested on Ubuntu 22.04, 24.04, and 26.04, plus the macOS preview. The older Windows 0.1.0 installer remains in the previous release.
+For Linux, [download the Debian package](https://github.com/Eleanor1018/human-humanoid-tools/releases/download/0.1.5/hhtools-0.1.5-amd64.deb) and its [SHA-256 checksum](https://github.com/Eleanor1018/human-humanoid-tools/releases/download/0.1.5/hhtools-0.1.5-amd64.deb.sha256).
 For macOS 12+ on Apple Silicon, [download the DMG](https://github.com/Eleanor1018/human-humanoid-tools/releases/download/0.1.5/hhtools-0.1.5-mac-arm64.dmg),
 drag **Human-Humanoid Tools** into **Applications**, and launch it to complete the online first-run setup.
 See the signing and compatibility notes below before installing this preview.
@@ -181,7 +181,7 @@ SMPL-family model files and GVHMR weights are not part of the default distributa
 `npm run prepare:models` command exists only for a locally authorized build; a user checkbox cannot
 grant redistribution rights for a model file.
 
-Install the Linux package with `sudo apt install ./release/hhtools-0.1.0-amd64.deb`, then launch
+Install the Linux package with `sudo apt install ./hhtools-0.1.5-amd64.deb`, then launch
 `hhtools-desktop`. The first-run setup may download several gigabytes, shows live output, verifies
 the bundled checksums, and restarts the app only after `hhtools doctor` succeeds. Network access is
 still required for uv to acquire Python and the third-party packages named by the bundled lock. The
