@@ -114,7 +114,7 @@ HHTools 提供供脚本使用的严格 JSON CLI，以及供兼容 Agent 使用�
 | 平台 | 下载 | 架构 | 版本 |
 |------|------|------|------|
 | Windows | [EXE 安装程序](https://github.com/Eleanor1018/human-humanoid-tools/releases/download/v0.1.0%28beta%29/hhtools-0.1.0-x64-setup.exe) | x64 | 0.1.0 |
-| Linux | [Debian 安装包](https://github.com/Eleanor1018/human-humanoid-tools/releases/download/0.1.5/hhtools-0.1.5-amd64.deb) · [SHA-256](https://github.com/Eleanor1018/human-humanoid-tools/releases/download/0.1.5/hhtools-0.1.5-amd64.deb.sha256) | amd64 | **0.1.5** |
+| Linux | [Debian 安装包](https://github.com/Eleanor1018/human-humanoid-tools/releases/download/0.1.5/hhtools-0.1.5-linux-amd64.deb) · [SHA-256](https://github.com/Eleanor1018/human-humanoid-tools/releases/download/0.1.5/hhtools-0.1.5-linux-amd64.deb.sha256) | amd64 | **0.1.5** |
 | macOS 12+ | [DMG 安装包](https://github.com/Eleanor1018/human-humanoid-tools/releases/download/0.1.5/hhtools-0.1.5-mac-arm64.dmg) | Apple Silicon（arm64） | **0.1.5** |
 
 Debian 包包含 Electron、精选内置动作与机器人。首次启动页使用同一 deb 内置的 HHTools wheel、
@@ -122,9 +122,14 @@ Debian 包包含 Electron、精选内置动作与机器人。首次启动页使�
 所有用户安装则使用操作系统认证窗口：
 
 ```bash
-sudo apt install ./hhtools-0.1.5-amd64.deb
+sha256sum -c hhtools-0.1.5-linux-amd64.deb.sha256
+sudo apt install ./hhtools-0.1.5-linux-amd64.deb
 hhtools-desktop
 ```
+
+Ubuntu 22.04 和 26.04 已通过容器内安装、启动及动作播放检查；Ubuntu 24.04 已通过实机桌面、
+CUDA 重定向及 NVIDIA 硬件渲染检查。
+SHA-256：`7d08c6979de02d26a46ab4eb2bc810a0c2651daad3558a1b1a1fbf4c965548d9`。
 
 Windows 安装程序会直接打包 Python runtime 与应用源码，不需要目标机器另行准备 checkout 或
 系统 Python。

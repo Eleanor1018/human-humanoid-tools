@@ -122,7 +122,7 @@ Download the desktop preview for your platform. The [0.1.5 release](https://gith
 | Platform | Download | Architecture | Version |
 |----------|----------|--------------|---------|
 | Windows | [EXE installer](https://github.com/Eleanor1018/human-humanoid-tools/releases/download/v0.1.0%28beta%29/hhtools-0.1.0-x64-setup.exe) | x64 | 0.1.0 |
-| Linux | [Debian package](https://github.com/Eleanor1018/human-humanoid-tools/releases/download/0.1.5/hhtools-0.1.5-amd64.deb) · [SHA-256](https://github.com/Eleanor1018/human-humanoid-tools/releases/download/0.1.5/hhtools-0.1.5-amd64.deb.sha256) | amd64 | **0.1.5** |
+| Linux | [Debian package](https://github.com/Eleanor1018/human-humanoid-tools/releases/download/0.1.5/hhtools-0.1.5-linux-amd64.deb) · [SHA-256](https://github.com/Eleanor1018/human-humanoid-tools/releases/download/0.1.5/hhtools-0.1.5-linux-amd64.deb.sha256) | amd64 | **0.1.5** |
 | macOS 12+ | [DMG installer](https://github.com/Eleanor1018/human-humanoid-tools/releases/download/0.1.5/hhtools-0.1.5-mac-arm64.dmg) | Apple Silicon (arm64) | **0.1.5** |
 
 The Debian package contains Electron plus the curated built-in motions and robots. On first launch,
@@ -131,9 +131,14 @@ carried inside that same package. The recommended per-user option needs no admin
 while the all-users option opens the operating system authentication dialog:
 
 ```bash
-sudo apt install ./hhtools-0.1.5-amd64.deb
+sha256sum -c hhtools-0.1.5-linux-amd64.deb.sha256
+sudo apt install ./hhtools-0.1.5-linux-amd64.deb
 hhtools-desktop
 ```
+
+Ubuntu 22.04 and 26.04 passed container installation, startup, and motion playback checks;
+Ubuntu 24.04 passed native desktop, CUDA retargeting, and NVIDIA rendering checks.
+SHA-256: `7d08c6979de02d26a46ab4eb2bc810a0c2651daad3558a1b1a1fbf4c965548d9`.
 
 The Windows installer instead bundles its Python runtime and application source, so it starts
 without a checkout or system Python.
