@@ -38,7 +38,7 @@ Video-to-motion additionally needs a separate CUDA-capable GVHMR installation.
 
 ### Download Desktop GUI Version Here!
 
-[macOS 0.1.5 DMG (Apple Silicon)](https://github.com/Eleanor1018/human-humanoid-tools/releases/download/0.1.5/hhtools-0.1.5-mac-arm64.dmg) · [All desktop downloads](#desktop-gui)
+[Windows 0.1.5 EXE (x64)](https://github.com/Eleanor1018/human-humanoid-tools/releases/download/0.1.5/hhtools-0.1.5-x64-selfsigned-setup.exe) · [Linux 0.1.5 DEB (amd64)](https://github.com/Eleanor1018/human-humanoid-tools/releases/download/0.1.5/hhtools-0.1.5-linux-amd64.deb) · [macOS 0.1.5 DMG (Apple Silicon)](https://github.com/Eleanor1018/human-humanoid-tools/releases/download/0.1.5/hhtools-0.1.5-mac-arm64.dmg) · [Installation notes](#desktop-gui)
 
 hhtools has three interactive modes plus an Agent automation interface. They share the same motion,
 robot, and retargeting core, but their installation and launch paths are intentionally separate:
@@ -117,11 +117,11 @@ ownership, and the included Codex project configuration.
 
 ### Desktop GUI
 
-Download the desktop preview for your platform. The [0.1.5 release](https://github.com/Eleanor1018/human-humanoid-tools/releases/tag/0.1.5) includes a Linux package built on Ubuntu 22.04 and tested on Ubuntu 22.04, 24.04, and 26.04, plus the macOS preview.
+Download the desktop preview for your platform. The [0.1.5 release](https://github.com/Eleanor1018/human-humanoid-tools/releases/tag/0.1.5) includes Windows x64, Linux amd64, and macOS Apple Silicon packages. The Linux package is built on Ubuntu 22.04 and tested on Ubuntu 22.04, 24.04, and 26.04.
 
 | Platform | Download | Architecture | Version |
 |----------|----------|--------------|---------|
-| Windows | [EXE installer](https://github.com/Eleanor1018/human-humanoid-tools/releases/download/v0.1.0%28beta%29/hhtools-0.1.0-x64-setup.exe) | x64 | 0.1.0 |
+| Windows | [EXE installer](https://github.com/Eleanor1018/human-humanoid-tools/releases/download/0.1.5/hhtools-0.1.5-x64-selfsigned-setup.exe) · [SHA-256](https://github.com/Eleanor1018/human-humanoid-tools/releases/download/0.1.5/hhtools-0.1.5-x64-selfsigned-setup.exe.sha256) | x64 | **0.1.5** |
 | Linux | [Debian package](https://github.com/Eleanor1018/human-humanoid-tools/releases/download/0.1.5/hhtools-0.1.5-linux-amd64.deb) · [SHA-256](https://github.com/Eleanor1018/human-humanoid-tools/releases/download/0.1.5/hhtools-0.1.5-linux-amd64.deb.sha256) | amd64 | **0.1.5** |
 | macOS 12+ | [DMG installer](https://github.com/Eleanor1018/human-humanoid-tools/releases/download/0.1.5/hhtools-0.1.5-mac-arm64.dmg) | Apple Silicon (arm64) | **0.1.5** |
 
@@ -140,8 +140,25 @@ Ubuntu 22.04 and 26.04 passed container installation, startup, and motion playba
 Ubuntu 24.04 passed native desktop, CUDA retargeting, and NVIDIA rendering checks.
 SHA-256: `7d08c6979de02d26a46ab4eb2bc810a0c2651daad3558a1b1a1fbf4c965548d9`.
 
-The Windows installer instead bundles its Python runtime and application source, so it starts
-without a checkout or system Python.
+**Windows installation:** download and run the EXE above. The default current-user installation
+does not require administrator privileges. It bundles Python, application dependencies and the
+Microsoft C++ runtime, so the core application starts without a checkout, system Python, or
+first-run dependency downloads. This preview is **self-signed**, not signed with a publicly trusted
+commercial certificate; Windows may show a SmartScreen or untrusted-publisher warning.
+
+The 526,100,560-byte installer (about 502 MiB) has SHA-256
+`920e8b848a7c366c508b4959f5b38b8eff7a7a86945ce307e2cad3fce2fcce73`.
+To check a downloaded copy in PowerShell:
+
+```powershell
+Get-FileHash .\hhtools-0.1.5-x64-selfsigned-setup.exe -Algorithm SHA256
+```
+
+Windows 10 x64 installation/uninstallation, all seven robot models, motion import, H2R/R2R
+calibration, a four-frame LAFAN-to-G1 Newton retarget and CSV export passed; six desktop UI
+checks also passed. The bundled Torch build is CPU-only. Optional GVHMR video-to-motion uses
+Docker and needs a compatible NVIDIA GPU, its image/checkpoints and licensed SMPL-X assets;
+these are not included, and GPU inference was not validated for this installer.
 
 **macOS installation:**
 
@@ -152,7 +169,7 @@ without a checkout or system Python.
    Python 3.12 environment. No existing Python, source checkout, or Homebrew installation is needed;
    the runtime is installed for the current user without an administrator password.
 
-The Windows **0.1.0** package includes 30 built-in motions and six robots. The Linux **0.1.5** package is built on Ubuntu 22.04, includes 30 motions and seven robots, and has been checked on Ubuntu 22.04, 24.04, and 26.04. The macOS **0.1.5** package includes 30 motions and adds **ROBOTO 01** (`rp1`) as the seventh built-in robot, listed first,
+The Windows, Linux, and macOS **0.1.5** packages each include 30 built-in motions and seven robots. The Linux package is built on Ubuntu 22.04 and has been checked on Ubuntu 22.04, 24.04, and 26.04. **ROBOTO 01** (`rp1`) is the seventh built-in robot, listed first,
 ahead of Unitree G1; **ROBOTO_ORIGIN** (`roboto_origin`) remains a separate model.
 On macOS, Warp retargeting runs on CPU; Intel Macs and the local NVIDIA GVHMR pipeline are unsupported.
 
