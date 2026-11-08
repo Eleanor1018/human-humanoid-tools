@@ -63,11 +63,18 @@ uv run hhtools retarget run path/to/clip.npz \
   --robot g1_29dof -o /tmp/out.csv \
   --calibration-reference smpl --limit-frames 30
 
+# FRAX (experimental, CPU; needs the retarget-frax extra)
+uv run hhtools retarget run path/to/clip.npz \
+  --robot g1_29dof -o /tmp/out_frax.csv \
+  --calibration-reference smpl --backend frax
+
 # Interaction-mesh (OMOMO / OmniContact / terrain clips)
 uv run hhtools retarget interaction-mesh run path/to/clip.pkl \
   --robot g1_29dof -o /tmp/out_im.csv \
   --calibration-reference smpl --limit-frames 30
 ```
+
+`--backend frax` solves the same IK targets as Newton with [frax](https://github.com/StanfordASL/frax) differential IK: joint limits, the floor and self-collision are constraints, and a clip compiles once and then solves in tens of milliseconds on the CPU. `--no-frax-floor` and `--no-frax-self-collision` turn those constraints off; `hhtools robot frax-collision <robot>` prints the sphere model they use. FRAX ignores `--ik-iterations`.
 
 ## Large offline batches
 

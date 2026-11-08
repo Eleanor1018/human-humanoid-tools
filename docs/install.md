@@ -117,6 +117,13 @@ uv sync --locked --extra web --extra retarget
 uv run hhtools web
 ```
 
+To also offer the experimental FRAX solver (CPU only, no Newton needed), add `--extra retarget-frax`:
+
+```bash
+uv sync --locked --extra web --extra retarget --extra retarget-frax
+uv run hhtools doctor --require retarget-frax
+```
+
 For a preview-only WebUI, omit `--extra retarget`. If a required package is absent, startup exits with the missing package names and the exact recovery command instead of an import traceback.
 
 ### Troubleshooting

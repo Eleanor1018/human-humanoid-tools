@@ -63,11 +63,18 @@ uv run hhtools retarget run path/to/clip.npz \
   --robot g1_29dof -o /tmp/out.csv \
   --calibration-reference smpl --limit-frames 30
 
+# FRAX（实验性，CPU；需要 retarget-frax extra）
+uv run hhtools retarget run path/to/clip.npz \
+  --robot g1_29dof -o /tmp/out_frax.csv \
+  --calibration-reference smpl --backend frax
+
 # Interaction-mesh（OMOMO / OmniContact / 带地形）
 uv run hhtools retarget interaction-mesh run path/to/clip.pkl \
   --robot g1_29dof -o /tmp/out_im.csv \
   --calibration-reference smpl --limit-frames 30
 ```
+
+`--backend frax` 用 [frax](https://github.com/StanfordASL/frax) 差分 IK 求解与 Newton 相同的 IK 目标：关节限位、地面和自碰撞都是约束；一段动作编译一次，之后在 CPU 上几十毫秒即可求解完。`--no-frax-floor`、`--no-frax-self-collision` 可关闭对应约束；`hhtools robot frax-collision <robot>` 会打印这些约束使用的球体模型。FRAX 不使用 `--ik-iterations`。
 
 ## 大批量离线任务
 

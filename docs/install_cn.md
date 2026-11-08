@@ -117,6 +117,13 @@ uv sync --locked --extra web --extra retarget
 uv run hhtools web
 ```
 
+如需使用实验性的 FRAX 求解器（只用 CPU，不依赖 Newton），再加 `--extra retarget-frax`：
+
+```bash
+uv sync --locked --extra web --extra retarget --extra retarget-frax
+uv run hhtools doctor --require retarget-frax
+```
+
 只需要预览时可省略 `--extra retarget`。缺少必需的包时，启动程序会列出缺失的包和准确的修复命令，而不是直接显示 import traceback。
 
 ### 常见问题

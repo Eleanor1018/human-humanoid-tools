@@ -23,6 +23,7 @@
 | [`retarget.joint_scale_multipliers`](#调整体型joint_scale_multipliers) | 可选，手动覆盖体型比例，无需重新标定。 |
 | `retarget.feet_stabilizer`、`apply_feet_stabilizer` | 脚底贴地与身体离地高度。翻滚、空翻类动作可设 `apply_feet_stabilizer: false`。 |
 | `retarget.references.<格式>` | 按动作格式覆盖（例如 bundled `scaler_config`）。 |
+| [`retarget.frax`](#frax-求解器retargetfrax) | 只作用于实验性的 FRAX 求解器。 |
 
 ## 手臂一直张开？先检查 `smooth_joint_filter_masks`
 
@@ -58,3 +59,26 @@ retarget:
 - **不要**把某份标定的 `derived.scales` 整表贴进来，否则会影响其他人体参考格式。
 - 与当前或任意 `retarget_calibration_*.yaml` 的 scales 相同的值（或仍是脚手架零位默认值）会被视为未修改并忽略。
 - **肩**只影响横向 IK 与 shoulder roll，不改变竖直身高。
+
+## FRAX 求解器：`retarget.frax`
+
+这些字段只影响 `--backend frax`（或 WebUI 求解器列表里的 **FRAX**），都可以省略。拼错的字段会在日志里提示，取值非法时会报出字段名并停止重映射。
+
+```yaml
+retarget:
+  frax:
+    regularization: 0.1        # 关节速度正则；越小跟踪越紧，但可能抖动
+    floor: true                # 碰撞球保持在 z = 0 之上
+    floor_margin: 0.0          # 额外离地高度（米）
+    self_collision: true       # 肢体碰撞球互不穿透
+    self_collision_rows: 64    # 每帧检查最近的球对数量
+    velocity_limits: false     # 同时执行 URDF 关节速度限制
+    midpoint_weight: 0.0       # Newton 的拉向限位中点项；null 表示沿用 smooth_joint_filter_weight
+    global_ik_init: false      # 首帧先做采样式全局 IK（启动更慢）
+    joint_limit_overrides:     # 收窄位置限位（弧度）
+      left_shoulder_roll_joint: [-0.2, 2.5]
+    joint_regularization:      # 单个关节的正则
+      waist_yaw_joint: 1.0
+```
+
+地面和自碰撞约束基于球体模型：机器人目录里有 `frax_collision.yaml` 时用它；Unitree G1 用 frax 自带的调好的模型；其余机器人按 URDF 碰撞几何自动拟合。用 `hhtools robot frax-collision <name>` 查看当前模型；加 `-o <机器人目录>/frax_collision.yaml` 保存后即可手动修改。
