@@ -242,7 +242,7 @@ _LEGACY_LOCATION_BASELINE: dict[ImportIdentity, int] = {
     ): 1,
     ImportIdentity(
         "hhtools/robot/retarget_profile.py",
-        "hhtools.retarget.newton_basic.pipeline",
+        "hhtools.retarget.ik_pipeline",
         "build_pipeline_config_for_preset",
     ): 1,
     ImportIdentity(
@@ -373,7 +373,7 @@ _LEGACY_IMPORT_FINGERPRINTS: dict[tuple[str, str, str], str] = {
     ): "from:auto_source_to_canonical",
     (
         "hhtools/robot/retarget_profile.py",
-        "hhtools.retarget.newton_basic.pipeline",
+        "hhtools.retarget.ik_pipeline",
         "build_pipeline_config_for_preset",
     ): "from:PipelineConfig",
     (

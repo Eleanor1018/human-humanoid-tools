@@ -1073,7 +1073,7 @@ def build_pipeline_config_for_preset(
     overrides ``robot.yaml`` for that retarget run.
     """
 
-    from hhtools.retarget.newton_basic.pipeline import PipelineConfig
+    from hhtools.retarget.ik_pipeline import PipelineConfig
 
     block = _retarget_block(preset)
     ref_cfg = _reference_block(preset, reference)
