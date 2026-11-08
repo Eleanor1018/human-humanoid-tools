@@ -217,6 +217,18 @@ def _reload_retarget_block(preset: "RobotPreset") -> dict[str, Any]:
     return _retarget_block(preset)
 
 
+def retarget_backend_block(preset: "RobotPreset", backend: str) -> dict[str, Any]:
+    """Read the ``retarget.<backend>:`` options block (fresh from disk).
+
+    Backend-specific knobs (for example ``retarget.frax``) live under the same
+    ``retarget:`` section as the shared settings so yaml edits apply on the
+    next retarget.  Returns ``{}`` when the block is absent or malformed.
+    """
+
+    block = _reload_retarget_block(preset).get(str(backend))
+    return dict(block) if isinstance(block, dict) else {}
+
+
 def joint_scale_overrides_from_preset(
     preset: "RobotPreset",
 ) -> dict[str, float]:

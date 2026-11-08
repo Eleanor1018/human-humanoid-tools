@@ -99,6 +99,13 @@ retarget-interaction = [
     "newton",
     "osqp>=0.6",
 ]
+# FRAX differential-IK backend (JAX + ElastiQP, runs on CPU).  frax is 0.x, so
+# the version is pinned exactly; every frax call lives in hhtools/retarget/frax_backend.
+retarget-frax = [
+    "frax[ik]==0.2.0",
+    "yourdfpy>=0.0.56",
+    "mujoco>=3.1",
+]
 mcp = [
     # The stdio host assembles the transport-neutral application runtime.
     # Keep execution dependencies explicit without pulling FastAPI, Uvicorn,

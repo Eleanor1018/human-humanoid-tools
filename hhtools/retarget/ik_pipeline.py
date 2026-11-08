@@ -632,11 +632,7 @@ class IKPipelineBase:
                 after each per-frame IK solve.  Exceptions raised by the
                 callback are swallowed so a buggy UI doesn't abort the solve.
         """
-        motion = self._ensure_z_up(motion)
-        from hhtools.retarget.newton_basic.rest_pose import normalize_mocap_bvh_clip
-
-        motion = normalize_mocap_bvh_clip(motion)
-        motion = self._floor_normalize_motion(motion)
+        motion = self._normalize_input_motion(motion)
         self._active_motion_source_format = str(
             getattr(motion, "source_format", "") or "",
         ).lower()
@@ -660,6 +656,14 @@ class IKPipelineBase:
         finally:
             if ik_map_restore is not None:
                 self.ik_mapping = ik_map_restore
+
+    def _normalize_input_motion(self, motion: Motion) -> Motion:
+        """Z-up, MOCAP BVH clip normalisation and floor reference, as ``run`` applies them."""
+        motion = self._ensure_z_up(motion)
+        from hhtools.retarget.newton_basic.rest_pose import normalize_mocap_bvh_clip
+
+        motion = normalize_mocap_bvh_clip(motion)
+        return self._floor_normalize_motion(motion)
 
     def _push_motion_ik_policy(self, motion: Motion):
         """Drop head/neck IK entries for OmniContact→G1; return prior mapping."""

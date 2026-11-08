@@ -1542,8 +1542,9 @@ def retarget_robot_to_robot(
     ``calibrated_joint_q`` is the target robot's hand-aligned pose matching the
     source robot's rest skeleton (saved by the R2R calibration step).
 
-    ``backend`` is ``"newton"`` (GPU IK) or ``"interaction_mesh"`` (MPC on
-    terrain / interaction objects).  For the latter, attach scene data to
+    ``backend`` is ``"newton"`` (GPU IK), ``"frax"`` (CPU differential IK,
+    experimental) or ``"interaction_mesh"`` (MPC on terrain / interaction
+    objects).  For the latter, attach scene data to
     ``source_motion`` before calling (see
     :func:`~hhtools.io.r2r_scene.attach_r2r_clip_scene_to_motion`).
     """
@@ -1600,32 +1601,46 @@ def retarget_robot_to_robot(
             calibrated_joint_q,
         )
 
-    from hhtools.retarget.newton_basic import NewtonBasicPipeline
-    from hhtools.retarget.newton_basic._warp_config import configure as configure_warp
     from hhtools.robot.retarget_profile import (
         build_feet_stabilizer_config,
         build_pipeline_config_for_preset,
     )
 
-    configure_warp()
     feet_cfg = build_feet_stabilizer_config(
         target_model.preset,
         reference_key,
         model=target_model,
     )
-    pipeline = NewtonBasicPipeline(
-        target_model,
-        scaler_config=cfg,
-        pipeline_config=build_pipeline_config_for_preset(
-            target_model.preset,
-            reference_key,
-            ik_iterations=ik_iterations,
-        ),
-        feet_stabilizer_config=feet_cfg,
-        human_height=float(ref.height_m),
-        source_to_canonical=identity_map,
-        configure_warp=False,
+    pipeline_cfg = build_pipeline_config_for_preset(
+        target_model.preset,
+        reference_key,
+        ik_iterations=ik_iterations,
     )
+    if backend == "frax":
+        from hhtools.retarget.frax_backend import FraxPipeline
+
+        pipeline = FraxPipeline(
+            target_model,
+            scaler_config=cfg,
+            pipeline_config=pipeline_cfg,
+            feet_stabilizer_config=feet_cfg,
+            human_height=float(ref.height_m),
+            source_to_canonical=identity_map,
+        )
+    else:
+        from hhtools.retarget.newton_basic import NewtonBasicPipeline
+        from hhtools.retarget.newton_basic._warp_config import configure as configure_warp
+
+        configure_warp()
+        pipeline = NewtonBasicPipeline(
+            target_model,
+            scaler_config=cfg,
+            pipeline_config=pipeline_cfg,
+            feet_stabilizer_config=feet_cfg,
+            human_height=float(ref.height_m),
+            source_to_canonical=identity_map,
+            configure_warp=False,
+        )
     try:
         ret = pipeline.run(source_motion, progress_callback=progress_callback)
     except TypeError:
