@@ -17,6 +17,7 @@ import {
 } from "@/components/WorkflowSteps";
 import { useLocaleText } from "@/LocaleProvider";
 import { displayFileName } from "@/lib/api";
+import { useFraxAvailable } from "@/lib/solvers";
 import { robotLabel } from "@/features/robot/presentation";
 import { ResultDiagnostics } from "@/features/result/ResultDiagnostics";
 import { ResultExportControls } from "@/features/result/ResultExportControls";
@@ -220,6 +221,7 @@ export function RobotToRobotView({
   const [backend, setBackend] = useState<R2rBackend>(
     suggestedBackend(currentSourceResult),
   );
+  const fraxAvailable = useFraxAvailable();
   const [calibrated, setCalibrated] = useState(false);
   const [checkingCalibration, setCheckingCalibration] = useState(false);
   const [calibration, setCalibration] = useState<R2rCalibrationSession | null>(null);
@@ -1088,6 +1090,9 @@ export function RobotToRobotView({
                   }}
                 >
                   <option value="newton">Newton IK</option>
+                  {(fraxAvailable || backend === "frax") && (
+                    <option value="frax">{text("FRAX (experimental)", "FRAX（实验性）")}</option>
+                  )}
                   <option value="interaction_mesh">Interaction Mesh</option>
                 </select>
               </Field>

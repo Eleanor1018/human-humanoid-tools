@@ -63,6 +63,7 @@ _DISTRIBUTIONS: dict[str, tuple[str, ...]] = {
     "osqp": ("osqp",),
     "torch": ("torch",),
     "warp": ("warp-lang", "warp"),
+    "frax": ("frax",),
 }
 
 
@@ -286,6 +287,10 @@ def _robot_capabilities(presets: Iterable[RobotPreset]) -> list[RobotCapability]
     return robots
 
 
+#: Package whose version identifies each backend's solver.
+_VERSION_MODULE = {"newton": "newton", "frax": "frax"}
+
+
 def _backend_capabilities(
     devices: list[DeviceCapability],
     batch_limits: BatchLimitSnapshot,
@@ -316,6 +321,32 @@ def _backend_capabilities(
                 # value below them, while accidental pathological values are
                 # rejected before a solver or resampler is constructed.
                 "max_ik_iterations": 200,
+                "max_retarget_fps": 1_000.0,
+                "max_retarget_frames": 100_000,
+                "max_human_height": 10.0,
+                "max_batch_items": batch_limits.max_batch_items,
+                "max_batch_total_frames": batch_limits.max_batch_total_frames,
+            },
+        ),
+        (
+            "frax",
+            "FRAX differential IK (experimental)",
+            # frax.ik solves on the CPU with JAX + ElastiQP; the robot adapter
+            # (URDF, collision geometry) needs yourdfpy and MuJoCo as for Newton.
+            ("frax", "jax", "elastiqp", "mujoco", "yourdfpy"),
+            [AssetCategory.PLAIN_MOTION, AssetCategory.ROBOT_TRAJECTORY],
+            {
+                "batch": True,
+                "scene_geometry": False,
+                "r2r": True,
+                "cuda_graph": False,
+                "cpu_fallback": True,
+                "experimental": True,
+                "floor_constraint": True,
+                "self_collision": True,
+            },
+            {
+                "requires_cuda": False,
                 "max_retarget_fps": 1_000.0,
                 "max_retarget_frames": 100_000,
                 "max_human_height": 10.0,
@@ -355,7 +386,7 @@ def _backend_capabilities(
                 backend_id=backend_id,
                 display_name=display_name,
                 available=not reasons,
-                version=_module_version("newton" if backend_id == "newton" else "mujoco"),
+                version=_module_version(_VERSION_MODULE.get(backend_id, "mujoco")),
                 supported_categories=categories,
                 output_formats=list(_OUTPUT_FORMATS),
                 unavailable_reason="; ".join(reasons) if reasons else None,
@@ -364,6 +395,25 @@ def _backend_capabilities(
             )
         )
     return capabilities
+
+
+def solver_availability() -> list[dict[str, Any]]:
+    """Compact solver list for the Web UI: id, label, availability and reason.
+
+    Same dependency probes as :meth:`CapabilitiesService.get_capabilities`
+    (no solver is imported and no device is probed).
+    """
+    return [
+        {
+            "id": backend.backend_id,
+            "label": backend.display_name,
+            "available": backend.available,
+            "experimental": bool(backend.features.get("experimental", False)),
+            "categories": [category.value for category in backend.supported_categories],
+            "reason": backend.unavailable_reason,
+        }
+        for backend in _backend_capabilities([], BatchLimitSnapshot())
+    ]
 
 
 class CapabilitiesService:

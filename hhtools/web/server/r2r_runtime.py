@@ -24,6 +24,7 @@ from hhtools.application.progress import (
 )
 from hhtools.application.robots import (
     _join_robot_prewarm,
+    _require_frax_package,
     _require_newton_package,
 )
 from hhtools.application.state import _snapshot_job_request
@@ -352,6 +353,12 @@ def _r2r_retarget_progress_cb(
                 f"MPC 求解 {done}/{total}",
             )
         return
+    if backend == "frax":
+        if done <= 0:
+            _set_retarget_job_clip_progress(job, 0.1, f"FRAX 整段求解 {total} 帧…")
+        else:
+            _set_retarget_job_clip_progress(job, 0.95, "FRAX 求解完成，正在后处理…")
+        return
     if done <= 0:
         _set_retarget_job_clip_progress(job, 0.08, "正在准备逐帧 IK…")
     else:
@@ -474,7 +481,9 @@ def _run_r2r_batch_job(job: Job, body: dict, state: SessionState) -> None:
         if not calib:
             raise ValueError(f"target {target!r} is not calibrated against source {source!r}")
 
-        if backend != "interaction_mesh":
+        if backend == "frax":
+            _require_frax_package()
+        elif backend != "interaction_mesh":
             _require_newton_package()
             _join_robot_prewarm(state, target, job)
 

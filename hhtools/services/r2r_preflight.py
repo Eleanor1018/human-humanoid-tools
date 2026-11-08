@@ -159,11 +159,16 @@ def _positive_float(
     return value
 
 
+#: Backends the Agent R2R workflow can execute; the first is the default.
+_R2R_BACKENDS = ("newton", "frax")
+
+
 def _normalize_parameters(
     request: R2RPreflightRequest,
     inspection: AssetInspection,
     *,
     backend_limits: Mapping[str, Any],
+    backend_id: str = "newton",
 ) -> dict[str, Any]:
     parameters = request.parameters
     unknown = sorted(set(parameters).difference(_PARAMETERS))
@@ -209,7 +214,15 @@ def _normalize_parameters(
 
     maximum_iterations = int(backend_limits.get("max_ik_iterations", _DEFAULT_MAX_IK_ITERATIONS))
     ik_iterations = parameters.get("ik_iterations", 24)
-    if (
+    if backend_id != "newton":
+        if "ik_iterations" in parameters:
+            _fail(
+                "INVALID_PARAMETER",
+                "ik_iterations is only supported by the Newton backend.",
+                details={"parameter": "ik_iterations", "backend": backend_id},
+            )
+        ik_iterations = None
+    elif (
         isinstance(ik_iterations, bool)
         or not isinstance(ik_iterations, int)
         or ik_iterations <= 0
@@ -230,7 +243,7 @@ def _normalize_parameters(
             details={"parameter": "source_fps"},
         )
     retarget_fps = _positive_float(parameters, "retarget_fps", maximum=maximum_fps)
-    return {
+    normalized = {
         "run_mode": run_mode,
         "limit_frames": limit_frames,
         "ik_iterations": ik_iterations,
@@ -238,6 +251,9 @@ def _normalize_parameters(
         "retarget_fps": retarget_fps,
         "trajectory_profile": "mimic",
     }
+    if ik_iterations is None:
+        del normalized["ik_iterations"]
+    return normalized
 
 
 def _calibration_action(
@@ -464,11 +480,11 @@ class R2RPreflightService:
             )
 
             requested_backend = request.backend or recommended_backend
-            if requested_backend != recommended_backend:
+            if requested_backend not in _R2R_BACKENDS:
                 _fail(
                     "BACKEND_INCOMPATIBLE",
-                    "The initial Agent R2R workflow supports only the Newton backend.",
-                    details={"backend": requested_backend},
+                    "The Agent R2R workflow supports the Newton and FRAX backends.",
+                    details={"backend": requested_backend, "supported": list(_R2R_BACKENDS)},
                 )
             capabilities = self._capabilities_provider()
             backend = _backend_capability(capabilities, requested_backend)
@@ -482,7 +498,7 @@ class R2RPreflightService:
                 _check(
                     "BACKEND_READY",
                     PreflightCheckLevel.PASS,
-                    "The Newton backend is installed and available for R2R.",
+                    "The selected backend is installed and available for R2R.",
                     details={"backend": backend.backend_id},
                 )
             )
@@ -595,6 +611,7 @@ class R2RPreflightService:
                 request,
                 trajectory_inspection,
                 backend_limits=backend.limits,
+                backend_id=backend.backend_id,
             )
             checks.append(
                 _check(

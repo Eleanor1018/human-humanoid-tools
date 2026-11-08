@@ -21,6 +21,7 @@ class Requirement(StrEnum):
     WEB = "web"
     ROBOT = "robot"
     RETARGET = "retarget"
+    RETARGET_FRAX = "retarget-frax"
     MCP = "mcp"
     BODYMODELS = "bodymodels"
     GVHMR = "gvhmr"
@@ -150,6 +151,19 @@ def _check_retarget() -> DoctorCheck:
     )
 
 
+def _check_retarget_frax() -> DoctorCheck:
+    modules = _availability(("frax", "jax", "elastiqp", "mujoco", "yourdfpy"))
+    ready = all(modules.values())
+    return DoctorCheck(
+        "retarget-frax",
+        ready,
+        "FRAX, JAX and ElastiQP imports are available (experimental CPU solver)"
+        if ready
+        else "FRAX solver imports are missing (install the retarget-frax extra)",
+        {"modules": modules},
+    )
+
+
 def _check_mcp() -> DoctorCheck:
     modules = _availability(_MCP_RUNTIME_MODULES)
     entries = _availability(("hhtools.mcp.runtime", "hhtools.mcp.server"))
@@ -246,6 +260,7 @@ def build_report(required: list[Requirement]) -> DoctorReport:
         _check_web(),
         _check_robot(),
         _check_retarget(),
+        _check_retarget_frax(),
         _check_mcp(),
         _check_bodymodels(),
         _check_gvhmr(),

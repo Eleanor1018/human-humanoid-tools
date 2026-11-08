@@ -16,7 +16,7 @@ PositiveExecutionInt = Annotated[int, Field(gt=0, strict=True)]
 class SolverExecutionOptions(ContractModel):
     """Parameters shared by browser and Agent solver entry points."""
 
-    backend: Literal["newton", "interaction_mesh"] = "newton"
+    backend: Literal["newton", "interaction_mesh", "frax"] = "newton"
     ik_iterations: PositiveExecutionInt = 24
     retarget_fps: PositiveExecutionFloat | None = None
 
@@ -43,8 +43,8 @@ class AgentH2RExecutionParameters(HumanRetargetExecutionOptions):
     def validate_run_scope(self) -> AgentH2RExecutionParameters:
         if self.run_mode == "full" and self.limit_frames is not None:
             raise ValueError("full execution cannot declare limit_frames")
-        if self.backend == "interaction_mesh" and "ik_iterations" in self.model_fields_set:
-            raise ValueError("interaction_mesh execution cannot declare ik_iterations")
+        if self.backend != "newton" and "ik_iterations" in self.model_fields_set:
+            raise ValueError(f"{self.backend} execution cannot declare ik_iterations")
         return self
 
 
@@ -59,8 +59,10 @@ class AgentR2RExecutionParameters(SolverExecutionOptions):
 
     @model_validator(mode="after")
     def validate_run_scope(self) -> AgentR2RExecutionParameters:
-        if self.backend != "newton":
-            raise ValueError("the initial R2R Agent workflow supports only newton")
+        if self.backend not in ("newton", "frax"):
+            raise ValueError("the R2R Agent workflow supports newton and frax")
+        if self.backend == "frax" and "ik_iterations" in self.model_fields_set:
+            raise ValueError("frax execution cannot declare ik_iterations")
         if self.run_mode == "full" and self.limit_frames is not None:
             raise ValueError("full execution cannot declare limit_frames")
         return self

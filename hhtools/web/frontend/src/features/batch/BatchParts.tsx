@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import type { MotionLibraryEntry } from "@/features/motion/api";
 import type { RobotSummary } from "@/features/robot/api";
 import type { JobSnapshot, UploadFile } from "@/lib/api";
+import { useFraxAvailable } from "@/lib/solvers";
 import { cn } from "@/lib/utils";
 import { useLocaleText } from "@/LocaleProvider";
 
@@ -327,6 +328,7 @@ export function CommonBatchSettings({
   onBatchSizeChange?(value: string): void;
 }) {
   const text = useLocaleText();
+  const fraxAvailable = useFraxAvailable();
   return (
     <div className="grid gap-2.5">
       <div className="grid grid-cols-2 gap-2">
@@ -338,6 +340,9 @@ export function CommonBatchSettings({
             onChange={(event) => onChange({ backend: event.currentTarget.value as BatchBackend })}
           >
             <option value="newton">Newton IK</option>
+            {(fraxAvailable || value.backend === "frax") && (
+              <option value="frax">{text("FRAX (experimental)", "FRAX（实验性）")}</option>
+            )}
             <option value="interaction_mesh">Interaction-Mesh</option>
           </select>
         </Field>

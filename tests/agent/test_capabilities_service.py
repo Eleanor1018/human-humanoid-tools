@@ -98,6 +98,14 @@ def test_capabilities_report_unlimited_defaults_and_backend_specific_dependencie
     assert "newton, warp" in (backends["newton"].unavailable_reason or "")
     assert backends["newton"].features["cpu_fallback"] is True
     assert backends["newton"].features["cuda_graph"] is False
+    assert backends["frax"].available is False
+    assert backends["frax"].unavailable_reason == "missing dependencies: frax, jax, elastiqp"
+    assert backends["frax"].features["experimental"] is True
+    assert backends["frax"].features["cuda_graph"] is False
+    assert [category.value for category in backends["frax"].supported_categories] == [
+        "plain_motion",
+        "robot_trajectory",
+    ]
 
 
 def test_capabilities_normalize_live_scheduler_and_available_gpu_backends(
@@ -135,6 +143,7 @@ def test_capabilities_normalize_live_scheduler_and_available_gpu_backends(
     assert response.features["asset_registry"] is True
     assert response.features["asset_inspection"] is True
     assert {backend.backend_id for backend in response.backends if backend.available} == {
+        "frax",
         "interaction_mesh",
         "newton",
     }

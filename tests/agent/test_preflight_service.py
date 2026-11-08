@@ -168,6 +168,13 @@ def _capabilities(*, closed: bool = False) -> CapabilityResponse:
                 output_formats=["csv", "pkl"],
             ),
             BackendCapability(
+                backend_id="frax",
+                display_name="FRAX differential IK (experimental)",
+                available=True,
+                supported_categories=["plain_motion", "robot_trajectory"],
+                output_formats=["csv", "pkl"],
+            ),
+            BackendCapability(
                 backend_id="interaction_mesh",
                 display_name="Interaction Mesh",
                 available=True,
@@ -598,6 +605,29 @@ def test_robot_asset_is_required_and_backend_cannot_override_routing(
     assert wrong_backend.status is PreflightStatus.REJECTED
     assert wrong_backend.error is not None
     assert wrong_backend.error.code == "BACKEND_INCOMPATIBLE"
+
+
+def test_plain_motion_may_choose_frax_which_takes_no_ik_iterations(tmp_path: Path) -> None:
+    service, motion_id, robot_id, _ = _setup(tmp_path, calibration=False, scaler=True)
+
+    response = service.preflight_retarget(_request(motion_id, robot_id, backend="frax"))
+    rejected = service.preflight_retarget(
+        _request(
+            motion_id,
+            robot_id,
+            backend="frax",
+            parameters={"run_mode": "smoke", "ik_iterations": 24},
+        )
+    )
+
+    assert response.status is PreflightStatus.READY
+    assert response.plan is not None
+    assert response.plan.backend == "frax"
+    assert response.plan.parameters["retarget_profile"] == "bundled_scaler"
+    assert "ik_iterations" not in response.plan.parameters
+    assert rejected.status is PreflightStatus.REJECTED
+    assert rejected.error is not None
+    assert rejected.error.code == "INVALID_PARAMETER"
 
 
 def test_terrain_scene_preflight_freezes_interaction_mesh_without_newton_options(

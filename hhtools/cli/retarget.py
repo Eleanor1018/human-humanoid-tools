@@ -189,7 +189,7 @@ def retarget(
     ik_iterations: int = typer.Option(
         24,
         "--ik-iterations",
-        help="Newton IK LM iterations per frame.",
+        help="Newton IK LM iterations per frame (ignored by --backend frax).",
     ),
     human_height: float = typer.Option(
         1.7,
@@ -226,6 +226,25 @@ def retarget(
             "legacy retarget_calibration.yaml if its embedded reference matches."
         ),
     ),
+    backend: str = typer.Option(
+        "newton",
+        "--backend",
+        help=(
+            "IK solver: newton (default; Warp, CUDA when available) or frax "
+            "(experimental; JAX on the CPU, joint limits and floor as constraints). "
+            "frax needs the retarget-frax extra."
+        ),
+    ),
+    frax_floor: bool | None = typer.Option(
+        None,
+        "--frax-floor/--no-frax-floor",
+        help="FRAX only: keep collision spheres above the floor (default: robot.yaml, on).",
+    ),
+    frax_self_collision: bool | None = typer.Option(
+        None,
+        "--frax-self-collision/--no-frax-self-collision",
+        help="FRAX only: avoid self-collision between limb spheres (default: robot.yaml).",
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
     """Retarget one or more NPZ motion clips to ``robot`` and save CSVs."""
@@ -233,12 +252,26 @@ def retarget(
         level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    backend = backend.strip().lower()
+    if backend not in ("newton", "frax"):
+        raise typer.BadParameter("--backend must be 'newton' or 'frax'")
+    if backend == "frax":
+        from hhtools.retarget.frax_backend import missing_frax_dependencies
 
-    # Configure Warp's kernel cache *before* anything that imports warp, so
-    # the pipeline's first kernel compile lands in a writable directory.
-    from hhtools.retarget.newton_basic._warp_config import configure as configure_warp_cache
+        missing = missing_frax_dependencies()
+        if missing:
+            raise typer.BadParameter(
+                f"--backend frax needs {', '.join(missing)}; install the "
+                "retarget-frax extra (uv sync --extra retarget-frax)."
+            )
+    else:
+        # Configure Warp's kernel cache *before* anything that imports warp, so
+        # the pipeline's first kernel compile lands in a writable directory.
+        from hhtools.retarget.newton_basic._warp_config import (
+            configure as configure_warp_cache,
+        )
 
-    configure_warp_cache()
+        configure_warp_cache()
 
     from hhtools.core.motion import Motion
     from hhtools.io.robot_csv import save_robot_csv
@@ -246,7 +279,6 @@ def retarget(
         load_calibration,
         resolve_preset_calibration_file,
     )
-    from hhtools.retarget.newton_basic import NewtonBasicPipeline
     from hhtools.robot.loader import load_robot
     from hhtools.robot.registry import get as get_preset
     from hhtools.robot.retarget_profile import (
@@ -329,7 +361,21 @@ def retarget(
             model=robot_model,
         )
 
-    pipeline: NewtonBasicPipeline | None = None
+    frax_config = None
+    if backend == "frax":
+        from hhtools.retarget.frax_backend import frax_config_for_preset
+
+        overrides = {}
+        if frax_floor is not None:
+            overrides["floor"] = frax_floor
+        if frax_self_collision is not None:
+            overrides["self_collision"] = frax_self_collision
+        try:
+            frax_config = frax_config_for_preset(preset, **overrides)
+        except ValueError as err:
+            raise typer.BadParameter(str(err)) from err
+
+    pipeline = None
     errors: list[tuple[Path, str]] = []
     written: list[Path] = []
 
@@ -361,14 +407,28 @@ def retarget(
         # Newton model / IK solver only cares about the robot, not the
         # source hierarchy.  The scaler is re-created per motion internally.
         if pipeline is None:
-            pipeline = NewtonBasicPipeline(
-                robot_model,
-                scaler_config=scaler_cfg,
-                feet_stabilizer_config=feet_stabilizer_config,
-                pipeline_config=pipeline_cfg,
-                human_height=human_height,
-                configure_warp=False,
-            )
+            if backend == "frax":
+                from hhtools.retarget.frax_backend import FraxPipeline
+
+                pipeline = FraxPipeline(
+                    robot_model,
+                    scaler_config=scaler_cfg,
+                    feet_stabilizer_config=feet_stabilizer_config,
+                    pipeline_config=pipeline_cfg,
+                    human_height=human_height,
+                    frax_config=frax_config,
+                )
+            else:
+                from hhtools.retarget.newton_basic import NewtonBasicPipeline
+
+                pipeline = NewtonBasicPipeline(
+                    robot_model,
+                    scaler_config=scaler_cfg,
+                    feet_stabilizer_config=feet_stabilizer_config,
+                    pipeline_config=pipeline_cfg,
+                    human_height=human_height,
+                    configure_warp=False,
+                )
         else:
             pipeline.scaler_config = scaler_cfg
 
@@ -389,7 +449,8 @@ def retarget(
         meta_out = {
             "source": str(src.resolve()),
             "source_format": motion.meta.get("source_format", ""),
-            "ik_iterations": str(ik_iterations),
+            "retarget_backend": backend,
+            **({"ik_iterations": str(ik_iterations)} if backend == "newton" else {}),
             **{k: str(v) for k, v in retargeted.meta.items()},
         }
         if abs(lift) > 1e-12:

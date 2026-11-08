@@ -246,6 +246,14 @@ def _raise_inspection_error(
     )
 
 
+#: Backends that may solve each category; the first is the recommended one.
+_CATEGORY_BACKENDS: dict[AssetCategory, tuple[str, ...]] = {
+    AssetCategory.PLAIN_MOTION: ("newton", "frax"),
+    AssetCategory.OBJECT_INTERACTION: ("interaction_mesh",),
+    AssetCategory.TERRAIN_SCENE: ("interaction_mesh",),
+}
+
+
 def _backend_for_category(category: AssetCategory) -> str:
     if category is AssetCategory.PLAIN_MOTION:
         return "newton"
@@ -1154,7 +1162,7 @@ def _retarget_profile(
 ) -> tuple[str, str, str | None, float, str, str]:
     manual = _manual_calibration(preset, reference, limits, robot_bundle)
     scaler = None
-    if backend == "newton" and manual is None:
+    if backend in ("newton", "frax") and manual is None:
         scaler = _bundled_scaler(preset, reference, robot_bundle)
     if manual is None and scaler is None:
         if request.calibration_id is not None:
@@ -1333,7 +1341,9 @@ class PreflightService:
             )
             recommended_backend = _backend_for_category(motion_inspection.category)
             requested_backend = request.backend or recommended_backend
-            if requested_backend != recommended_backend:
+            if requested_backend not in _CATEGORY_BACKENDS.get(
+                motion_inspection.category, (recommended_backend,)
+            ):
                 _fail(
                     "BACKEND_INCOMPATIBLE",
                     "The requested backend does not support this motion category.",

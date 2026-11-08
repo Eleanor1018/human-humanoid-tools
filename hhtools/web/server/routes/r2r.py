@@ -16,7 +16,11 @@ from hhtools.application.previews import (
     _anchor_scaled_preview_to_ik_root,
     _compute_r2r_scaled_preview,
 )
-from hhtools.application.robots import _join_robot_prewarm, _require_newton_package
+from hhtools.application.robots import (
+    _join_robot_prewarm,
+    _require_frax_package,
+    _require_newton_package,
+)
 from hhtools.application.state import Job, _snapshot_job_request
 from hhtools.io.export_bundle import ensure_export_path, sanitize_export_stem
 from hhtools.web.server.r2r_runtime import (
@@ -252,7 +256,9 @@ def register_r2r_routes(app, *, state, jobs, uploads) -> None:
                     "run the calibration step first"
                 )
 
-            if backend != "interaction_mesh":
+            if backend == "frax":
+                _require_frax_package()
+            elif backend != "interaction_mesh":
                 _require_newton_package()
                 _join_robot_prewarm(state, target, job)
 

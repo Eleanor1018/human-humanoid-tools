@@ -96,7 +96,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     p.add_argument(
         "--backend",
-        choices=("auto", "newton", "interaction_mesh"),
+        choices=("auto", "newton", "frax", "interaction_mesh"),
         default="auto",
         help="Retarget backend (default: auto from profile/scene).",
     )

@@ -20,6 +20,7 @@ import {
 } from "@/components/WorkflowSteps";
 import { useLocaleText } from "@/LocaleProvider";
 import { displayFileName } from "@/lib/api";
+import { useFraxAvailable } from "@/lib/solvers";
 import {
   getHumanMotionLibrary,
   loadMotionLibraryEntry,
@@ -68,7 +69,7 @@ type Action =
   | "proposal"
   | "save"
   | "retarget";
-type Backend = "newton" | "interaction_mesh";
+type Backend = "newton" | "interaction_mesh" | "frax";
 
 interface StepStatus {
   readonly label: string;
@@ -249,6 +250,7 @@ export function HumanToRobotView({
   );
   const [retargetFps, setRetargetFps] = useState("");
   const [backend, setBackend] = useState<Backend>("newton");
+  const fraxAvailable = useFraxAvailable();
   const actionRequest = useRef<AbortController | null>(null);
   const calibrationStatusRequest = useRef<AbortController | null>(null);
   const resultCallback = useRef(onRetargetResult);
@@ -685,7 +687,9 @@ export function HumanToRobotView({
       setStatus(
         backend === "newton"
           ? text("Starting Newton IK…", "正在启动 Newton IK…")
-          : text("Starting Interaction-Mesh…", "正在启动 Interaction-Mesh…"),
+          : backend === "frax"
+            ? text("Starting FRAX…", "正在启动 FRAX…")
+            : text("Starting Interaction-Mesh…", "正在启动 Interaction-Mesh…"),
       );
       const value = await retarget(
         {
@@ -924,6 +928,11 @@ export function HumanToRobotView({
                   }}
                 >
                   <option value="newton">Newton IK</option>
+                  {(fraxAvailable || backend === "frax") && (
+                    <option value="frax">
+                      {text("FRAX (experimental)", "FRAX（实验性）")}
+                    </option>
+                  )}
                   <option value="interaction_mesh">Interaction-Mesh</option>
                 </select>
               </Field>
