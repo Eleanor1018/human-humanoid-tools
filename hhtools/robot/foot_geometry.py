@@ -18,6 +18,7 @@ __all__ = [
     "foot_mesh_lateral_inner_gap",
     "ground_contact_zs",
     "lowest_ankle_z",
+    "pelvis_offset_in_root_frame",
     "quat_xyzw_to_rotmat",
     "resolve_leg_abduction_joints",
     "scene_min_mesh_z",
@@ -160,6 +161,48 @@ def ground_contact_zs(
     if include_mesh:
         mesh_z = scene_min_mesh_z(model.trimesh_scene(), root_rot)
     return limb_z, mesh_z
+
+
+def pelvis_offset_in_root_frame(model: URDFRobotModel) -> np.ndarray | None:
+    """Root-frame offset from the floating-base origin up to the hips.
+
+    Upright tests such as the clip floor snap read the floating-base origin
+    as the pelvis height.  That holds when the URDF is rooted at the pelvis,
+    which covers almost every humanoid.  A URDF can also be rooted at foot
+    level: Berkeley Humanoid Lite's ``base`` origin sits at the soles with the
+    hip joints ~0.54 m above it, so "root above the sole" reads ~0 on every
+    standing frame and those frames are never treated as upright.
+
+    Returns ``None`` for pelvis-rooted robots so callers keep reading the
+    root origin exactly as before.  When the root origin lies in the lower
+    half of the hip-to-ankle span at the zero configuration, returns the
+    midpoint of the ``left_hip`` / ``right_hip`` link origins in the root
+    frame instead.  Leaves the model at the zero configuration.
+    """
+
+    ik = dict(model.preset.ik_map or {})
+    if not ik:
+        return None
+    model.apply_configuration(model.zero_configuration())
+    hip_origins: list[np.ndarray] = []
+    for canonical in ("left_hip", "right_hip"):
+        link = _resolve_ik_link(ik, canonical)
+        if not link:
+            continue
+        try:
+            transform = np.asarray(model.urdf.get_transform(link), dtype=np.float64)
+        except Exception:
+            continue
+        hip_origins.append(transform[:3, 3])
+    ankle_z = lowest_ankle_z(model, ik, np.eye(3, dtype=np.float64))
+    if not hip_origins or ankle_z is None:
+        return None
+    hip_mid = np.mean(hip_origins, axis=0)
+    mid_leg_z = 0.5 * (float(hip_mid[2]) + float(ankle_z))
+    if mid_leg_z <= 0.0:
+        # Root origin at or above mid-leg: it already marks the pelvis.
+        return None
+    return hip_mid
 
 
 def apply_retarget_dof(
