@@ -1,8 +1,8 @@
-"""Grounding on robots whose URDF root link sits at foot level (Berkeley Humanoid Lite).
+"""Grounding on small robots whose URDF root link sits at foot level (Berkeley Humanoid Lite).
 
-Covers the clip floor snap, the calibration's root height and the feet
-stabilizer's ground contact, which all read the root / hips-slot link origin as
-the pelvis.
+Covers the clip floor snap, the calibration anchor and root height, the feet
+stabilizer's ground contact and the Newton ground capsules, which read the
+root / hips-slot link origin as the pelvis or assume human-sized legs.
 """
 
 from __future__ import annotations
@@ -187,6 +187,37 @@ def test_newton_hips_ground_capsule_starts_at_the_hips(foot_rooted, hip_rooted) 
         np.subtract(feet[1], feet[0]), np.subtract(hips[1], hips[0]), atol=1e-9
     )
     assert feet[2] == hips[2]
+
+
+def test_newton_leg_ground_capsules_stop_at_the_next_joint(foot_rooted, tmp_path) -> None:
+    """BHL's default 0.28 m knee capsule on a 0.21 m shin kept its feet ~8 cm up.
+
+    The biped's shin is 0.2 m, so its knee capsule is cut to 0.2 m; its 0.25 m
+    thigh already fits the 0.18 m default.  The toy robot's 0.35 m shin keeps
+    the default length.
+    """
+    from frax_toy_robot import write_toy_robot
+
+    from hhtools.retarget.newton_basic.ground_collision_bodies import (
+        build_ground_collision_bodies_from_ik_map,
+    )
+
+    def capsule_lengths(robot) -> dict[str, float]:
+        bodies = build_ground_collision_bodies_from_ik_map(
+            dict(robot.preset.ik_map), robot.preset.urdf_path
+        )
+        return {
+            b["body"]: float(np.linalg.norm(np.subtract(b["capsule"][1], b["capsule"][0])))
+            for b in bodies
+        }
+
+    short = capsule_lengths(foot_rooted)
+    assert short["left_shin_link"] == pytest.approx(0.2, abs=1e-9)
+    assert short["right_shin_link"] == pytest.approx(0.2, abs=1e-9)
+    assert short["left_thigh_link"] == pytest.approx(0.18, abs=1e-9)
+
+    toy = capsule_lengths(write_toy_robot(tmp_path / "toy"))
+    assert toy["left_shin_link"] == pytest.approx(0.28, abs=1e-9)
 
 
 def test_snap_keeps_standing_frames_on_the_floor_when_root_is_at_foot_level(

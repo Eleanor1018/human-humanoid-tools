@@ -9,6 +9,7 @@ Explicit ``ground_collision_bodies`` in ``robot.yaml`` still override this.
 
 from __future__ import annotations
 
+import math
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
@@ -45,6 +46,10 @@ _DISTAL_SLOT: dict[str, str] = {
     "left_elbow": "left_wrist",
     "right_elbow": "right_wrist",
 }
+
+# Capsules never longer than the bone to the next leg joint (see
+# ``_leg_bone_length``).
+_LENGTH_CAPPED_SLOTS = frozenset({"left_hip", "right_hip", "left_knee", "right_knee"})
 
 # Default capsule geometry (link-local) when URDF joint offsets are tiny.
 _FALLBACK_P1: dict[str, tuple[float, float, float]] = {
@@ -185,8 +190,14 @@ def _capsule_entry(
     ik_map: dict[str, str],
     *,
     start: tuple[float, float, float] | None = None,
+    max_length: float | None = None,
 ) -> dict[str, Any]:
     p1 = _bone_endpoint(slot, link, km, origins, ik_map)
+    if max_length is not None:
+        length = math.sqrt(p1[0] ** 2 + p1[1] ** 2 + p1[2] ** 2)
+        if length > max_length:
+            shrink = max(0.0, max_length) / length
+            p1 = (p1[0] * shrink, p1[1] * shrink, p1[2] * shrink)
     p0 = [0.0, 0.0, 0.0]
     if start is not None:
         p0 = [float(v) for v in start]
@@ -198,8 +209,43 @@ def _capsule_entry(
     }
 
 
+def _leg_bone_length(
+    slot: str,
+    link: str,
+    ik_map: dict[str, str],
+    transforms: dict[str, Any] | None,
+) -> float | None:
+    """Zero-pose distance from a leg slot's link to its distal slot's link.
+
+    The default capsule lengths assume human-sized legs.  Berkeley Humanoid
+    Lite's shin (knee to ankle) is 0.21 m, so its 0.28 m knee capsule reached
+    ~0.1 m under the sole and the ground objective kept the knees bent and the
+    feet ~8 cm off the floor.  Leg capsules carry the standing robot, so they
+    are capped at this length; ``None`` (no cap) for every other slot.
+    """
+
+    if slot not in _LENGTH_CAPPED_SLOTS or transforms is None:
+        return None
+    distal = ik_map.get(_DISTAL_SLOT.get(slot, ""))
+    if not distal or link not in transforms or distal not in transforms:
+        return None
+    a = transforms[link][:3, 3]
+    b = transforms[distal][:3, 3]
+    return math.sqrt(sum((float(b[i]) - float(a[i])) ** 2 for i in range(3)))
+
+
+def _zero_pose_transforms(urdf_path: Path) -> dict[str, Any] | None:
+    from hhtools.retarget.frax_backend._urdf import zero_pose_link_transforms
+
+    try:
+        return zero_pose_link_transforms(urdf_path)
+    except Exception:
+        return None
+
+
 def _foot_level_hips_start(
-    ik_map: dict[str, str], urdf_path: Path,
+    ik_map: dict[str, str],
+    transforms: dict[str, Any] | None,
 ) -> tuple[float, float, float] | None:
     """Hip midpoint in the ``hips`` link frame when that link sits at foot level.
 
@@ -209,15 +255,10 @@ def _foot_level_hips_start(
     robots whose ``hips`` link already sits at or above mid-leg.
     """
 
-    from hhtools.retarget.frax_backend._urdf import zero_pose_link_transforms
     from hhtools.robot.foot_geometry import pelvis_offset_from_link_transforms
 
     hips = ik_map.get("hips")
-    if not hips:
-        return None
-    try:
-        transforms = zero_pose_link_transforms(urdf_path)
-    except Exception:
+    if not hips or transforms is None:
         return None
     offset = pelvis_offset_from_link_transforms(transforms, ik_map, str(hips))
     if offset is None:
@@ -241,6 +282,7 @@ def build_ground_collision_bodies_from_ik_map(
 
     km = KinematicModel.from_urdf(urdf_path)
     origins = _joint_child_origins(urdf_path)
+    transforms = _zero_pose_transforms(urdf_path)
     seen_links: set[str] = set()
     out: list[dict[str, Any]] = []
 
@@ -249,7 +291,17 @@ def build_ground_collision_bodies_from_ik_map(
         if not link or link not in km.all_links or link in seen_links:
             continue
         seen_links.add(link)
-        start = _foot_level_hips_start(ik_map, urdf_path) if slot == "hips" else None
-        out.append(_capsule_entry(slot, link, km, origins, ik_map, start=start))
+        start = _foot_level_hips_start(ik_map, transforms) if slot == "hips" else None
+        out.append(
+            _capsule_entry(
+                slot,
+                link,
+                km,
+                origins,
+                ik_map,
+                start=start,
+                max_length=_leg_bone_length(slot, link, ik_map, transforms),
+            )
+        )
 
     return out
