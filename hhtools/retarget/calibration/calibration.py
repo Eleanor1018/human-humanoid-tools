@@ -2129,6 +2129,8 @@ def _estimate_robot_pelvis_height_at_q(
     This is the robot's natural "how high above the ground should the
     pelvis sit" distance — used by calibration to shift source pelvis
     Z so the robot stands on the floor instead of floating in mid-air.
+    Negative when the link origin sits below the lowest vertex (a URDF
+    rooted at foot level).
 
     Implementation: iterate every visual mesh's transformed vertices
     (same routine as :func:`_estimate_robot_tpose_height` but at the
@@ -2169,7 +2171,10 @@ def _estimate_robot_pelvis_height_at_q(
         # No visual geometry (pure capsule URDF etc.) — fall back to the
         # aggregate standing height, treating pelvis as sitting at half.
         return max(1e-3, 0.5 * _estimate_robot_tpose_height(model))
-    return max(1e-3, pelvis_z - min_z)
+    # Not floored: a URDF rooted at foot level puts this link origin below the
+    # soles (Berkeley Humanoid Lite's ``base`` sits ~4 cm under them), and
+    # clamping that to a positive height floated every target by the gap.
+    return pelvis_z - min_z
 
 
 def _estimate_source_pelvis_height(

@@ -1,14 +1,22 @@
-"""Clip floor snap on robots whose URDF root link sits at foot level."""
+"""Grounding on robots whose URDF root link sits at foot level (Berkeley Humanoid Lite).
+
+Covers the clip floor snap, the calibration's root height and the feet
+stabilizer's ground contact, which all read the root / hips-slot link origin as
+the pelvis.
+"""
 
 from __future__ import annotations
 
 import numpy as np
 import pytest
 
+from hhtools.retarget.calibration.calibration import _estimate_robot_pelvis_height_at_q
 from hhtools.retarget.clip_ground_snap import (
     measure_clip_min_foot_world_z,
     snap_joint_q_clip_floor,
 )
+from hhtools.retarget.newton_basic.config import FeetStabilizerConfig
+from hhtools.retarget.newton_basic.feet_stabilizer import FeetStabilizer
 from hhtools.robot.foot_geometry import pelvis_offset_in_root_frame, scene_min_mesh_z
 
 _INERTIAL = (
@@ -145,3 +153,59 @@ def test_snap_keeps_standing_frames_on_the_floor_when_root_is_at_foot_level(
     lowest = [_lowest_point_z(foot_rooted, row) for row in out]
     assert min(lowest) > -0.01
     assert lowest[0] == pytest.approx(0.0, abs=1e-6)
+
+
+def test_calibrated_root_height_goes_negative_when_root_sits_below_the_soles(
+    foot_rooted,
+) -> None:
+    """Bent knees lift the soles above a foot-level root origin.
+
+    Berkeley Humanoid Lite's calibrated pose leaves its ``base`` ~4 cm below the
+    soles.  This height used to be floored at 1 mm, which floated every IK
+    target by the difference.
+    """
+    # Knees bent with the ankles counter-rotated so the soles stay flat.
+    bend = {"knee": 0.8, "ankle": -0.8}
+    q = {n: next((v for k, v in bend.items() if k in n), 0.0) for n in foot_rooted.dof_names()}
+    foot_rooted.apply_configuration(q)
+    lowest = scene_min_mesh_z(foot_rooted.trimesh_scene())
+    assert lowest > 0.01
+
+    height = _estimate_robot_pelvis_height_at_q(foot_rooted, q, "base")
+
+    assert height == pytest.approx(-lowest, abs=1e-6)
+
+
+def _stabilizer_frames(hips_z: float, feet_z: float, hips_quat=(0.0, 0.0, 0.0, 1.0)):
+    eff = np.zeros((3, 3, 7), dtype=np.float32)
+    eff[..., 6] = 1.0
+    eff[:, 0, 2] = hips_z
+    eff[:, 0, 3:7] = hips_quat
+    eff[:, 1:, 2] = feet_z
+    eff[:, 1, 1] = 0.1
+    eff[:, 2, 1] = -0.1
+    return eff
+
+
+def test_stabilizer_grounds_floating_feet_when_hips_target_is_at_foot_level() -> None:
+    """Frame-0 BHL targets: hips (``base``) at 0.007 m, ankles floating at 0.097 m.
+
+    Uprightness compares the hips target with the feet.  With the hips target
+    at foot level that never reads upright, so the ground contact never pulled
+    floating targets down; measured from the hips it does.
+    """
+    names = ("hips", "left_ankle", "right_ankle")
+    cfg = FeetStabilizerConfig(ground_contact_z=0.0, max_ground_correction=0.05)
+    floating = _stabilizer_frames(0.007, 0.097)
+
+    unchanged = FeetStabilizer(cfg, joint_names=names).apply(floating)
+    np.testing.assert_allclose(unchanged[:, 1:, 2], 0.097, atol=1e-6)
+
+    stab = FeetStabilizer(cfg, joint_names=names, pelvis_offset=np.array([0.0, 0.0, _HIP_Z]))
+    grounded = stab.apply(floating)
+    np.testing.assert_allclose(grounded[:, 1:, 2], 0.047, atol=1e-6)
+    np.testing.assert_allclose(grounded[:, 0, 2], -0.043, atol=1e-6)
+
+    # Upside down, the hips sit below the hips target: not upright, no pull-down.
+    inverted = _stabilizer_frames(0.007, 0.097, hips_quat=(1.0, 0.0, 0.0, 0.0))
+    np.testing.assert_allclose(stab.apply(inverted)[:, 1:, 2], 0.097, atol=1e-6)

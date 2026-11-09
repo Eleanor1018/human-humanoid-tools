@@ -31,6 +31,7 @@ from dataclasses import dataclass
 import numpy as np
 from numpy.typing import NDArray
 
+from hhtools.core.math import quaternion as Q
 from hhtools.retarget.newton_basic.config import FeetStabilizerConfig
 
 
@@ -73,9 +74,22 @@ class FeetStabilizer:
         config: FeetStabilizerConfig,
         *,
         joint_names: tuple[str, ...],
+        pelvis_offset: NDArray | None = None,
     ) -> None:
+        """``pelvis_offset`` is a vector in the hips target's frame from that
+        target up to the robot's hips.  Pass it only for robots whose root
+        link sits at foot level (see
+        :func:`hhtools.robot.foot_geometry.pelvis_offset_in_root_frame`): their
+        hips target lands on that root origin, so its height alone never reads
+        upright.  ``None`` uses the hips target height as is.
+        """
         self._config = config
         self._joint_names = tuple(joint_names)
+        self._pelvis_offset = (
+            None
+            if pelvis_offset is None
+            else np.asarray(pelvis_offset, dtype=np.float32).reshape(1, 3)
+        )
         self._up = _AXIS_TO_IDX[config.up_axis]
         # Lateral / forward axes are whatever remains after up
         axes = {0, 1, 2} - {self._up}
@@ -282,7 +296,8 @@ class FeetStabilizer:
             uprightness = 1.0
             if hips_idx >= 0:
                 uprightness = float(np.clip(
-                    (effectors[f, hips_idx, up] - min_foot_h) / max(blend_range, 1e-6),
+                    (self._hips_height(effectors, f, hips_idx) - min_foot_h)
+                    / max(blend_range, 1e-6),
                     0.0, 1.0,
                 ))
             if uprightness < 0.01:
@@ -297,6 +312,14 @@ class FeetStabilizer:
         return corrections
 
     # --------------------------------------------------------- hand ground contact
+
+    def _hips_height(self, effectors: NDArray, f: int, hips_idx: int):
+        """Up-axis height of the robot's hips on frame ``f``."""
+        h = effectors[f, hips_idx, self._up]
+        if self._pelvis_offset is None:
+            return h
+        offset = Q.rotate(effectors[f, hips_idx, 3:7][None, :], self._pelvis_offset)
+        return h + np.float32(offset[0, self._up])
 
     def _apply_hand_ground_contact(self, effectors: NDArray) -> None:
         """Pull torso/arms down so hand targets can touch the ground plane.

@@ -1263,8 +1263,12 @@ class IKPipelineBase:
         if cached is not None:
             return cached
         assert self.feet_stabilizer_config is not None
+        from hhtools.robot.foot_geometry import pelvis_offset_in_root_frame
+
         stab = FeetStabilizer(
-            self.feet_stabilizer_config, joint_names=joint_names,
+            self.feet_stabilizer_config,
+            joint_names=joint_names,
+            pelvis_offset=pelvis_offset_in_root_frame(self.robot),
         )
         self._feet_stab_by_hierarchy[key] = stab
         return stab
