@@ -1263,12 +1263,14 @@ class IKPipelineBase:
         if cached is not None:
             return cached
         assert self.feet_stabilizer_config is not None
-        from hhtools.robot.foot_geometry import pelvis_offset_in_root_frame
+        from hhtools.robot.foot_geometry import _resolve_ik_link, pelvis_offset_in_link_frame
 
+        # The stabilizer's hips effector lands on the ``hips`` ik_map link.
+        hips_link = _resolve_ik_link(dict(self.robot.preset.ik_map or {}), "hips")
         stab = FeetStabilizer(
             self.feet_stabilizer_config,
             joint_names=joint_names,
-            pelvis_offset=pelvis_offset_in_root_frame(self.robot),
+            pelvis_offset=pelvis_offset_in_link_frame(self.robot, hips_link),
         )
         self._feet_stab_by_hierarchy[key] = stab
         return stab

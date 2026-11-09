@@ -79,7 +79,7 @@ class FeetStabilizer:
         """``pelvis_offset`` is a vector in the hips target's frame from that
         target up to the robot's hips.  Pass it only for robots whose root
         link sits at foot level (see
-        :func:`hhtools.robot.foot_geometry.pelvis_offset_in_root_frame`): their
+        :func:`hhtools.robot.foot_geometry.pelvis_offset_in_link_frame`): their
         hips target lands on that root origin, so its height alone never reads
         upright.  ``None`` uses the hips target height as is.
         """

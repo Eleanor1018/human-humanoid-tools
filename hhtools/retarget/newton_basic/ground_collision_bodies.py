@@ -183,13 +183,46 @@ def _capsule_entry(
     km: KinematicModel,
     origins: dict[str, tuple[float, float, float]],
     ik_map: dict[str, str],
+    *,
+    start: tuple[float, float, float] | None = None,
 ) -> dict[str, Any]:
     p1 = _bone_endpoint(slot, link, km, origins, ik_map)
+    p0 = [0.0, 0.0, 0.0]
+    if start is not None:
+        p0 = [float(v) for v in start]
+        p1 = tuple(float(a) + float(b) for a, b in zip(start, p1, strict=True))
     return {
         "body": link,
-        "capsule": [[0.0, 0.0, 0.0], list(p1), _RADIUS[slot]],
+        "capsule": [p0, list(p1), _RADIUS[slot]],
         "margin": _MARGIN.get(slot, 0.02),
     }
+
+
+def _foot_level_hips_start(
+    ik_map: dict[str, str], urdf_path: Path,
+) -> tuple[float, float, float] | None:
+    """Hip midpoint in the ``hips`` link frame when that link sits at foot level.
+
+    Berkeley Humanoid Lite maps ``hips`` to its URDF root ``base``, whose
+    origin is at the soles.  A pelvis capsule starting there held the root
+    origin ~0.13 m above the floor and floated the whole robot.  ``None`` for
+    robots whose ``hips`` link already sits at or above mid-leg.
+    """
+
+    from hhtools.retarget.frax_backend._urdf import zero_pose_link_transforms
+    from hhtools.robot.foot_geometry import pelvis_offset_from_link_transforms
+
+    hips = ik_map.get("hips")
+    if not hips:
+        return None
+    try:
+        transforms = zero_pose_link_transforms(urdf_path)
+    except Exception:
+        return None
+    offset = pelvis_offset_from_link_transforms(transforms, ik_map, str(hips))
+    if offset is None:
+        return None
+    return (float(offset[0]), float(offset[1]), float(offset[2]))
 
 
 def build_ground_collision_bodies_from_ik_map(
@@ -216,6 +249,7 @@ def build_ground_collision_bodies_from_ik_map(
         if not link or link not in km.all_links or link in seen_links:
             continue
         seen_links.add(link)
-        out.append(_capsule_entry(slot, link, km, origins, ik_map))
+        start = _foot_level_hips_start(ik_map, urdf_path) if slot == "hips" else None
+        out.append(_capsule_entry(slot, link, km, origins, ik_map, start=start))
 
     return out

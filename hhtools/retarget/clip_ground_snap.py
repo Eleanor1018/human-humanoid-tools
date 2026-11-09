@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 from numpy.typing import NDArray
 
-from hhtools.robot.foot_geometry import pelvis_offset_in_root_frame, quat_xyzw_to_rotmat
+from hhtools.robot.foot_geometry import pelvis_offset_in_link_frame, quat_xyzw_to_rotmat
 
 if TYPE_CHECKING:
     from hhtools.robot.loader import URDFRobotModel
@@ -113,7 +113,7 @@ def measure_clip_min_foot_world_z(
     ``upright_root_above_sole_m`` above the sole are considered.  If no such
     frame exists, falls back to the full-clip minimum.  On robots whose root
     link sits at foot level, "root" here means the hips (see
-    :func:`~hhtools.robot.foot_geometry.pelvis_offset_in_root_frame`).
+    :func:`~hhtools.robot.foot_geometry.pelvis_offset_in_link_frame`).
     """
     q = np.asarray(joint_q, dtype=np.float64)
     if q.ndim != 2 or q.shape[0] == 0 or q.shape[1] < root_coord_count:
@@ -133,7 +133,7 @@ def measure_clip_min_foot_world_z(
     # Robots rooted at foot level measure uprightness from the hips instead
     # of the root origin; ``None`` keeps the root origin (pelvis-rooted).
     pelvis_offset = (
-        pelvis_offset_in_root_frame(robot)
+        pelvis_offset_in_link_frame(robot)
         if upright_only and root_coord_count >= 7
         else None
     )

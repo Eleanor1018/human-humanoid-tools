@@ -17,7 +17,7 @@ from hhtools.retarget.clip_ground_snap import (
 )
 from hhtools.retarget.newton_basic.config import FeetStabilizerConfig
 from hhtools.retarget.newton_basic.feet_stabilizer import FeetStabilizer
-from hhtools.robot.foot_geometry import pelvis_offset_in_root_frame, scene_min_mesh_z
+from hhtools.robot.foot_geometry import pelvis_offset_in_link_frame, scene_min_mesh_z
 
 _INERTIAL = (
     '<inertial><origin xyz="0 0 0"/><mass value="1.0"/>'
@@ -45,19 +45,21 @@ def _joint(name: str, parent: str, child: str, xyz: str, *, upper: float = 1.5) 
     )
 
 
-def _foot_rooted_urdf() -> str:
-    """Biped like Berkeley Humanoid Lite: the root ``base`` origin is at sole level.
+def _biped_urdf(hip_z: float) -> str:
+    """Biped whose root ``base`` origin sits ``hip_z`` below the hip joints.
 
-    At the zero configuration the soles sit on z=0 (the root origin), the hip
-    joints at z=0.5 and the trunk spans z=0.55..0.85.
+    ``hip_z=_HIP_Z`` is rooted at foot level like Berkeley Humanoid Lite: at
+    the zero configuration the soles sit on z=0 (the root origin), the hip
+    joints at z=0.5 and the trunk spans z=0.55..0.85.  ``hip_z=0`` is the same
+    body rooted at the hips.
     """
-    parts = [_link("base", "0.2 0.3 0.3", "0 0 0.7")]
+    parts = [_link("base", "0.2 0.3 0.3", f"0 0 {hip_z + 0.2}")]
     for side, s in (("left", 1.0), ("right", -1.0)):
         parts += [
             _link(f"{side}_thigh_link"),
             _link(f"{side}_shin_link"),
             _link(f"{side}_foot_link", "0.15 0.08 0.04", "0.03 0 -0.03"),
-            _joint(f"{side}_hip_joint", "base", f"{side}_thigh_link", f"0 {0.1 * s} {_HIP_Z}"),
+            _joint(f"{side}_hip_joint", "base", f"{side}_thigh_link", f"0 {0.1 * s} {hip_z}"),
             _joint(
                 f"{side}_knee_joint",
                 f"{side}_thigh_link",
@@ -70,23 +72,21 @@ def _foot_rooted_urdf() -> str:
     return '<?xml version="1.0"?>\n<robot name="footroot">' + "".join(parts) + "</robot>\n"
 
 
-@pytest.fixture(scope="module")
-def foot_rooted(tmp_path_factory):
+def _load_biped(root, hip_z: float):
     from hhtools.robot.base import RobotPreset
     from hhtools.robot.loader import load_robot
 
-    root = tmp_path_factory.mktemp("robots") / "footroot"
     root.mkdir(parents=True)
-    urdf = root / "footroot.urdf"
-    urdf.write_text(_foot_rooted_urdf(), encoding="utf-8")
+    urdf = root / "biped.urdf"
+    urdf.write_text(_biped_urdf(hip_z), encoding="utf-8")
     ik_map = {"hips": "base"}
     for side in ("left", "right"):
         ik_map[f"{side}_hip"] = f"{side}_thigh_link"
         ik_map[f"{side}_knee"] = f"{side}_shin_link"
         ik_map[f"{side}_ankle"] = f"{side}_foot_link"
     preset = RobotPreset(
-        name="footroot",
-        display_name="Foot-rooted biped",
+        name=root.name,
+        display_name=root.name,
         root_dir=root,
         urdf_path=urdf,
         ik_map=ik_map,
@@ -98,6 +98,16 @@ def foot_rooted(tmp_path_factory):
     return load_robot(preset)
 
 
+@pytest.fixture(scope="module")
+def foot_rooted(tmp_path_factory):
+    return _load_biped(tmp_path_factory.mktemp("robots") / "footroot", _HIP_Z)
+
+
+@pytest.fixture(scope="module")
+def hip_rooted(tmp_path_factory):
+    return _load_biped(tmp_path_factory.mktemp("robots") / "hiproot", 0.0)
+
+
 def _lowest_point_z(robot, row: np.ndarray) -> float:
     from hhtools.robot.foot_geometry import quat_xyzw_to_rotmat
 
@@ -107,15 +117,76 @@ def _lowest_point_z(robot, row: np.ndarray) -> float:
 
 
 def test_pelvis_offset_points_at_the_hips_when_root_is_at_foot_level(foot_rooted) -> None:
-    offset = pelvis_offset_in_root_frame(foot_rooted)
+    offset = pelvis_offset_in_link_frame(foot_rooted)
     assert offset is not None
     np.testing.assert_allclose(offset, [0.0, 0.0, _HIP_Z], atol=1e-9)
 
 
-def test_pelvis_offset_is_none_for_pelvis_rooted_robots(tmp_path) -> None:
+def test_pelvis_offset_is_none_for_pelvis_rooted_robots(tmp_path, hip_rooted) -> None:
     from frax_toy_robot import write_toy_robot
 
-    assert pelvis_offset_in_root_frame(write_toy_robot(tmp_path / "toy")) is None
+    assert pelvis_offset_in_link_frame(write_toy_robot(tmp_path / "toy")) is None
+    assert pelvis_offset_in_link_frame(hip_rooted) is None
+
+
+def _scaler_config(robot):
+    from hhtools.retarget.calibration.calibration import (
+        RobotRetargetCalibration,
+        _reference_pose_for_calibration,
+        build_scaler_config_soma_style,
+    )
+    from hhtools.retarget.newton_basic.rest_pose import rest_pose_from_reference
+
+    cal = RobotRetargetCalibration(
+        robot=robot.preset.name, reference="smplx", calibrated_joint_q={}
+    )
+    rest = rest_pose_from_reference(_reference_pose_for_calibration("smplx"))
+    return build_scaler_config_soma_style(cal, robot, rest)
+
+
+def test_calibration_anchors_at_the_hips_when_root_is_at_foot_level(
+    foot_rooted, hip_rooted
+) -> None:
+    """Rooting the same body at its feet must not change its calibration.
+
+    Measured from Berkeley Humanoid Lite's foot-level ``base``, its hip scale
+    came out 5.1 with a 0.69 m offset and its ankle scale 0.13.  Anchored at
+    the hips, only the root link's own offset (anchor -> ``base``) differs.
+    """
+    feet, hips = _scaler_config(foot_rooted), _scaler_config(hip_rooted)
+    root = feet.root_joint
+
+    assert feet.joint_scales == pytest.approx(hips.joint_scales, abs=1e-5)
+    for name, (t_offset, _q) in hips.joint_offsets.items():
+        if name != root:
+            np.testing.assert_allclose(feet.joint_offsets[name][0], t_offset, atol=1e-5)
+    np.testing.assert_allclose(feet.joint_offsets[root][0], [0.0, 0.0, -_HIP_Z], atol=1e-5)
+    np.testing.assert_allclose(hips.joint_offsets.get(root, ((0, 0, 0), ()))[0], 0.0, atol=1e-6)
+    assert feet.robot_pelvis_height == pytest.approx(_HIP_Z, abs=1e-6)
+    assert feet.robot_pelvis_height == pytest.approx(hips.robot_pelvis_height, abs=1e-6)
+    assert feet.root_z_offset == pytest.approx(hips.root_z_offset, abs=1e-6)
+
+
+def test_newton_hips_ground_capsule_starts_at_the_hips(foot_rooted, hip_rooted) -> None:
+    """A pelvis capsule from the foot-level ``base`` held BHL ~0.13 m in the air."""
+    from hhtools.retarget.newton_basic.ground_collision_bodies import (
+        build_ground_collision_bodies_from_ik_map,
+    )
+
+    def hips_capsule(robot):
+        bodies = build_ground_collision_bodies_from_ik_map(
+            dict(robot.preset.ik_map), robot.preset.urdf_path
+        )
+        return next(b for b in bodies if b["body"] == "base")["capsule"]
+
+    feet, hips = hips_capsule(foot_rooted), hips_capsule(hip_rooted)
+
+    assert hips[0] == [0.0, 0.0, 0.0]
+    np.testing.assert_allclose(feet[0], [0.0, 0.0, _HIP_Z], atol=1e-9)
+    np.testing.assert_allclose(
+        np.subtract(feet[1], feet[0]), np.subtract(hips[1], hips[0]), atol=1e-9
+    )
+    assert feet[2] == hips[2]
 
 
 def test_snap_keeps_standing_frames_on_the_floor_when_root_is_at_foot_level(
