@@ -56,6 +56,7 @@ from hhtools.services.calibration_validation import (
     calibration_validation_identity,
 )
 from hhtools.services.plans import PlanStore, PlanStoreError, compute_plan_id
+from hhtools.services.routing import compatible_backends_for_category
 from hhtools.utils.paths import user_robot_dir
 
 _PLAN_SEMANTICS = "hhtools.retarget.plan.v1"
@@ -244,14 +245,6 @@ def _raise_inspection_error(
             next_action=selected.next_action,
         ),
     )
-
-
-#: Backends that may solve each category; the first is the recommended one.
-_CATEGORY_BACKENDS: dict[AssetCategory, tuple[str, ...]] = {
-    AssetCategory.PLAIN_MOTION: ("newton", "frax"),
-    AssetCategory.OBJECT_INTERACTION: ("interaction_mesh",),
-    AssetCategory.TERRAIN_SCENE: ("interaction_mesh",),
-}
 
 
 def _backend_for_category(category: AssetCategory) -> str:
@@ -1341,8 +1334,8 @@ class PreflightService:
             )
             recommended_backend = _backend_for_category(motion_inspection.category)
             requested_backend = request.backend or recommended_backend
-            if requested_backend not in _CATEGORY_BACKENDS.get(
-                motion_inspection.category, (recommended_backend,)
+            if requested_backend not in compatible_backends_for_category(
+                motion_inspection.category
             ):
                 _fail(
                     "BACKEND_INCOMPATIBLE",

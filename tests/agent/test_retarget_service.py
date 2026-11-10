@@ -152,6 +152,7 @@ def _fixture(
     profile_storage: str = "robot_bundle",
     semantics: str = "hhtools.retarget.plan.v1",
     category: str | None = None,
+    backend: str = "newton",
 ) -> _Fixture:
     motion_root = tmp_path / "motions"
     robot_root = tmp_path / "robots"
@@ -200,6 +201,8 @@ def _fixture(
         "retarget_profile": profile_source,
         "ik_iterations": 24,
     }
+    if backend != "newton":
+        del parameters["ik_iterations"]
     profile_payload: dict[str, object] = {
         "source": profile_source,
         "calibration_id": calibration_id,
@@ -230,7 +233,7 @@ def _fixture(
             "digest": robot.asset_id.removeprefix("asset:sha256:"),
             "robot_id": "test_robot",
         },
-        "backend": "newton",
+        "backend": backend,
         "retarget_profile": profile_payload,
         "output": {"format": "csv", "policy": "create_new"},
         "parameters": parameters,
@@ -241,7 +244,7 @@ def _fixture(
         motion_asset_id=motion.asset_id,
         robot_id="test_robot",
         robot_asset_id=robot.asset_id,
-        backend="newton",
+        backend=backend,
         calibration_id=calibration_id,
         output_format="csv",
         output_policy=OutputPolicy.CREATE_NEW,
@@ -431,6 +434,38 @@ def test_changed_asset_bytes_make_the_plan_stale(
     assert "ASSET_HASH_MISMATCH" in captured.value.error.details["reason_code"]
     assert captured.value.error.next_action is not None
     assert captured.value.error.next_action.action == "run_preflight"
+
+
+def test_plain_motion_plan_may_use_frax_instead_of_the_recommended_newton(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path, backend="frax")
+    service = RetargetService(
+        fixture.store,
+        fixture.assets,
+        provenance_provider=_fixed_provenance,
+    )
+
+    spec = service.get_job_spec(fixture.plan.plan_id)
+
+    assert spec.backend == "frax"
+    assert "ik_iterations" not in spec.effective_parameters
+
+
+def test_frax_plan_is_stale_once_the_motion_routes_to_interaction_mesh(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path, backend="frax", category="terrain_scene")
+    service = RetargetService(
+        fixture.store,
+        fixture.assets,
+        provenance_provider=_fixed_provenance,
+    )
+
+    with pytest.raises(RetargetServiceError) as captured:
+        service.get_job_spec(fixture.plan.plan_id)
+
+    _assert_error(captured, "PLAN_STALE")
 
 
 def test_changed_routing_projection_makes_the_plan_stale(tmp_path: Path) -> None:

@@ -61,8 +61,22 @@ def reference_for_dataset(dataset: str, suffix: str) -> str:
     return DATASET_REFERENCE.get(dataset, FORMAT_REFERENCE.get(suffix.lower(), "smpl"))
 
 
+#: Retarget backends that can solve each workflow category, recommended first.
+_CATEGORY_BACKENDS: dict[AssetCategory, tuple[str, ...]] = {
+    AssetCategory.PLAIN_MOTION: ("newton", "frax"),
+    AssetCategory.OBJECT_INTERACTION: ("interaction_mesh",),
+    AssetCategory.TERRAIN_SCENE: ("interaction_mesh",),
+}
+
+
+def compatible_backends_for_category(category: AssetCategory) -> tuple[str, ...]:
+    """Return every backend that may solve ``category``; the first is recommended."""
+
+    return _CATEGORY_BACKENDS.get(category, ())
+
+
 def backend_for_category(category: AssetCategory) -> str:
-    """Return the only currently declared compatible retarget backend."""
+    """Return the recommended retarget backend for ``category``."""
 
     if category is AssetCategory.PLAIN_MOTION:
         return "newton"
@@ -77,6 +91,7 @@ __all__ = [
     "OBJECT_DATASETS",
     "TERRAIN_DATASETS",
     "backend_for_category",
+    "compatible_backends_for_category",
     "category_for_dataset",
     "reference_for_dataset",
 ]
