@@ -69,6 +69,10 @@ _CATEGORY_BACKENDS: dict[AssetCategory, tuple[str, ...]] = {
 }
 
 
+#: Backends the robot-to-robot workflow can execute; the first is the default.
+R2R_BACKENDS: tuple[str, ...] = ("newton", "frax")
+
+
 def compatible_backends_for_category(category: AssetCategory) -> tuple[str, ...]:
     """Return every backend that may solve ``category``; the first is recommended."""
 
@@ -87,6 +91,7 @@ def backend_for_category(category: AssetCategory) -> str:
 
 __all__ = [
     "DATASET_REFERENCE",
+    "R2R_BACKENDS",
     "FORMAT_REFERENCE",
     "OBJECT_DATASETS",
     "TERRAIN_DATASETS",

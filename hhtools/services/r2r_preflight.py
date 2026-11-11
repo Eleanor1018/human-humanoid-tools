@@ -31,6 +31,7 @@ from hhtools.robot.base import RobotPreset
 from hhtools.services.asset_service import AgentAssetService
 from hhtools.services.assets import AssetServiceError
 from hhtools.services.plans import PlanStore, PlanStoreError, compute_plan_id
+from hhtools.services.routing import R2R_BACKENDS
 from hhtools.utils.paths import user_robot_dir
 
 from .preflight import (
@@ -157,10 +158,6 @@ def _positive_float(
             details={"parameter": name, "maximum": maximum},
         )
     return value
-
-
-#: Backends the Agent R2R workflow can execute; the first is the default.
-_R2R_BACKENDS = ("newton", "frax")
 
 
 def _normalize_parameters(
@@ -480,11 +477,11 @@ class R2RPreflightService:
             )
 
             requested_backend = request.backend or recommended_backend
-            if requested_backend not in _R2R_BACKENDS:
+            if requested_backend not in R2R_BACKENDS:
                 _fail(
                     "BACKEND_INCOMPATIBLE",
                     "The Agent R2R workflow supports the Newton and FRAX backends.",
-                    details={"backend": requested_backend, "supported": list(_R2R_BACKENDS)},
+                    details={"backend": requested_backend, "supported": list(R2R_BACKENDS)},
                 )
             capabilities = self._capabilities_provider()
             backend = _backend_capability(capabilities, requested_backend)
