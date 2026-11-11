@@ -134,6 +134,8 @@ class CollisionSpec:
                 for link, spheres in sorted(self.spheres.items())
             ),
             tuple(sorted(tuple(sorted(p)) for p in self.self_collision_pairs)),
+            # Sole links set the floor height and which spheres keep off the floor.
+            tuple(sorted(self.sole_links)),
         )
 
 
@@ -234,12 +236,74 @@ def _urdf_topology(root: ET.Element) -> dict[str, tuple[str, str]]:
     }
 
 
-def frax_g1_collision_spec(urdf_path: Path) -> CollisionSpec | None:
-    """frax's tuned G1 spheres, if ``urdf_path`` has the same joints and links as frax's G1.
+#: frax's G1 model is reused only for URDFs this close to frax's own G1.
+_G1_MAX_JOINT_ORIGIN_DELTA = 0.03
+_G1_MAX_SOLE_HEIGHT_DELTA = 0.01
+_G1_MAX_SOLE_EXTENT_DELTA = 0.025
 
-    Spheres are expressed in link frames, so small differences in joint
-    origins (hhtools' G1 differs from frax's by about 1 cm in the torso) move
-    them together with the links' meshes.
+
+def _fixed_parents(urdf_root: ET.Element) -> dict[str, str]:
+    """child link → parent link, for links attached by fixed joints."""
+    return {
+        j.find("child").get("link"): j.find("parent").get("link")
+        for j in urdf_root.findall("joint")
+        if j.get("type") == "fixed" and j.find("child") is not None and j.find("parent") is not None
+    }
+
+
+def _movable_joint_origins_match(ours: ET.Element, reference: ET.Element, names) -> bool:
+    from hhtools.retarget.frax_backend._urdf import origin_transform
+
+    our_joints = {j.get("name"): j for j in ours.findall("joint")}
+    ref_joints = {j.get("name"): j for j in reference.findall("joint")}
+    for name in names:
+        a, b = our_joints.get(name), ref_joints.get(name)
+        if a is None or b is None or a.get("type") != b.get("type"):
+            return False
+        delta = np.abs(origin_transform(a)[:3, 3] - origin_transform(b)[:3, 3]).max()
+        if float(delta) > _G1_MAX_JOINT_ORIGIN_DELTA:
+            return False
+    return True
+
+
+def _sole_spheres_match(
+    spheres: list[Sphere],
+    world_from_link: NDArray[np.float64],
+    link_points: NDArray[np.float64],
+) -> bool:
+    """Whether a foot's sole spheres cover its real sole (zero pose, world frame)."""
+    if not spheres or link_points.shape[0] < 3:
+        return False
+    R, t = world_from_link[:3, :3], world_from_link[:3, 3]
+    world = link_points @ R.T + t
+    sole = world[world[:, 2] <= world[:, 2].min() + _SOLE_BAND]
+    centres = np.asarray([R @ np.asarray(c) + t for c, _r in spheres])
+    radii = np.asarray([r for _c, r in spheres])
+    bottoms = centres[:, 2] - radii
+    low = bottoms <= bottoms.min() + _SOLE_BAND
+    if abs(float(bottoms.min()) - float(sole[:, 2].min())) > _G1_MAX_SOLE_HEIGHT_DELTA:
+        return False
+    for axis in (0, 1):
+        lo = float((centres[low, axis] - radii[low]).min())
+        hi = float((centres[low, axis] + radii[low]).max())
+        if (
+            abs(lo - float(sole[:, axis].min())) > _G1_MAX_SOLE_EXTENT_DELTA
+            or abs(hi - float(sole[:, axis].max())) > _G1_MAX_SOLE_EXTENT_DELTA
+        ):
+            return False
+    return True
+
+
+def frax_g1_collision_spec(
+    urdf_path: Path, robot: URDFRobotModel | None = None
+) -> CollisionSpec | None:
+    """frax's tuned G1 spheres, if ``urdf_path`` is a close match for frax's G1.
+
+    Requires the same movable joints with the same parent/child links, joint
+    origins within 3 cm of frax's G1 (hhtools' G1 differs by up to 1.9 cm in
+    the torso; spheres are expressed in link frames, so they move with the
+    meshes), and, when ``robot`` is given, sole spheres that match the real
+    foot soles.  Otherwise returns ``None`` and the automatic model is used.
     """
     try:
         from hhtools.retarget.frax_backend._jax_env import import_frax
@@ -250,14 +314,19 @@ def frax_g1_collision_spec(urdf_path: Path) -> CollisionSpec | None:
     except Exception:
         return None
     try:
-        reference = _urdf_topology(ET.parse(G1_ASSETS_DIR / "g1_29dof_rev_1_0.urdf").getroot())
-        ours = _urdf_topology(ET.parse(urdf_path).getroot())
+        reference_root = ET.parse(G1_ASSETS_DIR / "g1_29dof_rev_1_0.urdf").getroot()
+        our_root = ET.parse(urdf_path).getroot()
     except (OSError, ET.ParseError):
         return None
+    reference = _urdf_topology(reference_root)
+    ours = _urdf_topology(our_root)
     movable_ref = {
         name: pc for name, pc in reference.items() if name in unitree_g1.joint_to_child_mapping
     }
     if not movable_ref or any(ours.get(name) != pc for name, pc in movable_ref.items()):
+        return None
+    if not _movable_joint_origins_match(our_root, reference_root, movable_ref):
+        _log.info("FRAX: URDF has G1's joints but different dimensions; using automatic spheres")
         return None
     spec = load_collision_spec(Path(unitree_g1.collision_model_file), source="frax-g1")
     our_links = {c for _, c in ours.values()} | {p for p, _ in ours.values()}
@@ -270,6 +339,17 @@ def frax_g1_collision_spec(urdf_path: Path) -> CollisionSpec | None:
     spec.sole_links = tuple(
         link for link in ("left_ankle_roll_link", "right_ankle_roll_link") if link in spec.spheres
     )
+    mj_model = getattr(robot, "mujoco_model", None) if robot is not None else None
+    if mj_model is not None:
+        zero_pose = zero_pose_link_transforms(our_root)
+        fixed_parent = _fixed_parents(our_root)
+        roots = [n for n in zero_pose if n not in {c for _p, c in ours.values()}]
+        root_link = roots[0] if len(roots) == 1 else None
+        for foot in spec.sole_links:
+            points = _link_points(mj_model, foot, zero_pose, fixed_parent, root_link=root_link)
+            if not _sole_spheres_match(spec.spheres[foot], zero_pose[foot], points):
+                _log.info("FRAX: G1 feet differ from frax's G1 model; using automatic spheres")
+                return None
     return spec
 
 
@@ -361,15 +441,56 @@ def _body_points(model, link: str, *, root_link: str | None = None) -> NDArray[n
     return np.vstack(pts) if pts else np.zeros((0, 3))
 
 
+def _link_points(
+    mj_model,
+    link: str,
+    zero_pose: dict[str, NDArray[np.float64]],
+    fixed_parent: dict[str, str],
+    *,
+    root_link: str | None = None,
+) -> NDArray[np.float64]:
+    """Collision points expressed in ``link``'s frame, even when MuJoCo merged it.
+
+    MuJoCo fuses links attached by fixed joints into the nearest moving
+    ancestor body.  For such a link, the ancestor body's points (which then
+    include the link's own geometry) are re-expressed in the link frame.
+    """
+    pts = _body_points(mj_model, link, root_link=root_link)
+    if pts.shape[0] or link not in zero_pose:
+        return pts
+    import mujoco
+
+    ancestor, hops = link, 0
+    while ancestor in fixed_parent and hops < 64:
+        ancestor, hops = fixed_parent[ancestor], hops + 1
+        is_body = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_BODY, ancestor) >= 0
+        if ancestor == root_link or is_body:
+            break
+    if ancestor == link or ancestor not in zero_pose:
+        return pts
+    merged = _body_points(mj_model, ancestor, root_link=root_link)
+    if not merged.shape[0]:
+        return merged
+    link_from_ancestor = np.linalg.inv(zero_pose[link]) @ zero_pose[ancestor]
+    return merged @ link_from_ancestor[:3, :3].T + link_from_ancestor[:3, 3]
+
+
 def _sole_spheres(
-    mj_model, link: str, world_from_link: NDArray[np.float64], *, root_link: str | None = None
+    mj_model,
+    link: str,
+    world_from_link: NDArray[np.float64],
+    *,
+    root_link: str | None = None,
+    points: NDArray[np.float64] | None = None,
 ) -> list[Sphere]:
     """Spheres at the four corners of a foot's sole (link frame).
 
     "Down" is world -Z with every joint at zero; corners are the sole points
-    furthest toward toe-left, toe-right, heel-left and heel-right.
+    furthest toward toe-left, toe-right, heel-left and heel-right.  ``points``
+    (link frame) overrides the MuJoCo body lookup, for links merged into a
+    parent body.
     """
-    pts = _body_points(mj_model, link, root_link=root_link)
+    pts = _body_points(mj_model, link, root_link=root_link) if points is None else points
     if pts.shape[0] < 2:
         return []
     R = world_from_link[:3, :3]
@@ -492,12 +613,19 @@ def auto_collision_spec(robot: URDFRobotModel) -> CollisionSpec:
     ]
     root_link = roots[0] if len(roots) == 1 else None
 
+    fixed_parent = _fixed_parents(urdf_root)
+
     spheres: dict[str, list[Sphere]] = {}
     if mj_model is not None:
-        for link in sorted(body_links):
+        for link in sorted(body_links | set(feet)):
             if link in feet:
                 if link in zero_pose:
-                    sole = _sole_spheres(mj_model, link, zero_pose[link], root_link=root_link)
+                    points = _link_points(
+                        mj_model, link, zero_pose, fixed_parent, root_link=root_link
+                    )
+                    sole = _sole_spheres(
+                        mj_model, link, zero_pose[link], root_link=root_link, points=points
+                    )
                     if sole:
                         spheres[link] = sole
                 continue
@@ -552,7 +680,7 @@ def collision_spec_for_robot(robot: URDFRobotModel) -> CollisionSpec:
                 )
             return spec
     if preset.urdf_path is not None:
-        spec = frax_g1_collision_spec(Path(preset.urdf_path))
+        spec = frax_g1_collision_spec(Path(preset.urdf_path), robot)
         if spec is not None:
             return spec
     return auto_collision_spec(robot)

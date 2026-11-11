@@ -132,21 +132,21 @@ IK_MAP = {
 }
 
 
-def write_toy_robot(root: Path):
+def write_toy_robot(root: Path, *, dof_order: tuple[str, ...] = DOF_ORDER, urdf: str | None = None):
     """Write the URDF under ``root`` and return a loaded ``URDFRobotModel``."""
     from hhtools.robot.base import RobotPreset
     from hhtools.robot.loader import load_robot
 
     root.mkdir(parents=True, exist_ok=True)
-    urdf = root / "toy.urdf"
-    urdf.write_text(toy_humanoid_urdf(), encoding="utf-8")
+    urdf_path = root / "toy.urdf"
+    urdf_path.write_text(urdf or toy_humanoid_urdf(), encoding="utf-8")
     preset = RobotPreset(
         name="toy",
         display_name="Toy",
         root_dir=root,
-        urdf_path=urdf,
+        urdf_path=urdf_path,
         ik_map=dict(IK_MAP),
         feet={"left_contact_link": "left_foot_link", "right_contact_link": "right_foot_link"},
-        dof_order=DOF_ORDER,
+        dof_order=tuple(dof_order),
     )
     return load_robot(preset)

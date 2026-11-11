@@ -50,6 +50,11 @@ class FraxRobotModel:
     floor_sphere_idxs: tuple[int, ...] = ()
     num_collision_spheres: int = 0
     num_self_collision_pairs: int = 0
+    #: Content key the pipeline's model cache stored this model under.
+    cache_key: tuple = ()
+    #: frax actuated-joint indices left out of ``dof_order``.  They are not
+    #: exported, so the solver holds them at 0, where playback FK puts them.
+    frozen_joints: tuple[int, ...] = ()
 
     @property
     def nq(self) -> int:
@@ -188,6 +193,14 @@ def build_frax_robot_model(
             "(frax supports revolute, prismatic and fixed joints)"
         )
     dof_to_frax = np.asarray([frax_actuated.index(name) for name in dof_names], dtype=np.int64)
+    exported = set(int(i) for i in dof_to_frax)
+    frozen = tuple(i for i in range(len(frax_actuated)) if i not in exported)
+    if frozen:
+        _log.info(
+            "robot %r: holding joints outside dof_order at 0 in FRAX: %s",
+            preset.name,
+            [frax_actuated[i] for i in frozen],
+        )
     return FraxRobotModel(
         robot=model,
         preset_name=preset.name,
@@ -197,6 +210,7 @@ def build_frax_robot_model(
         joint_link=joint_link,
         has_collision=bool(model.has_collision_data),
         has_self_collision=bool(model.has_collision_data and model.has_sc_data),
+        frozen_joints=frozen,
         collision_source=collision.source if model is not kinematic else "none",
         floor_sphere_idxs=layout.floor_sphere_idxs if model is not kinematic else (),
         num_collision_spheres=layout.num_spheres if model is not kinematic else 0,

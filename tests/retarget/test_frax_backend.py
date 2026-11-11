@@ -283,3 +283,190 @@ def test_robot_to_robot_runs_through_frax(toy) -> None:
     assert result.meta["execution_provenance"]["backend"] == "frax"
     # Same robot on both sides: the joints come back close to the source.
     assert float(np.abs(result.joint_q[:, 7:] - joint_q[:, 7:]).mean()) < 0.1
+
+
+def _pipeline_for(robot, **overrides):
+    from hhtools.retarget.frax_backend import FraxPipeline
+
+    return FraxPipeline(
+        robot,
+        scaler_config=SimpleNamespace(source_body_quat=(0.0, 0.0, 0.0, 1.0)),
+        pipeline_config=PipelineConfig(apply_feet_stabilizer=False),
+        frax_config=FraxConfig(frame_bucket=64).with_overrides(**overrides),
+    )
+
+
+def test_model_cache_is_keyed_by_content_and_dof_order(tmp_path: Path, monkeypatch) -> None:
+    import hhtools.retarget.frax_backend.pipeline as fp
+    from frax_toy_robot import DOF_ORDER
+
+    monkeypatch.setattr(fp, "_MODEL_CACHE", type(fp._MODEL_CACHE)())
+    monkeypatch.setattr(fp, "_SOLVER_CACHE", type(fp._SOLVER_CACHE)())
+    # Agent jobs copy the same robot into a fresh temporary folder each time.
+    first = _pipeline_for(
+        write_toy_robot(tmp_path / "job-a" / "toy"), floor=False, self_collision=False
+    )
+    second = _pipeline_for(
+        write_toy_robot(tmp_path / "job-b" / "toy"), floor=False, self_collision=False
+    )
+    assert second.frax_model is first.frax_model
+    entries = first.ik_mapping.entries
+    assert fp._solver_for(second, entries, 30.0) is fp._solver_for(first, entries, 30.0)
+
+    # Same URDF, different dof_order: the column mapping must follow the new order.
+    reordered = write_toy_robot(tmp_path / "job-c" / "toy", dof_order=tuple(reversed(DOF_ORDER)))
+    third = _pipeline_for(reordered, floor=False, self_collision=False)
+    assert third.frax_model is not first.frax_model
+    assert third.frax_model.dof_names == tuple(reordered.dof_names())
+    names = list(third.frax_model.robot.joint_names[third.frax_model.robot.nv_floating :])
+    assert [names[i] for i in third.frax_model.dof_to_frax] == list(reordered.dof_names())
+
+
+def test_model_cache_is_bounded(tmp_path: Path, monkeypatch) -> None:
+    import hhtools.retarget.frax_backend.pipeline as fp
+    from frax_toy_robot import DOF_ORDER
+
+    monkeypatch.setattr(fp, "_MODEL_CACHE", type(fp._MODEL_CACHE)())
+    monkeypatch.setattr(fp, "_MAX_CACHED_MODELS", 2)
+    for k in range(3):
+        order = DOF_ORDER[k:] + DOF_ORDER[:k]
+        _pipeline_for(
+            write_toy_robot(tmp_path / f"r{k}" / "toy", dof_order=order),
+            floor=False,
+            self_collision=False,
+        )
+    assert len(fp._MODEL_CACHE) == 2
+
+
+def test_collision_signature_covers_sole_links() -> None:
+    from hhtools.retarget.frax_backend.collision import CollisionSpec
+
+    spheres = {"a": [((0.0, 0.0, 0.0), 0.01)], "b": [((0.0, 0.0, 0.1), 0.01)]}
+    assert (
+        CollisionSpec(spheres=spheres, sole_links=("a",)).signature()
+        != CollisionSpec(spheres=spheres, sole_links=("b",)).signature()
+    )
+
+
+def _fixed_feet_urdf() -> str:
+    """Toy humanoid whose feet hang off small ankle links by fixed joints."""
+    from frax_toy_robot import _joint, _link, toy_humanoid_urdf
+
+    urdf = toy_humanoid_urdf()
+    extra = []
+    for side in ("left", "right"):
+        urdf = urdf.replace(
+            f'<joint name="{side}_ankle_joint" type="revolute"><parent link="{side}_shin_link"/>'
+            f'<child link="{side}_foot_link"/>',
+            f'<joint name="{side}_ankle_joint" type="revolute"><parent link="{side}_shin_link"/>'
+            f'<child link="{side}_ankle_link"/>',
+        )
+        extra.append(_link(f"{side}_ankle_link", '<sphere radius="0.02"/>'))
+        extra.append(
+            _joint(
+                f"{side}_foot_fixed",
+                f"{side}_ankle_link",
+                f"{side}_foot_link",
+                "0.02 0 -0.03",
+                kind="fixed",
+            )
+        )
+    return urdf.replace("</robot>", "".join(extra) + "</robot>")
+
+
+def test_fixed_foot_links_still_get_sole_spheres_at_the_real_sole(tmp_path: Path) -> None:
+    import mujoco
+
+    from hhtools.retarget.frax_backend._urdf import zero_pose_link_transforms
+    from hhtools.retarget.frax_backend.collision import _body_points, auto_collision_spec
+
+    robot = write_toy_robot(tmp_path / "fixed-feet" / "toy", urdf=_fixed_feet_urdf())
+    m = robot.mujoco_model
+    assert mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, "left_foot_link") < 0  # merged by MuJoCo
+
+    spec = auto_collision_spec(robot)
+
+    assert set(spec.sole_links) == {"left_foot_link", "right_foot_link"}
+    assert len(spec.spheres["left_foot_link"]) == 4
+    zero = zero_pose_link_transforms(Path(robot.preset.urdf_path))
+    sole_z = min(
+        float((p @ zero["left_ankle_link"][:3, :3].T + zero["left_ankle_link"][:3, 3])[:, 2].min())
+        for p in [_body_points(m, "left_ankle_link")]
+    )
+    T = zero["left_foot_link"]
+    bottoms = [
+        float((T[:3, :3] @ np.asarray(c) + T[:3, 3])[2] - r)
+        for c, r in spec.spheres["left_foot_link"]
+    ]
+    np.testing.assert_allclose(bottoms, sole_z, atol=1e-6)
+
+
+def test_joints_outside_dof_order_are_held_at_zero(tmp_path: Path) -> None:
+    from frax_toy_robot import DOF_ORDER
+
+    full = _pipeline_for(
+        write_toy_robot(tmp_path / "full" / "toy"), floor=False, self_collision=False
+    )
+    wave = _wave(full)
+    wave[:, list(full.robot.dof_names()).index("waist_yaw_joint")] = 0.5
+    targets = _reachable_targets(full, wave)
+
+    partial_order = tuple(n for n in DOF_ORDER if n != "waist_yaw_joint")
+    partial = _pipeline_for(
+        write_toy_robot(tmp_path / "partial" / "toy", dof_order=partial_order),
+        floor=False,
+        self_collision=False,
+    )
+    assert [e.canonical_name for e in partial.ik_mapping.entries] == [
+        e.canonical_name for e in full.ik_mapping.entries
+    ]
+    model = partial.frax_model
+    waist = list(model.robot.joint_names[model.nv_floating :]).index("waist_yaw_joint")
+    assert model.frozen_joints == (waist,)
+    captured = {}
+    original = model.joint_q_from_frax_q
+
+    def capture(q):
+        captured["q"] = np.asarray(q)
+        return original(q)
+
+    model.joint_q_from_frax_q = capture
+    try:
+        _solve(partial, targets)
+    finally:
+        del model.joint_q_from_frax_q
+    # The solver could have rotated the waist towards the targets, but must not.
+    np.testing.assert_allclose(captured["q"][:, model.robot.nq_floating + waist], 0.0, atol=1e-9)
+
+
+def test_frax_g1_model_requires_matching_dimensions_and_soles() -> None:
+    import xml.etree.ElementTree as ET
+
+    from frax.assets import G1_ASSETS_DIR
+    from frax.robots import unitree_g1
+
+    from hhtools.retarget.frax_backend.collision import (
+        _movable_joint_origins_match,
+        _sole_spheres_match,
+    )
+
+    reference = ET.parse(G1_ASSETS_DIR / "g1_29dof_rev_1_0.urdf").getroot()
+    names = list(unitree_g1.joint_to_child_mapping)
+    assert _movable_joint_origins_match(reference, reference, names)
+    longer = ET.parse(G1_ASSETS_DIR / "g1_29dof_rev_1_0.urdf").getroot()
+    knee = longer.find("joint[@name='left_knee_joint']/origin")
+    xyz = [float(v) for v in knee.get("xyz").split()]
+    knee.set("xyz", f"{xyz[0]} {xyz[1]} {xyz[2] - 0.05}")  # 5 cm longer thigh
+    assert not _movable_joint_origins_match(longer, reference, names)
+
+    # A 20 x 8 cm sole at z = 0 with sole spheres on its corners matches; the
+    # same spheres on a foot 6 cm longer do not.
+    r = 0.01
+    spheres = [((x, y, r), r) for x in (-0.05 + r, 0.15 - r) for y in (-0.04 + r, 0.04 - r)]
+    grid = np.array(
+        [[x, y, z] for x in np.linspace(-0.05, 0.15, 9) for y in (-0.04, 0.04) for z in (0.0, 0.03)]
+    )
+    assert _sole_spheres_match(spheres, np.eye(4), grid)
+    enlarged = grid.copy()
+    enlarged[:, 0] = np.where(enlarged[:, 0] > 0.1, enlarged[:, 0] + 0.06, enlarged[:, 0])
+    assert not _sole_spheres_match(spheres, np.eye(4), enlarged)

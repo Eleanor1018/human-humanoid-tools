@@ -19,9 +19,11 @@ rules) and the same pull-to-midpoint joint filter.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import threading
 import time
+from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -146,35 +148,48 @@ class _SmoothJointFilterTask(Task):
 # Caches (process-wide: compiled solvers outlive pipeline instances)
 # ---------------------------------------------------------------------------
 
+# Keys are content-based (URDF bytes, DOF order, collision model, options), so
+# Agent jobs that materialize the same robot into fresh temporary folders reuse
+# one model and solver.  Both caches are LRU-bounded.
 _CACHE_LOCK = threading.RLock()
-_MODEL_CACHE: dict[tuple, FraxRobotModel] = {}
-_SOLVER_CACHE: dict[tuple, _Solver] = {}
+_MODEL_CACHE: OrderedDict[tuple, FraxRobotModel] = OrderedDict()
+_SOLVER_CACHE: OrderedDict[tuple, _Solver] = OrderedDict()
+_MAX_CACHED_MODELS = 8
 _MAX_CACHED_SOLVERS = 16
 
 
-def _file_stamp(path: Path | None) -> tuple[str, int]:
+def _file_digest(path: Path | None) -> str:
     if path is None:
-        return ("", 0)
+        return ""
     try:
-        return (str(path), Path(path).stat().st_mtime_ns)
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
     except OSError:
-        return (str(path), 0)
+        return ""
 
 
 def _frax_model_for(robot: URDFRobotModel, config: FraxConfig) -> FraxRobotModel:
-    """Build (or reuse) the frax model, with collision spheres when a constraint needs them."""
+    """Build (or reuse) the frax model, with collision spheres when a constraint needs them.
+
+    The key covers everything the model depends on: the URDF content, the
+    exported DOF order (``dof_to_frax``) and the collision model.
+    """
     preset = robot.preset
     spec = collision_spec_for_robot(robot) if (config.floor or config.self_collision) else None
     key = (
-        preset.name,
-        _file_stamp(preset.urdf_path),
+        _file_digest(preset.urdf_path),
+        tuple(robot.dof_names()),
         None if spec is None else (spec.source, spec.signature()),
     )
     with _CACHE_LOCK:
         model = _MODEL_CACHE.get(key)
-        if model is None:
-            model = build_frax_robot_model(robot, collision=spec)
-            _MODEL_CACHE[key] = model
+        if model is not None:
+            _MODEL_CACHE.move_to_end(key)
+            return model
+        model = build_frax_robot_model(robot, collision=spec)
+        model.cache_key = key
+        _MODEL_CACHE[key] = model
+        while len(_MODEL_CACHE) > _MAX_CACHED_MODELS:
+            _MODEL_CACHE.popitem(last=False)
     return model
 
 
@@ -267,6 +282,10 @@ def _actuated_limits(model: FraxRobotModel, config: FraxConfig) -> tuple[NDArray
             raise ValueError(
                 f"retarget.frax.joint_limit_overrides.{name} lies outside the URDF limits"
             )
+    # Joints outside dof_order are not exported; hold them where playback FK puts them.
+    frozen = list(model.frozen_joints)
+    lower[frozen] = 0.0
+    upper[frozen] = 0.0
     return lower, upper
 
 
@@ -285,6 +304,8 @@ def _build_solver(
     model: FraxRobotModel,
     entries: tuple[IKMappingEntry, ...],
     fps: float,
+    smooth_weight: float,
+    smooth_mask: NDArray | None,
 ) -> _Solver:
     config = pipeline.frax_config
     robot = model.robot
@@ -316,14 +337,8 @@ def _build_solver(
         ),
     ]
     lower, upper = _actuated_limits(model, config)
-    smooth_weight = (
-        float(pipeline.config.smooth_joint_filter_weight)
-        if config.midpoint_weight is None
-        else float(config.midpoint_weight)
-    )
-    if smooth_weight > 0.0:
-        mask = _smooth_joint_mask(pipeline, model)
-        smooth = _SmoothJointFilterTask(robot, lower, upper, mask, smooth_weight, gain)
+    if smooth_weight > 0.0 and smooth_mask is not None:
+        smooth = _SmoothJointFilterTask(robot, lower, upper, smooth_mask, smooth_weight, gain)
         if smooth.num_rows:
             tasks.append(smooth)
 
@@ -408,10 +423,24 @@ def _build_solver(
     )
 
 
+def _smooth_settings(pipeline: FraxPipeline, model: FraxRobotModel) -> tuple[float, NDArray | None]:
+    """Weight and per-joint mask of the mid-range filter (``(0, None)`` when off)."""
+    config = pipeline.frax_config
+    weight = (
+        float(pipeline.config.smooth_joint_filter_weight)
+        if config.midpoint_weight is None
+        else float(config.midpoint_weight)
+    )
+    if weight <= 0.0:
+        return 0.0, None
+    return weight, _smooth_joint_mask(pipeline, model)
+
+
 def _solver_for(pipeline: FraxPipeline, entries: tuple[IKMappingEntry, ...], fps: float) -> _Solver:
     model = pipeline.frax_model
+    smooth_weight, smooth_mask = _smooth_settings(pipeline, model)
     key = (
-        id(model),
+        model.cache_key,
         pipeline.frax_config,
         round(float(fps), 6),
         tuple(
@@ -423,18 +452,18 @@ def _solver_for(pipeline: FraxPipeline, entries: tuple[IKMappingEntry, ...], fps
             )
             for e in entries
         ),
-        float(pipeline.config.smooth_joint_filter_weight),
-        None
-        if pipeline.config.smooth_joint_filter_masks is None
-        else tuple(sorted(pipeline.config.smooth_joint_filter_masks.items())),
+        smooth_weight,
+        None if smooth_mask is None else tuple(round(float(x), 9) for x in smooth_mask),
     )
     with _CACHE_LOCK:
         solver = _SOLVER_CACHE.get(key)
-        if solver is None:
-            solver = _build_solver(pipeline, model, entries, fps)
-            if len(_SOLVER_CACHE) >= _MAX_CACHED_SOLVERS:
-                _SOLVER_CACHE.pop(next(iter(_SOLVER_CACHE)))
-            _SOLVER_CACHE[key] = solver
+        if solver is not None:
+            _SOLVER_CACHE.move_to_end(key)
+            return solver
+        solver = _build_solver(pipeline, model, entries, fps, smooth_weight, smooth_mask)
+        _SOLVER_CACHE[key] = solver
+        while len(_SOLVER_CACHE) > _MAX_CACHED_SOLVERS:
+            _SOLVER_CACHE.popitem(last=False)
     return solver
 
 
