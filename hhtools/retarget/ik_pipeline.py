@@ -1263,14 +1263,30 @@ class IKPipelineBase:
         if cached is not None:
             return cached
         assert self.feet_stabilizer_config is not None
-        from hhtools.robot.foot_geometry import _resolve_ik_link, pelvis_offset_in_link_frame
+        from hhtools.robot.foot_geometry import (
+            _resolve_ik_link,
+            foot_sole_points_in_ankle_frames,
+            pelvis_offset_in_link_frame,
+        )
 
         # The stabilizer's hips effector lands on the ``hips`` ik_map link.
         hips_link = _resolve_ik_link(dict(self.robot.preset.ik_map or {}), "hips")
+        try:
+            # Ground contact compares soles, not ankle origins, with the floor.
+            sole_points = foot_sole_points_in_ankle_frames(self.robot)
+        except Exception:
+            _log.warning(
+                "feet stabilizer: could not read foot meshes of %r; "
+                "comparing ankle targets with the floor",
+                getattr(self.robot.preset, "name", "?"),
+                exc_info=True,
+            )
+            sole_points = {}
         stab = FeetStabilizer(
             self.feet_stabilizer_config,
             joint_names=joint_names,
             pelvis_offset=pelvis_offset_in_link_frame(self.robot, hips_link),
+            sole_points=sole_points,
         )
         self._feet_stab_by_hierarchy[key] = stab
         return stab

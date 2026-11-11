@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 _INERTIAL = (
@@ -132,8 +133,31 @@ IK_MAP = {
 }
 
 
-def write_toy_robot(root: Path, *, dof_order: tuple[str, ...] = DOF_ORDER, urdf: str | None = None):
-    """Write the URDF under ``root`` and return a loaded ``URDFRobotModel``."""
+def toy_humanoid_urdf_with_visuals() -> str:
+    """:func:`toy_humanoid_urdf` with each collision shape repeated as a visual.
+
+    The visuals are named after their link, as the clip floor snap finds foot
+    meshes by name.
+    """
+    return re.sub(
+        r'<link name="([^"]+)">(.*?)<collision>(.*?)</collision>',
+        r'<link name="\1">\2<visual name="\1_visual">\3</visual><collision>\3</collision>',
+        toy_humanoid_urdf(),
+    )
+
+
+def write_toy_robot(
+    root: Path,
+    *,
+    dof_order: tuple[str, ...] = DOF_ORDER,
+    urdf: str | None = None,
+    name: str = "toy",
+):
+    """Write the URDF under ``root`` and return a loaded ``URDFRobotModel``.
+
+    Give robots with different geometry different ``name``s: some foot
+    geometry caches are keyed by preset name.
+    """
     from hhtools.robot.base import RobotPreset
     from hhtools.robot.loader import load_robot
 
@@ -141,7 +165,7 @@ def write_toy_robot(root: Path, *, dof_order: tuple[str, ...] = DOF_ORDER, urdf:
     urdf_path = root / "toy.urdf"
     urdf_path.write_text(urdf or toy_humanoid_urdf(), encoding="utf-8")
     preset = RobotPreset(
-        name="toy",
+        name=name,
         display_name="Toy",
         root_dir=root,
         urdf_path=urdf_path,

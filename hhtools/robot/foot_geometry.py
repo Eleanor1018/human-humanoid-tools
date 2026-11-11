@@ -16,6 +16,7 @@ __all__ = [
     "apply_retarget_dof",
     "estimate_min_lateral_foot_separation",
     "foot_mesh_lateral_inner_gap",
+    "foot_sole_points_in_ankle_frames",
     "ground_contact_zs",
     "lowest_ankle_z",
     "pelvis_offset_from_link_transforms",
@@ -205,6 +206,74 @@ def pelvis_offset_in_link_frame(
         except Exception:
             continue
     return pelvis_offset_from_link_transforms(transforms, ik, link)
+
+
+def foot_sole_points_in_ankle_frames(
+    model: URDFRobotModel,
+) -> dict[str, np.ndarray]:
+    """Each foot's mesh points in its ``*_ankle`` ik_map link frame.
+
+    Keys are ``"left"`` / ``"right"``; values are ``(P, 3)`` arrays.  The
+    meshes are the ones the clip floor snap measures: the
+    ``feet.*_contact_link`` meshes (default: the ankle link).  Only the
+    convex hull is kept, which has the same lowest point as the mesh in any
+    orientation.  A side is left out when its link or meshes are missing.
+
+    Adding the lowest rotated point to an ankle target's height gives the
+    height of that foot's sole; at the zero pose the ankle origin of the
+    bundled robots sits 3.5-6 cm above the sole.  Leaves the model at the
+    zero configuration.
+    """
+
+    ik = dict(model.preset.ik_map or {})
+    contact = dict(zip(("left", "right"), _foot_contact_links(model), strict=True))
+    model.apply_configuration(model.zero_configuration())
+    scene = model.urdf.scene
+    try:
+        parents = dict(scene.graph.transforms.parents)
+    except Exception:
+        parents = {}
+    out: dict[str, np.ndarray] = {}
+    for side in ("left", "right"):
+        ankle = _resolve_ik_link(ik, f"{side}_ankle")
+        foot = contact.get(side) or ankle
+        if not ankle or not foot:
+            continue
+        try:
+            ankle_T = np.asarray(model.urdf.get_transform(ankle), dtype=np.float64)
+        except Exception:
+            continue
+        to_ankle = np.linalg.inv(ankle_T)
+        chunks: list[np.ndarray] = []
+        # Geometry nodes hanging off the foot link.  Some URDF scenes name
+        # their nodes after the mesh file (ASIMOV 1), which the name match in
+        # ``_foot_mesh_node_parts`` misses; it stays the fallback.
+        parts = [
+            (node, scene.graph[node][1])
+            for node in scene.graph.nodes_geometry
+            if parents.get(node) == foot
+        ] or list(_foot_mesh_node_parts(model, foot))
+        for node, geom_name in parts:
+            if not geom_name:
+                continue
+            vertices = _cached_geom_vertices(model, geom_name)
+            if vertices is None or vertices.shape[0] == 0:
+                continue
+            node_T = to_ankle @ np.asarray(scene.graph.get(node)[0], dtype=np.float64)
+            chunks.append(vertices @ node_T[:3, :3].T + node_T[:3, 3])
+        if not chunks:
+            continue
+        points = np.concatenate(chunks, axis=0)
+        try:
+            import trimesh
+
+            hull = trimesh.convex.convex_hull(points)
+            if len(hull.vertices) >= 4:
+                points = np.asarray(hull.vertices, dtype=np.float64)
+        except Exception:
+            pass
+        out[side] = points
+    return out
 
 
 def pelvis_offset_from_link_transforms(
