@@ -470,3 +470,75 @@ def test_frax_g1_model_requires_matching_dimensions_and_soles() -> None:
     enlarged = grid.copy()
     enlarged[:, 0] = np.where(enlarged[:, 0] > 0.1, enlarged[:, 0] + 0.06, enlarged[:, 0])
     assert not _sole_spheres_match(spheres, np.eye(4), enlarged)
+
+
+def _stepped_wave(pipeline, frames: int = 40) -> np.ndarray:
+    """``_wave`` with both legs bending 0.6 rad more in one frame halfway."""
+    traj = _wave(pipeline, frames)
+    dof = pipeline.robot.dof_names()
+    legs = [i for i, n in enumerate(dof) if "hip_pitch" in n or "knee" in n]
+    traj[frames // 2 :, legs] += 0.6
+    return traj
+
+
+def _capped_pipeline(robot, max_joint_velocity: float, **overrides):
+    from hhtools.retarget.frax_backend import FraxPipeline
+
+    return FraxPipeline(
+        robot,
+        scaler_config=SimpleNamespace(source_body_quat=(0.0, 0.0, 0.0, 1.0)),
+        pipeline_config=PipelineConfig(
+            apply_feet_stabilizer=False,
+            max_joint_velocity=max_joint_velocity,
+            post_ik_foot_clamps=False,
+        ),
+        frax_config=FraxConfig(frame_bucket=64).with_overrides(**overrides),
+    )
+
+
+def test_qp_bounds_joint_speed_so_the_finalizer_clips_nothing(toy) -> None:
+    pipeline = _capped_pipeline(toy, 3.0, floor=False, self_collision=False)
+    joint_q = _solve(pipeline, _reachable_targets(pipeline, _stepped_wave(pipeline)))
+
+    speed = np.abs(np.diff(joint_q[:, 7:], axis=0)) * 30.0
+    assert float(speed.max()) <= 3.0 + 1e-3
+    limited = pipeline._rate_limit(root7=joint_q[:, :7], dof=joint_q[:, 7:], framerate=30.0)
+    np.testing.assert_allclose(limited[:, 7:], joint_q[:, 7:], atol=1e-5)
+    assert "joint_limits+velocity" in pipeline.frax_summary()["constraints"]
+
+
+@pytest.fixture(scope="module")
+def toy_with_visuals(tmp_path_factory):
+    from frax_toy_robot import toy_humanoid_urdf_with_visuals
+
+    return write_toy_robot(
+        tmp_path_factory.mktemp("robots") / "toy_visual",
+        urdf=toy_humanoid_urdf_with_visuals(),
+        name="toy_visual",
+    )
+
+
+def test_finalized_clip_keeps_the_solved_floor_contact(toy_with_visuals) -> None:
+    """The whole back half, not just the solve: the speed cap and the clip
+    floor snap must not lift a clip whose solved soles are on the floor."""
+    from hhtools.retarget.clip_ground_snap import measure_clip_min_foot_world_z
+
+    robot = toy_with_visuals
+    pipeline = _capped_pipeline(robot, 3.0)
+    targets = _reachable_targets(pipeline, _stepped_wave(pipeline))
+    # A squat in one frame: the body drops so the ankles stay 2 cm below their
+    # standing height (sole 6 cm under the ankle), pressing the feet into the
+    # floor.  Clipping the leg joints after the solve, while the root drops,
+    # would push the straighter legs through the floor.
+    names = [e.canonical_name for e in pipeline.ik_mapping.entries]
+    ankles = [names.index("left_ankle"), names.index("right_ankle")]
+    lowest = targets[:, ankles, 2].min(axis=1)
+    targets[:, :, 2] -= (lowest - (0.06 - 0.02))[:, None]
+    prepared = _prepared(targets)
+    motion = SimpleNamespace(framerate=30.0, name="clip")
+    raw = pipeline._solve_clip(pipeline._clip_job(motion, prepared, ""))
+    assert measure_clip_min_foot_world_z(robot, raw) > -0.01
+
+    result = pipeline._finalize_solved_joint_q(raw, motion, prepared)
+    assert abs(result.meta["clip_floor_snap_m"]) < 0.01
+    assert measure_clip_min_foot_world_z(robot, result.joint_q) > -0.01

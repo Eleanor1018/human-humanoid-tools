@@ -39,10 +39,12 @@ frax = import_frax()
 import jax  # noqa: E402  (configured by import_frax)
 import jax.numpy as jnp  # noqa: E402
 from frax.ik import (  # noqa: E402
+    DEFAULT_PENALTY,
     DiffIKSolver,
     FloorConstraint,
     FrameTask,
     GlobalIKSolver,
+    InequalityConstraint,
     JointLimits,
     OfflineRetargeter,
     Retargeter,
@@ -75,6 +77,20 @@ _HIPS_REDUCED_WEIGHT = 3.0
 _POSITION_ONLY_PELVIS_ROT_WEIGHT = 5.0
 #: Floor rows kept per step (the lowest spheres).
 _FLOOR_MAX_ROWS = 32
+
+
+def _root_speed_directions() -> NDArray:
+    """The 26 unit vectors towards the faces, edges and corners of a cube."""
+    grid = np.array(
+        [(x, y, z) for x in (-1, 0, 1) for y in (-1, 0, 1) for z in (-1, 0, 1) if x or y or z],
+        dtype=float,
+    )
+    return grid / np.linalg.norm(grid, axis=1, keepdims=True)
+
+
+#: ``{w : n_k . w <= 1}`` over :func:`_root_speed_directions` reaches at most
+#: this far from the origin (its inradius is 1).
+_ROOT_SPEED_POLYTOPE_RADIUS = 1.1281
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +158,40 @@ class _SmoothJointFilterTask(Task):
         diff = jnp.maximum(jnp.where(x <= self.lo, self.lo - x, x - self.hi), 0.0)
         s = jnp.where(inside, 0.0, 1.0 - jnp.exp(-(diff**6.5)))
         return self.J, -self.gain * x * s, self.weight
+
+
+@jax.tree_util.register_static
+class _RootAngularSpeedLimit(InequalityConstraint):
+    """Keep the floating base's angular speed under ``ref[cap_key]`` (rad/s).
+
+    The shared finalizer caps the root's rotation per frame (see
+    :meth:`IKPipelineBase._root_angular_speed_caps`).  A linear QP cannot
+    bound a norm, so the ball is replaced by the 26-sided polytope
+    ``n_k . w <= cap / R``, which lies inside it: the root then never turns
+    faster than the finalizer allows, and at worst 11% slower.
+    """
+
+    def __init__(
+        self,
+        robot,
+        gain: float,
+        cap_key: str = "root_cap",
+        penalty: float = DEFAULT_PENALTY,
+    ):
+        self.robot = robot
+        directions = _root_speed_directions()
+        self.G = np.zeros((len(directions), robot.nv))
+        self.G[:, 3:6] = directions  # frax floating-base velocity: (linear, angular)
+        self.num_rows = len(directions)
+        self.cap_key = cap_key
+        self.penalty = penalty
+        # Not used by ``rows``: frax reads every term's gain to size the
+        # first-frame convergence step.
+        self.gain = float(gain)
+
+    def rows(self, q, ref):
+        cap = ref[self.cap_key] / _ROOT_SPEED_POLYTOPE_RADIUS
+        return self.G, jnp.full((self.num_rows,), cap)
 
 
 # ---------------------------------------------------------------------------
@@ -289,6 +339,28 @@ def _actuated_limits(model: FraxRobotModel, config: FraxConfig) -> tuple[NDArray
     return lower, upper
 
 
+def _velocity_limit(pipeline: FraxPipeline, model: FraxRobotModel) -> NDArray | None:
+    """Per-joint speed bound (rad/s) for the QP; ``None`` when unbounded.
+
+    ``PipelineConfig.max_joint_velocity`` is the cap the shared finalizer
+    enforces by clipping each joint's per-frame change.  Clipping after the
+    solve moves joints without rechecking the feet, so FRAX's floor contact
+    is lost and the clip floor snap then lifts the whole clip.  Bounding the
+    speed inside the QP lets the other joints compensate; the finalizer's
+    clip is then a no-op that stays as a safety net.  ``velocity_limits``
+    adds the URDF limits on top.
+    """
+    n = model.nv - model.nv_floating
+    cap = float(pipeline.config.max_joint_velocity)
+    limit = np.full(n, cap if cap > 0.0 else np.inf)
+    if pipeline.frax_config.velocity_limits:
+        urdf = np.asarray(model.robot.actuated_joint_max_velocities, dtype=float)
+        limit = np.minimum(limit, np.where(urdf > 0.0, urdf, np.inf))
+    if not np.isfinite(limit).any():
+        return None
+    return limit
+
+
 def _regularization(model: FraxRobotModel, config: FraxConfig) -> NDArray:
     reg = np.full(model.nv, float(config.regularization))
     index = model.robot.joint_name_to_index
@@ -344,17 +416,22 @@ def _build_solver(
 
     # Constraint gains of 1/dt let a joint (or sphere) reach its limit within
     # one frame without overshooting (frax: keep gain * dt <= 1).
+    v_max = _velocity_limit(pipeline, model)
     constraints: list[Any] = [
         JointLimits(
             robot,
             q_min=lower,
             q_max=upper,
-            v_max="robot" if config.velocity_limits else None,
-            v_min="robot" if config.velocity_limits else None,
+            v_max=v_max,
+            v_min=None if v_max is None else -v_max,
             gain=gain,
         )
     ]
-    names = ["joint_limits" + ("+velocity" if config.velocity_limits else "")]
+    names = ["joint_limits" + ("" if v_max is None else "+velocity")]
+    if float(pipeline.config.max_joint_velocity) > 0.0:
+        # Same condition as the finalizer's rate limit, same per-frame cap.
+        constraints.append(_RootAngularSpeedLimit(robot, gain))
+        names.append("root_angular_speed")
     if config.floor and model.has_collision and model.floor_sphere_idxs:
         constraints.append(
             FloorConstraint(
@@ -442,6 +519,7 @@ def _solver_for(pipeline: FraxPipeline, entries: tuple[IKMappingEntry, ...], fps
     key = (
         model.cache_key,
         pipeline.frax_config,
+        round(float(pipeline.config.max_joint_velocity), 9),
         round(float(fps), 6),
         tuple(
             (
@@ -671,6 +749,7 @@ class FraxPipeline(IKPipelineBase):
             "rmat": _rotation_matrices(targets[:, :, 3:7]),
             "w_pos": W_pos,
             "w_rot": W_rot,
+            "root_cap": self._root_caps(motion, prepared, targets.shape[0]),
         }
         return _ClipJob(
             motion=motion,
@@ -679,6 +758,22 @@ class FraxPipeline(IKPipelineBase):
             source_format=source_format,
             frames=frames,
         )
+
+    def _root_caps(self, motion: Motion, prepared: PreparedIKTargets, n: int) -> NDArray:
+        """``(n,)`` root angular speed cap (rad/s) into each solver frame.
+
+        The finalizer's per-frame caps on the real frames; its fixed floor on
+        the warm-up and stabilisation frames, which repeat the first and last
+        targets.
+        """
+        caps = np.full(n, self._root_angular_speed_floor(), dtype=float)
+        n_init = int(prepared.n_init)
+        real = n - n_init - int(prepared.n_stab)
+        if real > 1:
+            caps[n_init + 1 : n_init + real] = self._root_angular_speed_caps(
+                real, float(motion.framerate), prepared.source_root_quat
+            )
+        return caps
 
     def _padded_length(self, n: int) -> int:
         bucket = max(1, int(self.frax_config.frame_bucket))

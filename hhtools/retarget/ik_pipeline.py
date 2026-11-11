@@ -1291,6 +1291,38 @@ class IKPipelineBase:
         self._feet_stab_by_hierarchy[key] = stab
         return stab
 
+    def _root_angular_speed_floor(self) -> float:
+        """Fixed part of the root angular speed cap (rad/s)."""
+        if self.config.max_root_angular_velocity > 0.0:
+            return float(self.config.max_root_angular_velocity)
+        return float(self.config.max_joint_velocity)
+
+    def _root_angular_speed_caps(
+        self,
+        n: int,
+        framerate: float,
+        source_root_quat: NDArray | None = None,
+    ) -> NDArray:
+        """``(n - 1,)`` root angular speed cap (rad/s) into frames ``1..n-1``.
+
+        ``max(floor, source_speed * mult)``; just the floor when the source
+        rotation is missing or does not cover the ``n`` frames.
+        """
+        dt = 1.0 / max(framerate, 1.0)
+        caps = np.full(max(n - 1, 0), self._root_angular_speed_floor(), dtype=np.float64)
+        mult = float(self.config.root_angular_velocity_source_multiplier)
+        if (
+            caps.size
+            and mult > 0.0
+            and source_root_quat is not None
+            and source_root_quat.shape[0] == n
+        ):
+            qs = Q.normalize(source_root_quat.astype(np.float32))
+            dots = np.abs(np.sum(qs[1:] * qs[:-1], axis=1)).clip(0.0, 1.0)
+            src_speed = (2.0 * np.arccos(dots)) / dt  # (n-1,)
+            caps = np.maximum(caps, src_speed.astype(np.float64) * mult)
+        return caps
+
     def _rate_limit(
         self,
         *,
@@ -1319,20 +1351,7 @@ class IKPipelineBase:
         """
         dt = 1.0 / max(framerate, 1.0)
         max_dq = self.config.max_joint_velocity * dt
-        floor_root = (
-            self.config.max_root_angular_velocity
-            if self.config.max_root_angular_velocity > 0.0
-            else self.config.max_joint_velocity
-        )
-        mult = float(self.config.root_angular_velocity_source_multiplier)
-
-        # Per-frame source root angular speed (rad/s); 0 when unavailable so
-        # the cap collapses to the fixed ``floor_root``.
-        src_speed: NDArray | None = None
-        if source_root_quat is not None and source_root_quat.shape[0] == root7.shape[0]:
-            qs = Q.normalize(source_root_quat.astype(np.float32))
-            dots = np.abs(np.sum(qs[1:] * qs[:-1], axis=1)).clip(0.0, 1.0)
-            src_speed = (2.0 * np.arccos(dots)) / dt  # (F-1,)
+        caps = self._root_angular_speed_caps(root7.shape[0], framerate, source_root_quat)
 
         solved_q = Q.normalize(root7[:, 3:7].astype(np.float32))
 
@@ -1349,10 +1368,7 @@ class IKPipelineBase:
             # Root quat (3..7): SLERP-clamp to the source-relative cap.
             prev_q = prev[3:7]
             cur_q = solved_q[frame]
-            cap = floor_root
-            if src_speed is not None and mult > 0.0:
-                cap = max(floor_root, float(src_speed[frame - 1]) * mult)
-            max_ang = cap * dt
+            max_ang = float(caps[frame - 1]) * dt
             dot = float(np.dot(prev_q, cur_q))
             target_q = -cur_q if dot < 0.0 else cur_q
             ang = 2.0 * float(np.arccos(min(abs(dot), 1.0)))

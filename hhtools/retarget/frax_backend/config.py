@@ -32,7 +32,9 @@ class FraxConfig:
             limits, e.g. to keep a shoulder off its second IK solution.
         velocity_limits: Also enforce the URDF joint velocity limits.  Off by
             default: mocap retargeting is not actuator-limited, and Newton
-            does not apply them either.
+            does not apply them either.  The QP always bounds joint speed by
+            ``PipelineConfig.max_joint_velocity`` (the cap the shared
+            finalizer clips to); this adds the URDF limits on top.
         midpoint_weight: Weight of Newton's pull-to-mid-range joint filter.
             Off by default: the joint-limit constraints already keep joints
             in range, and on the built-in robots the filter raised the p95
