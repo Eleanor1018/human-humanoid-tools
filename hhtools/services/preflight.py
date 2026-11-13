@@ -1346,9 +1346,7 @@ class PreflightService:
                 )
             )
             capabilities = self._capabilities_provider()
-            recommended_backend = _backend_for_category(
-                motion_inspection.category, capabilities
-            )
+            recommended_backend = _backend_for_category(motion_inspection.category, capabilities)
             requested_backend = request.backend or recommended_backend
             if requested_backend not in compatible_backends_for_category(
                 motion_inspection.category

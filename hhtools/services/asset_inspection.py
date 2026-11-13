@@ -908,10 +908,14 @@ class MotionAssetInspector:
                     "detected": reference,
                 }
             declared_backend = bundle.detected.recommended_backend
-            if declared_backend and declared_backend != recommended_backend and not (
-                # Bundles registered before FRAX became the preferred IK backend
-                # recorded Newton; either IK backend is a valid recommendation.
-                declared_backend in IK_BACKENDS and recommended_backend in IK_BACKENDS
+            if (
+                declared_backend
+                and declared_backend != recommended_backend
+                and not (
+                    # Bundles registered before FRAX became the preferred IK backend
+                    # recorded Newton; either IK backend is a valid recommendation.
+                    declared_backend in IK_BACKENDS and recommended_backend in IK_BACKENDS
+                )
             ):
                 routing_mismatches["recommended_backend"] = {
                     "declared": bundle.detected.recommended_backend,

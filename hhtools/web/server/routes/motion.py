@@ -141,9 +141,7 @@ def register_motion_routes(
         # with terrain / interaction objects defaults to interaction-mesh, plain
         # motion to the default IK backend (FRAX when installed).
         has_scene = bool(motion.terrain is not None or motion.objects)
-        payload["suggested_backend"] = (
-            "interaction_mesh" if has_scene else default_ik_backend()
-        )
+        payload["suggested_backend"] = "interaction_mesh" if has_scene else default_ik_backend()
 
         if job is not None:
             job.message = "完成"
