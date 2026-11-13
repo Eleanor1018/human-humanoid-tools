@@ -117,6 +117,13 @@ uv sync --locked --extra web --extra retarget
 uv run hhtools web
 ```
 
+FRAX is the default IK solver when it is installed (CPU only, no Newton needed). Add `--extra retarget-frax` to get it; without it, HHTools falls back to Newton:
+
+```bash
+uv sync --locked --extra web --extra retarget --extra retarget-frax
+uv run hhtools doctor --require retarget-frax
+```
+
 For a preview-only WebUI, omit `--extra retarget`. If a required package is absent, startup exits with the missing package names and the exact recovery command instead of an import traceback.
 
 ### Troubleshooting

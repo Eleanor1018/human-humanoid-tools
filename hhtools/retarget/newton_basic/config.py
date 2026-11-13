@@ -258,6 +258,8 @@ class FeetStabilizerConfig:
     forward_axis: Literal["X", "Y", "Z"] = "X"
 
     # ---- ground contact ---------------------------------------------------
+    # Floor height for the lowest sole of upright frames; negative disables.
+    # Without foot meshes the stabilizer compares ankle targets instead.
     ground_contact_z: float = 0.0
     min_foot_clearance: float = 0.0
     max_ground_correction: float = 0.05

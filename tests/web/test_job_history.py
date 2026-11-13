@@ -363,6 +363,37 @@ def test_job_history_survives_app_restart(tmp_path: Path, monkeypatch) -> None:
         assert config["request"]["source_path"].endswith("missing.csv")
 
 
+def test_cli_for_frax_h2r_job_selects_the_backend_without_ik_iterations(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    app = _create_test_app(tmp_path, monkeypatch)
+    source = tmp_path / "walk.npz"
+    source.write_bytes(b"test")
+    job = server_state.Job(
+        id="cli-frax-job",
+        kind="retarget",
+        request={
+            "source_path": str(source),
+            "robot": "unitree_g1",
+            "backend": "frax",
+            "reference": "smpl",
+            "human_height": 1.72,
+            "ik_iterations": 24,
+        },
+    )
+    with app.state.session_state.job_lock:
+        app.state.session_state.jobs[job.id] = job
+
+    with TestClient(app) as client:
+        cli = client.get(f"/api/job/{job.id}/cli").json()
+
+    assert cli["available"] is True
+    assert "hhtools retarget run" in cli["command"]
+    assert "--backend frax" in cli["command"]
+    assert "--ik-iterations" not in cli["command"]
+
+
 def test_cli_and_config_download_for_source_backed_h2r_job(
     tmp_path: Path,
     monkeypatch,
@@ -517,3 +548,23 @@ def test_failed_only_replay_filters_batch_entries(
         assert config["parent_job_id"] == original.id
         assert config["spec"]["request"]["out_dir"] == "original_failed_retry"
         assert [entry["stem"] for entry in config["spec"]["request"]["entries"]] == ["second"]
+
+
+def test_solver_list_reports_frax_availability_from_dependency_probes(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from hhtools.services import capabilities
+
+    app = _create_test_app(tmp_path, monkeypatch)
+    monkeypatch.setattr(capabilities, "_module_available", lambda name: name != "elastiqp")
+
+    with TestClient(app) as client:
+        solvers = {item["id"]: item for item in client.get("/api/solvers").json()["solvers"]}
+
+    assert set(solvers) == {"newton", "frax", "interaction_mesh"}
+    assert solvers["newton"]["available"] is True
+    assert solvers["frax"]["available"] is False
+    assert solvers["frax"]["experimental"] is False
+    assert solvers["frax"]["reason"] == "missing dependencies: elastiqp"
+    assert solvers["frax"]["categories"] == ["plain_motion", "robot_trajectory"]

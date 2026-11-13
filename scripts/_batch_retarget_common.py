@@ -143,9 +143,8 @@ def process_sequence(seq_id: str, cfg: BatchClipConfig) -> Path:
             robot_model, motion, str(cal_path), human_height=cfg.human_height,
         )
         retargeted = pipe.run(motion)
-    elif backend == "newton":
+    elif backend in ("newton", "frax"):
         from hhtools.retarget.calibration import load_calibration
-        from hhtools.retarget.newton_basic import NewtonBasicPipeline
         from hhtools.robot.retarget_profile import (
             build_feet_stabilizer_config,
             build_pipeline_config_for_preset,
@@ -164,14 +163,28 @@ def process_sequence(seq_id: str, cfg: BatchClipConfig) -> Path:
             feet_cfg = build_feet_stabilizer_config(
                 preset, cfg.reference, model=robot_model,
             )
-        pipe = NewtonBasicPipeline(
-            robot_model,
-            scaler_config=scaler_cfg,
-            feet_stabilizer_config=feet_cfg,
-            pipeline_config=pipeline_cfg,
-            human_height=cfg.human_height,
-            configure_warp=False,
-        )
+        if backend == "frax":
+            # Solvers are cached per process, so later clips skip compilation.
+            from hhtools.retarget.frax_backend import FraxPipeline
+
+            pipe = FraxPipeline(
+                robot_model,
+                scaler_config=scaler_cfg,
+                feet_stabilizer_config=feet_cfg,
+                pipeline_config=pipeline_cfg,
+                human_height=cfg.human_height,
+            )
+        else:
+            from hhtools.retarget.newton_basic import NewtonBasicPipeline
+
+            pipe = NewtonBasicPipeline(
+                robot_model,
+                scaler_config=scaler_cfg,
+                feet_stabilizer_config=feet_cfg,
+                pipeline_config=pipeline_cfg,
+                human_height=cfg.human_height,
+                configure_warp=False,
+            )
         retargeted = pipe.run(motion)
     else:
         raise ValueError(f"unknown backend {cfg.backend!r}")
@@ -227,11 +240,20 @@ def add_common_args(
         default=default_reference,
         help="Calibration reference (default: dataset-specific).",
     )
+    if default_backend == "ik":
+        # Plain motion: FRAX when its optional extra is installed, else Newton.
+        from hhtools.retarget.frax_backend import default_ik_backend
+
+        default_backend = default_ik_backend()
     p.add_argument(
         "--backend",
-        choices=("newton", "interaction_mesh"),
+        choices=("frax", "newton", "interaction_mesh"),
         default=default_backend,
-        help=f"Retarget backend (default: {default_backend}).",
+        help=(
+            f"Retarget backend (default here: {default_backend}). frax is the "
+            "default IK solver when the retarget-frax extra is installed; newton is "
+            "the fallback."
+        ),
     )
     p.add_argument("--human-height", type=float, default=1.7, help="Subject height in metres.")
     p.add_argument("--limit", type=int, default=None, help="Process only the first N clips.")

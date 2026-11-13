@@ -37,6 +37,7 @@ from hhtools.contracts import (
 from hhtools.io.mimic_detect import infer_mimic_dataset, path_dataset_hint
 
 from .routing import (
+    IK_BACKENDS,
     backend_for_category,
     category_for_dataset,
     reference_for_dataset,
@@ -906,9 +907,15 @@ class MotionAssetInspector:
                     "declared": bundle.detected.reference,
                     "detected": reference,
                 }
+            declared_backend = bundle.detected.recommended_backend
             if (
-                bundle.detected.recommended_backend
-                and bundle.detected.recommended_backend != recommended_backend
+                declared_backend
+                and declared_backend != recommended_backend
+                and not (
+                    # Bundles registered before FRAX became the preferred IK backend
+                    # recorded Newton; either IK backend is a valid recommendation.
+                    declared_backend in IK_BACKENDS and recommended_backend in IK_BACKENDS
+                )
             ):
                 routing_mismatches["recommended_backend"] = {
                     "declared": bundle.detected.recommended_backend,

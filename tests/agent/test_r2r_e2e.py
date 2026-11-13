@@ -166,6 +166,7 @@ def test_agent_runs_self_contained_r2r_plan_to_verified_artifacts(
                             "target_robot_id": target_model.preset.name,
                             "target_robot_asset_id": target_robot.structured_content["asset_id"],
                             "output_format": "csv",
+                            "backend": "newton",
                             "parameters": {
                                 "run_mode": "smoke",
                                 "limit_frames": 1,

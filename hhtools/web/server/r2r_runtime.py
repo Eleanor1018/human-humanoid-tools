@@ -24,9 +24,11 @@ from hhtools.application.progress import (
 )
 from hhtools.application.robots import (
     _join_robot_prewarm,
+    _require_frax_package,
     _require_newton_package,
 )
 from hhtools.application.state import _snapshot_job_request
+from hhtools.services.routing import default_ik_backend
 
 if TYPE_CHECKING:
     from hhtools.application.state import Job, SessionState
@@ -352,6 +354,12 @@ def _r2r_retarget_progress_cb(
                 f"MPC 求解 {done}/{total}",
             )
         return
+    if backend == "frax":
+        if done <= 0:
+            _set_retarget_job_clip_progress(job, 0.1, f"FRAX 整段求解 {total} 帧…")
+        else:
+            _set_retarget_job_clip_progress(job, 0.95, "FRAX 求解完成，正在后处理…")
+        return
     if done <= 0:
         _set_retarget_job_clip_progress(job, 0.08, "正在准备逐帧 IK…")
     else:
@@ -370,7 +378,7 @@ def _r2r_retarget_from_path(
     calibrated_joint_q: dict[str, float],
     retarget_fps: float | None,
     ik_iters: int,
-    backend: str = "newton",
+    backend: str | None = None,
     profile: str = "mimic",
     has_scene: bool = False,
     source_fps: float | None = None,
@@ -378,6 +386,7 @@ def _r2r_retarget_from_path(
 ):
     from hhtools.retarget import robot_to_robot as r2r
 
+    backend = (backend or default_ik_backend()).strip().lower()
     traj = r2r.load_source_trajectory(
         traj_path,
         source_model=source_model,
@@ -431,7 +440,7 @@ def _run_r2r_batch_job(job: Job, body: dict, state: SessionState) -> None:
         fmt = (body.get("format") or "csv").lower()
         csv_header = _parse_csv_header(body.get("csv_header", True))
         out_name = body.get("out_dir") or "r2r_batch_export"
-        backend = (body.get("backend") or "newton").strip().lower()
+        backend = (body.get("backend") or default_ik_backend()).strip().lower()
 
         job.request = _snapshot_job_request(
             {
@@ -474,7 +483,9 @@ def _run_r2r_batch_job(job: Job, body: dict, state: SessionState) -> None:
         if not calib:
             raise ValueError(f"target {target!r} is not calibrated against source {source!r}")
 
-        if backend != "interaction_mesh":
+        if backend == "frax":
+            _require_frax_package()
+        elif backend != "interaction_mesh":
             _require_newton_package()
             _join_robot_prewarm(state, target, job)
 

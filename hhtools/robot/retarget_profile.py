@@ -38,11 +38,14 @@ _DEFAULT_HUMAN_HEIGHT_BY_REFERENCE: dict[str, float] = {
 
 # Pre-IK feet / body-ground defaults mirroring soma lafan_to_rp1_scaler_config.json.
 # Applied when robot.yaml has no explicit ``retarget.feet_stabilizer`` block.
+# ``ground_contact_z`` is the floor under the soles: the stabilizer adds each
+# robot's ankle-to-sole height from its foot meshes.  soma's 0.045 was RP1's
+# ankle height above the sole.
 _REFERENCE_FEET_DEFAULTS: dict[str, dict[str, Any]] = {
     "lafan_bvh": {
         "apply_feet_stabilizer": True,
         "feet_stabilizer": {
-            "ground_contact_z": 0.045,
+            "ground_contact_z": 0.0,
             "foot_planting_velocity_threshold": 0.005,
             "foot_planting_height_margin": 0.02,
             "min_lateral_separation": 0.0,
@@ -80,7 +83,7 @@ _REFERENCE_FEET_DEFAULTS: dict[str, dict[str, Any]] = {
     "mocap_bvh": {
         "apply_feet_stabilizer": True,
         "feet_stabilizer": {
-            "ground_contact_z": 0.045,
+            "ground_contact_z": 0.0,
             "foot_planting_velocity_threshold": 0.005,
             "foot_planting_height_margin": 0.02,
             "min_lateral_separation": 0.0,
@@ -125,7 +128,7 @@ _REFERENCE_FEET_DEFAULTS: dict[str, dict[str, Any]] = {
     "xsens_mocap": {
         "apply_feet_stabilizer": True,
         "feet_stabilizer": {
-            "ground_contact_z": 0.045,
+            "ground_contact_z": 0.0,
             "foot_planting_velocity_threshold": 0.005,
             "foot_planting_height_margin": 0.02,
             "min_lateral_separation": 0.0,
@@ -215,6 +218,18 @@ def _reload_retarget_block(preset: "RobotPreset") -> dict[str, Any]:
         except OSError:
             pass
     return _retarget_block(preset)
+
+
+def retarget_backend_block(preset: "RobotPreset", backend: str) -> dict[str, Any]:
+    """Read the ``retarget.<backend>:`` options block (fresh from disk).
+
+    Backend-specific knobs (for example ``retarget.frax``) live under the same
+    ``retarget:`` section as the shared settings so yaml edits apply on the
+    next retarget.  Returns ``{}`` when the block is absent or malformed.
+    """
+
+    block = _reload_retarget_block(preset).get(str(backend))
+    return dict(block) if isinstance(block, dict) else {}
 
 
 def joint_scale_overrides_from_preset(
@@ -1073,7 +1088,7 @@ def build_pipeline_config_for_preset(
     overrides ``robot.yaml`` for that retarget run.
     """
 
-    from hhtools.retarget.newton_basic.pipeline import PipelineConfig
+    from hhtools.retarget.ik_pipeline import PipelineConfig
 
     block = _retarget_block(preset)
     ref_cfg = _reference_block(preset, reference)

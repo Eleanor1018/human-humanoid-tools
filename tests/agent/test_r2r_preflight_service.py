@@ -67,7 +67,15 @@ def _capabilities() -> CapabilityResponse:
                     "max_retarget_fps": 1_000.0,
                     "max_retarget_frames": 100_000,
                 },
-            )
+            ),
+            BackendCapability(
+                backend_id="frax",
+                display_name="FRAX differential IK",
+                available=True,
+                supported_categories=[AssetCategory.ROBOT_TRAJECTORY],
+                output_formats=["csv", "pkl"],
+                limits={"max_retarget_fps": 1_000.0, "max_retarget_frames": 100_000},
+            ),
         ],
         devices=[
             DeviceCapability(
@@ -192,7 +200,7 @@ def test_r2r_preflight_freezes_trajectory_robot_pair_and_calibration(
         grounding_robot_pair,
     )
 
-    response = service.preflight_r2r(request)
+    response = service.preflight_r2r(request.model_copy(update={"backend": "newton"}))
 
     assert response.status is PreflightStatus.READY
     assert response.plan is not None
@@ -216,6 +224,26 @@ def test_r2r_preflight_freezes_trajectory_robot_pair_and_calibration(
     assert payload["source_robot"]["asset_id"] == request.source_robot_asset_id
     assert payload["target_robot"]["asset_id"] == request.target_robot_asset_id
     assert str(tmp_path) not in response.model_dump_json()
+
+
+def test_r2r_preflight_defaults_to_frax(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    grounding_robot_pair,
+) -> None:
+    service, _plans, request, _assets = _setup(
+        tmp_path,
+        monkeypatch,
+        grounding_robot_pair,
+    )
+
+    response = service.preflight_r2r(request)
+
+    assert response.status is PreflightStatus.READY
+    assert response.plan is not None
+    assert response.plan.backend == "frax"
+    assert response.recommended_backend == "frax"
+    assert "ik_iterations" not in response.plan.parameters
 
 
 def test_missing_pair_calibration_returns_exact_agent_action(
@@ -328,6 +356,51 @@ def test_ready_r2r_plan_projects_to_a_two_robot_jobspec_and_detects_drift(
     with pytest.raises(RetargetServiceError) as captured:
         projector.get_job_spec(response.plan.plan_id)
     assert captured.value.code == "PLAN_STALE"
+
+
+def test_frax_r2r_plan_is_stored_and_projects_to_an_executable_jobspec(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    grounding_robot_pair,
+) -> None:
+    from hhtools.contracts import AgentR2RExecutionParameters
+
+    service, plans, request, assets = _setup(
+        tmp_path,
+        monkeypatch,
+        grounding_robot_pair,
+    )
+    frax_request = request.model_copy(update={"backend": "frax"})
+
+    response = service.preflight_r2r(frax_request)
+    rejected = service.preflight_r2r(
+        frax_request.model_copy(
+            update={"parameters": {"run_mode": "smoke", "limit_frames": 1, "ik_iterations": 24}}
+        )
+    )
+
+    assert response.status is PreflightStatus.READY
+    assert response.plan is not None
+    assert response.plan.backend == "frax"
+    assert "ik_iterations" not in response.plan.parameters
+    assert plans.get_payload(response.plan.plan_id)["backend"] == "frax"
+    spec = R2RRetargetService(
+        plans,
+        assets,
+        provenance_provider=lambda: {
+            "hhtools_git_commit": "test",
+            "hhtools_dirty": False,
+            "python": "3.12",
+        },
+    ).get_job_spec(response.plan.plan_id)
+    assert spec.backend == "frax"
+    parameters = AgentR2RExecutionParameters.model_validate(
+        {**spec.effective_parameters, "backend": spec.backend}
+    )
+    assert parameters.backend == "frax"
+    assert rejected.status is PreflightStatus.REJECTED
+    assert rejected.error is not None
+    assert rejected.error.code == "INVALID_PARAMETER"
 
 
 def test_identical_concurrent_preflight_recovers_the_winning_plan(

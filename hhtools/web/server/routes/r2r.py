@@ -16,9 +16,14 @@ from hhtools.application.previews import (
     _anchor_scaled_preview_to_ik_root,
     _compute_r2r_scaled_preview,
 )
-from hhtools.application.robots import _join_robot_prewarm, _require_newton_package
+from hhtools.application.robots import (
+    _join_robot_prewarm,
+    _require_frax_package,
+    _require_newton_package,
+)
 from hhtools.application.state import Job, _snapshot_job_request
 from hhtools.io.export_bundle import ensure_export_path, sanitize_export_stem
+from hhtools.services.routing import default_ik_backend
 from hhtools.web.server.r2r_runtime import (
     _build_r2r_calibration_session,
     _r2r_entry_from_upload,
@@ -220,7 +225,7 @@ def register_r2r_routes(app, *, state, jobs, uploads) -> None:
             token = body["source_token"]
             ik_iters = int(body.get("ik_iterations", 24))
             retarget_fps = _parse_optional_fps(body.get("retarget_fps"))
-            backend = (body.get("backend") or "newton").strip().lower()
+            backend = (body.get("backend") or default_ik_backend()).strip().lower()
 
             rec = state.r2r_sources.get(token)
             if rec is None:
@@ -252,7 +257,9 @@ def register_r2r_routes(app, *, state, jobs, uploads) -> None:
                     "run the calibration step first"
                 )
 
-            if backend != "interaction_mesh":
+            if backend == "frax":
+                _require_frax_package()
+            elif backend != "interaction_mesh":
                 _require_newton_package()
                 _join_robot_prewarm(state, target, job)
 
@@ -440,6 +447,9 @@ def register_r2r_routes(app, *, state, jobs, uploads) -> None:
                 detail="target robot is not calibrated; calibrate first",
             )
         body = request.model_dump()
+        # Record the backend the job will run, not ``None``, so history and the
+        # reproduce-CLI command stay exact regardless of later installs.
+        body["backend"] = body["backend"] or default_ik_backend()
         job = _schedule_job(
             "r2r_retarget",
             body,

@@ -754,14 +754,37 @@ def _metadata(facts: _UrdfFacts, *, unique_meshes: int, shared_meshes: int) -> d
     }
 
 
+#: Hand-tuned FRAX sphere model beside robot.yaml (see frax_backend.collision).
+_FRAX_COLLISION_FILENAME = "frax_collision.yaml"
+
+
+def _validate_frax_collision(path: Path) -> None:
+    from hhtools.retarget.frax_backend.collision import load_collision_spec
+
+    try:
+        load_collision_spec(path)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RobotAssetDiscoveryError(
+            _api_error(
+                "ROBOT_METADATA_INVALID",
+                "The FRAX collision model is malformed.",
+                details={"exception_type": type(exc).__name__},
+            )
+        ) from exc
+
+
 def _robot_metadata_files(bundle_root: Path, primary: Path) -> tuple[Path, ...]:
-    """Return robot YAML, calibrations, and declared scaler configs."""
+    """Return robot YAML, calibrations, FRAX collision models, and declared scaler configs."""
 
     candidates = {
         bundle_root / "robot.yaml",
         bundle_root / f"robot.{primary.stem}.yaml",
         primary.parent / "robot.yaml",
         primary.parent / f"robot.{primary.stem}.yaml",
+        # The FRAX collision override changes solver behaviour, so it must be
+        # part of the robot's content identity and of every job snapshot.
+        bundle_root / _FRAX_COLLISION_FILENAME,
+        primary.parent / _FRAX_COLLISION_FILENAME,
     }
     # Human- or Agent-validated calibrations are executable robot configuration, not
     # incidental workspace state.  Binding them into the robot manifest means
@@ -803,6 +826,8 @@ def _robot_metadata_files(bundle_root: Path, primary: Path) -> tuple[Path, ...]:
                 "ROBOT_METADATA_INVALID",
                 "Robot metadata must contain a YAML mapping.",
             )
+        if metadata_path.name == _FRAX_COLLISION_FILENAME:
+            _validate_frax_collision(metadata_path)
         files.add(metadata_path)
         raw_urdf = payload.get("urdf")
         if raw_urdf is not None:

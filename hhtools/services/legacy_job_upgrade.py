@@ -107,7 +107,7 @@ _SOURCE_ENTRY_FIELDS = frozenset(
     }
 )
 _SOURCE_ENTRY_STRING_FIELDS = _SOURCE_ENTRY_FIELDS.difference({"has_scene"})
-_BACKENDS = frozenset({"newton", "interaction_mesh"})
+_BACKENDS = frozenset({"newton", "interaction_mesh", "frax"})
 _REFERENCES = frozenset(
     {
         "smplx",

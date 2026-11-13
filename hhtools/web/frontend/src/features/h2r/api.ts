@@ -96,7 +96,7 @@ export interface RetargetRequest {
   readonly robot: string;
   readonly motion_token: string;
   readonly reference: string;
-  readonly backend: "newton" | "interaction_mesh";
+  readonly backend: "newton" | "interaction_mesh" | "frax";
   readonly retarget_fps?: number;
 }
 

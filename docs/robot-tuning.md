@@ -23,6 +23,7 @@ Re-uploading a URDF regenerates `robot.yaml` from the URDF. Calibration files ar
 | [`retarget.joint_scale_multipliers`](#adjust-proportions-joint_scale_multipliers) | Optional manual proportion overrides, without re-calibrating. |
 | `retarget.feet_stabilizer`, `apply_feet_stabilizer` | Foot planting and body-ground clearance. Set `apply_feet_stabilizer: false` for rolls and flips. |
 | `retarget.references.<format>` | Per motion-format overrides (for example a bundled `scaler_config`). |
+| [`retarget.frax`](#frax-solver-retargetfrax) | Options for the FRAX solver (the default IK solver) only. |
 
 ## Arms stay open? Check `smooth_joint_filter_masks`
 
@@ -58,3 +59,26 @@ retarget:
 - Do **not** paste a calibration's `derived.scales` table here; it pollutes other human-reference formats.
 - Values that match the current or any on-disk `retarget_calibration_*.yaml` scales, or leftover scaffold zero-pose defaults, are ignored.
 - **Shoulders** affect lateral IK and shoulder roll only, not vertical height.
+
+## FRAX solver: `retarget.frax`
+
+These keys only affect `--backend frax` (or **FRAX** in the WebUI solver list). Every key is optional; a misspelled key is reported in the log, and an invalid value stops the retarget with its name.
+
+```yaml
+retarget:
+  frax:
+    regularization: 0.1        # joint-velocity regularization; lower tracks tighter but can chatter
+    floor: true                # keep collision spheres above z = 0
+    floor_margin: 0.0          # extra floor clearance (m)
+    self_collision: true       # keep limb spheres apart
+    self_collision_rows: 64    # closest sphere pairs checked per frame
+    velocity_limits: false     # also enforce URDF joint velocity limits
+    midpoint_weight: 0.0       # Newton's mid-range pull; null uses smooth_joint_filter_weight
+    global_ik_init: false      # sampled global IK for the first frame (slower start)
+    joint_limit_overrides:     # narrower position limits (rad)
+      left_shoulder_roll_joint: [-0.2, 2.5]
+    joint_regularization:      # per-joint regularization
+      waist_yaw_joint: 1.0
+```
+
+The floor and self-collision constraints use spheres. They come from `frax_collision.yaml` in the robot folder when it exists, from frax's tuned model for the Unitree G1, and otherwise are fitted to the URDF collision geometry. Print the model in use with `hhtools robot frax-collision <name>`; save it with `-o <robot folder>/frax_collision.yaml` to edit it by hand.
