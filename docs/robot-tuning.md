@@ -23,7 +23,7 @@ Re-uploading a URDF regenerates `robot.yaml` from the URDF. Calibration files ar
 | [`retarget.joint_scale_multipliers`](#adjust-proportions-joint_scale_multipliers) | Optional manual proportion overrides, without re-calibrating. |
 | `retarget.feet_stabilizer`, `apply_feet_stabilizer` | Foot planting and body-ground clearance. Set `apply_feet_stabilizer: false` for rolls and flips. |
 | `retarget.references.<format>` | Per motion-format overrides (for example a bundled `scaler_config`). |
-| [`retarget.frax`](#frax-solver-retargetfrax) | Options for the experimental FRAX solver only. |
+| [`retarget.frax`](#frax-solver-retargetfrax) | Options for the FRAX solver (the default IK solver) only. |
 
 ## Arms stay open? Check `smooth_joint_filter_masks`
 

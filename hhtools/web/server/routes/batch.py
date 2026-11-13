@@ -23,6 +23,7 @@ from hhtools.application.motions import _load_batch_motion
 from hhtools.application.progress import _BATCH_ZIP_PROGRESS, _set_batch_job_progress
 from hhtools.application.retarget import _request_human_height
 from hhtools.application.state import Job, _snapshot_job_request
+from hhtools.services.routing import default_ik_backend
 from hhtools.web.server.batch_runtime import (
     _batch_export_retargeted_chunk,
     _record_batch_failure,
@@ -70,7 +71,7 @@ def register_batch_routes(app, *, state, jobs) -> BatchRouteOperations:
         try:
             robot = body["robot"]
             default_reference = body.get("reference", "smpl")
-            backend = body.get("backend", "newton")
+            backend = body.get("backend") or default_ik_backend()
             ik_iters = int(body.get("ik_iterations", 24))
             from hhtools.robot.registry import get as _get_preset
 

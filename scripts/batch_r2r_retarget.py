@@ -98,7 +98,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--backend",
         choices=("auto", "newton", "frax", "interaction_mesh"),
         default="auto",
-        help="Retarget backend (default: auto from profile/scene).",
+        help=(
+            "Retarget backend (default: auto — interaction_mesh for scene clips, "
+            "otherwise frax when installed, else newton)."
+        ),
     )
     p.add_argument(
         "--calibration",

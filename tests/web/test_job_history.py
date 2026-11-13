@@ -565,6 +565,6 @@ def test_solver_list_reports_frax_availability_from_dependency_probes(
     assert set(solvers) == {"newton", "frax", "interaction_mesh"}
     assert solvers["newton"]["available"] is True
     assert solvers["frax"]["available"] is False
-    assert solvers["frax"]["experimental"] is True
+    assert solvers["frax"]["experimental"] is False
     assert solvers["frax"]["reason"] == "missing dependencies: elastiqp"
     assert solvers["frax"]["categories"] == ["plain_motion", "robot_trajectory"]

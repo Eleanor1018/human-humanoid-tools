@@ -117,7 +117,7 @@ uv sync --locked --extra web --extra retarget
 uv run hhtools web
 ```
 
-如需使用实验性的 FRAX 求解器（只用 CPU，不依赖 Newton），再加 `--extra retarget-frax`：
+安装了 FRAX 时，它就是默认的 IK 求解器（只用 CPU，不依赖 Newton）。加上 `--extra retarget-frax` 即可安装；未安装时会自动改用 Newton：
 
 ```bash
 uv sync --locked --extra web --extra retarget --extra retarget-frax

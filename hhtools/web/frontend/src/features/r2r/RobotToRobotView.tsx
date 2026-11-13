@@ -17,7 +17,7 @@ import {
 } from "@/components/WorkflowSteps";
 import { useLocaleText } from "@/LocaleProvider";
 import { displayFileName } from "@/lib/api";
-import { useFraxAvailable } from "@/lib/solvers";
+import { useDefaultIkBackend, useFraxAvailable } from "@/lib/solvers";
 import { robotLabel } from "@/features/robot/presentation";
 import { ResultDiagnostics } from "@/features/result/ResultDiagnostics";
 import { ResultExportControls } from "@/features/result/ResultExportControls";
@@ -106,9 +106,8 @@ function entryLabel(entry: MotionLibraryEntry, fallback = "Trajectory"): string 
 }
 
 function suggestedBackend(result?: R2rSourceResult | null): R2rBackend {
-  return result?.suggested_backend === "interaction_mesh"
-    ? "interaction_mesh"
-    : "newton";
+  const suggested = result?.suggested_backend;
+  return suggested === "interaction_mesh" || suggested === "frax" ? suggested : "newton";
 }
 
 function RobotSelect({
@@ -221,7 +220,9 @@ export function RobotToRobotView({
   const [backend, setBackend] = useState<R2rBackend>(
     suggestedBackend(currentSourceResult),
   );
+  const [backendTouched, setBackendTouched] = useState(false);
   const fraxAvailable = useFraxAvailable();
+  useDefaultIkBackend(backend, setBackend, fraxAvailable, backendTouched);
   const [calibrated, setCalibrated] = useState(false);
   const [checkingCalibration, setCheckingCalibration] = useState(false);
   const [calibration, setCalibration] = useState<R2rCalibrationSession | null>(null);
@@ -337,6 +338,7 @@ export function RobotToRobotView({
     setErrorOwner(null);
     setSourceResult(currentSourceResult);
     setBackend(suggestedBackend(currentSourceResult));
+    setBackendTouched(false);
   }, [currentSourceResult]);
 
   useEffect(() => {
@@ -612,10 +614,9 @@ export function RobotToRobotView({
       clearRetargetResult();
       setSourceResult(result);
       onSourceLoaded?.(result);
-      if (result.suggested_backend === "interaction_mesh") {
-        setBackend("interaction_mesh");
-      } else if (result.suggested_backend === "newton") {
-        setBackend("newton");
+      if (result.suggested_backend) {
+        setBackend(suggestedBackend(result));
+        setBackendTouched(false);
       }
       setProgress(1);
       setStatus(
@@ -1086,13 +1087,12 @@ export function RobotToRobotView({
                   onChange={(event) => {
                     const value = event.target.value as R2rBackend;
                     setBackend(value);
+                    setBackendTouched(true);
                     clearRetargetResult();
                   }}
                 >
+                  {(fraxAvailable || backend === "frax") && <option value="frax">FRAX</option>}
                   <option value="newton">Newton IK</option>
-                  {(fraxAvailable || backend === "frax") && (
-                    <option value="frax">{text("FRAX (experimental)", "FRAX（实验性）")}</option>
-                  )}
                   <option value="interaction_mesh">Interaction Mesh</option>
                 </select>
               </Field>

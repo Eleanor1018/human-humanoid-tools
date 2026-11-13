@@ -64,3 +64,30 @@ export function useFraxAvailable(): boolean {
   }, []);
   return available;
 }
+
+export type IkBackend = "frax" | "newton";
+
+/** Default plain-motion IK backend: FRAX when installed, otherwise Newton. */
+export function defaultIkBackend(fraxAvailable: boolean): IkBackend {
+  return fraxAvailable ? "frax" : "newton";
+}
+
+/**
+ * Keep a backend selection on the install's default IK solver until the user
+ * changes it.  ``useFraxAvailable`` answers asynchronously, so a view that
+ * started on Newton moves to FRAX once FRAX turns out to be installed — but
+ * only while the user has not picked a backend themselves.
+ */
+export function useDefaultIkBackend<T extends string>(
+  backend: T,
+  setBackend: (value: T) => void,
+  fraxAvailable: boolean,
+  touched: boolean,
+): void {
+  useEffect(() => {
+    if (touched) return;
+    if (backend === "newton" && fraxAvailable) setBackend("frax" as T);
+    if (backend === "frax" && !fraxAvailable) setBackend("newton" as T);
+    // Re-evaluate only when availability arrives or the user takes over.
+  }, [fraxAvailable, touched]);
+}

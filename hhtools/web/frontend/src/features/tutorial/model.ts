@@ -168,8 +168,8 @@ export const TUTORIAL_STEPS: readonly TutorialStep[] = [
     placement: "left",
     title: copy("6. Run Human to Robot", "6. 执行人体到机器人"),
     body: copy(
-      "With a motion, robot, and calibration ready, choose the solver and optional Retarget FPS, then start Retarget. Newton IK handles regular motion; Interaction-Mesh handles clips with interaction objects or terrain.",
-      "动作、机器人和标定就绪后，选择求解器与可选的重定向 FPS，再开始重定向。Newton IK 适合常规动作；Interaction-Mesh 适合带交互物体或地形的动作。",
+      "With a motion, robot, and calibration ready, choose the solver and optional Retarget FPS, then start Retarget. FRAX (the default) or Newton IK handles regular motion; Interaction-Mesh handles clips with interaction objects or terrain.",
+      "动作、机器人和标定就绪后，选择求解器与可选的重定向 FPS，再开始重定向。常规动作使用 FRAX（默认）或 Newton IK；Interaction-Mesh 适合带交互物体或地形的动作。",
     ),
   },
   {

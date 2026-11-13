@@ -21,6 +21,7 @@ __all__ = [
     "FRAX_DEPENDENCIES",
     "FraxConfig",
     "FraxPipeline",
+    "default_ik_backend",
     "frax_available",
     "frax_config_for_preset",
     "missing_frax_dependencies",
@@ -38,6 +39,15 @@ def missing_frax_dependencies() -> list[str]:
 def frax_available() -> bool:
     """True when every FRAX backend dependency is installed."""
     return not missing_frax_dependencies()
+
+
+def default_ik_backend() -> str:
+    """The plain-motion IK backend to use when the caller names none.
+
+    FRAX when its optional dependencies are installed (the ``retarget-frax``
+    extra, part of ``all``), otherwise Newton.
+    """
+    return "frax" if frax_available() else "newton"
 
 
 def __getattr__(name: str):

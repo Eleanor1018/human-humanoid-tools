@@ -20,7 +20,7 @@ import {
 } from "@/components/WorkflowSteps";
 import { useLocaleText } from "@/LocaleProvider";
 import { displayFileName } from "@/lib/api";
-import { useFraxAvailable } from "@/lib/solvers";
+import { useDefaultIkBackend, useFraxAvailable } from "@/lib/solvers";
 import {
   getHumanMotionLibrary,
   loadMotionLibraryEntry,
@@ -250,7 +250,9 @@ export function HumanToRobotView({
   );
   const [retargetFps, setRetargetFps] = useState("");
   const [backend, setBackend] = useState<Backend>("newton");
+  const [backendTouched, setBackendTouched] = useState(false);
   const fraxAvailable = useFraxAvailable();
+  useDefaultIkBackend(backend, setBackend, fraxAvailable, backendTouched);
   const actionRequest = useRef<AbortController | null>(null);
   const calibrationStatusRequest = useRef<AbortController | null>(null);
   const resultCallback = useRef(onRetargetResult);
@@ -315,11 +317,10 @@ export function HumanToRobotView({
   }, [motion?.token, references]);
 
   useEffect(() => {
-    if (
-      motion?.suggested_backend === "newton" ||
-      motion?.suggested_backend === "interaction_mesh"
-    ) {
-      setBackend(motion.suggested_backend);
+    const suggested = motion?.suggested_backend;
+    if (suggested === "frax" || suggested === "newton" || suggested === "interaction_mesh") {
+      setBackend(suggested);
+      setBackendTouched(false);
     }
   }, [motion?.token]);
 
@@ -924,15 +925,14 @@ export function HumanToRobotView({
                   onChange={(event) => {
                     const value = event.currentTarget.value as Backend;
                     setBackend(value);
+                    setBackendTouched(true);
                     clearResult();
                   }}
                 >
-                  <option value="newton">Newton IK</option>
                   {(fraxAvailable || backend === "frax") && (
-                    <option value="frax">
-                      {text("FRAX (experimental)", "FRAX（实验性）")}
-                    </option>
+                    <option value="frax">FRAX</option>
                   )}
+                  <option value="newton">Newton IK</option>
                   <option value="interaction_mesh">Interaction-Mesh</option>
                 </select>
               </Field>

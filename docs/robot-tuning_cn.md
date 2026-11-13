@@ -23,7 +23,7 @@
 | [`retarget.joint_scale_multipliers`](#调整体型joint_scale_multipliers) | 可选，手动覆盖体型比例，无需重新标定。 |
 | `retarget.feet_stabilizer`、`apply_feet_stabilizer` | 脚底贴地与身体离地高度。翻滚、空翻类动作可设 `apply_feet_stabilizer: false`。 |
 | `retarget.references.<格式>` | 按动作格式覆盖（例如 bundled `scaler_config`）。 |
-| [`retarget.frax`](#frax-求解器retargetfrax) | 只作用于实验性的 FRAX 求解器。 |
+| [`retarget.frax`](#frax-求解器retargetfrax) | 只作用于 FRAX 求解器（默认的 IK 求解器）。 |
 
 ## 手臂一直张开？先检查 `smooth_joint_filter_masks`
 

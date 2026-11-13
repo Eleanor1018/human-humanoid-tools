@@ -248,10 +248,10 @@ class WebJobRuntime:
                 args.extend(["--limit-frames", str(int(request["limit_frames"]))])
         elif backend in ("newton", "frax"):
             args = ["hhtools", "retarget", "run", *source_paths]
-            args.extend(["--robot", robot, "--output", output])
-            if backend == "frax":
-                args.extend(["--backend", "frax"])
-            else:
+            # Always name the backend: the CLI default depends on what is
+            # installed, so the command must not rely on it to reproduce the job.
+            args.extend(["--robot", robot, "--output", output, "--backend", backend])
+            if backend == "newton":
                 args.extend(["--ik-iterations", str(ik_iterations)])
             args.extend(
                 [

@@ -28,6 +28,7 @@ from hhtools.application.robots import (
     _require_newton_package,
 )
 from hhtools.application.state import _snapshot_job_request
+from hhtools.services.routing import default_ik_backend
 
 if TYPE_CHECKING:
     from hhtools.application.state import Job, SessionState
@@ -377,7 +378,7 @@ def _r2r_retarget_from_path(
     calibrated_joint_q: dict[str, float],
     retarget_fps: float | None,
     ik_iters: int,
-    backend: str = "newton",
+    backend: str | None = None,
     profile: str = "mimic",
     has_scene: bool = False,
     source_fps: float | None = None,
@@ -385,6 +386,7 @@ def _r2r_retarget_from_path(
 ):
     from hhtools.retarget import robot_to_robot as r2r
 
+    backend = (backend or default_ik_backend()).strip().lower()
     traj = r2r.load_source_trajectory(
         traj_path,
         source_model=source_model,
@@ -438,7 +440,7 @@ def _run_r2r_batch_job(job: Job, body: dict, state: SessionState) -> None:
         fmt = (body.get("format") or "csv").lower()
         csv_header = _parse_csv_header(body.get("csv_header", True))
         out_name = body.get("out_dir") or "r2r_batch_export"
-        backend = (body.get("backend") or "newton").strip().lower()
+        backend = (body.get("backend") or default_ik_backend()).strip().lower()
 
         job.request = _snapshot_job_request(
             {

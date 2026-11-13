@@ -117,7 +117,7 @@ uv sync --locked --extra web --extra retarget
 uv run hhtools web
 ```
 
-To also offer the experimental FRAX solver (CPU only, no Newton needed), add `--extra retarget-frax`:
+FRAX is the default IK solver when it is installed (CPU only, no Newton needed). Add `--extra retarget-frax` to get it; without it, HHTools falls back to Newton:
 
 ```bash
 uv sync --locked --extra web --extra retarget --extra retarget-frax

@@ -157,7 +157,7 @@ def _check_retarget_frax() -> DoctorCheck:
     return DoctorCheck(
         "retarget-frax",
         ready,
-        "FRAX, JAX and ElastiQP imports are available (experimental CPU solver)"
+        "FRAX, JAX and ElastiQP imports are available (default CPU IK solver)"
         if ready
         else "FRAX solver imports are missing (install the retarget-frax extra)",
         {"modules": modules},

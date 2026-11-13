@@ -7,6 +7,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from hhtools.services.routing import default_ik_backend
 from hhtools.web.server import create_app
 from hhtools.web.server.routes.h2r import register_h2r_routes
 from hhtools.web.server.routes.r2r import register_r2r_routes
@@ -109,7 +110,7 @@ def test_valid_human_retarget_is_scheduled_after_preflight(tmp_path: Path, monke
         (
             "retarget",
             {
-                "backend": "newton",
+                "backend": default_ik_backend(),
                 "ik_iterations": 24,
                 "retarget_fps": None,
                 "robot": "robot",
@@ -151,7 +152,7 @@ def test_valid_robot_retarget_is_scheduled_after_preflight(tmp_path: Path, monke
         (
             "r2r_retarget",
             {
-                "backend": "newton",
+                "backend": default_ik_backend(),
                 "ik_iterations": 24,
                 "retarget_fps": None,
                 "target": "target",

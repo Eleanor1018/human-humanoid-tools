@@ -226,14 +226,15 @@ def retarget(
             "legacy retarget_calibration.yaml if its embedded reference matches."
         ),
     ),
-    backend: str = typer.Option(
-        "newton",
+    backend: str | None = typer.Option(
+        None,
         "--backend",
         help=(
-            "IK solver: newton (default; Warp, CUDA when available) or frax "
-            "(experimental; JAX on the CPU, joint limits and floor as constraints). "
-            "frax needs the retarget-frax extra."
+            "IK solver: frax (default when installed; JAX on the CPU, joint limits "
+            "and floor as constraints) or newton (Warp, CUDA when available; the "
+            "default when the retarget-frax extra is missing)."
         ),
+        show_default=False,
     ),
     frax_floor: bool | None = typer.Option(
         None,
@@ -252,6 +253,10 @@ def retarget(
         level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    if backend is None:
+        from hhtools.retarget.frax_backend import default_ik_backend
+
+        backend = default_ik_backend()
     backend = backend.strip().lower()
     if backend not in ("newton", "frax"):
         raise typer.BadParameter("--backend must be 'newton' or 'frax'")

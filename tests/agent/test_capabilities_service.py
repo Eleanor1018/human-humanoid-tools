@@ -100,7 +100,7 @@ def test_capabilities_report_unlimited_defaults_and_backend_specific_dependencie
     assert backends["newton"].features["cuda_graph"] is False
     assert backends["frax"].available is False
     assert backends["frax"].unavailable_reason == "missing dependencies: frax, jax, elastiqp"
-    assert backends["frax"].features["experimental"] is True
+    assert backends["frax"].features["experimental"] is False
     assert backends["frax"].features["cuda_graph"] is False
     assert [category.value for category in backends["frax"].supported_categories] == [
         "plain_motion",

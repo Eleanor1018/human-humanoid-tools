@@ -10,7 +10,7 @@ registerHooks({
   },
 });
 
-const { getSolvers } = await import("../src/lib/solvers.ts");
+const { defaultIkBackend, getSolvers } = await import("../src/lib/solvers.ts");
 
 test("solver list keeps well-formed entries and normalizes optional fields", async () => {
   const calls: string[] = [];
@@ -58,4 +58,9 @@ test("a malformed solver payload yields no solvers", async () => {
       headers: { "Content-Type": "application/json" },
     });
   assert.deepEqual(await getSolvers({ fetcher }), []);
+});
+
+test("FRAX is the default IK backend when installed, otherwise Newton", () => {
+  assert.equal(defaultIkBackend(true), "frax");
+  assert.equal(defaultIkBackend(false), "newton");
 });

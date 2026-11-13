@@ -1520,11 +1520,17 @@ def r2r_scene_scale_ratio(
 
 
 def suggested_r2r_backend(profile: str, *, has_scene: bool = False) -> str:
-    """Default retarget backend for an R2R upload profile."""
+    """Default retarget backend for an R2R upload profile.
+
+    Scene profiles use interaction-mesh; plain trajectories use the default IK
+    backend (FRAX when installed, otherwise Newton).
+    """
+    from hhtools.retarget.frax_backend import default_ik_backend
+
     prof = (profile or "mimic").strip().lower()
     if prof in ("intermimic", "meshmimic") or has_scene:
         return "interaction_mesh"
-    return "newton"
+    return default_ik_backend()
 
 
 def retarget_robot_to_robot(
@@ -1533,7 +1539,7 @@ def retarget_robot_to_robot(
     *,
     calibrated_joint_q: dict[str, float],
     source_motion: Motion,
-    backend: str = "newton",
+    backend: str | None = None,
     ik_iterations: int = 24,
     progress_callback=None,
 ) -> RetargetedMotion:
@@ -1542,16 +1548,20 @@ def retarget_robot_to_robot(
     ``calibrated_joint_q`` is the target robot's hand-aligned pose matching the
     source robot's rest skeleton (saved by the R2R calibration step).
 
-    ``backend`` is ``"newton"`` (GPU IK), ``"frax"`` (CPU differential IK,
-    experimental) or ``"interaction_mesh"`` (MPC on terrain / interaction
-    objects).  For the latter, attach scene data to
+    ``backend`` is ``"frax"`` (CPU differential IK; the default when
+    installed), ``"newton"`` (GPU IK; the fallback) or ``"interaction_mesh"``
+    (MPC on terrain / interaction objects).  For the latter, attach scene data to
     ``source_motion`` before calling (see
     :func:`~hhtools.io.r2r_scene.attach_r2r_clip_scene_to_motion`).
     """
     cfg, ref = _build_scaler_config(source_model, target_model, calibrated_joint_q)
     reference_key = f"robot_{source_model.preset.name}"
     identity_map = {n: n for n in ref.joint_names}
-    backend = (backend or "newton").strip().lower()
+    if not backend:
+        from hhtools.retarget.frax_backend import default_ik_backend
+
+        backend = default_ik_backend()
+    backend = backend.strip().lower()
 
     if backend == "interaction_mesh":
         from hhtools.retarget.interaction_mesh.config import InteractionMeshPipelineConfig

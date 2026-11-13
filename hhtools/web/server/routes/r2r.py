@@ -23,6 +23,7 @@ from hhtools.application.robots import (
 )
 from hhtools.application.state import Job, _snapshot_job_request
 from hhtools.io.export_bundle import ensure_export_path, sanitize_export_stem
+from hhtools.services.routing import default_ik_backend
 from hhtools.web.server.r2r_runtime import (
     _build_r2r_calibration_session,
     _r2r_entry_from_upload,
@@ -224,7 +225,7 @@ def register_r2r_routes(app, *, state, jobs, uploads) -> None:
             token = body["source_token"]
             ik_iters = int(body.get("ik_iterations", 24))
             retarget_fps = _parse_optional_fps(body.get("retarget_fps"))
-            backend = (body.get("backend") or "newton").strip().lower()
+            backend = (body.get("backend") or default_ik_backend()).strip().lower()
 
             rec = state.r2r_sources.get(token)
             if rec is None:
@@ -446,6 +447,9 @@ def register_r2r_routes(app, *, state, jobs, uploads) -> None:
                 detail="target robot is not calibrated; calibrate first",
             )
         body = request.model_dump()
+        # Record the backend the job will run, not ``None``, so history and the
+        # reproduce-CLI command stay exact regardless of later installs.
+        body["backend"] = body["backend"] or default_ik_backend()
         job = _schedule_job(
             "r2r_retarget",
             body,

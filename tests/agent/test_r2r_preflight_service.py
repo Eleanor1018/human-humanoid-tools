@@ -70,7 +70,7 @@ def _capabilities() -> CapabilityResponse:
             ),
             BackendCapability(
                 backend_id="frax",
-                display_name="FRAX differential IK (experimental)",
+                display_name="FRAX differential IK",
                 available=True,
                 supported_categories=[AssetCategory.ROBOT_TRAJECTORY],
                 output_formats=["csv", "pkl"],
@@ -200,7 +200,7 @@ def test_r2r_preflight_freezes_trajectory_robot_pair_and_calibration(
         grounding_robot_pair,
     )
 
-    response = service.preflight_r2r(request)
+    response = service.preflight_r2r(request.model_copy(update={"backend": "newton"}))
 
     assert response.status is PreflightStatus.READY
     assert response.plan is not None
@@ -224,6 +224,26 @@ def test_r2r_preflight_freezes_trajectory_robot_pair_and_calibration(
     assert payload["source_robot"]["asset_id"] == request.source_robot_asset_id
     assert payload["target_robot"]["asset_id"] == request.target_robot_asset_id
     assert str(tmp_path) not in response.model_dump_json()
+
+
+def test_r2r_preflight_defaults_to_frax(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    grounding_robot_pair,
+) -> None:
+    service, _plans, request, _assets = _setup(
+        tmp_path,
+        monkeypatch,
+        grounding_robot_pair,
+    )
+
+    response = service.preflight_r2r(request)
+
+    assert response.status is PreflightStatus.READY
+    assert response.plan is not None
+    assert response.plan.backend == "frax"
+    assert response.recommended_backend == "frax"
+    assert "ik_iterations" not in response.plan.parameters
 
 
 def test_missing_pair_calibration_returns_exact_agent_action(

@@ -247,16 +247,29 @@ def _raise_inspection_error(
     )
 
 
-def _backend_for_category(category: AssetCategory) -> str:
-    if category is AssetCategory.PLAIN_MOTION:
-        return "newton"
-    if category in {AssetCategory.OBJECT_INTERACTION, AssetCategory.TERRAIN_SCENE}:
-        return "interaction_mesh"
-    _fail(
-        "BACKEND_INCOMPATIBLE",
-        "The registered input category is not supported by retarget preflight.",
-        details={"category": category.value},
-    )
+def _backend_for_category(
+    category: AssetCategory,
+    capabilities: CapabilityResponse | None = None,
+) -> str:
+    """Recommend the first compatible backend that is available.
+
+    Compatible backends are listed in preference order (FRAX before Newton for
+    plain motion).  When ``capabilities`` is given, an unavailable preference
+    is skipped so a smaller install still gets a runnable recommendation.
+    """
+    candidates = compatible_backends_for_category(category)
+    if not candidates:
+        _fail(
+            "BACKEND_INCOMPATIBLE",
+            "The registered input category is not supported by retarget preflight.",
+            details={"category": category.value},
+        )
+    if capabilities is not None:
+        available = {item.backend_id for item in capabilities.backends if item.available}
+        for backend_id in candidates:
+            if backend_id in available:
+                return backend_id
+    return candidates[0]
 
 
 def _backend_capability(
@@ -1332,7 +1345,10 @@ class PreflightService:
                     },
                 )
             )
-            recommended_backend = _backend_for_category(motion_inspection.category)
+            capabilities = self._capabilities_provider()
+            recommended_backend = _backend_for_category(
+                motion_inspection.category, capabilities
+            )
             requested_backend = request.backend or recommended_backend
             if requested_backend not in compatible_backends_for_category(
                 motion_inspection.category
@@ -1347,7 +1363,6 @@ class PreflightService:
                     },
                 )
 
-            capabilities = self._capabilities_provider()
             backend = _backend_capability(capabilities, requested_backend)
             if motion_inspection.category not in backend.supported_categories:
                 _fail(

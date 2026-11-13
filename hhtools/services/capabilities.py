@@ -330,7 +330,7 @@ def _backend_capabilities(
         ),
         (
             "frax",
-            "FRAX differential IK (experimental)",
+            "FRAX differential IK",
             # frax.ik solves on the CPU with JAX + ElastiQP; the robot adapter
             # (URDF, collision geometry) needs yourdfpy and MuJoCo as for Newton.
             ("frax", "jax", "elastiqp", "mujoco", "yourdfpy"),
@@ -341,7 +341,7 @@ def _backend_capabilities(
                 "r2r": True,
                 "cuda_graph": False,
                 "cpu_fallback": True,
-                "experimental": True,
+                "experimental": False,
                 "floor_constraint": True,
                 "self_collision": True,
             },

@@ -339,10 +339,8 @@ export function CommonBatchSettings({
             disabled={disabled}
             onChange={(event) => onChange({ backend: event.currentTarget.value as BatchBackend })}
           >
+            {(fraxAvailable || value.backend === "frax") && <option value="frax">FRAX</option>}
             <option value="newton">Newton IK</option>
-            {(fraxAvailable || value.backend === "frax") && (
-              <option value="frax">{text("FRAX (experimental)", "FRAX（实验性）")}</option>
-            )}
             <option value="interaction_mesh">Interaction-Mesh</option>
           </select>
         </Field>

@@ -427,7 +427,7 @@ class R2RPreflightService:
     def preflight_r2r(self, request: R2RPreflightRequest) -> R2RPreflightResponse:
         request_id = self._request_id_provider()
         checks: list[PreflightCheck] = []
-        recommended_backend = "newton"
+        recommended_backend = R2R_BACKENDS[0]
         try:
             if request.output_policy is not OutputPolicy.CREATE_NEW:
                 _fail(
@@ -476,14 +476,20 @@ class R2RPreflightService:
                 )
             )
 
+            capabilities = self._capabilities_provider()
+            available = {item.backend_id for item in capabilities.backends if item.available}
+            # Prefer the first available R2R backend (FRAX before Newton).
+            recommended_backend = next(
+                (backend_id for backend_id in R2R_BACKENDS if backend_id in available),
+                R2R_BACKENDS[0],
+            )
             requested_backend = request.backend or recommended_backend
             if requested_backend not in R2R_BACKENDS:
                 _fail(
                     "BACKEND_INCOMPATIBLE",
-                    "The Agent R2R workflow supports the Newton and FRAX backends.",
+                    "The Agent R2R workflow supports the FRAX and Newton backends.",
                     details={"backend": requested_backend, "supported": list(R2R_BACKENDS)},
                 )
-            capabilities = self._capabilities_provider()
             backend = _backend_capability(capabilities, requested_backend)
             if AssetCategory.ROBOT_TRAJECTORY not in backend.supported_categories:
                 _fail(

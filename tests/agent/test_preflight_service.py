@@ -169,7 +169,7 @@ def _capabilities(*, closed: bool = False) -> CapabilityResponse:
             ),
             BackendCapability(
                 backend_id="frax",
-                display_name="FRAX differential IK (experimental)",
+                display_name="FRAX differential IK",
                 available=True,
                 supported_categories=["plain_motion", "robot_trajectory"],
                 output_formats=["csv", "pkl"],
@@ -311,8 +311,8 @@ def test_ready_preflight_is_stable_portable_and_does_not_reserve_admission(
 ) -> None:
     service, motion_id, robot_id, calibration_id = _setup(tmp_path)
 
-    first = service.preflight_retarget(_request(motion_id, robot_id))
-    second = service.preflight_retarget(_request(motion_id, robot_id))
+    first = service.preflight_retarget(_request(motion_id, robot_id, backend="newton"))
+    second = service.preflight_retarget(_request(motion_id, robot_id, backend="newton"))
 
     assert first.status is PreflightStatus.READY
     assert first.plan is not None
@@ -332,6 +332,41 @@ def test_ready_preflight_is_stable_portable_and_does_not_reserve_admission(
     assert first.checks[-1].code == "JOB_ADMISSION"
     assert first.checks[-1].level.value == "warning"
     assert str(tmp_path) not in first.model_dump_json()
+
+
+def test_preflight_defaults_plain_motion_to_frax(tmp_path: Path) -> None:
+    service, motion_id, robot_id, _ = _setup(tmp_path)
+
+    response = service.preflight_retarget(_request(motion_id, robot_id))
+
+    assert response.status is PreflightStatus.READY
+    assert response.plan is not None
+    assert response.plan.backend == "frax"
+    assert response.recommended_backend == "frax"
+    assert "ik_iterations" not in response.plan.parameters
+
+
+def test_preflight_falls_back_to_newton_when_frax_is_unavailable(tmp_path: Path) -> None:
+    service, motion_id, robot_id, _ = _setup(tmp_path)
+    capabilities = _capabilities()
+    capabilities = capabilities.model_copy(
+        update={
+            "backends": [
+                backend.model_copy(update={"available": False})
+                if backend.backend_id == "frax"
+                else backend
+                for backend in capabilities.backends
+            ]
+        }
+    )
+    service._capabilities_provider = lambda: capabilities  # noqa: SLF001
+
+    response = service.preflight_retarget(_request(motion_id, robot_id))
+
+    assert response.status is PreflightStatus.READY
+    assert response.plan is not None
+    assert response.plan.backend == "newton"
+    assert response.recommended_backend == "newton"
 
 
 def test_preflight_rejects_output_policy_without_a_managed_alias(tmp_path: Path) -> None:
@@ -368,11 +403,12 @@ def test_preflight_reloads_manifest_bound_yaml_instead_of_mutable_cache(
 def test_effective_parameter_change_changes_plan_identity(tmp_path: Path) -> None:
     service, motion_id, robot_id, _ = _setup(tmp_path)
 
-    baseline = service.preflight_retarget(_request(motion_id, robot_id))
+    baseline = service.preflight_retarget(_request(motion_id, robot_id, backend="newton"))
     changed = service.preflight_retarget(
         _request(
             motion_id,
             robot_id,
+            backend="newton",
             parameters={"run_mode": "smoke", "ik_iterations": 32},
         )
     )

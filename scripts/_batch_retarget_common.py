@@ -240,13 +240,19 @@ def add_common_args(
         default=default_reference,
         help="Calibration reference (default: dataset-specific).",
     )
+    if default_backend == "ik":
+        # Plain motion: FRAX when its optional extra is installed, else Newton.
+        from hhtools.retarget.frax_backend import default_ik_backend
+
+        default_backend = default_ik_backend()
     p.add_argument(
         "--backend",
-        choices=("newton", "frax", "interaction_mesh"),
+        choices=("frax", "newton", "interaction_mesh"),
         default=default_backend,
         help=(
-            f"Retarget backend (default: {default_backend}); frax is the experimental "
-            "CPU solver from the retarget-frax extra."
+            f"Retarget backend (default here: {default_backend}). frax is the "
+            "default IK solver when the retarget-frax extra is installed; newton is "
+            "the fallback."
         ),
     )
     p.add_argument("--human-height", type=float, default=1.7, help="Subject height in metres.")
