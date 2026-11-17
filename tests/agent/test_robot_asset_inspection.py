@@ -161,6 +161,47 @@ def test_declared_scaler_config_is_bound_into_robot_manifest(tmp_path: Path) -> 
     assert discovery.metadata["metadata_file_count"] == 2
 
 
+def test_frax_collision_model_is_bound_into_robot_manifest(tmp_path: Path) -> None:
+    bundle_root = tmp_path / "robot"
+    _write_valid_robot(bundle_root)
+    collision = bundle_root / "frax_collision.yaml"
+    collision.write_text(
+        "collision_spheres:\n  base:\n    - {center: [0, 0, 0], radius: 0.1}\n",
+        encoding="utf-8",
+    )
+
+    first = discover_robot_bundle(bundle_root)
+    assert any(item.path == collision.resolve() for item in first.files)
+    assert all(
+        item.role is AssetFileRole.METADATA
+        for item in first.files
+        if item.path.name == "frax_collision.yaml"
+    )
+    before = _bundle(bundle_root, first).files
+
+    # Editing the override changes the bundle's content identity.
+    collision.write_text(
+        "collision_spheres:\n  base:\n    - {center: [0, 0, 0], radius: 0.2}\n",
+        encoding="utf-8",
+    )
+    after = _bundle(bundle_root, discover_robot_bundle(bundle_root)).files
+    assert before != after
+
+
+def test_malformed_frax_collision_model_is_rejected(tmp_path: Path) -> None:
+    bundle_root = tmp_path / "robot"
+    _write_valid_robot(bundle_root)
+    (bundle_root / "frax_collision.yaml").write_text(
+        "collision_spheres:\n  base:\n    - {center: [0, 0], radius: 0.1}\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RobotAssetDiscoveryError) as captured:
+        discover_robot_bundle(bundle_root)
+
+    assert captured.value.api_error.code == "ROBOT_METADATA_INVALID"
+
+
 def test_declared_scaler_config_cannot_escape_robot_bundle(tmp_path: Path) -> None:
     bundle_root = tmp_path / "robot"
     _write_valid_robot(bundle_root)

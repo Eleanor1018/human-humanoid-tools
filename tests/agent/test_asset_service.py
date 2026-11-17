@@ -60,7 +60,7 @@ def test_plain_npz_register_inspect_and_persist_without_host_paths(
     assert bundle.detected is not None
     assert bundle.detected.dataset == "unified_npz"
     assert bundle.detected.reference == "smpl"
-    assert bundle.detected.recommended_backend == "newton"
+    assert bundle.detected.recommended_backend == "frax"
     assert inspection.status is InspectionStatus.VALID
     assert inspection.frame_count == 4
     assert inspection.joint_count == 2

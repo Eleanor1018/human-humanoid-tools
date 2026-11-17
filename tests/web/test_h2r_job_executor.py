@@ -82,7 +82,7 @@ def _spec(*, backend: str = "newton", **parameter_updates: Any) -> JobSpecV2:
         "output_format": "csv",
     }
     parameters.update(parameter_updates)
-    if backend == "interaction_mesh":
+    if backend != "newton":
         parameters.pop("ik_iterations", None)
     return JobSpecV2(
         kind=JobSpecKind.RETARGET,
@@ -435,7 +435,7 @@ def test_quality_verdict_ignores_inconsistent_limits() -> None:
     assert checks[0]["review_max_m"] == pytest.approx(0.10)
 
 
-@pytest.mark.parametrize("backend", ["newton", "interaction_mesh"])
+@pytest.mark.parametrize("backend", ["newton", "frax", "interaction_mesh"])
 def test_executor_acknowledges_running_cancellation_at_legacy_progress_boundary(
     tmp_path: Path,
     backend: str,
@@ -480,7 +480,7 @@ def test_executor_acknowledges_running_cancellation_at_legacy_progress_boundary(
     assert calls["released_models"] == [calls["run"]["model"]]
 
 
-@pytest.mark.parametrize("backend", ["newton", "interaction_mesh"])
+@pytest.mark.parametrize("backend", ["newton", "frax", "interaction_mesh"])
 def test_executor_maps_export_failure_without_leaking_host_path(
     tmp_path: Path,
     backend: str,

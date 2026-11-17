@@ -81,6 +81,20 @@ def _require_newton_package() -> None:
         ) from err
 
 
+def _require_frax_package() -> None:
+    """Raise a clear error when the optional FRAX backend dependencies are missing."""
+    from hhtools.retarget.frax_backend import missing_frax_dependencies
+
+    missing = missing_frax_dependencies()
+    if missing:
+        raise ValueError(
+            f"未安装 FRAX 求解器依赖（缺少 {', '.join(missing)}）。"
+            "请先安装 retarget-frax 额外依赖：\n"
+            "  uv sync --extra web --extra retarget-frax\n"
+            "或 pip install 'hhtools[retarget-frax]'。FRAX 只用 CPU，不需要 newton。"
+        )
+
+
 def _read_yaml_retarget_references(drop: Path) -> dict | None:
     """Extract ``retarget.references`` from a robot dir's yaml (pre-rebuild)."""
     import yaml

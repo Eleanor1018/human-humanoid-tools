@@ -11,14 +11,14 @@ from hhtools.cli import doctor
 
 
 def test_doctor_help_lists_repeatable_requirements() -> None:
-    result = CliRunner().invoke(doctor.app, ["--help"])
+    # A wide terminal keeps Rich from wrapping the choice list inside the table.
+    result = CliRunner().invoke(doctor.app, ["--help"], env={"COLUMNS": "200"})
     help_text = unstyle(result.stdout)
 
     assert result.exit_code == 0
     assert "--json" in help_text
     assert "--require" in help_text
-    assert "web|robot|retarget|mcp" in help_text
-    assert "models|gvhmr" in help_text
+    assert "[web|robot|retarget|retarget-frax|mcp|bodymodels|gvhmr]" in help_text
 
 
 def test_doctor_json_is_one_document_with_empty_stderr() -> None:
@@ -37,6 +37,7 @@ def test_doctor_json_is_one_document_with_empty_stderr() -> None:
         "web",
         "robot",
         "retarget",
+        "retarget-frax",
         "mcp",
         "bodymodels",
         "gvhmr",

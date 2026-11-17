@@ -224,6 +224,13 @@ def register_system_routes(
                 ) from err
         return _motion_library_settings_payload(request)
 
+    @app.get("/api/solvers")
+    def solvers() -> dict:
+        """Retarget solvers the UI may offer, with their availability in this install."""
+        from hhtools.services.capabilities import solver_availability
+
+        return {"solvers": solver_availability()}
+
     @app.get("/api/formats")
     def formats() -> dict:
         from hhtools.io.base import registered_loader_extensions

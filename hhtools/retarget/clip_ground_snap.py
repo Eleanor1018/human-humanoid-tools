@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 from numpy.typing import NDArray
 
-from hhtools.robot.foot_geometry import quat_xyzw_to_rotmat
+from hhtools.robot.foot_geometry import pelvis_offset_in_link_frame, quat_xyzw_to_rotmat
 
 if TYPE_CHECKING:
     from hhtools.robot.loader import URDFRobotModel
@@ -111,7 +111,9 @@ def measure_clip_min_foot_world_z(
 
     When ``upright_only`` is true, only frames whose root sits at least
     ``upright_root_above_sole_m`` above the sole are considered.  If no such
-    frame exists, falls back to the full-clip minimum.
+    frame exists, falls back to the full-clip minimum.  On robots whose root
+    link sits at foot level, "root" here means the hips (see
+    :func:`~hhtools.robot.foot_geometry.pelvis_offset_in_link_frame`).
     """
     q = np.asarray(joint_q, dtype=np.float64)
     if q.ndim != 2 or q.shape[0] == 0 or q.shape[1] < root_coord_count:
@@ -128,6 +130,13 @@ def measure_clip_min_foot_world_z(
     dof_names = robot.dof_names()
     n_dof = min(len(dof_names), q.shape[1] - root_coord_count)
     saved = robot.zero_configuration()
+    # Robots rooted at foot level measure uprightness from the hips instead
+    # of the root origin; ``None`` keeps the root origin (pelvis-rooted).
+    pelvis_offset = (
+        pelvis_offset_in_link_frame(robot)
+        if upright_only and root_coord_count >= 7
+        else None
+    )
     min_all = float("inf")
     min_upright = float("inf")
     try:
@@ -147,8 +156,12 @@ def measure_clip_min_foot_world_z(
                 continue
             if z < min_all:
                 min_all = z
-            root_z = float(q[f, 2])
-            if root_z - float(z) >= float(upright_root_above_sole_m):
+            upright_ref_z = float(q[f, 2])
+            if pelvis_offset is not None:
+                upright_ref_z += float(
+                    (quat_xyzw_to_rotmat(q[f, 3:7]) @ pelvis_offset)[2]
+                )
+            if upright_ref_z - float(z) >= float(upright_root_above_sole_m):
                 if z < min_upright:
                     min_upright = z
     finally:

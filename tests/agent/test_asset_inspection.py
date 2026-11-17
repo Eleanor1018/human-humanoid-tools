@@ -135,7 +135,7 @@ def test_plain_motion_inspection_reads_lightweight_npz_metadata(tmp_path: Path) 
     assert inspection.joint_count == 2
     assert inspection.has_object is False
     assert inspection.has_terrain is False
-    assert inspection.metadata["recommended_backend"] == "newton"
+    assert inspection.metadata["recommended_backend"] == "frax"
     assert str(tmp_path) not in str(inspection.model_dump(mode="json"))
 
 
@@ -540,6 +540,34 @@ def test_content_routing_truth_rejects_declared_dataset_reference_mismatch(
         "reference",
         "recommended_backend",
     }
+
+
+def test_plain_motion_registered_with_newton_stays_valid(tmp_path: Path) -> None:
+    """Bundles registered before FRAX became the preferred IK backend recorded
+    ``newton``; either IK backend is an accepted recommendation."""
+    primary = tmp_path / "unified_npz" / "walk.npz"
+    _write_unified_npz(primary)
+    relative = primary.relative_to(tmp_path).as_posix()
+    bundle = _bundle(
+        tmp_path,
+        primary=relative,
+        category=AssetCategory.PLAIN_MOTION,
+        dataset="unified_npz",
+        files=[(relative, AssetFileRole.MOTION)],
+    ).model_copy(
+        update={
+            "detected": AssetDetected(
+                dataset="unified_npz",
+                reference="smpl",
+                recommended_backend="newton",
+            )
+        }
+    )
+
+    inspection = MotionAssetInspector().inspect(bundle, tmp_path)
+
+    assert "BUNDLE_METADATA_MISMATCH" not in {error.code for error in inspection.errors}
+    assert inspection.metadata["recommended_backend"] == "frax"
 
 
 def test_directory_discovery_rejects_multiple_logical_clips(tmp_path: Path) -> None:

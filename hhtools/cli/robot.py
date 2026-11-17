@@ -7,6 +7,8 @@ Subcommands:
 * ``hhtools robot schema <name> [--out PATH]`` — write the CSV column header
   for retargeted trajectories.
 * ``hhtools robot add`` — wizard scaffold (placeholder until milestone M9).
+* ``hhtools robot frax-collision <name>`` — print or save the FRAX sphere
+  collision model.
 
 All commands route through :mod:`hhtools.robot.registry` so the CLI and the
 viewer see exactly the same preset list.
@@ -525,6 +527,43 @@ def scaffold(
                 f"[yellow]skipped[/] {result.yaml_path.name}  [dim]({result.actions[0]})[/]"
             )
     refresh()
+
+
+@app.command("frax-collision")
+def frax_collision(
+    name: str = typer.Argument(..., help="Preset name (see `hhtools robot list`)."),
+    out: Path | None = typer.Option(
+        None,
+        "--out",
+        "-o",
+        help=(
+            "Write the YAML here.  Saving it as frax_collision.yaml in the robot "
+            "folder makes the FRAX backend use it instead of the automatic model."
+        ),
+    ),
+) -> None:
+    """Print (or save) the sphere collision model the FRAX backend uses for a robot."""
+    refresh()
+    preset = _get_preset(name)
+    if preset.urdf_path is None or not preset.urdf_path.is_file():
+        _console.print(f"[red]robot {name!r} has no URDF on disk[/]")
+        raise typer.Exit(code=1)
+    from hhtools.retarget.frax_backend.collision import (
+        collision_spec_for_robot,
+        dump_collision_spec,
+    )
+
+    spec = collision_spec_for_robot(load_robot(preset))
+    text = dump_collision_spec(spec)
+    if out is None:
+        typer.echo(text, nl=False)
+        return
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(text, encoding="utf-8")
+    _console.print(
+        f"[green]wrote[/] {out}  [dim](source: {spec.source}, {spec.sphere_count} spheres, "
+        f"{len(spec.self_collision_pairs)} self-collision link pairs)[/]"
+    )
 
 
 # --------------------------------------------------------------------------- internals

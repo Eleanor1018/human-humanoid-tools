@@ -11,6 +11,7 @@ import { getCalibrationStatus } from "@/features/h2r/api";
 import type { MotionLibraryEntry } from "@/features/motion/api";
 import { loadRobot, type RobotPayload, type RobotSummary } from "@/features/robot/api";
 import type { JobSnapshot, UploadFile } from "@/lib/api";
+import { useDefaultIkBackend, useFraxAvailable } from "@/lib/solvers";
 import { useLocaleText } from "@/LocaleProvider";
 
 import {
@@ -99,6 +100,14 @@ export function HumanBatchView({
   const [robot, setRobot] = useState<RobotPayload | null>(null);
   const [checks, setChecks] = useState<readonly ReferenceCheck[]>([]);
   const [settings, setSettings] = useState(initialSettings);
+  const [backendTouched, setBackendTouched] = useState(false);
+  const fraxAvailable = useFraxAvailable();
+  useDefaultIkBackend(
+    settings.backend,
+    (backend) => setSettings((current) => ({ ...current, backend })),
+    fraxAvailable,
+    backendTouched,
+  );
   const [batchSize, setBatchSize] = useState("");
   const [action, setAction] = useState<"import" | "robot" | "run" | null>(null);
   const [job, setJob] = useState<JobSnapshot<BatchResult> | null>(null);
@@ -413,7 +422,10 @@ export function HumanBatchView({
           value={settings}
           batchSize={batchSize}
           disabled={busy}
-          onChange={(patch) => setSettings((current) => ({ ...current, ...patch }))}
+          onChange={(patch) => {
+            if (patch.backend !== undefined) setBackendTouched(true);
+            setSettings((current) => ({ ...current, ...patch }));
+          }}
           onBatchSizeChange={setBatchSize}
         />
         <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
@@ -422,10 +434,15 @@ export function HumanBatchView({
                 "Newton uses GPU chunks; leave batch size empty for automatic tuning.",
                 "Newton 使用 GPU 分块；批大小留空时将自动调整。",
               )
-            : text(
-                "Interaction-Mesh processes clips sequentially.",
-                "Interaction-Mesh 将依次处理各个动作。",
-              )}
+            : settings.backend === "frax"
+              ? text(
+                  "FRAX solves each clip on the CPU, one clip at a time.",
+                  "FRAX 在 CPU 上逐条求解各个动作。",
+                )
+              : text(
+                  "Interaction-Mesh processes clips sequentially.",
+                  "Interaction-Mesh 将依次处理各个动作。",
+                )}
         </p>
       </WorkflowStep>
 

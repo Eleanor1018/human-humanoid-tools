@@ -8,7 +8,7 @@ import {
 } from "@/lib/api";
 import type { MotionLibraryEntry } from "@/features/motion/api";
 
-export type BatchBackend = "newton" | "interaction_mesh";
+export type BatchBackend = "newton" | "interaction_mesh" | "frax";
 export type BatchFormat = "csv" | "pkl";
 
 export interface BatchFailure {

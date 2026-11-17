@@ -1,4 +1,4 @@
-"""Batch-retarget mimic-family clips (flat mocap → Newton IK).
+"""Batch-retarget mimic-family clips (flat mocap → FRAX or Newton IK).
 
 Supported ``--dataset`` values (registered adapters):
 
@@ -21,13 +21,14 @@ Usage::
         --limit 5
 
     python scripts/batch_mimic_retarget.py \\
-        --robot unitree_g1__g1_29dof \\
+        --robot g1_29dof \\
         --dataset lafan \\
         --in ~/motions/LAFAN \\
         --out ~/motions/LAFAN_g1 \\
         --skip-existing
 
-Requires the NVIDIA ``newton`` package for the IK backend.
+Uses FRAX (``retarget-frax`` extra) by default and falls back to Newton (NVIDIA
+``newton`` package) when FRAX is not installed; pass ``--backend`` to choose.
 """
 
 from __future__ import annotations
@@ -67,7 +68,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     add_common_args(
         p,
         default_reference=None,
-        default_backend="newton",
+        default_backend="ik",
         datasets=_MIMIC_DATASETS,
     )
     return p.parse_args(argv)

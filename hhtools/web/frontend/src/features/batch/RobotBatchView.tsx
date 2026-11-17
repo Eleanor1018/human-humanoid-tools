@@ -6,6 +6,7 @@ import { getR2rCalibrationStatus } from "@/features/r2r/api";
 import type { MotionLibraryEntry } from "@/features/motion/api";
 import { loadRobot, type RobotPayload, type RobotSummary } from "@/features/robot/api";
 import type { JobSnapshot, UploadFile } from "@/lib/api";
+import { useDefaultIkBackend, useFraxAvailable } from "@/lib/solvers";
 import { useLocaleText } from "@/LocaleProvider";
 
 import {
@@ -77,6 +78,14 @@ export function RobotBatchView({
   const [targetRobot, setTargetRobot] = useState<RobotPayload | null>(null);
   const [calibration, setCalibration] = useState<CalibrationPhase>("idle");
   const [settings, setSettings] = useState(initialSettings);
+  const [backendTouched, setBackendTouched] = useState(false);
+  const fraxAvailable = useFraxAvailable();
+  useDefaultIkBackend(
+    settings.backend,
+    (backend) => setSettings((current) => ({ ...current, backend })),
+    fraxAvailable,
+    backendTouched,
+  );
   const [sourceFps, setSourceFps] = useState("50");
   const [action, setAction] = useState<"import" | "source" | "target" | "run" | null>(null);
   const [job, setJob] = useState<JobSnapshot<BatchResult> | null>(null);
@@ -360,7 +369,10 @@ export function RobotBatchView({
           value={settings}
           sourceFps={sourceFps}
           disabled={busy}
-          onChange={(patch) => setSettings((current) => ({ ...current, ...patch }))}
+          onChange={(patch) => {
+            if (patch.backend !== undefined) setBackendTouched(true);
+            setSettings((current) => ({ ...current, ...patch }));
+          }}
           onSourceFpsChange={setSourceFps}
         />
       </WorkflowStep>

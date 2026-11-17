@@ -49,6 +49,7 @@ from hhtools.utils.paths import user_robot_dir
 
 from .assets import AssetServiceError
 from .plans import PlanStore, PlanStoreError
+from .routing import compatible_backends_for_category
 
 _PLAN_SEMANTICS = "hhtools.retarget.plan.v1"
 _ASSET_ID_PREFIX = "asset:sha256:"
@@ -393,10 +394,20 @@ class RetargetService:
             "reference": motion_payload.get("reference"),
         }
         recommended_backend = motion_inspection.metadata.get("recommended_backend")
+        # A plan may use any backend that solves the inspected category (Newton
+        # or FRAX for plain motions); a recommendation outside that set means
+        # the asset's routing changed since preflight.
+        allowed_backends = compatible_backends_for_category(motion_inspection.category)
         if (
             routing != expected_routing
             or robot_inspection.category.value != "robot_model"
-            or (isinstance(recommended_backend, str) and recommended_backend != plan.backend)
+            or (
+                isinstance(recommended_backend, str)
+                and (
+                    recommended_backend not in allowed_backends
+                    or plan.backend not in allowed_backends
+                )
+            )
         ):
             raise _service_error(
                 "PLAN_STALE",

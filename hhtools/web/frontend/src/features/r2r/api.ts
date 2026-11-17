@@ -35,7 +35,7 @@ import type { ExecutionProvenance } from "@/types/execution";
 export { getRobotLibrary, loadRobot };
 export type { MotionLibraryEntry, RobotPayload, RobotSummary };
 
-export type R2rBackend = "newton" | "interaction_mesh";
+export type R2rBackend = "newton" | "interaction_mesh" | "frax";
 
 export interface R2rRobotFrame {
   readonly root?: readonly [number, number, number, number, number, number, number];

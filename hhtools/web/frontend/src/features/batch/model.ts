@@ -78,7 +78,7 @@ export function suggestedBackend(
   const suggestion = [...entries]
     .reverse()
     .find((entry) => entry.suggested_backend)?.suggested_backend;
-  if (suggestion === "newton" || suggestion === "interaction_mesh") {
+  if (suggestion === "frax" || suggestion === "newton" || suggestion === "interaction_mesh") {
     return suggestion;
   }
   return undefined;

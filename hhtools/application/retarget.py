@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from hhtools.application.progress import _set_retarget_job_clip_progress
 from hhtools.application.robots import (
     _join_robot_prewarm,
+    _require_frax_package,
     _require_newton_package,
 )
 
@@ -116,12 +117,13 @@ def _retarget_single(
                 ) from err
             raise
 
-    if backend != "interaction_mesh":
+    use_frax = backend == "frax"
+    if use_frax:
+        _require_frax_package()
+    else:
         _require_newton_package()
 
     from hhtools.retarget.calibration import load_calibration
-    from hhtools.retarget.newton_basic import NewtonBasicPipeline
-    from hhtools.retarget.newton_basic._warp_config import configure as configure_warp_cache
     from hhtools.robot.retarget_profile import (
         build_feet_stabilizer_config,
         build_pipeline_config_for_preset,
@@ -130,10 +132,13 @@ def _retarget_single(
 
     if job is not None:
         _set_retarget_job_clip_progress(job, 0.03, "正在加载标定与缩放参数…")
-    if state is not None:
+    if state is not None and not use_frax:
         _join_robot_prewarm(state, robot_name, job)
 
-    configure_warp_cache()
+    if not use_frax:
+        from hhtools.retarget.newton_basic._warp_config import configure as configure_warp_cache
+
+        configure_warp_cache()
     calibration = load_calibration(cal_path) if cal_path is not None else None
     scaler_cfg = resolve_retarget_scaler_config(
         preset,
@@ -144,6 +149,41 @@ def _retarget_single(
         human_height=human_height,
     )
     feet_cfg = build_feet_stabilizer_config(preset, reference, model=model)
+    pipeline_cfg = build_pipeline_config_for_preset(
+        preset,
+        reference,
+        ik_iterations=ik_iters,
+        foot_clamp_anti_penetration=foot_clamp_anti_penetration,
+    )
+    if use_frax:
+        if job is not None:
+            _set_retarget_job_clip_progress(
+                job, 0.06, "正在初始化 FRAX（首次会编译求解器，之后会复用缓存）…"
+            )
+        from hhtools.retarget.frax_backend import FraxPipeline
+
+        frax_pipeline = FraxPipeline(
+            model,
+            scaler_config=scaler_cfg,
+            pipeline_config=pipeline_cfg,
+            feet_stabilizer_config=feet_cfg,
+            human_height=human_height,
+        )
+
+        def _frax_cb(done: int, total: int) -> None:
+            if job is None:
+                return
+            if done <= 0:
+                _set_retarget_job_clip_progress(
+                    job, 0.1, f"FRAX 整段求解 {total} 帧（首次需编译，请稍候）…"
+                )
+            else:
+                _set_retarget_job_clip_progress(job, 0.95, "FRAX 求解完成，正在后处理…")
+
+        return frax_pipeline.run(motion, progress_callback=_frax_cb)
+
+    from hhtools.retarget.newton_basic import NewtonBasicPipeline
+
     if job is not None:
         try:
             from hhtools.retarget.newton_basic.pipeline import is_newton_ik_prewarmed
@@ -163,12 +203,7 @@ def _retarget_single(
     pipeline = NewtonBasicPipeline(
         model,
         scaler_config=scaler_cfg,
-        pipeline_config=build_pipeline_config_for_preset(
-            preset,
-            reference,
-            ik_iterations=ik_iters,
-            foot_clamp_anti_penetration=foot_clamp_anti_penetration,
-        ),
+        pipeline_config=pipeline_cfg,
         feet_stabilizer_config=feet_cfg,
         human_height=human_height,
         configure_warp=False,

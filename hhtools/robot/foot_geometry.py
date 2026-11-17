@@ -16,8 +16,11 @@ __all__ = [
     "apply_retarget_dof",
     "estimate_min_lateral_foot_separation",
     "foot_mesh_lateral_inner_gap",
+    "foot_sole_points_in_ankle_frames",
     "ground_contact_zs",
     "lowest_ankle_z",
+    "pelvis_offset_from_link_transforms",
+    "pelvis_offset_in_link_frame",
     "quat_xyzw_to_rotmat",
     "resolve_leg_abduction_joints",
     "scene_min_mesh_z",
@@ -160,6 +163,152 @@ def ground_contact_zs(
     if include_mesh:
         mesh_z = scene_min_mesh_z(model.trimesh_scene(), root_rot)
     return limb_z, mesh_z
+
+
+def pelvis_offset_in_link_frame(
+    model: URDFRobotModel, link: str | None = None,
+) -> np.ndarray | None:
+    """Offset in ``link``'s frame from its origin up to the hips.
+
+    ``link`` defaults to the URDF root link (the floating base).  Upright
+    tests such as the clip floor snap, and the calibration's scale anchor,
+    read that origin (or the ``hips`` ik_map link's) as the pelvis.  That
+    holds when the URDF is rooted at the pelvis, which covers almost every
+    humanoid.  A URDF can also be rooted at foot level: Berkeley Humanoid
+    Lite's ``base`` origin sits at the soles with the hip joints ~0.54 m
+    above it, so "root above the sole" reads ~0 on every standing frame and
+    every joint scale is measured from the feet.
+
+    Returns ``None`` when the link origin sits at or above mid-leg, so callers
+    keep reading it exactly as before.  When it lies in the lower half of the
+    hip-to-ankle span at the zero configuration, returns the midpoint of the
+    ``left_hip`` / ``right_hip`` link origins expressed in ``link``'s frame.
+    Leaves the model at the zero configuration.
+    """
+
+    ik = dict(model.preset.ik_map or {})
+    if not ik:
+        return None
+    link = link or model.base_link
+    model.apply_configuration(model.zero_configuration())
+    names = {link}
+    for canonical in ("left_hip", "right_hip", "left_ankle", "right_ankle"):
+        name = _resolve_ik_link(ik, canonical)
+        if name:
+            names.add(name)
+    transforms: dict[str, np.ndarray] = {}
+    for name in names:
+        if name == model.base_link:
+            transforms[name] = np.eye(4, dtype=np.float64)
+            continue
+        try:
+            transforms[name] = np.asarray(model.urdf.get_transform(name), dtype=np.float64)
+        except Exception:
+            continue
+    return pelvis_offset_from_link_transforms(transforms, ik, link)
+
+
+def foot_sole_points_in_ankle_frames(
+    model: URDFRobotModel,
+) -> dict[str, np.ndarray]:
+    """Each foot's mesh points in its ``*_ankle`` ik_map link frame.
+
+    Keys are ``"left"`` / ``"right"``; values are ``(P, 3)`` arrays.  The
+    meshes are the ones the clip floor snap measures: the
+    ``feet.*_contact_link`` meshes (default: the ankle link).  Only the
+    convex hull is kept, which has the same lowest point as the mesh in any
+    orientation.  A side is left out when its link or meshes are missing.
+
+    Adding the lowest rotated point to an ankle target's height gives the
+    height of that foot's sole; at the zero pose the ankle origin of the
+    bundled robots sits 3.5-6 cm above the sole.  Leaves the model at the
+    zero configuration.
+    """
+
+    ik = dict(model.preset.ik_map or {})
+    contact = dict(zip(("left", "right"), _foot_contact_links(model), strict=True))
+    model.apply_configuration(model.zero_configuration())
+    scene = model.urdf.scene
+    try:
+        parents = dict(scene.graph.transforms.parents)
+    except Exception:
+        parents = {}
+    out: dict[str, np.ndarray] = {}
+    for side in ("left", "right"):
+        ankle = _resolve_ik_link(ik, f"{side}_ankle")
+        foot = contact.get(side) or ankle
+        if not ankle or not foot:
+            continue
+        try:
+            ankle_T = np.asarray(model.urdf.get_transform(ankle), dtype=np.float64)
+        except Exception:
+            continue
+        to_ankle = np.linalg.inv(ankle_T)
+        chunks: list[np.ndarray] = []
+        # Geometry nodes hanging off the foot link.  Some URDF scenes name
+        # their nodes after the mesh file (ASIMOV 1), which the name match in
+        # ``_foot_mesh_node_parts`` misses; it stays the fallback.
+        parts = [
+            (node, scene.graph[node][1])
+            for node in scene.graph.nodes_geometry
+            if parents.get(node) == foot
+        ] or list(_foot_mesh_node_parts(model, foot))
+        for node, geom_name in parts:
+            if not geom_name:
+                continue
+            vertices = _cached_geom_vertices(model, geom_name)
+            if vertices is None or vertices.shape[0] == 0:
+                continue
+            node_T = to_ankle @ np.asarray(scene.graph.get(node)[0], dtype=np.float64)
+            chunks.append(vertices @ node_T[:3, :3].T + node_T[:3, 3])
+        if not chunks:
+            continue
+        points = np.concatenate(chunks, axis=0)
+        try:
+            import trimesh
+
+            hull = trimesh.convex.convex_hull(points)
+            if len(hull.vertices) >= 4:
+                points = np.asarray(hull.vertices, dtype=np.float64)
+        except Exception:
+            pass
+        out[side] = points
+    return out
+
+
+def pelvis_offset_from_link_transforms(
+    transforms: dict[str, np.ndarray],
+    ik_map: dict[str, Any],
+    link: str,
+) -> np.ndarray | None:
+    """:func:`pelvis_offset_in_link_frame` from zero-pose link transforms.
+
+    ``transforms`` maps link names to 4x4 transforms in the URDF root frame
+    with every joint at zero.  Lets callers that only have the URDF file (the
+    Newton ground-collision capsules) apply the same rule.
+    """
+
+    link_T = transforms.get(link)
+    if link_T is None:
+        return None
+    hip_origins = [
+        transforms[name][:3, 3]
+        for name in (_resolve_ik_link(ik_map, c) for c in ("left_hip", "right_hip"))
+        if name and name in transforms
+    ]
+    ankle_zs = [
+        float(transforms[name][2, 3])
+        for name in (_resolve_ik_link(ik_map, c) for c in ("left_ankle", "right_ankle"))
+        if name and name in transforms
+    ]
+    if not hip_origins or not ankle_zs:
+        return None
+    hip_mid = np.mean(hip_origins, axis=0)
+    mid_leg_z = 0.5 * (float(hip_mid[2]) + min(ankle_zs))
+    if mid_leg_z <= float(link_T[2, 3]):
+        # Link origin at or above mid-leg: it already marks the pelvis.
+        return None
+    return link_T[:3, :3].T @ (hip_mid - link_T[:3, 3])
 
 
 def apply_retarget_dof(

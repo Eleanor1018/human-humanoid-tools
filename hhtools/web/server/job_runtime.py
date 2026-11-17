@@ -197,13 +197,13 @@ class WebJobRuntime:
             }
 
         backend = str(request.get("backend") or "newton").strip().lower()
-        if backend == "newton" and any(
+        if backend in ("newton", "frax") and any(
             Path(path).suffix.lower() != ".npz" for path in source_paths
         ):
             return {
                 "available": False,
                 "command": None,
-                "reason": "Newton CLI 当前只直接接受 NPZ 输入。",
+                "reason": "Newton / FRAX CLI 当前只直接接受 NPZ 输入。",
             }
         if kind == "batch" and isinstance(entries, list):
             references = {
@@ -246,16 +246,15 @@ class WebJobRuntime:
             )
             if request.get("limit_frames") is not None:
                 args.extend(["--limit-frames", str(int(request["limit_frames"]))])
-        elif backend == "newton":
+        elif backend in ("newton", "frax"):
             args = ["hhtools", "retarget", "run", *source_paths]
+            # Always name the backend: the CLI default depends on what is
+            # installed, so the command must not rely on it to reproduce the job.
+            args.extend(["--robot", robot, "--output", output, "--backend", backend])
+            if backend == "newton":
+                args.extend(["--ik-iterations", str(ik_iterations)])
             args.extend(
                 [
-                    "--robot",
-                    robot,
-                    "--output",
-                    output,
-                    "--ik-iterations",
-                    str(ik_iterations),
                     "--human-height",
                     f"{human_height:g}",
                     "--calibration-reference",

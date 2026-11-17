@@ -40,6 +40,11 @@ Third-party components (installed as dependencies, not vendored):
   - yourdfpy (Apache-2.0)  - https://github.com/clemense/yourdfpy
   - MuJoCo (Apache-2.0)    - https://github.com/google-deepmind/mujoco
   - OSQP (Apache-2.0)      - https://github.com/osqp/osqp
+  - frax (MIT)             - https://github.com/StanfordASL/frax
+    (optional retarget-frax extra; the FRAX backend can load frax's bundled
+    Unitree G1 collision-sphere model at run time)
+  - ElastiQP (Apache-2.0)  - https://github.com/StanfordASL/elastiqp
+  - JAX (Apache-2.0)       - https://github.com/jax-ml/jax
 
 SMPL, SMPL+H, SMPL-X body model weights are NOT bundled with this project and are
 released by the Max Planck Institute under non-commercial research licenses that

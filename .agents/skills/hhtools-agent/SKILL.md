@@ -1,6 +1,6 @@
 ---
 name: hhtools-agent
-description: "Run local HHTools H2R through Newton or Interaction-Mesh, scene-free R2R, scalable H2R/R2R batches, and validated H2R or robot-pair calibration through the versioned MCP Agent interface: inspect allowlisted assets, generate content-bound calibration candidates, review front/side previews with GPT vision, silently save only validated poses, preflight immutable smoke/full plans, manage jobs, and review verified artifacts. Use for HHTools H2R/R2R/Batch/calibration execution, status, cancellation, retry, or result requests. Do not use for UI or solver-code edits, scene-bearing R2R, arbitrary filesystem access, remote service setup, or real-robot deployment."
+description: "Run local HHTools H2R through FRAX (default), Newton, or Interaction-Mesh, scene-free R2R, scalable H2R/R2R batches, and validated H2R or robot-pair calibration through the versioned MCP Agent interface: inspect allowlisted assets, generate content-bound calibration candidates, review front/side previews with GPT vision, silently save only validated poses, preflight immutable smoke/full plans, manage jobs, and review verified artifacts. Use for HHTools H2R/R2R/Batch/calibration execution, status, cancellation, retry, or result requests. Do not use for UI or solver-code edits, scene-bearing R2R, arbitrary filesystem access, remote service setup, or real-robot deployment."
 ---
 
 # HHTools Agent
@@ -48,9 +48,11 @@ human-only action and must never run concurrently or expose its session token.
    - Register only with `register_asset_bundle` using the catalog's portable identity.
    - Call `inspect_asset_bundle` with hash verification and parsing enabled for every selected
      motion and robot bundle. Stop on `invalid`; surface warnings before continuing.
-   - Continue only when category and backend agree: `plain_motion` uses `newton`, while
-     `object_interaction` and `terrain_scene` use `interaction_mesh`. Never override the
-     inspected routing identity. Stop when content inspection requires isolated validation;
+   - Continue only when category and backend agree: `plain_motion` uses `frax` (the default;
+     preflight falls back to `newton` when capabilities report FRAX unavailable, and `newton`
+     may be requested explicitly), while `object_interaction` and `terrain_scene` use
+     `interaction_mesh`. Never override the inspected routing identity. `frax` takes no
+     `ik_iterations`. Stop when content inspection requires isolated validation;
      do not decode a rejected code-capable source format yourself.
    - Select a supported `robot_id` from `list_robots` or the capability snapshot and pair it with
      the inspected robot bundle's `asset_id`. Do not guess either identity.
@@ -146,7 +148,8 @@ human-only action and must never run concurrently or expose its session token.
 
 ## Run a new scene-free R2R job
 
-1. Confirm `r2r_preflight` and `r2r_execution` in capabilities and select the advertised backend.
+1. Confirm `r2r_preflight` and `r2r_execution` in capabilities and select an advertised R2R
+   backend: `frax` by default (no `ik_iterations`; `newton` when FRAX is unavailable), or `newton` on request.
 2. Resolve and inspect exactly three bundles: one `robot_trajectory_bundle`, its source robot, and
    the target robot. Require `category: robot_trajectory`, successful semantic parsing, a
    scene-free `mimic` trajectory profile, and an exact match between the trajectory's declared
@@ -201,7 +204,7 @@ not validate against the live tool schema, stop and present the contract error.
 |---|---|
 | `MCP_ONLY` | Use HHTools MCP tools/resources only; never fall back to shell, JSON CLI, REST, or direct service imports. |
 | `ALLOWLISTED_ASSETS` | Asset registration accepts only a capability-advertised `root_id` plus normalized `relative_path`, never an arbitrary or absolute path. |
-| `H2R_BACKEND_ROUTING` | Use `newton` only for inspected `plain_motion`; use `interaction_mesh` only for inspected object interaction or terrain scenes, and never bypass isolated content validation. |
+| `H2R_BACKEND_ROUTING` | Use `frax` (default; `newton` as fallback or on request) only for inspected `plain_motion`; use `interaction_mesh` only for inspected object interaction or terrain scenes, and never bypass isolated content validation. |
 | `R2R_INITIAL_SCOPE` | R2R accepts only semantically inspected, scene-free robot trajectories whose declared source identity matches the selected source robot. |
 | `SCALABLE_BATCH` | Batch accepts only ordered ready child plans from one workflow and run mode, with common robot identities and unique inputs; optional administrator caps use 0 for unlimited, while retry remains whole-batch. |
 | `PREFLIGHT_OWNS_MODE` | `run_mode` belongs in preflight `request.parameters`; `start_job` accepts only `plan_id` and `idempotency_key`. |

@@ -58,16 +58,23 @@ The seven presets are ROBOTO 01 (`rp1`, 28 DoF), Unitree G1 (`g1_29dof`), ROBOTO
 Use `--limit-frames` for a quick smoke test:
 
 ```bash
-# Newton IK (flat / AMASS-style NPZ)
+# Flat / AMASS-style NPZ: FRAX by default (CPU), Newton when FRAX is not installed
 uv run hhtools retarget run path/to/clip.npz \
   --robot g1_29dof -o /tmp/out.csv \
   --calibration-reference smpl --limit-frames 30
+
+# Force Newton IK (Warp; CUDA when available)
+uv run hhtools retarget run path/to/clip.npz \
+  --robot g1_29dof -o /tmp/out_newton.csv \
+  --calibration-reference smpl --backend newton --limit-frames 30
 
 # Interaction-mesh (OMOMO / OmniContact / terrain clips)
 uv run hhtools retarget interaction-mesh run path/to/clip.pkl \
   --robot g1_29dof -o /tmp/out_im.csv \
   --calibration-reference smpl --limit-frames 30
 ```
+
+FRAX is the default IK solver whenever the `retarget-frax` extra is installed (it is part of `all` and of the desktop packages); otherwise the CLI, WebUI and batch scripts fall back to Newton. FRAX solves the same IK targets as Newton with [frax](https://github.com/StanfordASL/frax) differential IK: joint limits, the floor and self-collision are constraints, and a clip compiles once and then solves in tens of milliseconds on the CPU. `--no-frax-floor` and `--no-frax-self-collision` turn those constraints off; `hhtools robot frax-collision <robot>` prints the sphere model they use. FRAX ignores `--ik-iterations`, which applies to Newton only.
 
 ## Large offline batches
 

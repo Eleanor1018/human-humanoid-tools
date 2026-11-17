@@ -26,11 +26,13 @@ Attribution:
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 import numpy as np
 from numpy.typing import NDArray
 
+from hhtools.core.math import quaternion as Q
 from hhtools.retarget.newton_basic.config import FeetStabilizerConfig
 
 
@@ -73,9 +75,36 @@ class FeetStabilizer:
         config: FeetStabilizerConfig,
         *,
         joint_names: tuple[str, ...],
+        pelvis_offset: NDArray | None = None,
+        sole_points: Mapping[str, NDArray] | None = None,
     ) -> None:
+        """``pelvis_offset`` is a vector in the hips target's frame from that
+        target up to the robot's hips.  Pass it only for robots whose root
+        link sits at foot level (see
+        :func:`hhtools.robot.foot_geometry.pelvis_offset_in_link_frame`): their
+        hips target lands on that root origin, so its height alone never reads
+        upright.  ``None`` uses the hips target height as is.
+
+        ``sole_points`` maps ``"left"`` / ``"right"`` to ``(P, 3)`` points of
+        that foot in its ankle target's frame (see
+        :func:`hhtools.robot.foot_geometry.foot_sole_points_in_ankle_frames`).
+        With them, ground contact and foot planting compare the lowest sole
+        point, rotated by the target's orientation, with
+        ``ground_contact_z``.  A foot without points is compared by its ankle
+        target height, as before.
+        """
         self._config = config
         self._joint_names = tuple(joint_names)
+        self._pelvis_offset = (
+            None
+            if pelvis_offset is None
+            else np.asarray(pelvis_offset, dtype=np.float32).reshape(1, 3)
+        )
+        self._sole_points_by_side = {
+            str(side): np.asarray(points, dtype=np.float32).reshape(-1, 3)
+            for side, points in (sole_points or {}).items()
+            if points is not None and np.asarray(points).size >= 3
+        }
         self._up = _AXIS_TO_IDX[config.up_axis]
         # Lateral / forward axes are whatever remains after up
         axes = {0, 1, 2} - {self._up}
@@ -88,6 +117,11 @@ class FeetStabilizer:
 
         self._foot_indices = self._resolve_foot_indices()
         self._foot_toe_pairs = self._resolve_foot_toe_pairs()
+        self._sole_points_by_index = {
+            idx: self._sole_points_by_side[side]
+            for idx, side in self._resolve_foot_sides().items()
+            if side in self._sole_points_by_side
+        }
         self._hips_idx = self._resolve(
             "hips_name",
             fallbacks=("Hips", "hips", "pelvis"),
@@ -190,13 +224,12 @@ class FeetStabilizer:
         height_limit = cfg.ground_contact_z + cfg.foot_planting_height_margin
         release_n = max(1, cfg.foot_planting_release_frames)
         h_axes = [self._fwd, self._lat]
-        up = self._up
 
         planted_all = np.zeros((len(pairs), F), dtype=bool)
 
         for p_idx, (fi, ti) in enumerate(pairs):
             horiz = effectors[:, fi, h_axes].copy()
-            h = effectors[:, fi, up]
+            h = self._foot_heights(effectors, fi)
 
             vel_h = np.zeros(F)
             vel_h[1:] = np.linalg.norm(np.diff(horiz, axis=0), axis=1)
@@ -258,7 +291,8 @@ class FeetStabilizer:
     # --------------------------------------------------------- ground contact
 
     def _apply_ground_contact(self, effectors: NDArray) -> NDArray:
-        """Lift uprightly-posed effector blocks so feet don't float.
+        """Lower uprightly-posed effector blocks so the lowest sole sits on
+        ``ground_contact_z`` (see :meth:`_foot_heights`).
 
         Returns ``(F,)`` the per-frame correction magnitude (0 when skipped).
         """
@@ -275,6 +309,12 @@ class FeetStabilizer:
         blend_range = cfg.ground_uprightness_range
         up = self._up
         hips_idx = self._hips_idx
+        # Lowest sole per frame.  Each frame is shifted at most once below,
+        # so these heights stay valid through the loop.
+        min_sole_h = np.min(
+            [self._foot_heights(effectors, idx) for idx in self._foot_indices],
+            axis=0,
+        )
 
         for f in range(effectors.shape[0]):
             min_foot_h = min(effectors[f, idx, up] for idx in self._foot_indices)
@@ -282,13 +322,14 @@ class FeetStabilizer:
             uprightness = 1.0
             if hips_idx >= 0:
                 uprightness = float(np.clip(
-                    (effectors[f, hips_idx, up] - min_foot_h) / max(blend_range, 1e-6),
+                    (self._hips_height(effectors, f, hips_idx) - min_foot_h)
+                    / max(blend_range, 1e-6),
                     0.0, 1.0,
                 ))
             if uprightness < 0.01:
                 continue
 
-            excess = min_foot_h - ref_h
+            excess = float(min_sole_h[f]) - ref_h
             if excess > 0.002:
                 correction = min(excess, max_correction) * uprightness
                 effectors[f, :, up] -= correction
@@ -297,6 +338,14 @@ class FeetStabilizer:
         return corrections
 
     # --------------------------------------------------------- hand ground contact
+
+    def _hips_height(self, effectors: NDArray, f: int, hips_idx: int):
+        """Up-axis height of the robot's hips on frame ``f``."""
+        h = effectors[f, hips_idx, self._up]
+        if self._pelvis_offset is None:
+            return h
+        offset = Q.rotate(effectors[f, hips_idx, 3:7][None, :], self._pelvis_offset)
+        return h + np.float32(offset[0, self._up])
 
     def _apply_hand_ground_contact(self, effectors: NDArray) -> None:
         """Pull torso/arms down so hand targets can touch the ground plane.
@@ -473,15 +522,48 @@ class FeetStabilizer:
         return -1
 
     def _resolve_foot_indices(self) -> tuple[int, ...]:
-        out = []
-        for attr, fallbacks in (
-            ("left_foot_name", ("LeftFoot", "left_foot", "LeftLeg")),
-            ("right_foot_name", ("RightFoot", "right_foot", "RightLeg")),
+        return tuple(self._resolve_foot_sides())
+
+    def _resolve_foot_sides(self) -> dict[int, str]:
+        """Foot joint index -> ``"left"`` / ``"right"``, left first."""
+        out: dict[int, str] = {}
+        for side, attr, fallbacks in (
+            ("left", "left_foot_name", ("LeftFoot", "left_foot", "LeftLeg")),
+            ("right", "right_foot_name", ("RightFoot", "right_foot", "RightLeg")),
         ):
             idx = self._resolve(attr, fallbacks=fallbacks)
-            if idx >= 0:
-                out.append(idx)
-        return tuple(out)
+            if idx >= 0 and idx not in out:
+                out[idx] = side
+        return out
+
+    def _foot_heights(self, effectors: NDArray, idx: int) -> NDArray:
+        """``(F,)`` up-axis height of foot ``idx``'s sole.
+
+        The ankle target height plus the lowest sole point rotated by the
+        target orientation; the ankle target height when the foot has no
+        sole points.
+        """
+        h = np.asarray(effectors[:, idx, self._up], dtype=np.float32)
+        points = self._sole_points_by_index.get(idx)
+        if points is None:
+            return h.copy()
+        quats = np.asarray(effectors[:, idx, 3:7], dtype=np.float32)
+        norm = np.linalg.norm(quats, axis=1, keepdims=True)
+        quats = np.where(norm > 1e-6, quats / np.maximum(norm, 1e-6), [0.0, 0.0, 0.0, 1.0])
+        x, y, z, w = (quats[:, k] for k in range(4))
+        # Up-axis row of each frame's rotation matrix.
+        if self._up == 0:
+            cols = (1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y))
+        elif self._up == 1:
+            cols = (2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x))
+        else:
+            cols = (2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y))
+        row = np.stack(cols, axis=1)
+        drop = np.empty(h.shape[0], dtype=np.float32)
+        for start in range(0, h.shape[0], 512):
+            stop = start + 512
+            drop[start:stop] = (row[start:stop] @ points.T).min(axis=1)
+        return h + drop
 
     def _resolve_foot_toe_pairs(self) -> tuple[tuple[int, int | None], ...]:
         pairs = []

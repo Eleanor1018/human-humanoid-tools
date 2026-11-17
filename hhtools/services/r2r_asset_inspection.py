@@ -26,6 +26,7 @@ from hhtools.contracts import (
 )
 from hhtools.io.isaaclab_trajectory import ISAACLAB_TRAINING_KEYS, decode_isaaclab_trajectory
 from hhtools.io.robot_trajectory_detect import sniff_robot_csv
+from hhtools.services.routing import R2R_BACKENDS
 
 SUPPORTED_R2R_PRIMARY_EXTENSIONS = frozenset({".csv", ".npz", ".pickle", ".pkl"})
 _MAX_TRAJECTORY_ARRAY_BYTES = 512 * 1024 * 1024
@@ -594,7 +595,7 @@ class R2RTrajectoryInspector:
         if declared is not None and (
             declared.dataset != "robot_trajectory"
             or declared.trajectory_profile != profile
-            or declared.recommended_backend != "newton"
+            or declared.recommended_backend not in R2R_BACKENDS
         ):
             errors.append(
                 _api_error(

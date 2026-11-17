@@ -45,6 +45,7 @@ from .robot_asset_inspection import (
     RobotAssetInspector,
     discover_robot_bundle,
 )
+from .routing import R2R_BACKENDS
 
 _MOTION_EXTENSIONS = frozenset(
     {".bvh", ".csv", ".glb", ".gltf", ".npy", ".npz", ".pickle", ".pkl", ".pt", ".pth"}
@@ -259,7 +260,7 @@ class AgentAssetService:
                 category=AssetCategory.ROBOT_TRAJECTORY,
                 detected=AssetDetected(
                     dataset="robot_trajectory",
-                    recommended_backend="newton",
+                    recommended_backend=R2R_BACKENDS[0],
                     source_robot_id=r2r_discovery.source_robot_id,
                     trajectory_profile=r2r_discovery.profile,
                 ),

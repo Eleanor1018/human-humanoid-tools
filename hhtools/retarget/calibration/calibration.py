@@ -1010,6 +1010,9 @@ def derive_calibration_params(
     if robot_root_T is None:
         robot_root_T = np.eye(4, dtype=np.float64)
     robot_root_pos = robot_root_T[:3, 3]
+    robot_anchor = _robot_scale_anchor(model, robot_root_link, robot_root_T)
+    if robot_anchor is not None:
+        robot_root_pos = robot_anchor
 
     out = _DerivedParams(reference=reference, robot_root_link=robot_root_link)
 
@@ -1650,6 +1653,13 @@ def build_scaler_config_soma_style(
         robot_root_link, np.eye(4, dtype=np.float64)
     )
     p_rbt_root = robot_root_T[:3, 3].astype(np.float32)
+    # Scales, offsets and the root height are measured from ``p_rbt_root``.
+    # On a robot rooted at foot level that is the hip midpoint instead of the
+    # root link origin; the root link then gets the anchor-to-origin vector as
+    # its ``t_offset``.
+    robot_anchor = _robot_scale_anchor(model, robot_root_link, robot_root_T)
+    if robot_anchor is not None:
+        p_rbt_root = robot_anchor.astype(np.float32)
 
     # Source-→-canonical alias map.  Resolution priority:
     #  1. Explicit caller-supplied override (src_to_canonical parameter)
@@ -2081,6 +2091,9 @@ def build_scaler_config_soma_style(
         h_robot_pelvis_rest = _estimate_robot_pelvis_height_at_q(
             model, calibration.calibrated_joint_q, robot_root_link
         )
+        if robot_anchor is not None:
+            # The scaled source pelvis lands on the anchor, not the root link.
+            h_robot_pelvis_rest += float(robot_anchor[2] - robot_root_T[2, 3])
         root_z_offset = float(h_robot_pelvis_rest) - p_src_root_z * scale_root
         robot_pelvis_height = float(h_robot_pelvis_rest)
     except Exception:  # noqa: BLE001 — URDF without visual meshes etc.
@@ -2120,6 +2133,29 @@ def build_scaler_config_soma_style(
     )
 
 
+def _robot_scale_anchor(
+    model: URDFRobotModel, root_link: str, root_transform: NDArray,
+) -> NDArray | None:
+    """Hip midpoint (posed by ``root_transform``) when ``root_link`` sits at foot level.
+
+    Calibration measures joint scales, offsets and the root height from the
+    ``hips`` ik_map link origin, standing in for the human pelvis.  Berkeley
+    Humanoid Lite maps ``hips`` to its URDF root ``base``, whose origin is at
+    the soles; measured from there its hip scale came out 5.1 with a 0.69 m
+    offset and its ankle scale 0.13, so leg targets broke whenever a joint
+    rotated.  Returns ``None`` (keep the link origin) for every robot whose
+    ``hips`` link already sits at or above mid-leg.
+    """
+
+    from hhtools.robot.foot_geometry import pelvis_offset_in_link_frame
+
+    offset = pelvis_offset_in_link_frame(model, root_link)
+    if offset is None:
+        return None
+    pose = np.asarray(root_transform, dtype=np.float64)
+    return pose[:3, :3] @ offset + pose[:3, 3]
+
+
 def _estimate_robot_pelvis_height_at_q(
     model: URDFRobotModel, joint_q: dict[str, float], pelvis_link: str,
 ) -> float:
@@ -2129,6 +2165,8 @@ def _estimate_robot_pelvis_height_at_q(
     This is the robot's natural "how high above the ground should the
     pelvis sit" distance — used by calibration to shift source pelvis
     Z so the robot stands on the floor instead of floating in mid-air.
+    Negative when the link origin sits below the lowest vertex (a URDF
+    rooted at foot level).
 
     Implementation: iterate every visual mesh's transformed vertices
     (same routine as :func:`_estimate_robot_tpose_height` but at the
@@ -2169,7 +2207,10 @@ def _estimate_robot_pelvis_height_at_q(
         # No visual geometry (pure capsule URDF etc.) — fall back to the
         # aggregate standing height, treating pelvis as sitting at half.
         return max(1e-3, 0.5 * _estimate_robot_tpose_height(model))
-    return max(1e-3, pelvis_z - min_z)
+    # Not floored: a URDF rooted at foot level puts this link origin below the
+    # soles (Berkeley Humanoid Lite's ``base`` sits ~4 cm under them), and
+    # clamping that to a positive height floated every target by the gap.
+    return pelvis_z - min_z
 
 
 def _estimate_source_pelvis_height(

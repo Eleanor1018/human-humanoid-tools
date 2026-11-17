@@ -56,6 +56,7 @@ from hhtools.services.calibration_validation import (
     calibration_validation_identity,
 )
 from hhtools.services.plans import PlanStore, PlanStoreError, compute_plan_id
+from hhtools.services.routing import compatible_backends_for_category
 from hhtools.utils.paths import user_robot_dir
 
 _PLAN_SEMANTICS = "hhtools.retarget.plan.v1"
@@ -246,16 +247,29 @@ def _raise_inspection_error(
     )
 
 
-def _backend_for_category(category: AssetCategory) -> str:
-    if category is AssetCategory.PLAIN_MOTION:
-        return "newton"
-    if category in {AssetCategory.OBJECT_INTERACTION, AssetCategory.TERRAIN_SCENE}:
-        return "interaction_mesh"
-    _fail(
-        "BACKEND_INCOMPATIBLE",
-        "The registered input category is not supported by retarget preflight.",
-        details={"category": category.value},
-    )
+def _backend_for_category(
+    category: AssetCategory,
+    capabilities: CapabilityResponse | None = None,
+) -> str:
+    """Recommend the first compatible backend that is available.
+
+    Compatible backends are listed in preference order (FRAX before Newton for
+    plain motion).  When ``capabilities`` is given, an unavailable preference
+    is skipped so a smaller install still gets a runnable recommendation.
+    """
+    candidates = compatible_backends_for_category(category)
+    if not candidates:
+        _fail(
+            "BACKEND_INCOMPATIBLE",
+            "The registered input category is not supported by retarget preflight.",
+            details={"category": category.value},
+        )
+    if capabilities is not None:
+        available = {item.backend_id for item in capabilities.backends if item.available}
+        for backend_id in candidates:
+            if backend_id in available:
+                return backend_id
+    return candidates[0]
 
 
 def _backend_capability(
@@ -1154,7 +1168,7 @@ def _retarget_profile(
 ) -> tuple[str, str, str | None, float, str, str]:
     manual = _manual_calibration(preset, reference, limits, robot_bundle)
     scaler = None
-    if backend == "newton" and manual is None:
+    if backend in ("newton", "frax") and manual is None:
         scaler = _bundled_scaler(preset, reference, robot_bundle)
     if manual is None and scaler is None:
         if request.calibration_id is not None:
@@ -1331,9 +1345,12 @@ class PreflightService:
                     },
                 )
             )
-            recommended_backend = _backend_for_category(motion_inspection.category)
+            capabilities = self._capabilities_provider()
+            recommended_backend = _backend_for_category(motion_inspection.category, capabilities)
             requested_backend = request.backend or recommended_backend
-            if requested_backend != recommended_backend:
+            if requested_backend not in compatible_backends_for_category(
+                motion_inspection.category
+            ):
                 _fail(
                     "BACKEND_INCOMPATIBLE",
                     "The requested backend does not support this motion category.",
@@ -1344,7 +1361,6 @@ class PreflightService:
                     },
                 )
 
-            capabilities = self._capabilities_provider()
             backend = _backend_capability(capabilities, requested_backend)
             if motion_inspection.category not in backend.supported_categories:
                 _fail(

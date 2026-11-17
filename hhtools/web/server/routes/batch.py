@@ -23,6 +23,7 @@ from hhtools.application.motions import _load_batch_motion
 from hhtools.application.progress import _BATCH_ZIP_PROGRESS, _set_batch_job_progress
 from hhtools.application.retarget import _request_human_height
 from hhtools.application.state import Job, _snapshot_job_request
+from hhtools.services.routing import default_ik_backend
 from hhtools.web.server.batch_runtime import (
     _batch_export_retargeted_chunk,
     _record_batch_failure,
@@ -70,7 +71,7 @@ def register_batch_routes(app, *, state, jobs) -> BatchRouteOperations:
         try:
             robot = body["robot"]
             default_reference = body.get("reference", "smpl")
-            backend = body.get("backend", "newton")
+            backend = body.get("backend") or default_ik_backend()
             ik_iters = int(body.get("ik_iterations", 24))
             from hhtools.robot.registry import get as _get_preset
 
@@ -98,7 +99,7 @@ def register_batch_routes(app, *, state, jobs) -> BatchRouteOperations:
                     for e in (body.get("entries") or state.basket)
                 ]
             model = state.robots[robot]
-            if backend != "interaction_mesh":
+            if backend == "newton":
                 from hhtools.retarget.newton_basic.batch_limits import clamp_gpu_batch_size
 
                 batch_size = clamp_gpu_batch_size(model, requested_batch)
@@ -149,7 +150,7 @@ def register_batch_routes(app, *, state, jobs) -> BatchRouteOperations:
             done_clips = 0
             batch_t0 = time.monotonic()
             clamp_note = ""
-            if backend != "interaction_mesh" and batch_size < requested_batch:
+            if backend == "newton" and batch_size < requested_batch:
                 clamp_note = f"（GPU 上限，批量 {requested_batch}→{batch_size}）"
             _set_batch_job_progress(
                 job,
@@ -159,7 +160,9 @@ def register_batch_routes(app, *, state, jobs) -> BatchRouteOperations:
                 clip_progress=0.0,
             )
 
-            if backend == "interaction_mesh":
+            # FRAX reuses one compiled solver per robot and frame rate, so clips
+            # run one after another through the same path as a single retarget.
+            if backend in ("interaction_mesh", "frax"):
                 failure_log = _run_batch_entries_sequential(
                     entries,
                     model,
@@ -355,9 +358,7 @@ def register_batch_routes(app, *, state, jobs) -> BatchRouteOperations:
 
             zip_path = zip_directory(out_dir, out_name, compress=False)
             gpu_note = (
-                "GPU-parallel Newton"
-                if backend != "interaction_mesh" and batch_size > 1
-                else "per-clip"
+                "GPU-parallel Newton" if backend == "newton" and batch_size > 1 else "per-clip"
             )
             job.result = {
                 "written": written,
@@ -376,7 +377,7 @@ def register_batch_routes(app, *, state, jobs) -> BatchRouteOperations:
             job.clip_progress = 1.0
             fail_note = f"，{len(failures)} 失败" if failures else ""
             job.message = f"{len(written)} 成功{fail_note}" + (
-                f" · {gpu_note}" if backend != "interaction_mesh" else ""
+                f" · {gpu_note}" if backend == "newton" else ""
             )
             job.mark_terminal("done")
         except Exception as err:  # noqa: BLE001
