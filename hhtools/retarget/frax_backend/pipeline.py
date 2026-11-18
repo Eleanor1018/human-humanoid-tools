@@ -650,20 +650,7 @@ class FraxPipeline(IKPipelineBase):
         return False
 
     def execution_provenance(self) -> dict[str, object]:
-        state = self._jax_state
-        platform = str(state.get("platform", "unknown"))
-        return {
-            "backend": "frax",
-            "device": str(state.get("device", "unknown")),
-            "device_kind": platform if platform in ("cpu", "cuda") else "unknown",
-            "precision": "float64" if state.get("x64") else "float32",
-            "runtime": "jax",
-            "runtime_version": str(state.get("jax_version", "unknown")),
-            "solver": f"frax-{_frax_version()}",
-            "cuda_graph_requested": False,
-            "cuda_graph_used": False,
-            "fallback_used": False,
-        }
+        return _execution_provenance(self._jax_state)
 
     def _result_meta(self, *, clip_floor_snap_m: float) -> dict[str, object]:
         meta = super()._result_meta(clip_floor_snap_m=clip_floor_snap_m)
@@ -914,6 +901,23 @@ def _notify(callback: Callable[[int, int], None] | None, done: int, total: int) 
         callback(done, total)
     except Exception:  # pragma: no cover - UI hooks must not break the solve
         pass
+
+
+def _execution_provenance(state: dict[str, Any]) -> dict[str, object]:
+    """``meta["execution_provenance"]`` of a FRAX solve, from :func:`configure_jax`'s state."""
+    platform = str(state.get("platform", "unknown"))
+    return {
+        "backend": "frax",
+        "device": str(state.get("device", "unknown")),
+        "device_kind": platform if platform in ("cpu", "cuda") else "unknown",
+        "precision": "float64" if state.get("x64") else "float32",
+        "runtime": "jax",
+        "runtime_version": str(state.get("jax_version", "unknown")),
+        "solver": f"frax-{_frax_version()}",
+        "cuda_graph_requested": False,
+        "cuda_graph_used": False,
+        "fallback_used": False,
+    }
 
 
 def _frax_version() -> str:
