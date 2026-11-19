@@ -1644,8 +1644,10 @@ class InteractionMeshPipeline:
                     "Z-snap: not applied; foot-terrain clearance could not be measured "
                     "in every frame (no foot collision geoms, or non-finite poses)",
                 )
-        elif bool(getattr(self.cfg, "clip_floor_snap", True)):
+        elif motion.terrain is None and bool(getattr(self.cfg, "clip_floor_snap", True)):
             # Flat-ground clips (LAFAN, etc.): no heightfield — snap sole to z=0.
+            # A terrain clip whose clearance could not be measured (no collision
+            # model) keeps its root height: z = 0 is not its floor.
             from hhtools.retarget.clip_ground_snap import snap_joint_q_clip_floor
 
             joint_q, floor_offset = snap_joint_q_clip_floor(

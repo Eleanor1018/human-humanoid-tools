@@ -8,6 +8,12 @@ up to ``hf[i, j]``, and the collision scene's ground plane at ``floor_z`` is sol
 everything.  Every collision point is measured at its own XY, so a toe beside a tall box and
 below its top is a few centimetres from the box side, not deep under the box top.
 
+Between nodes, MuJoCo's compiled ``<hfield>`` is a triangulated surface through the node heights,
+not columns: the ramp between a low and a high node row is higher than the low column beside it.
+When the collision model has such an hfield, the downward shift is also limited by that surface
+(:func:`compiled_hfield_triangulation`), so the lowered foot never ends inside what the SQP collided
+with.
+
 Pure NumPy apart from the MuJoCo forward kinematics in :func:`foot_terrain_clearance`.
 """
 
@@ -24,8 +30,10 @@ from hhtools.core.scene import TerrainHeightfield
 __all__ = [
     "FootTerrainClearance",
     "column_terrain_distance",
+    "compiled_hfield_triangulation",
     "foot_terrain_clearance",
     "geom_sample_points",
+    "terrain_sample_spacing",
     "terrain_snap_offset",
 ]
 
@@ -33,10 +41,116 @@ __all__ = [
 FOOT_BODY_TAGS = ("foot", "ankle", "toe")
 #: Largest spacing (m) between sample points on flat parts of a foot geom.
 _SAMPLE_SPACING = 0.02
+#: Finest sample spacing (m), however small the terrain cells are.
+_MIN_SAMPLE_SPACING = 0.002
 #: Largest gap (m) between a curved primitive surface and its lowest sample point.
 _CURVE_TOLERANCE = 1e-3
+#: Most foot points (frames x points) measured against the terrain in one batch.
+_MAX_CHUNK_POINTS = 400_000
 #: Gaps at or below this (m) count as contact, so the clip is not lowered.
 _SNAP_TOLERANCE = 1e-4
+
+
+def terrain_sample_spacing(terrain: TerrainHeightfield) -> float:
+    """Spacing (m) of foot sample points for ``terrain``: at most half a cell.
+
+    Any column one cell wide then lies under at least one sample of a flat sole.  Cells finer
+    than twice :data:`_MIN_SAMPLE_SPACING` keep that minimum spacing to bound the sample count.
+    """
+    return float(np.clip(0.5 * float(terrain.dx), _MIN_SAMPLE_SPACING, _SAMPLE_SPACING))
+
+
+def _surface_height(
+    xy: NDArray[np.float64], terrain: TerrainHeightfield, triangulation: str
+) -> NDArray[np.float64]:
+    """Height of the node-interpolated surface at ``xy`` (n, 2); ``-inf`` off the grid.
+
+    ``triangulation`` is the diagonal each cell is split along: ``"main"`` joins nodes
+    ``(i, j)`` and ``(i + 1, j + 1)``, ``"anti"`` joins ``(i + 1, j)`` and ``(i, j + 1)``, and
+    ``"both"`` is the higher of the two.  A cell with a non-finite corner is ``+inf``.
+    """
+    hf = np.asarray(terrain.hf, dtype=np.float64)
+    nx, ny = hf.shape
+    dx = float(terrain.dx)
+    out = np.full(len(xy), -np.inf)
+    if nx < 2 or ny < 2:
+        return out
+    origin = np.asarray(terrain.min_point, dtype=np.float64).reshape(2)
+    u = (xy[:, 0] - origin[0]) / dx
+    v = (xy[:, 1] - origin[1]) / dx
+    tol = 1e-6
+    on = (u >= -tol) & (u <= nx - 1 + tol) & (v >= -tol) & (v <= ny - 1 + tol)
+    i = np.clip(np.floor(u), 0, nx - 2).astype(np.int64)
+    j = np.clip(np.floor(v), 0, ny - 2).astype(np.int64)
+    fu = np.clip(u - i, 0.0, 1.0)
+    fv = np.clip(v - j, 0.0, 1.0)
+    corners = [hf[i, j], hf[i + 1, j], hf[i, j + 1], hf[i + 1, j + 1]]
+    solid = ~np.all([np.isfinite(c) for c in corners], axis=0)
+    h00, h10, h01, h11 = (np.where(solid, 0.0, c) for c in corners)
+    main = np.where(
+        fu >= fv,
+        h00 + fu * (h10 - h00) + fv * (h11 - h10),
+        h00 + fv * (h01 - h00) + fu * (h11 - h01),
+    )
+    anti = np.where(
+        fu + fv <= 1.0,
+        h00 + fu * (h10 - h00) + fv * (h01 - h00),
+        h11 + (1.0 - fu) * (h01 - h11) + (1.0 - fv) * (h10 - h11),
+    )
+    surface = {"main": main, "anti": anti, "both": np.maximum(main, anti)}[triangulation]
+    return np.where(on, np.where(solid, np.inf, surface), out)
+
+
+def compiled_hfield_triangulation(model, data, terrain: TerrainHeightfield) -> str | None:
+    """Diagonal MuJoCo splits the cells of ``model``'s ``<hfield>`` along, or ``None``.
+
+    ``None`` means the model has no heightfield geom, so there is no compiled surface to respect.
+    Otherwise this casts rays down onto the compiled surface at the centres of the cells whose two
+    triangulations differ most, and returns ``"main"`` or ``"anti"`` (see :func:`_surface_height`)
+    when every ray agrees with one of them, else ``"both"`` (the conservative higher surface).
+    A terrain whose cells are all planar has no preference and gets ``"main"``.
+    """
+    import mujoco
+
+    gids = np.flatnonzero(np.asarray(model.geom_type) == int(mujoco.mjtGeom.mjGEOM_HFIELD))
+    if gids.size == 0:
+        return None
+    gid = int(gids[0])
+    mujoco.mj_kinematics(model, data)
+    hf = np.asarray(terrain.hf, dtype=np.float64)
+    if min(hf.shape) < 2:
+        return "main"
+    ok = np.isfinite(hf)
+    ok = ok[:-1, :-1] & ok[1:, :-1] & ok[:-1, 1:] & ok[1:, 1:]
+    h = np.where(np.isfinite(hf), hf, 0.0)
+    diff = np.abs((h[:-1, :-1] + h[1:, 1:]) - (h[1:, :-1] + h[:-1, 1:])) * 0.5
+    diff = np.where(ok, diff, 0.0)
+    flat = np.argsort(diff, axis=None)[::-1][:6]
+    cells = np.stack(np.unravel_index(flat, diff.shape), axis=1)
+    cells = cells[diff[cells[:, 0], cells[:, 1]] > 1e-3]
+    if not len(cells):
+        return "main"
+    origin = np.asarray(terrain.min_point, dtype=np.float64).reshape(2)
+    top = float(data.geom_xpos[gid][2] + model.hfield_size[int(model.geom_dataid[gid])][2]) + 1.0
+    votes = set()
+    for i, j in cells:
+        x = origin[0] + (i + 0.5) * float(terrain.dx)
+        y = origin[1] + (j + 0.5) * float(terrain.dx)
+        depth = mujoco.mj_rayHfield(
+            model, data, gid, np.array([x, y, top]), np.array([0.0, 0.0, -1.0])
+        )
+        if depth < 0.0:
+            return "both"
+        z = top - depth
+        main, anti = 0.5 * (h[i, j] + h[i + 1, j + 1]), 0.5 * (h[i + 1, j] + h[i, j + 1])
+        tol = 0.1 * abs(main - anti) + 1e-6
+        if abs(z - main) <= tol and abs(z - main) < abs(z - anti):
+            votes.add("main")
+        elif abs(z - anti) <= tol:
+            votes.add("anti")
+        else:
+            return "both"
+    return votes.pop() if len(votes) == 1 else "both"
 
 
 def column_terrain_distance(
@@ -45,6 +159,7 @@ def column_terrain_distance(
     *,
     floor_z: float = 0.0,
     max_distance: float = 0.1,
+    triangulation: str | None = None,
 ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
     """Signed distance and vertical clearance of world ``points`` (..., 3) to the column terrain.
 
@@ -60,8 +175,14 @@ def column_terrain_distance(
       before it meets the terrain.  Negative inside the terrain; same sign as
       ``signed_distance``.
 
-    Cells without a finite height count as solid of unbounded height, so unknown terrain never
-    reads as free space.  Points with a non-finite coordinate get NaN in both outputs.
+    Cells without a finite height (NaN or +/-inf) count as solid of unbounded height, so unknown
+    terrain never reads as free space.  Points with a non-finite coordinate get NaN in both
+    outputs.
+
+    ``triangulation`` (``"main"``, ``"anti"`` or ``"both"``, see :func:`_surface_height`) also
+    makes the surface between nodes solid: the interpolated surface of the compiled hfield raises
+    ``vertical_clearance`` and the signed distance's way out, never lowers them.  ``None`` reads
+    the terrain as columns only.
     """
     pts = np.asarray(points, dtype=np.float64)
     batch = pts.shape[:-1]
@@ -76,7 +197,7 @@ def column_terrain_distance(
     # border can step out sideways onto the floor.
     hf = np.asarray(terrain.hf, dtype=np.float64)
     heights = np.pad(
-        np.maximum(np.where(np.isnan(hf), np.inf, hf), floor_z), w + 1, constant_values=floor_z
+        np.maximum(np.where(np.isfinite(hf), hf, np.inf), floor_z), w + 1, constant_values=floor_z
     )
     origin = np.asarray(terrain.min_point, dtype=np.float64).reshape(2) - (w + 1) * dx
     shape = np.asarray(heights.shape)
@@ -94,12 +215,17 @@ def column_terrain_distance(
 
     # Top of the highest column whose footprint contains the XY.  A point on a shared edge or
     # corner lies over every column touching it, all of them the nearest node or a neighbour.
+    # Node centres are reconstructed in floating point, so a point exactly on a shared edge can
+    # miss the footprint by rounding error; ``tol`` counts that as inside.
+    tol = 1e-6 * dx
     z = pts[:, 2]
     under = np.full(len(pts), floor_z)
     for di in (-1, 0, 1):
         for dj in (-1, 0, 1):
             lx, ly, h = gaps(pts, idx[:, 0] + di, idx[:, 1] + dj)
-            under = np.maximum(under, np.where((lx == 0.0) & (ly == 0.0), h, -np.inf))
+            under = np.maximum(under, np.where((lx <= tol) & (ly <= tol), h, -np.inf))
+    if triangulation is not None:
+        under = np.maximum(under, _surface_height(pts[:, :2], terrain, triangulation))
     vertical = z - under
 
     # Only points with some column top (or the floor) less than ``reach`` below them can be
@@ -188,18 +314,20 @@ def _sphere_directions(radius: float) -> NDArray[np.float64]:
     return np.concatenate(rings, axis=0)
 
 
-def _stations(half_length: float) -> NDArray[np.float64]:
-    n = max(math.ceil(2.0 * half_length / _SAMPLE_SPACING) + 1, 2)
+def _stations(half_length: float, spacing: float = _SAMPLE_SPACING) -> NDArray[np.float64]:
+    n = max(math.ceil(2.0 * half_length / spacing) + 1, 2)
     return np.linspace(-half_length, half_length, n)
 
 
-def _triangle_samples(tri: NDArray[np.float64]) -> NDArray[np.float64]:
+def _triangle_samples(
+    tri: NDArray[np.float64], spacing: float = _SAMPLE_SPACING
+) -> NDArray[np.float64]:
     """Samples on triangles (m, 3, 3): corners, points along edges and a grid inside.
 
-    Edges are split into pieces of at most ``_SAMPLE_SPACING``; triangles wide enough to hold
+    Edges are split into pieces of at most ``spacing``; triangles wide enough to hold
     a disk of that diameter also get a square grid of that spacing in their plane.
     """
-    s = _SAMPLE_SPACING
+    s = spacing
     out = [tri.reshape(-1, 3)]
     a, b = tri, tri[:, [1, 2, 0]]
     lengths = np.linalg.norm(b - a, axis=2)  # (m, 3)
@@ -228,7 +356,9 @@ def _triangle_samples(tri: NDArray[np.float64]) -> NDArray[np.float64]:
     return np.concatenate(out, axis=0)
 
 
-def _mesh_hull_points(model, mesh_id: int) -> NDArray[np.float64]:
+def _mesh_hull_points(
+    model, mesh_id: int, spacing: float = _SAMPLE_SPACING
+) -> NDArray[np.float64]:
     """Points on the convex hull MuJoCo collides with: its vertices and samples on its faces."""
     adr, num = int(model.mesh_vertadr[mesh_id]), int(model.mesh_vertnum[mesh_id])
     verts = np.asarray(model.mesh_vert[adr : adr + num], dtype=np.float64)
@@ -246,46 +376,49 @@ def _mesh_hull_points(model, mesh_id: int) -> NDArray[np.float64]:
         return verts
     if nf == 0 or faces.min() < 0 or faces.max() >= num:
         return verts[hull]
-    pts = np.concatenate([verts[hull], _triangle_samples(verts[faces])], axis=0)
+    pts = np.concatenate([verts[hull], _triangle_samples(verts[faces], spacing)], axis=0)
     _, first = np.unique(np.round(pts, 9), axis=0, return_index=True)
     return pts[np.sort(first)]
 
 
-def geom_sample_points(model, gid: int) -> NDArray[np.float64]:
+def geom_sample_points(
+    model, gid: int, spacing: float = _SAMPLE_SPACING
+) -> NDArray[np.float64]:
     """Points (n, 3) on collision geom ``gid`` in its own frame; empty for unsupported types.
 
     Meshes use the convex hull MuJoCo collides with (its vertices, plus samples on its faces so
     a narrow column under a flat sole is not missed).  Flat parts are sampled at most
-    ``_SAMPLE_SPACING`` apart, curved parts so that the lowest sample is within
+    ``spacing`` apart (:func:`terrain_sample_spacing` gives half a terrain cell), curved parts
+    so that the lowest sample is within
     ``_CURVE_TOLERANCE`` of the lowest surface point.  Between samples a tilted face can still
-    dip below a column edge by up to its slope times ``_SAMPLE_SPACING``.
+    dip below a column edge by up to its slope times ``spacing``.
     """
     import mujoco
 
     gtype = int(model.geom_type[gid])
     size = np.asarray(model.geom_size[gid], dtype=np.float64)
     if gtype == int(mujoco.mjtGeom.mjGEOM_MESH):
-        return _mesh_hull_points(model, int(model.geom_dataid[gid]))
+        return _mesh_hull_points(model, int(model.geom_dataid[gid]), spacing)
     if gtype == int(mujoco.mjtGeom.mjGEOM_SPHERE):
         return _sphere_directions(float(size[0])) * size[0]
     if gtype == int(mujoco.mjtGeom.mjGEOM_ELLIPSOID):
         return _sphere_directions(float(size[:3].max())) * size[:3]
     if gtype == int(mujoco.mjtGeom.mjGEOM_BOX):
-        axes = [_stations(float(s)) for s in size[:3]]
+        axes = [_stations(float(s), spacing) for s in size[:3]]
         grid = np.stack(np.meshgrid(*axes, indexing="ij"), axis=-1).reshape(-1, 3)
         return grid[np.any(np.isclose(np.abs(grid), size[:3]), axis=1)]
     if gtype in (int(mujoco.mjtGeom.mjGEOM_CAPSULE), int(mujoco.mjtGeom.mjGEOM_CYLINDER)):
         r, hl = float(size[0]), float(size[1])
         ang = np.linspace(0.0, 2.0 * np.pi, _arc_count(r), endpoint=False)
         ring = np.stack([np.cos(ang), np.sin(ang), np.zeros_like(ang)], axis=1)
-        pts = [r * ring + np.array([0.0, 0.0, z]) for z in _stations(hl)]
+        pts = [r * ring + np.array([0.0, 0.0, z]) for z in _stations(hl, spacing)]
         if gtype == int(mujoco.mjtGeom.mjGEOM_CAPSULE):
             dirs = _sphere_directions(r)
             pts.append(r * dirs[dirs[:, 2] >= 0.0] + np.array([0.0, 0.0, hl]))
             pts.append(r * dirs[dirs[:, 2] <= 0.0] + np.array([0.0, 0.0, -hl]))
         else:
             # Flat caps: concentric rings down to the axis.
-            for rr in np.linspace(0.0, r, max(math.ceil(r / _SAMPLE_SPACING), 1) + 1)[:-1]:
+            for rr in np.linspace(0.0, r, max(math.ceil(r / spacing), 1) + 1)[:-1]:
                 pts += [rr * ring + np.array([0.0, 0.0, z]) for z in (-hl, hl)]
         return np.concatenate(pts, axis=0)
     return np.zeros((0, 3), dtype=np.float64)
@@ -316,6 +449,8 @@ def foot_terrain_clearance(
     """
     import mujoco
 
+    spacing = terrain_sample_spacing(terrain)
+    triangulation = compiled_hfield_triangulation(model, data, terrain)
     geoms: list[int] = []
     local: list[NDArray[np.float64]] = []
     for g in range(model.ngeom):
@@ -324,7 +459,7 @@ def foot_terrain_clearance(
         body = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, int(model.geom_bodyid[g])) or ""
         if not any(tag in body.lower() for tag in FOOT_BODY_TAGS):
             continue
-        pts = geom_sample_points(model, g)
+        pts = geom_sample_points(model, g, spacing)
         if len(pts):
             geoms.append(g)
             local.append(pts)
@@ -337,6 +472,7 @@ def foot_terrain_clearance(
 
     qadr = _actuated_qpos_addresses(model)
     counts = [len(p) for p in local]
+    chunk_frames = max(1, min(chunk_frames, _MAX_CHUNK_POINTS // sum(counts)))
     world = np.empty((min(chunk_frames, num_frames), sum(counts), 3), dtype=np.float64)
     for start in range(0, num_frames, chunk_frames):
         stop = min(start + chunk_frames, num_frames)
@@ -359,6 +495,7 @@ def foot_terrain_clearance(
             terrain,
             floor_z=floor_z,
             max_distance=max_distance,
+            triangulation=triangulation,
         )
         signed[start:stop] = sd.min(axis=1)
         vertical[start:stop] = vc.min(axis=1)

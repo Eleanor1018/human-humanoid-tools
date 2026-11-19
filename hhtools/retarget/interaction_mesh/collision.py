@@ -95,6 +95,23 @@ def collision_ground_z(terrain: TerrainHeightfield | None, default: float = 0.0)
     return min(float(default), float(finite.min()))
 
 
+def sanitize_hfield(hf: NDArray[np.floating]) -> NDArray[np.float64]:
+    """Heightfield with every non-finite cell (NaN, +/-inf) set to the tallest finite height.
+
+    Cells without a height are unknown terrain, which the foot clearance treats as solid, so
+    the uploaded surface must not be lower there.  A grid with no finite cell becomes flat 0.
+    """
+    arr = np.array(hf, dtype=np.float64)
+    bad = ~np.isfinite(arr)
+    if bad.any():
+        good = arr[~bad]
+        _log.warning(
+            "Heightfield has %d non-finite cells; raised to the finite maximum", int(bad.sum())
+        )
+        arr[bad] = float(good.max()) if good.size else 0.0
+    return arr
+
+
 def _dump_hfield_to_bin(hf: NDArray[np.floating], path: str | Path) -> None:
     """Write a heightfield to MuJoCo's custom hfield binary format.
 
@@ -118,7 +135,7 @@ def _dump_hfield_to_bin(hf: NDArray[np.floating], path: str | Path) -> None:
     arr = np.asarray(hf, dtype=np.float64)
     if arr.ndim != 2:
         raise ValueError(f"hfield must be 2-D; got shape {arr.shape}")
-    arr = arr.T  # rows along Y, columns along X
+    arr = sanitize_hfield(arr).T  # rows along Y, columns along X
     nrow, ncol = arr.shape
     z_min = float(arr.min())
     z_max = float(arr.max())
@@ -313,14 +330,15 @@ def build_collision_model_with_hfield(
         y_min = float(terrain.min_point[1])
         x_max = x_min + (nx - 1) * dx_m
         y_max = y_min + (ny - 1) * dx_m
-        z_min_g = float(terrain.hf.min())
-        z_max_g = float(terrain.hf.max())
+        clean_hf = sanitize_hfield(terrain.hf)
+        z_min_g = float(clean_hf.min())
+        z_max_g = float(clean_hf.max())
 
         fd_bin, tmp_bin = tempfile.mkstemp(
             suffix=".bin", prefix="hhtools_terrain_hfield_", dir=urdf_dir,
         )
         os.close(fd_bin)
-        _dump_hfield_to_bin(terrain.hf, tmp_bin)
+        _dump_hfield_to_bin(clean_hf, tmp_bin)
         tmp_files.append(Path(tmp_bin))
 
         _add_hfield_geom(
@@ -385,6 +403,48 @@ def _raised_hfield_distance(model, data, g1, g2, hf, lift, fromto) -> float:
         data.geom_xpos[hf] = saved
 
 
+#: Facets steeper than ``acos(_HFIELD_MIN_NZ)`` are treated as exactly that steep when sizing the
+#: lift, which caps it at ``threshold / _HFIELD_MIN_NZ``.
+_HFIELD_MIN_NZ = 0.1
+
+
+def _hfield_local_min_nz(model, data, hf: int, other: int) -> float:
+    """Smallest upward-normal z component of the heightfield facets near geom ``other``.
+
+    Lifting a facet with unit normal ``n`` by ``L`` closes its normal gap by ``L * n_z``, so the
+    lift that brings every facet within ``threshold`` of the geom must be ``threshold / n_z``.
+    Both triangulations of every cell under the geom's bounding sphere are considered, so the
+    answer does not depend on which diagonal MuJoCo splits a cell along.  Flat terrain gives 1.
+    """
+    hid = int(model.geom_dataid[hf])
+    nrow, ncol = int(model.hfield_nrow[hid]), int(model.hfield_ncol[hid])
+    radius_x, radius_y, elevation, _ = (float(v) for v in model.hfield_size[hid])
+    if nrow < 2 or ncol < 2:
+        return 1.0
+    step_x, step_y = 2.0 * radius_x / (ncol - 1), 2.0 * radius_y / (nrow - 1)
+    centre = data.geom_xpos[other] - data.geom_xpos[hf]
+    reach = float(model.geom_rbound[other])
+    # Cells overlapping the bounding box of the geom's footprint (the geom may be rotated, but
+    # its bounding sphere is not).
+    c0 = max(int(np.floor((centre[0] - reach + radius_x) / step_x)), 0)
+    c1 = min(int(np.ceil((centre[0] + reach + radius_x) / step_x)), ncol - 1)
+    r0 = max(int(np.floor((centre[1] - reach + radius_y) / step_y)), 0)
+    r1 = min(int(np.ceil((centre[1] + reach + radius_y) / step_y)), nrow - 1)
+    if c1 <= c0 or r1 <= r0:
+        return 1.0
+    adr = int(model.hfield_adr[hid])
+    grid = model.hfield_data[adr : adr + nrow * ncol].reshape(nrow, ncol)
+    h = grid[r0 : r1 + 1, c0 : c1 + 1].astype(np.float64) * elevation
+    # Gradients of the planes through three corners of each cell, for both diagonals.
+    dx_ = (h[:, 1:] - h[:, :-1]) / step_x  # along x, per cell row edge
+    dy_ = (h[1:, :] - h[:-1, :]) / step_y
+    gx = np.maximum(np.abs(dx_[:-1]), np.abs(dx_[1:]))  # (rows - 1, cols - 1), both edges
+    gy = np.maximum(np.abs(dy_[:, :-1]), np.abs(dy_[:, 1:]))
+    # A diagonal facet mixes one x edge and one y edge; the gradient never exceeds their sum.
+    slope = float(np.hypot(gx, gy).max())
+    return float(np.clip(1.0 / np.sqrt(1.0 + slope * slope), _HFIELD_MIN_NZ, 1.0))
+
+
 def _hfield_pair_distance(
     model,
     data,
@@ -404,12 +464,16 @@ def _hfield_pair_distance(
 
     So: query at ``distmax = 0``; if the geoms penetrate, that is the answer.
     Otherwise measure the gap by raising the heightfield (its world pose only)
-    until the geom penetrates it shallowly: first by ``threshold``, then, while
-    the penetration is deeper than :data:`_HFIELD_EXACT_DEPTH`, to the estimated
-    gap plus :data:`_HFIELD_PROBE_DEPTH`.  Gaps at or above ``threshold`` return
-    ``threshold`` with ``fromto`` zeroed, like ``mj_geomDistance``.  Otherwise
-    ``fromto`` holds ``(p1, p2)`` with the heightfield witness moved back onto
-    the real surface, so ``p1 - p2`` gives the contact normal.
+    until the geom penetrates it shallowly.  A facet with unit upward normal ``n``
+    moves ``lift * n_z`` closer along its normal, not ``lift``, so the first lift is
+    ``threshold / n_z`` for the steepest facet under the geom (:func:`_hfield_local_min_nz`),
+    and a penetration ``d`` of the raised surface along the witness normal ``n`` means a gap
+    ``lift * n_z - d``.  While ``d`` is deeper than :data:`_HFIELD_EXACT_DEPTH` the lift
+    is redone for the estimated gap plus :data:`_HFIELD_PROBE_DEPTH` along that normal.
+    Gaps at or above ``threshold`` return ``threshold`` with ``fromto`` zeroed, like
+    ``mj_geomDistance``.  Otherwise ``fromto`` holds ``(p1, p2)`` with the geom witness at its
+    deepest point into the raised surface and the heightfield witness the foot of the
+    perpendicular on the real surface, so ``p1 - p2`` gives the contact normal.
     """
     import mujoco
 
@@ -418,27 +482,51 @@ def _hfield_pair_distance(
     if dist < 0.0 or threshold <= 0.0:
         return dist
     hf = g1 if int(model.geom_type[g1]) == int(mujoco.mjtGeom.mjGEOM_HFIELD) else g2
+    other = g2 if hf == g1 else g1
     k = 0 if hf == g1 else 3  # offset of the heightfield witness in ``fromto``
+    kg = 3 - k  # offset of the other geom's witness
+    nz_min = _hfield_local_min_nz(model, data, hf, other)
     probe = np.zeros(6, dtype=np.float64)
-    lift = float(threshold)
+    lift = float(threshold) / nz_min
     gap = float(threshold)
+    best = np.zeros(6, dtype=np.float64)
     found = False
     for _ in range(_HFIELD_MAX_LIFTS):
         depth = _raised_hfield_distance(model, data, g1, g2, hf, lift, probe)
         if depth >= 0.0:
-            # Clear of the raised surface: the gap is at least ``lift``.
-            gap = lift
+            # Clear of the raised surface: every facet is still at least ``threshold`` away
+            # (first lift), or the earlier estimate stands.
+            if not found:
+                gap = float(threshold)
             break
+        pen = -depth
+        if nz_min >= 1.0:
+            # Flat terrain: the facet normal is +z and a lift closes the gap one-for-one.
+            nz = 1.0
+            gap = lift - pen
+            best[:] = probe
+            best[k + 2] -= lift
+        else:
+            # Contact normal, from the terrain up towards the geom.
+            v = probe[kg : kg + 3] - probe[k : k + 3]
+            norm = float(np.linalg.norm(v))
+            up = v / norm if norm > 1e-12 else np.array([0.0, 0.0, 1.0])
+            if up[2] < 0.0:
+                up = -up
+            # A deep penetration returns an unreliable normal; the terrain's own steepest
+            # facet is the better guess then.
+            nz = float(np.clip(up[2], nz_min, 1.0)) if pen <= _HFIELD_EXACT_DEPTH else nz_min
+            gap = max(lift * nz - pen, 0.0)
+            best[kg : kg + 3] = probe[kg : kg + 3]
+            best[k : k + 3] = probe[kg : kg + 3] - gap * up
         found = True
-        gap = lift + depth
-        fromto[:] = probe
-        fromto[k + 2] -= lift
-        if -depth <= _HFIELD_EXACT_DEPTH:
+        if pen <= _HFIELD_EXACT_DEPTH:
             break
-        lift = gap + _HFIELD_PROBE_DEPTH
+        lift = (gap + _HFIELD_PROBE_DEPTH) / nz
     if not found or gap >= threshold:
         fromto[:] = 0.0
         return float(threshold)
+    fromto[:] = best
     return float(gap)
 
 
@@ -458,6 +546,31 @@ def _geom_pair_distance(
         return _hfield_pair_distance(model, data, g1, g2, threshold, fromto)
     fromto[:] = 0.0
     return float(mujoco.mj_geomDistance(model, data, g1, g2, threshold, fromto))
+
+
+def _plane_row_is_covered_by_hfield(model, data, plane: int, witness: NDArray[np.float64]) -> bool:
+    """Whether the plane's contact at ``witness`` is already measured against a heightfield.
+
+    The ground plane exists to catch feet that leave the heightfield's footprint.  Inside it, a
+    plane at or below the heightfield's lowest cell is never closer than the heightfield, whose row
+    has the same normal on a floor cell, so the plane's row would only double that contact's slack
+    penalty.
+    """
+    import mujoco
+
+    if int(model.geom_type[plane]) != int(mujoco.mjtGeom.mjGEOM_PLANE):
+        return False
+    for h in np.flatnonzero(np.asarray(model.geom_type) == int(mujoco.mjtGeom.mjGEOM_HFIELD)):
+        centre = data.geom_xpos[h]
+        radius_x, radius_y, _, _ = model.hfield_size[int(model.geom_dataid[h])]
+        # The heightfield geom sits at its lowest cell; the plane must not be above that.
+        if (
+            data.geom_xpos[plane][2] <= centre[2] + 1e-9
+            and abs(witness[0] - centre[0]) <= radius_x
+            and abs(witness[1] - centre[1]) <= radius_y
+        ):
+            return True
+    return False
 
 
 def _is_worldbody_geom(model, geom_id: int) -> bool:
@@ -624,6 +737,9 @@ def compute_nonpenetration_constraints(
 
         pos1 = fromto[:3].copy()
         pos2 = fromto[3:].copy()
+        scene_geom, scene_pos = (g1, pos1) if _is_worldbody_geom(model, g1) else (g2, pos2)
+        if _plane_row_is_covered_by_hfield(model, data, scene_geom, scene_pos):
+            continue
         v = pos1 - pos2
         v_norm = float(np.linalg.norm(v))
         if v_norm > 1e-12:

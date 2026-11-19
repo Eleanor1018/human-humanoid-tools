@@ -462,9 +462,18 @@ def _mpc_point_vertex_index(
     nh: int,
     pt: RobotMpcPoint | None,
 ) -> int | None:
-    """Index of ``pt`` within ``mpc_points[:nh]``, or ``None`` if not in the Laplacian mesh."""
+    """Index of ``pt`` within ``mpc_points[:nh]``, or ``None`` if not in the Laplacian mesh.
+
+    A copy of a point (not the list's own object) falls back to the first point with the same
+    body and offset.
+    """
     if pt is None:
         return None
+    # The selected point itself: points on one body at one offset (a knee and an ankle merged
+    # by a fixed joint) differ in their source vertex, so equal geometry is not identity.
+    for i, p in enumerate(mpc_points[:nh]):
+        if p is pt:
+            return i
     for i, p in enumerate(mpc_points[:nh]):
         if p.body_name != pt.body_name:
             continue
