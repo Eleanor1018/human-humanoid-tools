@@ -79,6 +79,17 @@ def test_build_grid_pads_buckets_and_clamps_to_floor() -> None:
     )
 
 
+def test_default_floor_never_cuts_into_the_terrain() -> None:
+    # Retarget scenes put z = 0 at the source's lowest ankle, above the floor it stands on.
+    hf = np.array([[-0.04, -0.04], [0.3, np.nan]])
+    grid = build_terrain_grid(hf, (0.0, 0.0), 0.1, pad_cells=1, shape_bucket=1)
+    assert grid.floor_z == pytest.approx(-0.04)
+    np.testing.assert_allclose(grid.heights[1:3, 1:3], [[-0.04, -0.04], [0.3, -0.04]])
+    assert np.all(grid.heights[0] == -0.04)  # padding is floor
+    above = build_terrain_grid(np.full((2, 2), 0.2), (0.0, 0.0), 0.1, shape_bucket=1)
+    assert above.floor_z == 0.0
+
+
 @pytest.mark.parametrize(
     "kwargs",
     [

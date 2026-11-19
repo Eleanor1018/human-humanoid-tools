@@ -644,7 +644,6 @@ class FraxScenePipeline:
                 terrain.hf,
                 terrain.min_point,
                 terrain.dx,
-                floor_z=0.0,
                 shape_bucket=int(cfg.grid_bucket),
             )
             static["terrain"] = grid.as_ref()
@@ -790,6 +789,7 @@ class FraxScenePipeline:
                 "substeps": cfg.substeps,
                 "terrain_grid_shape": None if grid is None else tuple(grid.heights.shape),
                 "terrain_window": None if grid is None else window,
+                "terrain_floor_z": None if grid is None else grid.floor_z,
                 "compile_s": round(compile_s, 3),
                 "solve_s": round(solve_s, 4),
                 "solver_frames": T,

@@ -222,6 +222,27 @@ def test_platform_in_the_path_is_not_penetrated(toy, calibration, base_motion) -
     assert gaps[2] >= -0.010
 
 
+def test_terrain_below_the_lowest_joint_is_not_raised(toy, calibration, base_motion) -> None:
+    # z = 0 is the source's lowest joint (the ankles); the floor they stand on is 3 cm lower.
+    sunk = 0.03
+    terrain = _terrain()
+    terrain = TerrainHeightfield(
+        hf=terrain.hf - sunk,
+        hf_maxmin=terrain.hf_maxmin - sunk,
+        min_point=terrain.min_point,
+        dx=terrain.dx,
+    )
+    motion = dataclasses.replace(_walk(base_motion), terrain=terrain)
+    pipe = _pipeline(toy, motion, calibration)
+    result = pipe.run(motion)
+    floor_z = result.meta["frax"]["terrain_floor_z"]
+    assert floor_z == pytest.approx(-sunk * result.meta["smpl_scale"], abs=1e-6)
+    gap = _sole_gap(pipe, result, motion).min(axis=1)  # lowest sole per frame
+    # A floor plane at z = 0 held the soles 3 cm above this terrain.
+    assert np.median(gap) < 0.005
+    assert gap.min() > -0.002
+
+
 def _left_foot_xy(pipe, motion, result) -> np.ndarray:
     """``(T, 2)`` XY of the robot's left foot point along ``result``."""
     scene = MujocoScene.from_robot(pipe.robot)

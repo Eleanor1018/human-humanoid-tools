@@ -112,17 +112,19 @@ def build_terrain_grid(
     min_point,
     dx: float,
     *,
-    floor_z: float = 0.0,
+    floor_z: float | None = None,
     pad_cells: int = 2,
     shape_bucket: int = 64,
 ) -> TerrainGrid:
     """Heightfield ``hf[ix, iy]`` (z at world XY ``min_point + (ix, iy) * dx``) as a solver grid.
 
-    Non-finite cells become ``floor_z`` and an infinite floor plane at ``floor_z`` lies under the
-    terrain.  ``pad_cells`` floor columns surround it (points beyond them see only the floor
-    plane), and both dimensions are then padded at the high-index end to multiples of
-    ``shape_bucket`` so compiled solvers are reused across terrains of similar size
-    (``shape_bucket <= 1`` disables this).
+    An infinite floor plane at ``floor_z`` lies under the terrain: cells below it are raised to
+    it and non-finite cells become it.  ``None`` puts it at ``min(0, lowest cell)``, so it never
+    cuts into the terrain; in a retarget scene ``z = 0`` is the source's lowest joint, usually an
+    ankle a few centimetres above the floor it stands on.  ``pad_cells`` floor columns surround
+    the terrain (points beyond them see only the floor plane), and both dimensions are then
+    padded at the high-index end to multiples of ``shape_bucket`` so compiled solvers are reused
+    across terrains of similar size (``shape_bucket <= 1`` disables this).
     """
     hf = np.asarray(hf, dtype=np.float64)
     if hf.ndim != 2:
@@ -136,6 +138,9 @@ def build_terrain_grid(
         raise ValueError(f"min_point must be two finite values, got {min_point}")
     if pad_cells < 0:
         raise ValueError(f"pad_cells must be >= 0, got {pad_cells}")
+    if floor_z is None:
+        finite = hf[np.isfinite(hf)]
+        floor_z = min(0.0, float(finite.min())) if finite.size else 0.0
     floor_z = float(floor_z)
     heights = np.maximum(np.where(np.isfinite(hf), hf, floor_z), floor_z)
     heights = np.pad(heights, pad_cells, constant_values=floor_z)
