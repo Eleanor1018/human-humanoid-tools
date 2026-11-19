@@ -609,12 +609,7 @@ def interaction_mesh_run(
         level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
-    from hhtools.io.robot_csv import save_robot_csv
-    from hhtools.retarget.calibration import resolve_preset_calibration_file
-    from hhtools.retarget.interaction_mesh.pipeline import InteractionMeshPipeline
-    from hhtools.robot.loader import load_robot
-    from hhtools.robot.registry import get as get_preset
-
+    # Before the imports below, which already need some of FRAX's dependencies.
     if solver not in ("osqp", "frax"):
         raise typer.BadParameter(f"--solver must be 'osqp' or 'frax', got {solver!r}")
     if solver == "frax":
@@ -625,6 +620,12 @@ def interaction_mesh_run(
             raise typer.BadParameter(
                 f"--solver frax needs {', '.join(missing)}; install the retarget-frax extra"
             )
+
+    from hhtools.io.robot_csv import save_robot_csv
+    from hhtools.retarget.calibration import resolve_preset_calibration_file
+    from hhtools.retarget.interaction_mesh.pipeline import InteractionMeshPipeline
+    from hhtools.robot.loader import load_robot
+    from hhtools.robot.registry import get as get_preset
 
     files = _expand_interaction_inputs(inputs)
     if not files:

@@ -325,6 +325,23 @@ def test_terrain_snap_lowers_a_floating_clip_but_never_lifts() -> None:
     assert _terrain_snap_offset(float("nan")) == 0.0
 
 
+def test_root_rotation_weight_ignores_the_quaternion_sign() -> None:
+    from hhtools.retarget.frax_backend.scene_pipeline import _root_rotation_weights
+
+    turned = np.array([0.0, 0.0, np.sin(0.2), np.cos(0.2)])
+    quats = np.array([[0, 0, 0, 1.0], [0, 0, 0, -1.0], turned, -turned])
+    np.testing.assert_array_equal(_root_rotation_weights(quats, 5.0), [0.0, 0.0, 5.0, 5.0])
+
+
+def test_terrain_snap_keeps_the_margin(toy, calibration, base_motion) -> None:
+    motion = _walk(base_motion)
+    margin = 0.01
+    pipe = _pipeline(toy, motion, calibration, terrain_margin=margin)
+    result = pipe.run(motion)
+    gap = _sole_gap(pipe, result, motion)
+    assert gap.min() == pytest.approx(margin, abs=2e-3)
+
+
 # --- flat floor, cache ----------------------------------------------------------------------
 
 

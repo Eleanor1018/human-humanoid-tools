@@ -113,9 +113,11 @@ class FraxSceneConfig:
         foot_sticking_velocity_threshold: Source foot XY move per frame below which the foot
             counts as planted (m).
         substeps: QP steps per frame, each re-linearised.
-        terrain_snap: If every sole stays above the terrain, lower the clip until the lowest
-            one touches it.  Never lifts: the terrain constraint already keeps the soles out,
-            so a sole below the surface is a local violation that a global shift cannot fix.
+        terrain_snap: If every terrain-constrained sphere (feet, hands, knees, ...) stays clear
+            of the terrain in every frame, lower the clip by the smallest straight-down
+            clearance, less ``terrain_margin``.  Never lifts: the terrain constraint already
+            keeps the body out, so a sphere inside the terrain is a local violation that a
+            global shift cannot fix.
         grid_bucket: ``build_terrain_grid(shape_bucket=...)``.
     """
 
@@ -206,25 +208,34 @@ def _frax_point_frames(
 def _terrain_distance(grid, points: NDArray, window: int) -> NDArray[np.float64]:
     """Signed distance (m) of ``points`` (..., 3) to the terrain, as the solver's rows see it.
 
-    Local (walls within ``window`` cells), so the cost is linear in the number of points; the
-    brute-force :meth:`TerrainGrid.signed_distance` is points x columns.
+    Local (obstacles within ``window`` cells), so the cost is linear in the number of points;
+    the brute-force :meth:`TerrainGrid.signed_distance` is points x columns.
     """
     flat = jnp.asarray(np.asarray(points, dtype=np.float64).reshape(-1, 3))
-    d_support, _, d_wall, _ = _distance_rows(grid.as_ref(), flat, window)
-    d_support, d_wall = np.asarray(d_support), np.asarray(d_wall)
-    d = np.where(d_support < 0.0, d_support, np.minimum(d_support, d_wall))
-    return d.reshape(np.shape(points)[:-1])
+    d, _ = _distance_rows(grid.as_ref(), flat, window)
+    return np.asarray(d).min(axis=1).reshape(np.shape(points)[:-1])
 
 
 _distance_rows = jax.jit(column_distance_rows, static_argnums=2)
 
 
+def _root_rotation_weights(quats_xyzw: NDArray, weight: float) -> NDArray[np.float64]:
+    """Per-frame weight of the source pelvis orientation: 0 on near-identity frames.
+
+    Position-only sources store identity rotations; ``q`` and ``-q`` are the same rotation.
+    """
+    q = np.asarray(quats_xyzw, dtype=np.float64)
+    identity = np.array([0.0, 0.0, 0.0, 1.0])
+    off = np.minimum(np.abs(q - identity).max(axis=1), np.abs(q + identity).max(axis=1))
+    return np.where(off >= _IDENTITY_QUAT_TOL, float(weight), 0.0)
+
+
 def _terrain_snap_offset(min_clearance: float) -> float:
-    """Downward root shift for the final terrain snap, given the lowest sole clearance (m).
+    """Downward root shift for the final terrain snap, given the lowest vertical clearance (m).
 
     Only a clip that floats everywhere is lowered.  A negative clearance is a local constraint
-    violation (a sole grazing a wall, say); lifting the whole clip for it would make every other
-    frame float.
+    violation (a foot grazing a wall, say); lifting the whole clip for it would make every
+    other frame float.
     """
     return float(min_clearance) if np.isfinite(min_clearance) and min_clearance > 1e-4 else 0.0
 
@@ -265,7 +276,7 @@ class _SceneSolver:
     solve: Callable[..., Any]
     constraints: tuple[str, ...]
     points_fn: Callable[[Any], Any]
-    sole_fn: Callable[[Any], Any] | None
+    floor_fn: Callable[[Any], Any] | None
     compiled: dict[tuple, Any] = field(default_factory=dict)
     lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -328,7 +339,8 @@ def _build_scene_solver(
     v_max = None
     if frax_config.velocity_limits:
         urdf = np.asarray(robot.actuated_joint_max_velocities, dtype=float)
-        limit = np.where(urdf > 0.0, urdf, np.inf)
+        # Each substep integrates over a whole frame, so the frame's travel is the sum.
+        limit = np.where(urdf > 0.0, urdf, np.inf) / float(scene_config.substeps)
         v_max = limit if np.isfinite(limit).any() else None
     constraints: list[Any] = [
         JointLimits(
@@ -417,21 +429,21 @@ def _build_scene_solver(
         tfs = robot.joint_to_world_transforms(q)[pj]
         return jnp.einsum("pab,pb->pa", tfs[:, :3, :3], po) + tfs[:, :3, 3]
 
-    sole_fn = None
-    if model.has_collision and model.sole_sphere_idxs:
-        sole = np.asarray(model.sole_sphere_idxs)
+    floor_fn = None
+    if model.has_collision and model.floor_sphere_idxs:
+        floor = np.asarray(model.floor_sphere_idxs)
 
-        def sole_fn(q):
-            return robot._link_collision_positions(robot.joint_to_world_transforms(q))[sole]
+        def floor_fn(q):
+            return robot._link_collision_positions(robot.joint_to_world_transforms(q))[floor]
 
-        sole_fn = jax.jit(jax.vmap(sole_fn))
+        floor_fn = jax.jit(jax.vmap(floor_fn))
 
     return _SceneSolver(
         ik=solver,
         solve=jax.jit(solve),
         constraints=tuple(names),
         points_fn=jax.jit(jax.vmap(points)),
-        sole_fn=sole_fn,
+        floor_fn=floor_fn,
     )
 
 
@@ -660,10 +672,7 @@ class FraxScenePipeline:
         if quats is not None and self.front.cfg.lock_root_orientation_to_source:
             quats = np.asarray(quats, dtype=np.float64)[:T]
             frames["root_rmat"] = _rotation_matrices(quats).reshape(T, 1, 3, 3)
-            informative = np.abs(quats - np.array([0.0, 0.0, 0.0, 1.0])).max(axis=1) >= (
-                _IDENTITY_QUAT_TOL
-            )
-            frames["w_root"] = np.where(informative, cfg.root_rotation_weight, 0.0).reshape(T, 1)
+            frames["w_root"] = _root_rotation_weights(quats, cfg.root_rotation_weight)[:, None]
         else:
             frames["root_rmat"] = np.tile(np.eye(3), (T, 1, 1, 1))
             frames["w_root"] = np.zeros((T, 1))
@@ -743,12 +752,13 @@ class FraxScenePipeline:
 
         signed_min_gap = float("nan")
         floor_offset = 0.0
-        if grid is not None and solver.sole_fn is not None:
-            spheres = np.asarray(solver.sole_fn(jnp.asarray(q_all)))[:T]  # (T, S, 3)
-            radii = np.asarray(model.robot.flat_collision_radii)[list(model.sole_sphere_idxs)]
+        if grid is not None and solver.floor_fn is not None:
+            spheres = np.asarray(solver.floor_fn(jnp.asarray(q_all)))[:T]  # (T, S, 3)
+            radii = np.asarray(model.robot.flat_collision_radii)[list(model.floor_sphere_idxs)]
             signed_min_gap = float((_terrain_distance(grid, spheres, window) - radii).min())
             if cfg.terrain_snap:
-                floor_offset = _terrain_snap_offset(signed_min_gap)
+                drop = float(grid.vertical_clearance(spheres, radii).min())
+                floor_offset = _terrain_snap_offset(drop - float(cfg.terrain_margin))
                 joint_q[:, 2] -= np.float32(floor_offset)
         clip_floor_snap = 0.0
         if terrain is None and self.front.cfg.clip_floor_snap:
@@ -761,6 +771,8 @@ class FraxScenePipeline:
         joint_q = apply_upper_body_roll_narrowing_post_ik(
             joint_q, dof_names, self.robot.preset, root_coord_count=7, robot_model=self.robot
         )
+        # The narrowing edits shoulder joints without regard to their limits.
+        joint_q[:, 7:] = np.clip(joint_q[:, 7:], dof_lo, dof_hi)
         meta: dict[str, object] = {
             "retarget_backend": "frax",
             "scene_solver": "frax",

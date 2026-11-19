@@ -26,6 +26,7 @@ from frax.utils.spatial_utils import offset_transforms_and_jacobians  # noqa: E4
 from jax import Array  # noqa: E402
 
 __all__ = [
+    "ROWS_PER_SPHERE",
     "FootStickConstraint",
     "TerrainConstraint",
     "TerrainGrid",
@@ -33,7 +34,7 @@ __all__ = [
     "column_distance_rows",
 ]
 
-#: Distance reported by an inactive (wall) row; large enough to never be among the kept rows.
+#: Distance reported by an inactive (sector) row; large enough to never be among the kept rows.
 _INACTIVE = 1e3
 #: Stand-in for "no candidate" inside ``min``/``argmin`` (finite, so nothing turns into NaN).
 _FAR = 1e30
@@ -80,9 +81,10 @@ class TerrainGrid:
     def signed_distance(self, points: NDArray) -> NDArray:
         """Brute-force signed distance from world ``points`` (..., 3) to the column terrain.
 
-        Outside: the smallest distance to any column or the floor plane.  Inside a column: minus
-        the shorter way out, upwards or sideways to the nearest column not higher than the
-        point.  Reference for :func:`column_distance_rows`; cost is points x columns.
+        Outside: the distance to the nearest solid, i.e. to any column or the floor plane.
+        Inside a column: minus the distance to the nearest free space, which lies above some
+        column (straight up out of the own column, or sideways and possibly up onto a
+        neighbour).  Reference for :func:`column_distance_rows`; cost is points x columns.
         """
         pts = np.asarray(points, dtype=np.float64)
         batch = pts.shape[:-1]
@@ -93,18 +95,46 @@ class TerrainGrid:
         yk = self.origin[1] + self.dx * np.arange(ny)
         lx = np.maximum(np.abs(pts[:, 0, None] - xk) - half, 0.0)  # (m, nx)
         ly = np.maximum(np.abs(pts[:, 1, None] - yk) - half, 0.0)  # (m, ny)
-        rho2 = lx[:, :, None] ** 2 + ly[:, None, :] ** 2
-        rho = np.sqrt(rho2)
-        s = pts[:, 2, None, None] - self.heights
-        outside = np.where(s >= 0.0, np.sqrt(rho2 + s**2), np.where(rho > 0.0, rho, np.inf))
-        d_out = np.minimum(outside.reshape(len(pts), -1).min(axis=1), pts[:, 2] - self.floor_z)
+        rho2 = (lx[:, :, None] ** 2 + ly[:, None, :] ** 2).reshape(len(pts), -1)
+        s = (pts[:, 2, None, None] - self.heights).reshape(len(pts), -1)
+        to_solid = np.sqrt(rho2 + np.maximum(s, 0.0) ** 2).min(axis=1)
+        d_out = np.minimum(to_solid, pts[:, 2] - self.floor_z)
+        d_in = -np.sqrt(rho2 + np.maximum(-s, 0.0) ** 2).min(axis=1)
         i, j, on_grid = self._nodes(pts[:, :2])
-        top = self.heights[i, j]
-        inside = on_grid & (pts[:, 2] < top)
-        free = (s >= 0.0) & (rho > 0.0)
-        side = np.where(free, rho, np.inf).reshape(len(pts), -1).min(axis=1)
-        d_in = -np.minimum(top - pts[:, 2], side)
+        inside = on_grid & (pts[:, 2] < self.heights[i, j])
         return np.where(inside, d_in, d_out).reshape(batch)
+
+    def vertical_clearance(self, points: NDArray, radii: NDArray) -> NDArray:
+        """How far spheres (..., 3) of ``radii`` (..., ) can move straight down before touching.
+
+        Negative when a sphere already overlaps the terrain.  Only columns within one radius
+        horizontally can be hit, so the search is local.
+        """
+        pts = np.asarray(points, dtype=np.float64)
+        r = np.broadcast_to(np.asarray(radii, dtype=np.float64), pts.shape[:-1])
+        batch = pts.shape[:-1]
+        pts, r = pts.reshape(-1, 3), r.reshape(-1)
+        out = pts[:, 2] - r - self.floor_z
+        if not len(pts):
+            return out.reshape(batch)
+        nx, ny = self.heights.shape
+        half = 0.5 * self.dx
+        f = (pts[:, :2] - self.origin) / self.dx
+        c = np.round(f).astype(np.int64)
+        reach = int(np.ceil(float(r.max()) / self.dx)) + 1
+        for di in range(-reach, reach + 1):
+            for dj in range(-reach, reach + 1):
+                i, j = c[:, 0] + di, c[:, 1] + dj
+                valid = (i >= 0) & (i < nx) & (j >= 0) & (j < ny)
+                ic, jc = np.clip(i, 0, nx - 1), np.clip(j, 0, ny - 1)
+                lx = np.maximum(np.abs(pts[:, 0] - (self.origin[0] + self.dx * ic)) - half, 0.0)
+                ly = np.maximum(np.abs(pts[:, 1] - (self.origin[1] + self.dx * jc)) - half, 0.0)
+                rho2 = lx**2 + ly**2
+                hit = valid & (rho2 < r**2)
+                lift = np.sqrt(np.maximum(r**2 - rho2, 0.0))
+                gap = pts[:, 2] - self.heights[ic, jc] - lift
+                out = np.where(hit, np.minimum(out, gap), out)
+        return out.reshape(batch)
 
 
 def build_terrain_grid(
@@ -136,8 +166,10 @@ def build_terrain_grid(
     min_point = np.asarray(min_point, dtype=np.float64).reshape(-1)
     if min_point.shape != (2,) or not np.all(np.isfinite(min_point)):
         raise ValueError(f"min_point must be two finite values, got {min_point}")
-    if pad_cells < 0:
-        raise ValueError(f"pad_cells must be >= 0, got {pad_cells}")
+    if pad_cells < 1:
+        # The padding columns stand for the free space beyond the grid; without them a point
+        # inside an edge column could not leave through the grid's outer face.
+        raise ValueError(f"pad_cells must be >= 1, got {pad_cells}")
     if floor_z is None:
         finite = hf[np.isfinite(hf)]
         floor_z = min(0.0, float(finite.min())) if finite.size else 0.0
@@ -163,20 +195,34 @@ def _safe_norm(sq: Array) -> Array:
     return jnp.where(pos, jnp.sqrt(jnp.where(pos, sq, 1.0)), 0.0)
 
 
-def column_distance_rows(
-    terrain: dict, centers: Array, window: int
-) -> tuple[Array, Array, Array, Array]:
-    """Local signed distance from sphere centres to the column terrain, as two rows each.
+#: Rows per sphere from :func:`column_distance_rows`: support, then +x, -x, +y, -y.
+ROWS_PER_SPHERE = 5
+#: Direction a sector row's distance grows in when it is undefined (touching): away from it.
+_SECTOR_AWAY = ((-1.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, -1.0, 0.0), (0.0, 1.0, 0.0))
 
-    ``centers``: (n, 3).  Columns are searched in a ``(2 * window + 1)^2`` block around the
-    nearest node (indices clamped into the grid).  Returns ``(d_support, n_support, d_wall,
-    n_wall)``, shapes (n,), (n, 3), (n,), (n, 3); directions are unit vectors along which the
-    distance grows.  The support row is the nearest feature below or diagonally beside the
-    centre (or the floor plane); when the centre is inside a column it is minus the shorter way
-    out (up, or sideways to a free column).  The wall row is the horizontal gap to the nearest
-    column that is higher than the centre; it is inactive (``d = 1e3``, zero direction) when
-    there is none or the centre is inside a column.  :meth:`TerrainGrid.signed_distance` is the
-    brute-force reference.
+
+def column_distance_rows(terrain: dict, centers: Array, window: int) -> tuple[Array, Array]:
+    """Barrier rows of sphere centres against the column terrain.
+
+    ``centers``: (n, 3).  Returns distances (n, 5) and unit directions (n, 5, 3) along which
+    each distance grows.  Columns are searched in a ``(2 * window + 1)^2`` block around the
+    nearest node (indices clamped into the grid).
+
+    - Row 0, support.  Outside the terrain: the height above the top of the column underneath
+      (the floor plane off the grid), direction up.  Inside a column: minus the distance to the
+      nearest free space, which lies above some column -- straight up out of the own column,
+      or sideways (and up, onto a neighbour that is lower than the own top); the direction
+      points that way.
+    - Rows 1-4: the nearest *raised* column (higher than the column underneath) in each
+      horizontal sector, +x, -x, +y, -y, assigned by the larger centre offset: the distance to
+      its solid, horizontal to its side below its top, diagonal to its edge above.  Inactive
+      (``d = 1e3``, zero direction) when the sector has none or the centre is inside a column.
+
+    Outside the terrain the smallest row is the signed distance; inside, row 0 is (the others
+    are inactive), so ``min`` over the rows is the signed distance everywhere.  One row per
+    sector keeps a wall on each side of a corridor, and a low step beside a sphere resting on a
+    lower column, which a single nearest-feature row would miss.
+    :meth:`TerrainGrid.signed_distance` is the brute-force reference.
     """
     heights = jnp.asarray(terrain["heights"], dtype=jnp.float64)
     origin = jnp.asarray(terrain["origin"], dtype=jnp.float64)
@@ -184,10 +230,11 @@ def column_distance_rows(
     floor_z = jnp.asarray(terrain["floor_z"], dtype=jnp.float64)
     centers = jnp.asarray(centers, dtype=jnp.float64)
     shape = heights.shape
-    half = 0.5 / inv_dx
     dx = 1.0 / inv_dx
+    half = 0.5 * dx
     offs = jnp.arange(-window, window + 1)
     up = jnp.array([0.0, 0.0, 1.0])
+    away = jnp.asarray(_SECTOR_AWAY)
 
     def one(c):
         f = (c[:2] - origin) * inv_dx
@@ -195,55 +242,58 @@ def column_distance_rows(
         n0 = jnp.clip(jnp.round(f), 0, jnp.asarray(shape) - 1).astype(jnp.int32)
         ii = jnp.clip(n0[0] + offs, 0, shape[0] - 1)
         jj = jnp.clip(n0[1] + offs, 0, shape[1] - 1)
-        dxs = c[0] - (origin[0] + dx * ii)  # (m,)
-        dys = c[1] - (origin[1] + dx * jj)
-        lx = jnp.maximum(jnp.abs(dxs) - half, 0.0)
-        ly = jnp.maximum(jnp.abs(dys) - half, 0.0)
-        hx = jnp.sign(dxs)[:, None] * lx[:, None] * jnp.ones_like(ly)[None]  # (m, m) x offsets
-        hy = jnp.sign(dys)[None] * ly[None] * jnp.ones_like(lx)[:, None]
+        ox = c[0] - (origin[0] + dx * ii)  # (m,) centre minus column centre
+        oy = c[1] - (origin[1] + dx * jj)
+        ones = jnp.ones((len(offs), len(offs)))
+        ox2, oy2 = ox[:, None] * ones, oy[None, :] * ones  # (m, m)
+        # Vector from the nearest point of each column's footprint to the centre.
+        hx = jnp.sign(ox2) * jnp.maximum(jnp.abs(ox2) - half, 0.0)
+        hy = jnp.sign(oy2) * jnp.maximum(jnp.abs(oy2) - half, 0.0)
         rho2 = hx**2 + hy**2
-        rho = _safe_norm(rho2)
-        s = c[2] - heights[ii[:, None], jj[None, :]]
-        top0 = heights[n0[0], n0[1]]
+        tops = heights[ii[:, None], jj[None, :]]
+        s = c[2] - tops
+        own = on_grid & (ii[:, None] == n0[0]) & (jj[None, :] == n0[1])
+        top0 = jnp.where(on_grid, heights[n0[0], n0[1]], floor_z)
         inside = on_grid & (c[2] < top0)
 
-        def direction(k, vertical):
-            """Unit direction away from the nearest point of column ``k`` (flattened index)."""
-            v = jnp.stack([hx.ravel()[k], hy.ravel()[k], vertical])
-            n = _safe_norm(jnp.sum(v**2))
-            return v / jnp.where(n > _EPS, n, 1.0), n
-
-        below = s >= 0.0
-        d_below = jnp.where(below, _safe_norm(rho2 + s**2), _FAR).ravel()
-        kb = jnp.argmin(d_below)
-        n_below, dist_b = direction(kb, s.ravel()[kb])
-        n_below = jnp.where(dist_b > _EPS, n_below, up)
-        use_plane = c[2] - floor_z <= d_below[kb]
-        d_out = jnp.where(use_plane, c[2] - floor_z, d_below[kb])
-        n_out = jnp.where(use_plane, up, n_below)
-
-        free = (below & (rho > 0.0)).ravel()
-        e_all = jnp.where(free, rho.ravel(), _FAR)
-        ke = jnp.argmin(e_all)
-        n_side, _ = direction(ke, 0.0)
-        depth_up = top0 - c[2]
-        go_up = depth_up <= e_all[ke]
-        d_in = -jnp.minimum(depth_up, e_all[ke])
-        n_in = jnp.where(go_up, up, -n_side)
-
-        beside = (~below & (rho > 0.0)).ravel()
-        r_all = jnp.where(beside, rho.ravel(), _FAR)
-        kw = jnp.argmin(r_all)
-        n_w, _ = direction(kw, 0.0)
-        active = jnp.any(beside) & ~inside
-        d_wall = jnp.where(active, r_all[kw], _INACTIVE)
-        n_wall = jnp.where(active, n_w, 0.0)
-        return (
-            jnp.where(inside, d_in, d_out),
-            jnp.where(inside, n_in, n_out),
-            d_wall,
-            n_wall,
+        # Inside: nearest free space, above some column (the own column included).
+        rise = jnp.maximum(tops - c[2], 0.0)
+        exit_d = _safe_norm(rho2 + rise**2).ravel()
+        k = jnp.argmin(exit_d)
+        v = jnp.stack([-hx.ravel()[k], -hy.ravel()[k], rise.ravel()[k]])
+        vn = _safe_norm(jnp.sum(v**2))
+        x_major = jnp.abs(ox2.ravel()[k]) >= jnp.abs(oy2.ravel()[k])
+        toward = jnp.where(
+            x_major,
+            jnp.array([-1.0, 0.0, 0.0]) * jnp.sign(ox2.ravel()[k]),
+            jnp.array([0.0, -1.0, 0.0]) * jnp.sign(oy2.ravel()[k]),
         )
+        fallback = jnp.where(own.ravel()[k] | ~jnp.any(toward != 0.0), up, toward)
+        n_in = jnp.where(vn > _EPS, v / jnp.where(vn > _EPS, vn, 1.0), fallback)
+        d0 = jnp.where(inside, -exit_d[k], c[2] - top0)
+        n0_dir = jnp.where(inside, n_in, up)
+
+        # Outside: nearest raised column per sector.
+        raised = (tops > top0) & ~own
+        to_solid = _safe_norm(rho2 + jnp.maximum(s, 0.0) ** 2)
+        x_dom = jnp.abs(ox2) >= jnp.abs(oy2)
+        sectors = (
+            raised & x_dom & (ox2 < 0.0),
+            raised & x_dom & (ox2 > 0.0),
+            raised & ~x_dom & (oy2 < 0.0),
+            raised & ~x_dom & (oy2 > 0.0),
+        )
+        d_rows, n_rows = [d0], [n0_dir]
+        for q, mask in enumerate(sectors):
+            cand = jnp.where(mask, to_solid, _FAR).ravel()
+            kq = jnp.argmin(cand)
+            w = jnp.stack([hx.ravel()[kq], hy.ravel()[kq], jnp.maximum(s.ravel()[kq], 0.0)])
+            wn = _safe_norm(jnp.sum(w**2))
+            nq = jnp.where(wn > _EPS, w / jnp.where(wn > _EPS, wn, 1.0), away[q])
+            active = jnp.any(mask) & ~inside
+            d_rows.append(jnp.where(active, cand[kq], _INACTIVE))
+            n_rows.append(jnp.where(active, nq, 0.0))
+        return jnp.stack(d_rows), jnp.stack(n_rows)
 
     return jax.vmap(one)(centers)
 
@@ -252,24 +302,24 @@ def column_distance_rows(
 class TerrainConstraint(_SphereConstraint):
     """Keep collision spheres out of a column terrain (:class:`TerrainGrid`).
 
-    Each sphere contributes two barrier rows ``h = d - r - margin`` from
+    Each sphere contributes five barrier rows ``h = d - r - margin`` from
     :func:`column_distance_rows`; rows are ``-(n . J_sphere) v <= gain * h`` and the ``max_rows``
-    lowest-barrier rows are kept.  The *support* row is the signed distance to the nearest
-    feature below or beside-and-below the sphere (floor, column top or edge); the *wall* row is
-    the horizontal gap to the nearest higher column.  A sphere standing on the floor beside a
-    wall has two different nearest features, and one row would guard only one of them.  The
-    wall distance shrinks continuously as the sphere approaches, so the barrier lets it close
-    the gap within a step but not cross it: no tunnelling, provided the wall is inside the
-    search window (``window`` columns each side, i.e. a sphere must not travel farther than
-    ``window * dx`` horizontally in one solver step).  A sphere already inside a column leaves
-    by the shorter way, up or sideways.  The terrain is read from ``ref[terrain_key]`` every
-    step (:meth:`TerrainGrid.as_ref`), so one compiled solver serves any terrain of the same
-    grid shape.
+    lowest-barrier rows are kept.  The *support* row holds the sphere above the column
+    underneath; the four *sector* rows hold it away from the nearest raised column on each
+    side (its wall below the top, its edge above).  Each of these distances shrinks
+    continuously as the sphere approaches, so the barrier lets it close a gap within a step
+    but not cross it: no tunnelling, provided the obstacle is inside the search window
+    (``window`` columns each side, i.e. a sphere must not travel farther than ``window * dx``
+    horizontally in one solver step).  A sphere already inside a column leaves towards the
+    nearest free space.  On flat ground the sector rows are inactive and the rows reduce to
+    frax's ``FloorConstraint``.  The terrain is read from ``ref[terrain_key]`` every step
+    (:meth:`TerrainGrid.as_ref`), so one compiled solver serves any terrain of the same grid
+    shape.
 
     Args:
         robot: frax robot with collision data
         sphere_idxs: robot collision spheres to check (default all)
-        max_rows: keep only this many lowest-barrier rows per step (of ``2 * spheres``)
+        max_rows: keep only this many lowest-barrier rows per step (of ``5 * spheres``)
         gain: CBF gain (1/s)
         penalty: relaxation penalty
         margin: clearance kept from the terrain
@@ -297,19 +347,19 @@ class TerrainConstraint(_SphereConstraint):
         self.sphere_idxs = (
             np.arange(len(self.radii)) if sphere_idxs is None else np.asarray(sphere_idxs)
         )
-        self._set_num_rows(2 * len(self.sphere_idxs), max_rows)
+        self._set_num_rows(ROWS_PER_SPHERE * len(self.sphere_idxs), max_rows)
 
     def rows(self, q, ref):
         robot = self.robot
         joint_tfs = robot.joint_to_world_transforms(q)
         pos = robot._link_collision_positions(joint_tfs)[self.sphere_idxs]
         radii = self.radii[self.sphere_idxs]
-        d_s, n_s, d_w, n_w = column_distance_rows(ref[self.terrain_key], pos, self.window)
-        h = jnp.concatenate([d_s, d_w]) - jnp.tile(radii, 2) - self.margin
-        normals = jnp.concatenate([n_s, n_w])  # (2n, 3)
-        n_sph = len(self.sphere_idxs)
-        keep = jnp.arange(2 * n_sph) if self.max_rows is None else self._keep(h)
-        spheres = jnp.asarray(self.sphere_idxs)[keep % n_sph]
+        d, normals = column_distance_rows(ref[self.terrain_key], pos, self.window)
+        h = (d - radii[:, None]).reshape(-1) - self.margin  # sphere-major: row k is sphere k // 5
+        normals = normals.reshape(-1, 3)
+        n_rows = ROWS_PER_SPHERE * len(self.sphere_idxs)
+        keep = jnp.arange(n_rows) if self.max_rows is None else self._keep(h)
+        spheres = jnp.asarray(self.sphere_idxs)[keep // ROWS_PER_SPHERE]
         Jv, Jw = robot._joint_jacobians(joint_tfs)
         J = robot._link_collision_jacobians(joint_tfs, Jv, Jw, spheres)  # (k, 3, nv)
         dh = jnp.einsum("ki,kij->kj", normals[keep], J)

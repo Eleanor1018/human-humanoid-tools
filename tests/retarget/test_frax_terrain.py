@@ -12,6 +12,7 @@ pytest.importorskip("elastiqp")
 from frax_toy_robot import write_toy_robot  # noqa: E402
 
 from hhtools.retarget.frax_backend.terrain import (  # noqa: E402  (configures JAX before it loads)
+    ROWS_PER_SPHERE,
     FootStickConstraint,
     TerrainConstraint,
     TerrainGrid,
@@ -98,11 +99,14 @@ def test_default_floor_never_cuts_into_the_terrain() -> None:
         {"hf": np.zeros((3, 3)), "dx": 0.0},
         {"hf": np.zeros((3, 3)), "dx": -0.1},
         {"hf": np.zeros((0, 3)), "dx": 0.1},
+        {"hf": np.zeros((3, 3)), "dx": 0.1, "pad_cells": 0},
     ],
 )
 def test_build_grid_rejects_bad_input(kwargs) -> None:
     with pytest.raises(ValueError):
-        build_terrain_grid(kwargs["hf"], (0.0, 0.0), kwargs["dx"])
+        build_terrain_grid(
+            kwargs["hf"], (0.0, 0.0), kwargs["dx"], pad_cells=kwargs.get("pad_cells", 2)
+        )
 
 
 # --- column distance ----------------------------------------------------------------------
@@ -143,55 +147,37 @@ def _random_points(grid: TerrainGrid, count: int, seed: int) -> np.ndarray:
 def test_rows_match_the_brute_force_distance(seed) -> None:
     grid = _random_terrain(seed)
     pts = _random_points(grid, 400, seed)
-    d_s, _, d_w, _ = _rows(grid, pts)
+    d, _ = _rows(grid, pts)
+    assert d.shape == (400, ROWS_PER_SPHERE)
     sd = grid.signed_distance(pts)
     inside = sd < 0.0
     assert inside.any() and (~inside).any()
-    np.testing.assert_allclose(np.minimum(d_s, d_w)[~inside], sd[~inside], atol=1e-12)
-    np.testing.assert_allclose(d_s[inside], sd[inside], atol=1e-12)
-    assert (d_w[inside] == 1e3).all()
-
-
-def _row_distances(grid: TerrainGrid, pts: np.ndarray, which: int) -> np.ndarray:
-    return _rows(grid, pts)[2 * which]
+    np.testing.assert_allclose(d.min(axis=1), sd, atol=1e-12)
+    np.testing.assert_allclose(d[inside, 0], sd[inside], atol=1e-12)
+    assert (d[inside, 1:] == 1e3).all()
 
 
 @pytest.mark.parametrize("seed", [0, 1])
 def test_row_directions_are_the_gradients_of_their_distances(seed) -> None:
     grid = _random_terrain(seed)
     pts = _random_points(grid, 300, seed + 10)
-    normals = _rows(grid, pts)
+    d0, normals = _rows(grid, pts)
     eps, wide = 1e-6, 1e-3
     axes = np.eye(3)
-    for which in (0, 1):  # support, wall
-        n = normals[2 * which + 1]
-        d0 = _row_distances(grid, pts, which)
-        fd = np.stack(
-            [
-                (
-                    _row_distances(grid, pts + eps * axes[a], which)
-                    - _row_distances(grid, pts - eps * axes[a], which)
-                )
-                / (2 * eps)
-                for a in range(3)
-            ],
-            axis=1,
-        )
-        # Skip kinks: a smooth distance has the same slope at 1 um and 1 mm.
-        lin = np.stack(
-            [
-                (
-                    _row_distances(grid, pts + wide * axes[a], which)
-                    - _row_distances(grid, pts - wide * axes[a], which)
-                )
-                / (2 * wide)
-                for a in range(3)
-            ],
-            axis=1,
-        )
-        smooth = (np.abs(fd - lin).max(axis=1) < 1e-6) & (d0 < 1e2)
-        assert smooth.sum() > (60 if which == 0 else 15)
-        np.testing.assert_allclose(fd[smooth], n[smooth], atol=1e-6)
+
+    def slope(step):
+        return np.stack(
+            [(_rows(grid, pts + step * a)[0] - _rows(grid, pts - step * a)[0]) / (2 * step)
+             for a in axes],
+            axis=-1,
+        )  # (n, rows, 3)  # fmt: skip
+
+    fd, lin = slope(eps), slope(wide)
+    # Skip kinks: a smooth distance has the same slope at 1 um and 1 mm.
+    smooth = (np.abs(fd - lin).max(axis=-1) < 1e-6) & (d0 < 1e2)
+    for row in range(ROWS_PER_SPHERE):
+        assert smooth[:, row].sum() > (60 if row == 0 else 5)
+        np.testing.assert_allclose(fd[smooth[:, row], row], normals[smooth[:, row], row], atol=1e-6)
 
 
 def test_hand_checked_box_cases() -> None:
@@ -208,23 +194,26 @@ def test_hand_checked_box_cases() -> None:
             [5.0, 5.0, 0.4],  # far outside the grid
         ]
     )
-    d_s, n_s, d_w, n_w = _rows(grid, pts, window=4)
-    assert d_s[0] == pytest.approx(0.3) and np.allclose(n_s[0], [0, 0, 1]) and d_w[0] == 1e3
-    assert d_s[1] == pytest.approx(0.3) and np.allclose(n_s[1], [0, 0, 1])  # floor
-    assert d_w[1] == pytest.approx(face - 0.3) and np.allclose(n_w[1], [-1, 0, 0])
-    assert d_w[2] == 1e3 or d_w[2] == pytest.approx(face - 0.3)
-    assert d_s[2] == pytest.approx(np.hypot(face - 0.3, 0.3)) and np.isclose(
-        np.linalg.norm(n_s[2]), 1.0
+    d, n = _rows(grid, pts, window=4)
+    support, plus_x = 0, 1
+    assert d[0, support] == pytest.approx(0.3) and np.allclose(n[0, support], [0, 0, 1])
+    assert (d[0, 1:] == 1e3).all()  # nothing on the box top is higher than it
+    assert d[1, support] == pytest.approx(0.3) and np.allclose(n[1, support], [0, 0, 1])
+    assert d[1, plus_x] == pytest.approx(face - 0.3) and np.allclose(n[1, plus_x], [-1, 0, 0])
+    assert d[2, plus_x] == pytest.approx(np.hypot(face - 0.3, 0.3))
+    np.testing.assert_allclose(n[2, plus_x] * d[2, plus_x], [-(face - 0.3), 0, 0.3], atol=1e-12)
+    assert d[3, plus_x] == pytest.approx(np.sqrt(2 * (face - 0.33) ** 2 + 0.1**2))
+    np.testing.assert_allclose(
+        n[3, plus_x] * d[3, plus_x], [-(face - 0.33), -(face - 0.33), 0.1], atol=1e-12
     )
-    assert d_s[3] == pytest.approx(np.sqrt(2 * (face - 0.33) ** 2 + 0.1**2))
-    np.testing.assert_allclose(n_s[3] * d_s[3], [-(face - 0.33), -(face - 0.33), 0.1], atol=1e-12)
-    assert np.isclose(np.linalg.norm(n_s[3]), 1.0)
-    assert d_s[4] == pytest.approx(-(0.395 - face)) and np.allclose(n_s[4], [-1, 0, 0])
-    assert d_w[4] == 1e3 and not n_w[4].any()
-    assert d_s[5] == pytest.approx(-0.05) and np.allclose(n_s[5], [0, 0, 1])
-    assert d_s[6] == pytest.approx(0.4) and np.allclose(n_s[6], [0, 0, 1])
-    assert d_w[6] == 1e3 and not n_w[6].any()
-    assert grid.signed_distance(pts[4]) == pytest.approx(d_s[4])
+    assert d[4, support] == pytest.approx(-(0.395 - face)) and np.allclose(
+        n[4, support], [-1, 0, 0]
+    )
+    assert (d[4, 1:] == 1e3).all() and not n[4, 1:].any()
+    assert d[5, support] == pytest.approx(-0.05) and np.allclose(n[5, support], [0, 0, 1])
+    assert d[6, support] == pytest.approx(0.4) and np.allclose(n[6, support], [0, 0, 1])
+    assert (d[6, 1:] == 1e3).all() and not n[6, 1:].any()
+    np.testing.assert_allclose(d.min(axis=1), grid.signed_distance(pts), atol=1e-12)
 
 
 def test_distance_is_continuous_along_a_path_over_the_wall() -> None:
@@ -232,13 +221,13 @@ def test_distance_is_continuous_along_a_path_over_the_wall() -> None:
     a, b = np.array([0.2, 0.55, 0.3]), np.array([0.6, 0.55, 1.3])  # beside, over the edge, on top
     steps = 2000
     path = a + (b - a) * np.linspace(0.0, 1.0, steps)[:, None]
-    d_s, _, d_w, _ = _rows(grid, path)
-    d = np.minimum(d_s, d_w)
+    rows, _ = _rows(grid, path)
+    d = rows.min(axis=1)
     length = np.linalg.norm(b - a) / (steps - 1)
     assert d.min() > 0.0
     assert np.abs(np.diff(d)).max() <= length + 1e-12
-    # The support row alone jumps when the wall appears: that is what the wall row is for.
-    assert np.abs(np.diff(d_s)).max() > 5 * length
+    # The support row alone jumps where the box starts: that is what the sector rows are for.
+    assert np.abs(np.diff(rows[:, 0])).max() > 5 * length
 
 
 def test_rows_are_finite_on_boundaries_column_tops_and_far_away() -> None:
@@ -260,17 +249,96 @@ def test_rows_are_finite_on_boundaries_column_tops_and_far_away() -> None:
     for window in (1, 3, 30):
         for out in _rows(grid, pts, window):
             assert np.isfinite(out).all()
-    grads = jax.vmap(
-        jax.jacfwd(lambda p: jnp.concatenate(column_distance_rows(grid.as_ref(), p[None], 3)[::2]))
-    )(jnp.asarray(pts))
+    grads = jax.vmap(jax.jacfwd(lambda p: column_distance_rows(grid.as_ref(), p[None], 3)[0]))(
+        jnp.asarray(pts)
+    )
     assert np.isfinite(np.asarray(grads)).all()
 
 
 def test_window_limits_how_far_walls_are_seen() -> None:
     grid = _box()
     p = np.array([[0.375 - 0.3, 0.55, 0.3]])
-    assert _rows(grid, p, window=2)[2][0] == 1e3  # wall 6 columns away
-    assert _rows(grid, p, window=8)[2][0] == pytest.approx(0.3)
+    assert _rows(grid, p, window=2)[0][0, 1] == 1e3  # wall 6 columns away
+    assert _rows(grid, p, window=8)[0][0, 1] == pytest.approx(0.3)
+
+
+# Counterexamples from review: exactly representable faces and points (dx = 1/8).
+_DX8 = 1 / 8
+
+
+def _grid8(hf) -> TerrainGrid:
+    return build_terrain_grid(hf, (0.0, 0.0), _DX8, shape_bucket=1)
+
+
+@pytest.mark.parametrize("layout", ["corridor", "at_top", "above_top"])
+def test_every_reachable_obstacle_has_a_row(layout) -> None:
+    # One nearest-feature row missed the far wall of a corridor, and a low step beside a
+    # sphere resting on the floor (the floor column underneath was nearer).
+    hf = np.zeros((6, 5))
+    r = 1 / 64
+    if layout == "corridor":
+        hf[[1, 3], :] = 0.5
+        p = np.array([2 * _DX8 - 1 / 32, 2 * _DX8, 1 / 16])
+    else:
+        hf[3, :] = 1 / 32
+        p = np.array([2 * _DX8, 2 * _DX8, 1 / 32 + (1 / 256 if layout == "above_top" else 0)])
+    grid = _grid8(hf)
+    end = p.copy()
+    end[0] = 3 * _DX8 - _DX8 / 2 + r  # the centre finishes over or in the obstacle
+    assert grid.signed_distance(p) > r > grid.signed_distance(end)
+    d, n = _rows(grid, p[None], window=3)
+    active = d[0] < 100
+    # A pure translation (exact Jacobian, gain * dt = 1) must violate at least one row.
+    assert (d[0, active] - r + n[0, active] @ (end - p)).min() < 0
+
+
+@pytest.mark.parametrize("wall_i", [0, 1])
+def test_point_on_a_shared_face(wall_i) -> None:
+    hf = np.zeros((4, 4))
+    hf[wall_i, 1] = 0.5
+    d, n = _rows(_grid8(hf), np.array([[_DX8 / 2, _DX8, 1 / 32]]), window=3)
+    k = int(np.argmin(d[0]))
+    assert d[0, k] == pytest.approx(0, abs=1e-12)
+    np.testing.assert_allclose(n[0, k], [1 if wall_i == 0 else -1, 0, 0])
+
+
+def test_point_a_hair_outside_a_face_gets_a_unit_direction() -> None:
+    hf = np.zeros((4, 4))
+    hf[1, 1] = 0.5
+    d, n = _rows(_grid8(hf), np.array([[_DX8 / 2 - 2**-40, _DX8, 1 / 32]]), window=3)
+    assert 0 < d[0, 1] < 1e-9
+    np.testing.assert_allclose(n[0, 1], [-1, 0, 0], atol=1e-12)
+
+
+def test_inside_exit_can_be_diagonal_onto_a_lower_terrace() -> None:
+    hf = np.full((4, 4), 1 / 4)
+    hf[1, 1] = 3 / 4
+    grid = _grid8(hf)
+    e = 1 / 64
+    p = np.array(
+        [[_DX8 + _DX8 / 2 - e, _DX8, 1 / 4 - e]]
+    )  # inside the tall column, below the terrace
+    assert grid.signed_distance(p)[0] == pytest.approx(-np.hypot(e, e))
+    d, n = _rows(grid, p, window=3)
+    assert d[0, 0] == pytest.approx(-np.hypot(e, e))
+    np.testing.assert_allclose(n[0, 0], [1 / np.sqrt(2), 0, 1 / np.sqrt(2)], atol=1e-12)
+
+
+def test_vertical_clearance_matches_lowering_until_contact() -> None:
+    grid = _random_terrain(3)
+    rng = np.random.default_rng(4)
+    pts = _random_points(grid, 300, 7)
+    pts[:, 2] += 0.4
+    radii = rng.uniform(0.01, 0.12, len(pts))
+    clearance = grid.vertical_clearance(pts, radii)
+    free = grid.signed_distance(pts) > radii
+    assert free.sum() > 100
+    # Lowering by the clearance makes contact; lowering by 1 mm less does not.
+    at = pts[free] - np.c_[np.zeros((free.sum(), 2)), clearance[free]]
+    before = pts[free] - np.c_[np.zeros((free.sum(), 2)), clearance[free] - 1e-3]
+    np.testing.assert_allclose(grid.signed_distance(at), radii[free], atol=1e-9)
+    assert (grid.signed_distance(before) > radii[free]).all()
+    assert (clearance[~free] <= 1e-12).all()
 
 
 # --- TerrainConstraint --------------------------------------------------------------------
@@ -284,7 +352,7 @@ def test_terrain_constraint_equals_floor_constraint_on_flat_grid(model, max_rows
     opts = {"sphere_idxs": idxs, "gain": 40.0, "margin": 0.003}
     floor = FloorConstraint(robot, max_rows=max_rows, **opts)
     terrain = TerrainConstraint(robot, max_rows=max_rows, **opts)
-    assert terrain.num_rows == (2 * n if max_rows is None else max_rows)
+    assert terrain.num_rows == (ROWS_PER_SPHERE * n if max_rows is None else max_rows)
     ref = {"terrain": build_terrain_grid(np.zeros((40, 40)), (-1.0, -1.0), 0.05).as_ref()}
     rng = np.random.default_rng(1)
     for _ in range(3):
@@ -293,7 +361,7 @@ def test_terrain_constraint_equals_floor_constraint_on_flat_grid(model, max_rows
         q[2] = rng.uniform(0.7, 1.0)
         G0, h0 = (np.asarray(x) for x in floor.rows(jnp.asarray(q), ref))
         G1, h1 = (np.asarray(x) for x in terrain.rows(jnp.asarray(q), ref))
-        active = h1 < 100.0  # the wall rows are inactive on a flat grid
+        active = h1 < 100.0  # the sector rows are inactive on a flat grid
         assert active.sum() == floor.num_rows  # kept rows are the same support rows
         np.testing.assert_array_equal(G1[~active], 0.0)
         order0, order1 = np.lexsort(np.c_[G0, h0].T), np.lexsort(np.c_[G1[active], h1[active]].T)
@@ -468,14 +536,15 @@ def test_spheres_inside_a_wall_leave_sideways(model, substeps) -> None:
     assert sole[:, :, 2].max() < 0.02  # left through the face, not up the 60 cm wall
 
 
-def test_flat_terrain_rows_have_inactive_walls(model) -> None:
+def test_flat_terrain_rows_have_inactive_sectors(model) -> None:
     terrain = TerrainConstraint(model.robot, np.asarray(model.floor_sphere_idxs), window=3)
-    assert terrain.num_rows == 2 * len(model.floor_sphere_idxs)
+    n = len(model.floor_sphere_idxs)
+    assert terrain.num_rows == ROWS_PER_SPHERE * n
     ref = {"terrain": build_terrain_grid(np.zeros((40, 40)), (-1.0, -1.0), 0.05).as_ref()}
     q = jnp.asarray(_stand_q(model))
     G, h = terrain.rows(q, ref)
     h = np.asarray(h)
-    assert (h > 100).sum() == len(h) // 2
+    assert (h > 100).sum() == (ROWS_PER_SPHERE - 1) * n
     np.testing.assert_array_equal(np.asarray(G)[h > 100], 0.0)
 
 
