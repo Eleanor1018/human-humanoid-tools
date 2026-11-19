@@ -39,5 +39,7 @@ def test_application_interaction_mesh_runs_one_self_contained_terrain_frame(
     assert result.num_frames == 1
     assert np.isfinite(result.joint_q).all()
     assert result.meta["retarget_backend"] == "interaction_mesh"
+    # Solved against the terrain: exports keep the solved root height.
+    assert result.meta["terrain_grounded"] is True
     assert result.meta["execution_provenance"]["runtime"] == "mujoco"
     assert result.meta["execution_provenance"]["device_kind"] == "cpu"
