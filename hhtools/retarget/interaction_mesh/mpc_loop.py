@@ -1124,24 +1124,19 @@ def sqp_step_laplacian(
 
 # Quadratic penalty on the per-row non-penetration slack.
 #
-# Tuned on holosoma parkour_1 (rp1, 80 frames).  This is deliberately a
-# *gentle* backstop, not a stiff barrier, for two reasons:
-#
-#  1. The base + feet are already anchored in absolute world space by the
-#     position cost (``position_weight`` = 400), which tracks the scaled
-#     source feet whose contact pattern relative to the terrain is correct
-#     by construction — so collision only has to stop gross penetration,
-#     not reproduce contact.
-#  2. Heightfield ``mj_geomDistance`` witness points / normals flip
-#     discontinuously as a foot crosses terrain cell boundaries.  A stiff
-#     penalty turns that chatter into the whole-robot "flashing" jitter the
-#     user reported (sweep: ρ=1e2 → 1.6°/frame² jerk_max; ρ=1e3 → 10.9°;
-#     ρ=1e4 → 30.3°, clearly trembling).  ρ=1e2 keeps the trajectory as
-#     smooth as the old (collision-dropped) path while still feasible.
+# The rows stay soft (a fully hard stack can be infeasible on contact-rich
+# frames), but the penalty must beat the position cost, which pulls feet
+# towards targets that can lie slightly inside the terrain.  On the 12
+# bundled terrain clips (rp1, full length), raising it from 1e2 to 1e4
+# cut the frames with a foot more than 1 cm inside the terrain from 36%
+# to 15% and the worst foot penetration from 128 to 45 mm (mean over
+# clips), for +0.2 cm tracking error and +1% joint acceleration p99.  The
+# earlier sweep that found 1e4 "clearly trembling" ran against a
+# transposed heightfield with biased hfield distances.
 #
 # Override via ``HHTOOLS_NP_SLACK_PENALTY`` for experiments.
 NONPENETRATION_SLACK_PENALTY = float(
-    os.environ.get("HHTOOLS_NP_SLACK_PENALTY", "1.0e2")
+    os.environ.get("HHTOOLS_NP_SLACK_PENALTY", "1.0e4")
 )
 
 
