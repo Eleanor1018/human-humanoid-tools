@@ -479,7 +479,14 @@ def extract_foot_sticking_sequences(
     *,
     velocity_threshold: float = 0.01,
 ) -> list[dict[str, bool]]:
-    """Contact flags from source-foot XY velocity (holosoma ``extract_foot_sticking_sequence_velocity``)."""
+    """Contact flags from source-foot XY velocity (holosoma ``extract_foot_sticking_sequence_velocity``).
+
+    Each side reads the source vertex of its ``*_foot`` point.  A side without
+    one (robots mapped by ankle, e.g. ``left_ankle`` / ``left_ankle:toe`` /
+    ``left_ankle:heel``) falls back to the source vertex of the point
+    :func:`resolve_foot_mpc_points` picks, i.e. the point the foot-sticking
+    rows pin.
+    """
 
     n = len(targets)
     if n == 0:
@@ -497,6 +504,13 @@ def extract_foot_sticking_sequences(
                 right_vi is None and "right" in sem and "foot" in sem and ":" not in sem
             ):
                 right_vi = i
+        if left_vi is None or right_vi is None:
+            nh = int(targets[0].n_human_vertices)
+            left_pt, right_pt = resolve_foot_mpc_points(robot_points, nh)
+            if left_vi is None:
+                left_vi = _mpc_point_vertex_index(robot_points, nh, left_pt)
+            if right_vi is None:
+                right_vi = _mpc_point_vertex_index(robot_points, nh, right_pt)
 
     left_xy = right_xy = None
     if left_vi is not None:
