@@ -220,14 +220,17 @@ _distance_rows = jax.jit(column_distance_rows, static_argnums=2)
 
 
 def _root_rotation_weights(quats_xyzw: NDArray, weight: float) -> NDArray[np.float64]:
-    """Per-frame weight of the source pelvis orientation: 0 on near-identity frames.
+    """Per-frame weight of the source pelvis orientation: ``weight``, or 0 for the whole clip.
 
-    Position-only sources store identity rotations; ``q`` and ``-q`` are the same rotation.
+    Position-only sources store identity rotations, which carry no orientation; a track with
+    any real rotation is tracked in every frame, identity frames included.  ``q`` and ``-q``
+    are the same rotation.
     """
     q = np.asarray(quats_xyzw, dtype=np.float64)
     identity = np.array([0.0, 0.0, 0.0, 1.0])
     off = np.minimum(np.abs(q - identity).max(axis=1), np.abs(q + identity).max(axis=1))
-    return np.where(off >= _IDENTITY_QUAT_TOL, float(weight), 0.0)
+    informative = bool((off >= _IDENTITY_QUAT_TOL).any())
+    return np.full(len(q), float(weight) if informative else 0.0)
 
 
 def _terrain_snap_offset(min_clearance: float) -> float:
@@ -736,12 +739,41 @@ class FraxScenePipeline:
         stage("mpc", T, T)
 
         # ---- back half ----
+        # Joint edits first, so the snap and the reported numbers describe the returned motion.
         joint_q = model.joint_q_from_frax_q(q)
         lower, upper = _actuated_limits(model, self.frax_config)
         dof_lo, dof_hi = lower[model.dof_to_frax], upper[model.dof_to_frax]
         joint_q[:, 7:] = np.clip(joint_q[:, 7:], dof_lo, dof_hi).astype(np.float32)
+        dof_names = self.robot.dof_names()
+        joint_q = apply_upper_body_roll_narrowing_post_ik(
+            joint_q, dof_names, self.robot.preset, root_coord_count=7, robot_model=self.robot
+        )
+        # The narrowing edits shoulder joints without regard to their limits.
+        joint_q[:, 7:] = np.clip(joint_q[:, 7:], dof_lo, dof_hi)
+        q_out = jnp.asarray(model.frax_q_from_joint_q(joint_q))
 
-        robot_pts = np.asarray(solver.points_fn(jnp.asarray(q_all)))[:T]
+        signed_min_gap = float("nan")
+        floor_offset = 0.0
+        if grid is not None and solver.floor_fn is not None:
+            spheres = np.asarray(solver.floor_fn(q_out))  # (T, S, 3)
+            radii = np.asarray(model.robot.flat_collision_radii)[list(model.floor_sphere_idxs)]
+            signed_min_gap = float((_terrain_distance(grid, spheres, window) - radii).min())
+            if cfg.terrain_snap:
+                # The constraint keeps sphere centres r + margin from the terrain.
+                margin = float(cfg.terrain_margin)
+                drop = float(grid.vertical_clearance(spheres, radii + margin).min())
+                floor_offset = _terrain_snap_offset(drop)
+                joint_q[:, 2] -= np.float32(floor_offset)
+                signed_min_gap -= floor_offset
+        clip_floor_snap = 0.0
+        if terrain is None and self.front.cfg.clip_floor_snap:
+            joint_q, clip_floor_snap = snap_joint_q_clip_floor(
+                self.robot, joint_q, root_coord_count=7, ground_z=0.0
+            )
+            floor_offset = clip_floor_snap
+
+        robot_pts = np.array(solver.points_fn(q_out))
+        robot_pts[..., 2] -= floor_offset  # the snaps only translate the root vertically
         err = np.linalg.norm(robot_pts - frames["pos"], axis=-1)  # (T, P)
 
         def group_mean(*keys: str) -> float:
@@ -750,29 +782,6 @@ class FraxScenePipeline:
             ]
             return float(err[:, cols].mean()) if cols else float("nan")
 
-        signed_min_gap = float("nan")
-        floor_offset = 0.0
-        if grid is not None and solver.floor_fn is not None:
-            spheres = np.asarray(solver.floor_fn(jnp.asarray(q_all)))[:T]  # (T, S, 3)
-            radii = np.asarray(model.robot.flat_collision_radii)[list(model.floor_sphere_idxs)]
-            signed_min_gap = float((_terrain_distance(grid, spheres, window) - radii).min())
-            if cfg.terrain_snap:
-                drop = float(grid.vertical_clearance(spheres, radii).min())
-                floor_offset = _terrain_snap_offset(drop - float(cfg.terrain_margin))
-                joint_q[:, 2] -= np.float32(floor_offset)
-        clip_floor_snap = 0.0
-        if terrain is None and self.front.cfg.clip_floor_snap:
-            joint_q, clip_floor_snap = snap_joint_q_clip_floor(
-                self.robot, joint_q, root_coord_count=7, ground_z=0.0
-            )
-            floor_offset = clip_floor_snap
-
-        dof_names = self.robot.dof_names()
-        joint_q = apply_upper_body_roll_narrowing_post_ik(
-            joint_q, dof_names, self.robot.preset, root_coord_count=7, robot_model=self.robot
-        )
-        # The narrowing edits shoulder joints without regard to their limits.
-        joint_q[:, 7:] = np.clip(joint_q[:, 7:], dof_lo, dof_hi)
         meta: dict[str, object] = {
             "retarget_backend": "frax",
             "scene_solver": "frax",

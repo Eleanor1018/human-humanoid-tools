@@ -175,8 +175,9 @@ def test_row_directions_are_the_gradients_of_their_distances(seed) -> None:
     fd, lin = slope(eps), slope(wide)
     # Skip kinks: a smooth distance has the same slope at 1 um and 1 mm.
     smooth = (np.abs(fd - lin).max(axis=-1) < 1e-6) & (d0 < 1e2)
+    # Later obstacle rows switch columns under small moves, so fewer of their points are smooth.
+    assert smooth[:, 0].sum() > 60 and smooth[:, 1].sum() > 15 and smooth[:, 2:].sum() > 15
     for row in range(ROWS_PER_SPHERE):
-        assert smooth[:, row].sum() > (60 if row == 0 else 5)
         np.testing.assert_allclose(fd[smooth[:, row], row], normals[smooth[:, row], row], atol=1e-6)
 
 
@@ -322,6 +323,77 @@ def test_inside_exit_can_be_diagonal_onto_a_lower_terrace() -> None:
     d, n = _rows(grid, p, window=3)
     assert d[0, 0] == pytest.approx(-np.hypot(e, e))
     np.testing.assert_allclose(n[0, 0], [1 / np.sqrt(2), 0, 1 / np.sqrt(2)], atol=1e-12)
+
+
+_DX16 = 1 / 16
+
+
+def _rows16(hf, p, origin=(0.0, 0.0)):
+    grid = build_terrain_grid(hf, origin, _DX16, shape_bucket=1)
+    d, n = column_distance_rows(grid.as_ref(), jnp.asarray(p, dtype=jnp.float64)[None], 4)
+    return grid, np.asarray(d)[0], np.asarray(n)[0]
+
+
+@pytest.mark.parametrize("x0", [0.0, -_DX16 / 8], ids=["diagonal", "x-major"])
+def test_second_post_in_the_same_direction_band_has_a_row(x0) -> None:
+    # Moving tangentially to the nearer post's row into a farther post: four sector rows kept
+    # only the nearer one, so no row forbade the step.
+    hf = np.zeros((9, 9))
+    hf[5, 5] = hf[6, 2] = 0.5
+    p = np.array([x0, 0.0, _DX16])
+    end = np.array([2 * _DX16, -2 * _DX16, _DX16])
+    r = _DX16 / 4
+    grid, d, n = _rows16(hf, p, origin=(-4 * _DX16, -4 * _DX16))
+    assert grid.signed_distance(p) > r and grid.signed_distance(end) < 0.0
+    active = d < 100
+    assert (d[active] - r + n[active] @ (end - p)).min() < 0.0
+
+
+@pytest.mark.parametrize("own_high", [True, False])
+def test_stepping_out_normal_to_a_wall_at_a_grid_seam_is_allowed(own_high) -> None:
+    # On the seam of a straight wall the touching columns used to get axis directions along
+    # the wall, which forbade the step that clears it.
+    hf = np.zeros((7, 7))
+    if own_high:
+        hf[:, :3] = 0.5
+        outward = np.array([0.0, 1.0, 0.0])
+    else:
+        hf[:, 3] = 0.5
+        outward = np.array([0.0, -1.0, 0.0])
+    p = np.array([2.5 * _DX16, 2.5 * _DX16, 0.25])
+    r = _DX16 / 8
+    delta = 2 * r * outward
+    grid, d, n = _rows16(hf, p)
+    assert grid.signed_distance(p) == 0.0
+    assert grid.signed_distance(p + delta) == pytest.approx(2 * r)
+    active = d < 100
+    assert (d[active] - r + n[active] @ delta).min() >= -1e-12
+
+
+def test_a_hair_outside_a_corner_keeps_the_diagonal_direction() -> None:
+    hf = np.zeros((5, 5))
+    hf[2, 2] = 0.5
+    e = 2.0**-40
+    _, d, n = _rows16(hf, np.array([1.5 * _DX16 - e, 1.5 * _DX16 - e, 0.25]))
+    k = int(np.argmin(d))
+    assert d[k] == pytest.approx(np.sqrt(2) * e, rel=1e-10, abs=0.0)
+    np.testing.assert_allclose(n[k], np.array([-1.0, -1.0, 0.0]) / np.sqrt(2), atol=1e-12)
+
+
+def test_vertical_clearance_beside_a_box_and_at_tangency() -> None:
+    # Exactly representable geometry (dx = 1/64): a 10 cm box with its face at x = 19.5 / 64.
+    dx = 1 / 64
+    hf = np.zeros((40, 40))
+    hf[20:, :] = 0.10
+    grid = build_terrain_grid(hf, (0.0, 0.0), dx, shape_bucket=1)
+    face, r = 19.5 * dx, 2 * dx  # r: a sphere radius plus the snap margin
+    # Closer than r to the face, the sphere catches the box's top edge on the way down.
+    near = np.array([[face - 1.5 * dx, 0.3, 0.20]])
+    expected = 0.20 - (0.10 + np.sqrt(r**2 - (1.5 * dx) ** 2))
+    assert grid.vertical_clearance(near, r)[0] == pytest.approx(expected, abs=1e-12)
+    # Exactly r from the face it touches the edge too, rather than dropping to the floor.
+    tangent = np.array([[face - r, 0.3, 0.20]])
+    assert grid.vertical_clearance(tangent, r)[0] == pytest.approx(0.20 - 0.10, abs=1e-12)
 
 
 def test_vertical_clearance_matches_lowering_until_contact() -> None:

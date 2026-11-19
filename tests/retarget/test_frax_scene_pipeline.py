@@ -326,12 +326,48 @@ def test_terrain_snap_lowers_a_floating_clip_but_never_lifts() -> None:
     assert _terrain_snap_offset(float("nan")) == 0.0
 
 
-def test_root_rotation_weight_ignores_the_quaternion_sign() -> None:
+def test_root_rotation_weight_is_decided_per_clip_and_ignores_the_sign() -> None:
     from hhtools.retarget.frax_backend.scene_pipeline import _root_rotation_weights
 
     turned = np.array([0.0, 0.0, np.sin(0.2), np.cos(0.2)])
+    # A real rotation track: identity frames are orientations to track too.
     quats = np.array([[0, 0, 0, 1.0], [0, 0, 0, -1.0], turned, -turned])
-    np.testing.assert_array_equal(_root_rotation_weights(quats, 5.0), [0.0, 0.0, 5.0, 5.0])
+    np.testing.assert_array_equal(_root_rotation_weights(quats, 5.0), [5.0] * 4)
+    # A position-only source: identity everywhere, either sign.
+    flat = np.array([[0, 0, 0, 1.0], [0, 0, 0, -1.0], [0, 0, 0, 1.0]])
+    np.testing.assert_array_equal(_root_rotation_weights(flat, 5.0), [0.0] * 3)
+
+
+def test_reported_numbers_describe_the_returned_motion(
+    toy, calibration, base_motion, monkeypatch
+) -> None:
+    # Alignment and the terrain gap are measured after the post-solve joint edits.
+    import hhtools.robot.retarget_profile as profile
+
+    def bend(joint_q, dof_names, *args, **kwargs):  # stands in for the shoulder narrowing
+        out = np.array(joint_q, copy=True)
+        out[:, 7:] += 0.2
+        return out
+
+    monkeypatch.setattr(profile, "apply_upper_body_roll_narrowing_post_ik", bend)
+    motion = _walk(base_motion, platform=(0.3, 0.9, 0.03))
+    pipe = _pipeline(toy, motion, calibration)
+    result = pipe.run(motion)
+    model = pipe.frax_model
+    st = pipe.front.prepare_scene_targets(motion, mj_model=MujocoScene.from_robot(toy).model)
+    joints, offsets = pipe._frames_for(MujocoScene.from_robot(toy), st.robot_points)
+    q = model.frax_q_from_joint_q(result.joint_q)
+    pts = np.stack([_fk_points(model, qq, joints, offsets) for qq in q])
+    err = np.linalg.norm(pts - st.positions, axis=-1)
+    assert result.meta["alignment_mean_m"] == pytest.approx(err.mean(), abs=1e-5)
+    radii = np.asarray(model.robot.flat_collision_radii)[list(model.floor_sphere_idxs)]
+    spheres = jax.vmap(
+        lambda qq: model.robot._link_collision_positions(model.robot.joint_to_world_transforms(qq))
+    )(jnp.asarray(q))[:, np.asarray(model.floor_sphere_idxs)]
+    terrain = pipe.front.scaled_terrain(motion, FLOOR, result.meta["smpl_scale"])
+    grid = build_terrain_grid(terrain.hf, terrain.min_point, terrain.dx, shape_bucket=1)
+    gap = (grid.signed_distance(np.asarray(spheres)) - radii).min()
+    assert result.meta["terrain_signed_min_gap"] == pytest.approx(gap, abs=1e-5)
 
 
 def test_terrain_snap_keeps_the_margin(toy, calibration, base_motion) -> None:
