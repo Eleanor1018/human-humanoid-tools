@@ -75,6 +75,26 @@ def _add_ground_plane(wb: ET.Element, z: float = 0.0) -> None:
     )
 
 
+def collision_ground_z(terrain: TerrainHeightfield | None, default: float = 0.0) -> float:
+    """Height of the collision scene's ground plane for ``terrain``.
+
+    The plane is solid below its height everywhere, including inside the
+    heightfield's footprint, so it must never sit above the terrain surface.
+    Grounding puts ``z = 0`` at the source's lowest joint, which on parc_ms is
+    an ankle about 4 cm above the floor (``hf`` floor at -0.038 m); a plane
+    at ``z = 0`` there fills every floor cell and pit up to ``z = 0``.  With a
+    heightfield the plane goes to ``min(default, hf.min())`` and only catches
+    feet that leave the heightfield's footprint.
+    """
+    if terrain is None:
+        return float(default)
+    hf = np.asarray(terrain.hf, dtype=np.float64)
+    finite = hf[np.isfinite(hf)]
+    if finite.size == 0:
+        return float(default)
+    return min(float(default), float(finite.min()))
+
+
 def _dump_hfield_to_bin(hf: NDArray[np.floating], path: str | Path) -> None:
     """Write a heightfield to MuJoCo's custom hfield binary format.
 
@@ -86,14 +106,19 @@ def _dump_hfield_to_bin(hf: NDArray[np.floating], path: str | Path) -> None:
 
     MuJoCo internally re-normalises the data, but doing it here too gives
     deterministic round-tripping and lets us use the same byte payload as
-    a fallback PNG.  ``hf[ix, iy]`` becomes ``data[ix * ncol + iy]`` so
-    the X axis runs along rows (matches PARC's convention).
+    a fallback PNG.
+
+    MuJoCo reads ``data[r * ncol + c]`` as the elevation at column ``c``
+    along X and row ``r`` along Y.  ``hf`` is indexed ``hf[ix, iy]``
+    (PARC's convention, X first), so it is written transposed:
+    ``nrow = ny``, ``ncol = nx``, ``data[iy * nx + ix] = hf[ix, iy]``.
     """
     import struct
 
     arr = np.asarray(hf, dtype=np.float64)
     if arr.ndim != 2:
         raise ValueError(f"hfield must be 2-D; got shape {arr.shape}")
+    arr = arr.T  # rows along Y, columns along X
     nrow, ncol = arr.shape
     z_min = float(arr.min())
     z_max = float(arr.max())
@@ -338,6 +363,103 @@ def build_collision_model_with_hfield(
 # Constraint computation (robot-agnostic)
 # ---------------------------------------------------------------------------
 
+#: Penetrations up to this depth (m) are measured exactly by the ``distmax = 0``
+#: heightfield query; deeper ones can come back too shallow.
+_HFIELD_EXACT_DEPTH = 0.01
+#: Penetration (m) aimed for when re-raising the heightfield to refine a gap.
+_HFIELD_PROBE_DEPTH = 0.003
+#: Raised-heightfield queries per pair, at most.
+_HFIELD_MAX_LIFTS = 3
+
+
+def _raised_hfield_distance(model, data, g1, g2, hf, lift, fromto) -> float:
+    """``mj_geomDistance(distmax=0)`` with heightfield geom ``hf`` raised by ``lift``."""
+    import mujoco
+
+    saved = data.geom_xpos[hf].copy()
+    try:
+        data.geom_xpos[hf, 2] += lift
+        fromto[:] = 0.0
+        return float(mujoco.mj_geomDistance(model, data, g1, g2, 0.0, fromto))
+    finally:
+        data.geom_xpos[hf] = saved
+
+
+def _hfield_pair_distance(
+    model,
+    data,
+    g1: int,
+    g2: int,
+    threshold: float,
+    fromto: NDArray[np.float64],
+) -> float:
+    """Signed distance between a geom and a heightfield geom, exact within ``threshold``.
+
+    ``mj_geomDistance`` against an ``<hfield>`` is wrong whenever ``distmax > 0``
+    (measured on MuJoCo 3.7 with spheres, boxes and the rp1 foot meshes): it
+    returns about ``gap - 1.5 * distmax``, so with the 5 cm collision threshold
+    a foot resting on the terrain reads 7.5 cm inside it.  With ``distmax = 0``
+    it is exact for penetration up to about the geom's own thickness (deeper
+    contact comes back too shallow) and reports 0 for any separation.
+
+    So: query at ``distmax = 0``; if the geoms penetrate, that is the answer.
+    Otherwise measure the gap by raising the heightfield (its world pose only)
+    until the geom penetrates it shallowly: first by ``threshold``, then, while
+    the penetration is deeper than :data:`_HFIELD_EXACT_DEPTH`, to the estimated
+    gap plus :data:`_HFIELD_PROBE_DEPTH`.  Gaps at or above ``threshold`` return
+    ``threshold`` with ``fromto`` zeroed, like ``mj_geomDistance``.  Otherwise
+    ``fromto`` holds ``(p1, p2)`` with the heightfield witness moved back onto
+    the real surface, so ``p1 - p2`` gives the contact normal.
+    """
+    import mujoco
+
+    fromto[:] = 0.0
+    dist = float(mujoco.mj_geomDistance(model, data, g1, g2, 0.0, fromto))
+    if dist < 0.0 or threshold <= 0.0:
+        return dist
+    hf = g1 if int(model.geom_type[g1]) == int(mujoco.mjtGeom.mjGEOM_HFIELD) else g2
+    k = 0 if hf == g1 else 3  # offset of the heightfield witness in ``fromto``
+    probe = np.zeros(6, dtype=np.float64)
+    lift = float(threshold)
+    gap = float(threshold)
+    found = False
+    for _ in range(_HFIELD_MAX_LIFTS):
+        depth = _raised_hfield_distance(model, data, g1, g2, hf, lift, probe)
+        if depth >= 0.0:
+            # Clear of the raised surface: the gap is at least ``lift``.
+            gap = lift
+            break
+        found = True
+        gap = lift + depth
+        fromto[:] = probe
+        fromto[k + 2] -= lift
+        if -depth <= _HFIELD_EXACT_DEPTH:
+            break
+        lift = gap + _HFIELD_PROBE_DEPTH
+    if not found or gap >= threshold:
+        fromto[:] = 0.0
+        return float(threshold)
+    return float(gap)
+
+
+def _geom_pair_distance(
+    model,
+    data,
+    g1: int,
+    g2: int,
+    threshold: float,
+    fromto: NDArray[np.float64],
+) -> float:
+    """``mj_geomDistance``, with heightfield pairs measured by :func:`_hfield_pair_distance`."""
+    import mujoco
+
+    hfield = int(mujoco.mjtGeom.mjGEOM_HFIELD)
+    if int(model.geom_type[g1]) == hfield or int(model.geom_type[g2]) == hfield:
+        return _hfield_pair_distance(model, data, g1, g2, threshold, fromto)
+    fromto[:] = 0.0
+    return float(mujoco.mj_geomDistance(model, data, g1, g2, threshold, fromto))
+
+
 def _is_worldbody_geom(model, geom_id: int) -> bool:
     return int(model.geom_bodyid[geom_id]) == 0
 
@@ -496,9 +618,8 @@ def compute_nonpenetration_constraints(
     # local to each foot ↔ each scene part.
     pair_records: list[tuple[int, int, float, NDArray[np.float64], NDArray[np.float64]]] = []
     for g1, g2 in candidates:
-        fromto[:] = 0.0
-        dist = float(mujoco.mj_geomDistance(model, data, g1, g2, threshold, fromto))
-        if dist > threshold:
+        dist = _geom_pair_distance(model, data, g1, g2, threshold, fromto)
+        if dist >= threshold:
             continue
 
         pos1 = fromto[:3].copy()
@@ -614,6 +735,7 @@ def cleanup_terrain_files(paths: list[Path]) -> None:
 __all__ = [
     "build_collision_model_with_hfield",
     "cleanup_terrain_files",
+    "collision_ground_z",
     "compute_nonpenetration_constraints",
     "detect_collision_candidates",
 ]

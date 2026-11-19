@@ -55,10 +55,6 @@ _log = logging.getLogger(__name__)
 # terrain clips without changing the exported trajectory.
 _ALIGNMENT_DIAG_MAX_FRAMES = 256
 
-# Height of the ground plane in the hard-collision scene; the terrain Z-snap
-# treats it as solid below the heightfield.
-_COLLISION_GROUND_Z = 0.0
-
 
 @dataclass
 class InteractionMeshPipeline:
@@ -1376,6 +1372,7 @@ class InteractionMeshPipeline:
 
         from hhtools.retarget.interaction_mesh.collision import (
             build_collision_model_with_hfield,
+            collision_ground_z,
         )
 
         urdf_path = getattr(self.robot.preset, "urdf_path", None)
@@ -1401,7 +1398,7 @@ class InteractionMeshPipeline:
                 terrain_robot,
                 base_xml=base_xml,
                 add_ground=True,
-                ground_z=_COLLISION_GROUND_Z,
+                ground_z=collision_ground_z(terrain_robot),
             )
         except Exception as exc:
             _log.error(
@@ -1606,6 +1603,7 @@ class InteractionMeshPipeline:
         signed_min_gap = float("nan")
         used_terrain_snap = False
         if coll_model is not None and motion.terrain is not None:
+            from hhtools.retarget.interaction_mesh.collision import collision_ground_z
             from hhtools.retarget.interaction_mesh.terrain_clearance import (
                 foot_terrain_clearance,
                 terrain_snap_offset,
@@ -1615,8 +1613,10 @@ class InteractionMeshPipeline:
                 float(smpl_scale),
                 z_offset=float(terrain_heightfield_z_offset_world(motion, z_min)),
             )
+            # Same ground plane as the collision scene the SQP solved against.
             clearance = foot_terrain_clearance(
-                coll_model, coll_data, joint_q, terrain_robot, floor_z=_COLLISION_GROUND_Z,
+                coll_model, coll_data, joint_q, terrain_robot,
+                floor_z=collision_ground_z(terrain_robot),
             )
             signed_min_gap = clearance.min_signed_distance
             floor_offset = terrain_snap_offset(
