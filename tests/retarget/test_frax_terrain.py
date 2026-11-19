@@ -323,20 +323,39 @@ def _sphere_world(robot, qs):
     )  # fmt: skip
 
 
-SOLE = np.arange(43, 51)  # both feet's sole spheres of the toy robot (radius 1 cm)
+def _sole_spheres(model, side: str | None = None) -> np.ndarray:
+    """Flat indices of the sole spheres; ``side="left"`` keeps those with y > 0 when standing."""
+    sole = np.asarray(model.sole_sphere_idxs)
+    if side is None:
+        return sole
+    y = _sphere_world(model.robot, _stand_q(model)[None])[0, sole, 1]
+    return sole[y > 0] if side == "left" else sole[y < 0]
 
 
 def _sole_clearance(model, grid, qs) -> np.ndarray:
-    """(T, 8) true signed distance of every sole sphere's surface to the column terrain."""
-    pos = _sphere_world(model.robot, qs)[:, SOLE]
-    radii = np.asarray(model.robot.flat_collision_radii)[SOLE]
+    """(T, S) true signed distance of every sole sphere's surface to the column terrain."""
+    sole = _sole_spheres(model)
+    pos = _sphere_world(model.robot, qs)[:, sole]
+    radii = np.asarray(model.robot.flat_collision_radii)[sole]
     return grid.signed_distance(pos) - radii
 
 
-def _foot_rig(model, grid, window, max_rows=32):
+def _foot_rig(model, grid, window, q0, max_rows=32):
+    """Drive the left ankle to ``ref["pos"]`` while holding the foot flat and the pelvis upright.
+
+    The orientation tasks stand in for the rest of a retarget's targets.  With the foot position
+    alone, the floating base may rotate freely and a foot jammed into a corner ends up wherever
+    floating-point details take it: two CI runs of the same code disagreed.
+    """
     robot = model.robot
     foot, _ = model.link_frame("left_foot_link")
-    task = FrameTask(robot, [foot], gain_pos=1 / DT, pos_key="pos", rot_key=None)
+    base = robot.nv_floating - 1
+    tfs = np.asarray(robot.joint_to_world_transforms(jnp.asarray(q0)))
+    tasks = [
+        FrameTask(robot, [foot], gain_pos=1 / DT, pos_key="pos", rot_key=None),
+        FrameTask(robot, [foot], gain_rot=1 / DT, pos_key=None, rot_key="foot_rmat"),
+        FrameTask(robot, [base], gain_rot=1 / DT, pos_key=None, rot_key="base_rmat"),
+    ]
     constraints = [
         JointLimits(robot, v_max=None, v_min=None, gain=1 / DT),
         TerrainConstraint(
@@ -347,8 +366,13 @@ def _foot_rig(model, grid, window, max_rows=32):
             window=window,
         ),
     ]
-    solver = DiffIKSolver(robot, [task], constraints, regularization=0.1)
-    return solver, foot, {"terrain": grid.as_ref()}
+    solver = DiffIKSolver(robot, tasks, constraints, regularization=0.1)
+    ref = {
+        "terrain": grid.as_ref(),
+        "foot_rmat": tfs[foot][None, :3, :3],
+        "base_rmat": tfs[base][None, :3, :3],
+    }
+    return solver, foot, ref
 
 
 def _ankle(robot, foot, q) -> np.ndarray:
@@ -363,43 +387,44 @@ def _path(a, b, steps):
 @pytest.mark.parametrize("substeps", [1, 2])
 def test_foot_driven_into_a_tall_wall_does_not_penetrate(model, per_frame, substeps) -> None:
     grid = _step_grid(0.6, 0.35)
-    solver, foot, ref = _foot_rig(model, grid, window=8)
     q0 = _stand_q(model)
+    solver, foot, ref = _foot_rig(model, grid, 8, q0)
     a0 = _ankle(model.robot, foot, q0)
     goal = a0 + np.array([0.3, 0.0, 0.0])  # the toe would end 25 cm inside the wall
     n = int(np.ceil(0.3 / per_frame))
     pos = np.concatenate([_path(a0, goal, n), np.tile(goal, (15, 1))])[:, None]
-    qs, _ = _run(solver, q0, ref, len(pos), pos, substeps)
+    qs, converged = _run(solver, q0, ref, len(pos), pos, substeps)
     clearance = _sole_clearance(model, grid, qs)
+    assert converged.all() and np.isfinite(qs).all()
     assert clearance.min() > -0.002
-    assert np.isfinite(qs).all()
     assert clearance[-1].min() < 0.02  # the foot did reach the wall
 
 
 @pytest.mark.parametrize("substeps", [1, 2])
 def test_foot_driven_into_a_low_step_is_held_at_the_face(model, substeps) -> None:
     grid = _step_grid(0.15, 0.35)
-    solver, foot, ref = _foot_rig(model, grid, window=8)
     q0 = _stand_q(model)
+    solver, foot, ref = _foot_rig(model, grid, 8, q0)
     a0 = _ankle(model.robot, foot, q0)
     goal = a0 + np.array([0.3, 0.0, 0.0])
     pos = np.concatenate([_path(a0, goal, 15), np.tile(goal, (20, 1))])[:, None]
-    qs, _ = _run(solver, q0, ref, len(pos), pos, substeps)
+    qs, converged = _run(solver, q0, ref, len(pos), pos, substeps)
     clearance = _sole_clearance(model, grid, qs)
-    sole = _sphere_world(model.robot, qs[-1:])[0, SOLE[:4]]  # the driven (left) foot
-    reach = sole[:, 0].max() + 0.01  # furthest sole extent in x
-    toe_z = sole[sole[:, 0] > 0.3, 2].max()
+    left = _sole_spheres(model, "left")
+    sole = _sphere_world(model.robot, qs[-1:])[0, left]
+    radius = np.asarray(model.robot.flat_collision_radii)[left]
+    assert converged.all()
     assert clearance.min() > -0.002
-    assert reach < 0.35 + 0.002  # stopped at the face
-    assert toe_z < 0.02  # toes still on the floor, not on the step
+    assert (sole[:, 0] + radius).max() < 0.35 + 0.002  # stopped at the face
+    assert (sole[:, 2] - radius).max() < 0.01  # flat on the floor, not on the step
 
 
 @pytest.mark.parametrize("substeps", [1, 2])
 def test_foot_lifted_above_a_step_gets_onto_it(model, substeps) -> None:
     top = 0.15
     grid = _step_grid(top, 0.35)
-    solver, foot, ref = _foot_rig(model, grid, window=8)
     q0 = _stand_q(model)
+    solver, foot, ref = _foot_rig(model, grid, 8, q0)
     a0 = _ankle(model.robot, foot, q0)
     up = a0 + np.array([0.0, 0.0, top + 0.02])  # 2 cm clearance over the edge
     over = up + np.array([0.3, 0.0, 0.0])
@@ -407,9 +432,10 @@ def test_foot_lifted_above_a_step_gets_onto_it(model, substeps) -> None:
     pos = np.concatenate(
         [_path(a0, up, 10), _path(up, over, 15), _path(over, goal, 5), np.tile(goal, (15, 1))]
     )[:, None]
-    qs, _ = _run(solver, q0, ref, len(pos), pos, substeps)
+    qs, converged = _run(solver, q0, ref, len(pos), pos, substeps)
     clearance = _sole_clearance(model, grid, qs)
     err = np.linalg.norm(_ankle(model.robot, foot, qs[-1]) - goal)
+    assert converged.all()
     assert clearance.min() > -0.002
     assert err <= 0.01
 
@@ -418,15 +444,17 @@ def test_foot_lifted_above_a_step_gets_onto_it(model, substeps) -> None:
 def test_spheres_inside_a_wall_leave_sideways(model, substeps) -> None:
     face = 0.35
     grid = _step_grid(0.6, face)
-    solver, foot, ref = _foot_rig(model, grid, window=8)
     q0 = _stand_q(model)
     q0[0] = face - 0.13  # toe sphere centres 1 cm inside the face: surfaces 2 cm inside
     assert _sole_clearance(model, grid, q0[None]).min() == pytest.approx(-0.02)
+    solver, foot, ref = _foot_rig(model, grid, 8, q0)
     pos = np.tile(_ankle(model.robot, foot, q0), (10, 1))[:, None]
-    qs, _ = _run(solver, q0, ref, 10, pos, substeps)
+    qs, converged = _run(solver, q0, ref, 10, pos, substeps)
     clearance = _sole_clearance(model, grid, qs)
+    sole = _sphere_world(model.robot, qs)[:, _sole_spheres(model)]
+    assert converged.all()
     assert clearance[1].min() > -0.002  # outside after two frames
-    assert qs[:, 2].max() - q0[2] < 0.03  # not lifted
+    assert sole[:, :, 2].max() < 0.02  # left through the face, not up the 60 cm wall
 
 
 def test_flat_terrain_rows_have_inactive_walls(model) -> None:
