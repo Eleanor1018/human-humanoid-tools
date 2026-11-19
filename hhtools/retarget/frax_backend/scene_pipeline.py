@@ -781,6 +781,8 @@ class FraxScenePipeline:
             "source_z_min": float(st.z_min),
             "source_terrain_z_offset": self._terrain_z_offset(motion, st.z_min),
             "terrain_floor_offset": float(floor_offset),
+            # Solved against the terrain, so the root height is absolute in its frame.
+            "terrain_grounded": "terrain" in solver.constraints,
             "terrain_signed_min_gap": float(signed_min_gap),
             "clip_floor_snap_m": float(clip_floor_snap),
             "alignment_mean_m": float(err.mean()),

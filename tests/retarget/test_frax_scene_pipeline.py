@@ -182,6 +182,7 @@ def test_flat_terrain_walk_tracks_and_stays_in_limits(toy, calibration, base_mot
     assert result.joint_q.dtype == np.float32
     assert np.isfinite(result.joint_q).all()
     assert meta["retarget_backend"] == "frax" and meta["scene_solver"] == "frax"
+    assert meta["terrain_grounded"] is True  # exports keep the solved root height
     assert meta["execution_provenance"]["runtime"] == "jax"
     assert meta["frax"]["constraints"] == [
         "joint_limits",
@@ -354,6 +355,7 @@ def test_motion_without_terrain_uses_the_flat_floor(toy, calibration, base_motio
     assert result.meta["frax"]["terrain_window"] is None
     assert np.isnan(result.meta["terrain_signed_min_gap"])
     assert np.isnan(result.meta["source_terrain_z_offset"])
+    assert result.meta["terrain_grounded"] is False
     assert np.isfinite(result.joint_q).all()
 
 
