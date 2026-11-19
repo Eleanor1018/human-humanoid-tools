@@ -31,8 +31,10 @@ __all__ = [
 
 #: Body-name tags that mark a foot body.
 FOOT_BODY_TAGS = ("foot", "ankle", "toe")
-#: Largest spacing (m) between the sample points placed along a primitive geom.
+#: Largest spacing (m) between sample points on flat parts of a foot geom.
 _SAMPLE_SPACING = 0.02
+#: Largest gap (m) between a curved primitive surface and its lowest sample point.
+_CURVE_TOLERANCE = 1e-3
 #: Gaps at or below this (m) count as contact, so the clip is not lowered.
 _SNAP_TOLERANCE = 1e-4
 
@@ -53,13 +55,19 @@ def column_terrain_distance(
       a lower column.  A point beside a tall column and below its top is therefore at the
       horizontal gap to the column's side.  Exact within ``max_distance`` and clipped to
       ``[-max_distance, max_distance]`` beyond it (only columns that close are searched).
-    * ``vertical_clearance``: height of the point above the top of the column under its own XY
-      (``floor_z`` outside the grid), i.e. how far it can move straight down before it meets
-      the terrain.  Negative inside the terrain; same sign as ``signed_distance``.
+    * ``vertical_clearance``: height of the point above the highest column whose footprint
+      contains its XY (``floor_z`` outside the grid), i.e. how far it can move straight down
+      before it meets the terrain.  Negative inside the terrain; same sign as
+      ``signed_distance``.
+
+    Cells without a finite height count as solid of unbounded height, so unknown terrain never
+    reads as free space.  Points with a non-finite coordinate get NaN in both outputs.
     """
     pts = np.asarray(points, dtype=np.float64)
     batch = pts.shape[:-1]
     pts = pts.reshape(-1, 3)
+    finite = np.all(np.isfinite(pts), axis=1)
+    pts = np.where(finite[:, None], pts, 0.0)
     floor_z = float(floor_z)
     dx = float(terrain.dx)
     reach = max(float(max_distance), 0.0)
@@ -68,116 +76,217 @@ def column_terrain_distance(
     # border can step out sideways onto the floor.
     hf = np.asarray(terrain.hf, dtype=np.float64)
     heights = np.pad(
-        np.maximum(np.where(np.isfinite(hf), hf, floor_z), floor_z), w + 1, constant_values=floor_z
+        np.maximum(np.where(np.isnan(hf), np.inf, hf), floor_z), w + 1, constant_values=floor_z
     )
     origin = np.asarray(terrain.min_point, dtype=np.float64).reshape(2) - (w + 1) * dx
     shape = np.asarray(heights.shape)
 
-    f = (pts[:, :2] - origin) / dx
-    on_grid = np.all((f >= -0.5) & (f <= shape - 0.5), axis=1)
-    idx = np.clip(np.round(f), 0, shape - 1).astype(np.int64)
-    top = np.where(on_grid, heights[idx[:, 0], idx[:, 1]], floor_z)
-    z = pts[:, 2]
-    vertical = z - top
-
+    idx = np.clip(np.round((pts[:, :2] - origin) / dx), 0, shape - 1).astype(np.int64)
     half = 0.5 * dx
-    d_out = z - floor_z  # outside: distance to the nearest column, or to the floor plane
-    d_in = -vertical  # inside: shortest way out, straight up or over the top of a nearby column
-    for di in range(-w, w + 1):
-        ii = np.clip(idx[:, 0] + di, 0, shape[0] - 1)
-        lx = np.maximum(np.abs(pts[:, 0] - (origin[0] + ii * dx)) - half, 0.0)
-        for dj in range(-w, w + 1):
-            jj = np.clip(idx[:, 1] + dj, 0, shape[1] - 1)
-            ly = np.maximum(np.abs(pts[:, 1] - (origin[1] + jj * dx)) - half, 0.0)
-            rho = np.hypot(lx, ly)  # horizontal gap to this column's footprint
-            s = z - heights[ii, jj]  # height above this column's top
-            # Distance to the column's solid, and to the free space above its top.
-            d_out = np.minimum(d_out, np.hypot(rho, np.maximum(s, 0.0)))
-            d_in = np.minimum(d_in, np.hypot(rho, np.maximum(-s, 0.0)))
-    signed = np.where(vertical < 0.0, -d_in, d_out)
+
+    def gaps(p, i, j):
+        """Horizontal gap of points ``p`` to the footprints of columns ``(i, j)``, per axis."""
+        ii = np.clip(i, 0, shape[0] - 1)
+        jj = np.clip(j, 0, shape[1] - 1)
+        lx = np.maximum(np.abs(p[:, 0] - (origin[0] + ii * dx)) - half, 0.0)
+        ly = np.maximum(np.abs(p[:, 1] - (origin[1] + jj * dx)) - half, 0.0)
+        return lx, ly, heights[ii, jj]
+
+    # Top of the highest column whose footprint contains the XY.  A point on a shared edge or
+    # corner lies over every column touching it, all of them the nearest node or a neighbour.
+    z = pts[:, 2]
+    under = np.full(len(pts), floor_z)
+    for di in (-1, 0, 1):
+        for dj in (-1, 0, 1):
+            lx, ly, h = gaps(pts, idx[:, 0] + di, idx[:, 1] + dj)
+            under = np.maximum(under, np.where((lx == 0.0) & (ly == 0.0), h, -np.inf))
+    vertical = z - under
+
+    # Only points with some column top (or the floor) less than ``reach`` below them can be
+    # closer than ``reach``; every other point is clipped to ``reach`` anyway.
+    win = 2 * w + 1
+    wmax = np.lib.stride_tricks.sliding_window_view(
+        np.pad(heights, w, constant_values=floor_z), (win, win)
+    ).max(axis=(-2, -1))
+    near = finite & (z - reach < wmax[idx[:, 0], idx[:, 1]])
+    signed = np.where(finite, reach, np.nan)
+    flat = heights.ravel()
+    for inside in (False, True):
+        sel = np.flatnonzero(near & ((vertical < 0.0) == inside))
+        if not sel.size:
+            continue
+        p, zn = pts[sel], z[sel]
+        # Window columns along x and rows along y: flat index part and squared horizontal gap.
+        cols, rows = [], []
+        for d in range(-w, w + 1):
+            ii = np.clip(idx[sel, 0] + d, 0, shape[0] - 1)
+            jj = np.clip(idx[sel, 1] + d, 0, shape[1] - 1)
+            lx = np.maximum(np.abs(p[:, 0] - (origin[0] + ii * dx)) - half, 0.0)
+            ly = np.maximum(np.abs(p[:, 1] - (origin[1] + jj * dx)) - half, 0.0)
+            cols.append((ii * shape[1], lx * lx))
+            rows.append((jj, ly * ly))
+        # Squared distance to the nearest column's solid (outside), or to the free space above
+        # some column top (inside).
+        best = np.full(len(sel), np.inf)
+        for base, lx2 in cols:
+            for jj, ly2 in rows:
+                s = zn - flat.take(base + jj)  # height above this column's top
+                s = np.maximum(-s if inside else s, 0.0)
+                best = np.minimum(best, lx2 + ly2 + s * s)
+        if inside:  # straight up is always a way out
+            signed[sel] = -np.minimum(under[sel] - zn, np.sqrt(best))
+        else:  # or the floor plane
+            signed[sel] = np.minimum(zn - floor_z, np.sqrt(best))
     signed = np.clip(signed, -reach, reach)
+    vertical = np.where(finite, vertical, np.nan)
     return signed.reshape(batch), vertical.reshape(batch)
 
 
 @dataclass(frozen=True)
 class FootTerrainClearance:
-    """Per-frame minima over all foot collision points (NaN where a frame has none)."""
+    """Per-frame minima over all foot collision points.
+
+    A frame that could not be measured (no foot geoms, or a non-finite pose) is NaN, and so are
+    the clip-wide minima then: clearance is only established if every frame is measured.
+    """
 
     signed_distance: NDArray[np.float64]  # (F,)
     vertical_clearance: NDArray[np.float64]  # (F,)
 
     @property
     def min_signed_distance(self) -> float:
-        d = self.signed_distance[np.isfinite(self.signed_distance)]
-        return float(d.min()) if d.size else float("nan")
+        d = self.signed_distance
+        return float(np.min(d)) if d.size else float("nan")
 
     @property
     def min_vertical_clearance(self) -> float:
-        d = self.vertical_clearance[np.isfinite(self.vertical_clearance)]
-        return float(d.min()) if d.size else float("nan")
+        d = self.vertical_clearance
+        return float(np.min(d)) if d.size else float("nan")
 
 
-def _unit_directions() -> NDArray[np.float64]:
-    """The 26 directions to the faces, edges and corners of a cube, normalised."""
-    g = np.array(
-        [
-            (a, b, c)
-            for a in (-1, 0, 1)
-            for b in (-1, 0, 1)
-            for c in (-1, 0, 1)
-            if (a, b, c) != (0, 0, 0)
-        ],
-        dtype=np.float64,
-    )
-    return g / np.linalg.norm(g, axis=1, keepdims=True)
+def _arc_count(radius: float) -> int:
+    """Samples around a circle so a chord sags at most ``_CURVE_TOLERANCE`` below the arc."""
+    if radius <= _CURVE_TOLERANCE:
+        return 8
+    return max(8, math.ceil(math.pi / math.acos(1.0 - _CURVE_TOLERANCE / radius)))
+
+
+def _sphere_directions(radius: float) -> NDArray[np.float64]:
+    """Unit directions on latitude rings, each direction within ``_CURVE_TOLERANCE`` of a sample.
+
+    Any direction is within an angle ``t`` of a sample, so the lowest sample of a sphere of
+    ``radius`` is at most ``radius * (1 - cos t) <= _CURVE_TOLERANCE`` above its lowest point.
+    """
+    t = math.acos(max(1.0 - _CURVE_TOLERANCE / max(radius, _CURVE_TOLERANCE), -1.0))
+    step = t * math.sqrt(2.0)
+    rings = []
+    for lat in np.linspace(-0.5 * np.pi, 0.5 * np.pi, max(math.ceil(np.pi / step), 2) + 1):
+        n = max(math.ceil(2.0 * np.pi * math.cos(lat) / step), 1)
+        lon = np.linspace(0.0, 2.0 * np.pi, n, endpoint=False)
+        c = math.cos(lat)
+        rings.append(np.stack([c * np.cos(lon), c * np.sin(lon), np.full(n, math.sin(lat))], 1))
+    return np.concatenate(rings, axis=0)
 
 
 def _stations(half_length: float) -> NDArray[np.float64]:
-    n = max(int(math.ceil(2.0 * half_length / _SAMPLE_SPACING)) + 1, 2)
+    n = max(math.ceil(2.0 * half_length / _SAMPLE_SPACING) + 1, 2)
     return np.linspace(-half_length, half_length, n)
+
+
+def _triangle_samples(tri: NDArray[np.float64]) -> NDArray[np.float64]:
+    """Samples on triangles (m, 3, 3): corners, points along edges and a grid inside.
+
+    Edges are split into pieces of at most ``_SAMPLE_SPACING``; triangles wide enough to hold
+    a disk of that diameter also get a square grid of that spacing in their plane.
+    """
+    s = _SAMPLE_SPACING
+    out = [tri.reshape(-1, 3)]
+    a, b = tri, tri[:, [1, 2, 0]]
+    lengths = np.linalg.norm(b - a, axis=2)  # (m, 3)
+    pieces = np.ceil(lengths / s).astype(np.int64)
+    for k in np.unique(pieces[pieces > 1]):
+        m = pieces == k
+        t = (np.arange(1, k) / k)[None, :, None]
+        out.append((a[m][:, None] + t * (b[m] - a[m])[:, None]).reshape(-1, 3))
+    normal = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
+    area2 = np.linalg.norm(normal, axis=1)  # twice the area
+    inradius = area2 / np.maximum(lengths.sum(axis=1), 1e-12)
+    for f in np.flatnonzero(inradius > 0.5 * s):
+        p0, p1, p2 = tri[f]
+        e1 = (p1 - p0) / np.linalg.norm(p1 - p0)
+        e2 = np.cross(normal[f] / area2[f], e1)
+        uv = np.array([[0.0, 0.0], [(p1 - p0) @ e1, 0.0], [(p2 - p0) @ e1, (p2 - p0) @ e2]])
+        lo, hi = uv.min(axis=0), uv.max(axis=0)
+        gu, gv = np.meshgrid(np.arange(lo[0], hi[0], s), np.arange(lo[1], hi[1], s))
+        q = np.stack([gu.ravel(), gv.ravel()], axis=1)
+        # Inside test: same side of all three edges (the uv triangle is counter-clockwise).
+        e = np.roll(uv, -1, axis=0) - uv
+        rel = q[:, None, :] - uv[None]
+        inside = np.all(e[None, :, 0] * rel[..., 1] - e[None, :, 1] * rel[..., 0] >= 0.0, axis=1)
+        q = q[inside]
+        out.append(p0 + q[:, :1] * e1 + q[:, 1:] * e2)
+    return np.concatenate(out, axis=0)
+
+
+def _mesh_hull_points(model, mesh_id: int) -> NDArray[np.float64]:
+    """Points on the convex hull MuJoCo collides with: its vertices and samples on its faces."""
+    adr, num = int(model.mesh_vertadr[mesh_id]), int(model.mesh_vertnum[mesh_id])
+    verts = np.asarray(model.mesh_vert[adr : adr + num], dtype=np.float64)
+    gadr = int(model.mesh_graphadr[mesh_id])
+    if gadr < 0:
+        return verts
+    # mesh_graph: numvert, numface, vert_edgeadr[numvert], vert_globalid[numvert],
+    # edge_localid[numvert + 3 * numface], face_globalid[3 * numface]
+    graph = model.mesh_graph
+    nv, nf = int(graph[gadr]), int(graph[gadr + 1])
+    hull = np.asarray(graph[gadr + 2 + nv : gadr + 2 + 2 * nv], dtype=np.int64)
+    fadr = gadr + 2 + 3 * nv + 3 * nf
+    faces = np.asarray(graph[fadr : fadr + 3 * nf], dtype=np.int64).reshape(nf, 3)
+    if not (hull.size and hull.min() >= 0 and hull.max() < num):
+        return verts
+    if nf == 0 or faces.min() < 0 or faces.max() >= num:
+        return verts[hull]
+    pts = np.concatenate([verts[hull], _triangle_samples(verts[faces])], axis=0)
+    _, first = np.unique(np.round(pts, 9), axis=0, return_index=True)
+    return pts[np.sort(first)]
 
 
 def geom_sample_points(model, gid: int) -> NDArray[np.float64]:
     """Points (n, 3) on collision geom ``gid`` in its own frame; empty for unsupported types.
 
-    Meshes use the vertices of the convex hull MuJoCo collides with.  Primitives are sampled
-    on their surface with at most ``_SAMPLE_SPACING`` between points along an edge or axis.
+    Meshes use the convex hull MuJoCo collides with (its vertices, plus samples on its faces so
+    a narrow column under a flat sole is not missed).  Flat parts are sampled at most
+    ``_SAMPLE_SPACING`` apart, curved parts so that the lowest sample is within
+    ``_CURVE_TOLERANCE`` of the lowest surface point.  Between samples a tilted face can still
+    dip below a column edge by up to its slope times ``_SAMPLE_SPACING``.
     """
     import mujoco
 
     gtype = int(model.geom_type[gid])
     size = np.asarray(model.geom_size[gid], dtype=np.float64)
     if gtype == int(mujoco.mjtGeom.mjGEOM_MESH):
-        mid = int(model.geom_dataid[gid])
-        adr, num = int(model.mesh_vertadr[mid]), int(model.mesh_vertnum[mid])
-        verts = np.asarray(model.mesh_vert[adr : adr + num], dtype=np.float64)
-        gadr = int(model.mesh_graphadr[mid])
-        if gadr >= 0:
-            # mesh_graph: numvert, numface, vert_edgeadr[numvert], vert_globalid[numvert], ...
-            nv = int(model.mesh_graph[gadr])
-            hull = np.asarray(model.mesh_graph[gadr + 2 + nv : gadr + 2 + 2 * nv], dtype=np.int64)
-            if hull.size and hull.min() >= 0 and hull.max() < num:
-                verts = verts[hull]
-        return verts
-    dirs = _unit_directions()
+        return _mesh_hull_points(model, int(model.geom_dataid[gid]))
     if gtype == int(mujoco.mjtGeom.mjGEOM_SPHERE):
-        return dirs * size[0]
+        return _sphere_directions(float(size[0])) * size[0]
     if gtype == int(mujoco.mjtGeom.mjGEOM_ELLIPSOID):
-        return dirs * size[:3]
+        return _sphere_directions(float(size[:3].max())) * size[:3]
     if gtype == int(mujoco.mjtGeom.mjGEOM_BOX):
         axes = [_stations(float(s)) for s in size[:3]]
         grid = np.stack(np.meshgrid(*axes, indexing="ij"), axis=-1).reshape(-1, 3)
-        on_surface = np.any(np.isclose(np.abs(grid), size[:3]), axis=1)
-        return grid[on_surface]
+        return grid[np.any(np.isclose(np.abs(grid), size[:3]), axis=1)]
     if gtype in (int(mujoco.mjtGeom.mjGEOM_CAPSULE), int(mujoco.mjtGeom.mjGEOM_CYLINDER)):
         r, hl = float(size[0]), float(size[1])
-        ang = np.linspace(0.0, 2.0 * np.pi, 8, endpoint=False)
-        ring = np.stack([r * np.cos(ang), r * np.sin(ang), np.zeros_like(ang)], axis=1)
-        pts = [ring + np.array([0.0, 0.0, z]) for z in _stations(hl)]
+        ang = np.linspace(0.0, 2.0 * np.pi, _arc_count(r), endpoint=False)
+        ring = np.stack([np.cos(ang), np.sin(ang), np.zeros_like(ang)], axis=1)
+        pts = [r * ring + np.array([0.0, 0.0, z]) for z in _stations(hl)]
         if gtype == int(mujoco.mjtGeom.mjGEOM_CAPSULE):
-            pts += [dirs * r + np.array([0.0, 0.0, z]) for z in (-hl, hl)]
+            dirs = _sphere_directions(r)
+            pts.append(r * dirs[dirs[:, 2] >= 0.0] + np.array([0.0, 0.0, hl]))
+            pts.append(r * dirs[dirs[:, 2] <= 0.0] + np.array([0.0, 0.0, -hl]))
         else:
-            pts.append(np.array([[0.0, 0.0, -hl], [0.0, 0.0, hl]]))
+            # Flat caps: concentric rings down to the axis.
+            for rr in np.linspace(0.0, r, max(math.ceil(r / _SAMPLE_SPACING), 1) + 1)[:-1]:
+                pts += [rr * ring + np.array([0.0, 0.0, z]) for z in (-hl, hl)]
         return np.concatenate(pts, axis=0)
     return np.zeros((0, 3), dtype=np.float64)
 
@@ -266,6 +375,6 @@ def terrain_snap_offset(min_signed_distance: float, min_vertical_clearance: floa
     """
     if not (np.isfinite(min_signed_distance) and np.isfinite(min_vertical_clearance)):
         return 0.0
-    if min_signed_distance <= _SNAP_TOLERANCE:
+    if min(min_signed_distance, min_vertical_clearance) <= _SNAP_TOLERANCE:
         return 0.0
     return float(min_vertical_clearance)

@@ -1637,7 +1637,12 @@ class InteractionMeshPipeline:
                     "Z-snap: not applied; the feet touch or penetrate the terrain "
                     "(min signed gap %+.4fm at frame %d)",
                     signed_min_gap,
-                    int(np.nanargmin(clearance.signed_distance)),
+                    int(np.argmin(clearance.signed_distance)),
+                )
+            else:
+                _log.warning(
+                    "Z-snap: not applied; foot-terrain clearance could not be measured "
+                    "in every frame (no foot collision geoms, or non-finite poses)",
                 )
         elif bool(getattr(self.cfg, "clip_floor_snap", True)):
             # Flat-ground clips (LAFAN, etc.): no heightfield — snap sole to z=0.
