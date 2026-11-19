@@ -91,6 +91,29 @@ class InteractionMeshPipeline:
         )
         return cls(robot=robot, scaler=scaler, cfg=cfg or InteractionMeshPipelineConfig())
 
+    @staticmethod
+    def _with_finite_terrain(motion: Motion) -> Motion:
+        """``motion`` with its terrain sanitised (:func:`~.collision.sanitize_terrain`).
+
+        Cells without a finite height (NaN, +/-inf) become solid at the tallest finite height;
+        a terrain with no finite cell raises ``ValueError``.  ``motion`` itself is returned when
+        there is nothing to fix, and is never modified.
+        """
+        if motion.terrain is None:
+            return motion
+        import dataclasses
+
+        from hhtools.retarget.interaction_mesh.collision import sanitize_terrain
+
+        terrain = sanitize_terrain(motion.terrain)
+        if terrain is motion.terrain:
+            return motion
+        _log.warning(
+            "Terrain has non-finite height cells; treating them as solid at the tallest "
+            "finite height"
+        )
+        return dataclasses.replace(motion, terrain=terrain)
+
     def scale_scene(self, motion: Motion) -> ScaledMotionScene:
         """Human + ``motion.objects`` in the same scaled world frame as mimic."""
         return scale_motion_and_objects(motion, self.scaler, motion.objects)
@@ -626,6 +649,7 @@ class InteractionMeshPipeline:
             precompute_target_laplacians,
         )
 
+        motion = self._with_finite_terrain(motion)
         source_indices, robot_links, canonical_names = self._resolve_mapped_joints(motion)
         if mj_model is not None:
             robot_links = self._validate_body_names_against_mujoco(
@@ -781,9 +805,14 @@ class InteractionMeshPipeline:
         )
         if qs.ndim != 2 or qs.shape[0] == 0 or qs.shape[1] != 4:
             return False
-        identity = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float64)
-        # Same threshold as the scaler's position-only heading probe.
-        return float(np.abs(qs - identity[None, :]).max()) >= 0.01
+        from hhtools.retarget.interaction_mesh.mpc_loop import (
+            IDENTITY_QUAT_TOLERANCE,
+            quat_deviation_from_identity,
+        )
+
+        # Same threshold as the scaler's position-only heading probe; ``q`` and ``-q`` are one
+        # rotation, so a clip of ``(0, 0, 0, -1)`` is as uninformative as ``(0, 0, 0, 1)``.
+        return float(quat_deviation_from_identity(qs).max()) >= IDENTITY_QUAT_TOLERANCE
 
     @staticmethod
     def _skip_source_root_quat_lock(motion: Motion) -> bool:
@@ -1427,6 +1456,9 @@ class InteractionMeshPipeline:
         )
         from hhtools.retarget.retarget_result import RetargetedMotion
 
+        # Terrain without a height somewhere is made finite once, here, before grounding, the
+        # Laplacian anchors, the collision scene and the Z-snap read it.
+        motion = self._with_finite_terrain(motion)
         scene = MujocoScene.from_robot(self.robot)
         mj = scene.model
 

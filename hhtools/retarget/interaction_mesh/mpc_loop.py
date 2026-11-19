@@ -762,6 +762,21 @@ def _set_freejoint_quat_from_source(
     return out
 
 
+#: A source quaternion closer than this to the identity rotation counts as "no orientation".
+IDENTITY_QUAT_TOLERANCE = 0.01
+
+
+def quat_deviation_from_identity(quats) -> np.ndarray:
+    """Largest component difference of xyzw quaternions ``(..., 4)`` from the identity rotation.
+
+    ``q`` and ``-q`` are the same rotation, so this is the smaller of the distances to
+    ``(0, 0, 0, 1)`` and ``(0, 0, 0, -1)``; shape ``quats.shape[:-1]``.
+    """
+    q = np.asarray(quats, dtype=np.float64)
+    identity = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float64)
+    return np.minimum(np.abs(q - identity).max(axis=-1), np.abs(q + identity).max(axis=-1))
+
+
 def sqp_step_laplacian(
     model,
     data,
@@ -879,9 +894,7 @@ def sqp_step_laplacian(
     # must not freeze the FREE joint — that locks yaw for the whole clip.
     _src_usable = False
     if src_quat is not None:
-        _sq = np.asarray(src_quat, dtype=np.float64).reshape(4)
-        _id = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float64)
-        _src_usable = float(np.abs(_sq - _id).max()) >= 0.01
+        _src_usable = float(quat_deviation_from_identity(src_quat)) >= IDENTITY_QUAT_TOLERANCE
     lock_ori = (
         bool(lock_root_orientation_to_source)
         and src_quat is not None
