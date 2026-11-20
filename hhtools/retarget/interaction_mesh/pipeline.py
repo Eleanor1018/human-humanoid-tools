@@ -1725,6 +1725,8 @@ class InteractionMeshPipeline:
             "terrain_floor_offset": float(floor_offset),
             # The SQP collided with the terrain, so the root height is absolute in its frame.
             "terrain_grounded": bool(used_terrain_snap),
+            # The interaction objects are part of the scene the Laplacian targets are built in.
+            "objects_grounded": bool(getattr(motion, "objects", None)),
             "terrain_signed_min_gap": float(signed_min_gap),
             "clip_floor_snap_m": float(floor_offset) if not used_terrain_snap else 0.0,
             "position_weight": float(self.cfg.position_weight),

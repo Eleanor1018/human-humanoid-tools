@@ -194,15 +194,18 @@ def _bake_export_joint_q(
 ) -> tuple[np.ndarray, float]:
     """Bake viewer ``mesh_z_lift`` into robot ``root_z`` for CSV/PKL export.
 
-    Not for a result the solver already grounded against its terrain
-    (``meta["terrain_grounded"]``): its root height is absolute in the frame the terrain
-    sidecar is exported in, and the playback lift, which rests the mesh sole on the yellow
-    overlay's foot *joint*, would leave the robot floating above the exported terrain by the
-    height of that joint above the sole.
+    Not for a result the solver already placed in the scene's frame: grounded against its
+    terrain (``meta["terrain_grounded"]``) or solved around its interaction objects
+    (``meta["objects_grounded"]``).  Its root height is absolute in the frame the terrain and
+    object sidecars are exported in, and the playback lift, which rests the mesh sole on the
+    yellow overlay's foot *joint*, would move the robot by the height of that joint above the
+    sole: above the exported terrain, or away from the object it holds (4-5 cm on the
+    OmniContact carry clips).
     """
     from hhtools.io.scene_serialize import bake_playback_mesh_z_lift_into_joint_q
 
-    if model is None or not hasattr(model, "trimesh_scene") or meta.get("terrain_grounded"):
+    grounded = meta.get("terrain_grounded") or meta.get("objects_grounded")
+    if model is None or not hasattr(model, "trimesh_scene") or grounded:
         return np.asarray(joint_q, dtype=np.float32), 0.0
 
     if preserve_absolute_z is None:
