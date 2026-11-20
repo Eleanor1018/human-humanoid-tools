@@ -40,6 +40,12 @@ from frax.ik import (  # noqa: E402
 from hhtools.core.motion import Motion  # noqa: E402
 from hhtools.retarget.frax_backend.config import FraxConfig, frax_config_for_preset  # noqa: E402
 from hhtools.retarget.frax_backend.model import FraxRobotModel  # noqa: E402
+from hhtools.retarget.frax_backend.objects import (  # noqa: E402
+    ObjectConstraint,
+    ObjectSDF,
+    build_object_sdf,
+    object_distance_rows,
+)
 from hhtools.retarget.frax_backend.pipeline import (  # noqa: E402
     _CACHE_LOCK,
     _FLOOR_MAX_ROWS,
@@ -128,6 +134,21 @@ class FraxSceneConfig:
             keeps the body out, so a sphere inside the terrain is a local violation that a
             global shift cannot fix.
         grid_bucket: ``build_terrain_grid(shape_bucket=...)``.
+        objects: Keep every collision sphere out of the clip's interaction objects
+            (``motion.objects``: boxes, chairs, ...) with a signed-distance barrier
+            (:class:`~hhtools.retarget.frax_backend.objects.ObjectConstraint`).  The source
+            wrist targets of a carried object lie inside it at the robot's proportions; without
+            this the hands go several centimetres into it.
+        object_margin: Clearance kept between a sphere's surface and an object (m).  The
+            spheres underfill the collision meshes at their edges (on rp1 the wrist and elbow
+            meshes reach 7-16 mm past them), so with 0 the hand spheres touch the object while
+            the hand mesh is up to 1.3 cm inside it.  On the 4 bundled object clips 1 cm brought
+            the worst mesh penetration from 10 to 3.6 mm (mean) and the share of contact frames
+            with the hand mesh between 10 mm off and 5 mm into the object from 67% to 82%,
+            for 0.4 cm more hand tracking error; 0.5 cm and 0.75 cm were in between.
+        object_rows: Lowest-barrier rows kept per step *per object* (one row per sphere); a row
+            dropped here is not enforced that step.
+        object_grid_dx: Cell size (m) of the object signed distance fields.
     """
 
     position_weight: float = 0.5
@@ -141,6 +162,10 @@ class FraxSceneConfig:
     substeps: int = 1
     terrain_snap: bool = True
     grid_bucket: int = 64
+    objects: bool = True
+    object_margin: float = 0.01
+    object_rows: int = 32
+    object_grid_dx: float = 0.01
 
     def __post_init__(self) -> None:
         if self.substeps < 1:
@@ -322,6 +347,73 @@ def _limit_edit_by_terrain(
     return blend(alpha), int((alpha < 1.0 - 1e-6).sum())
 
 
+def _object_gap_fn(
+    sdfs: list[ObjectSDF], pos: NDArray, rot: NDArray, radii: NDArray
+) -> Callable[[NDArray], NDArray]:
+    """``gap(centres)``: lowest ``d - r`` (m) over objects and spheres, per frame.
+
+    ``centres`` is ``(T, S, 3)`` world sphere centres; ``pos`` (T, K, 3) and ``rot``
+    (T, K, 3, 3) are the object poses of those frames.  Negative means penetration.
+    """
+    refs = [s.as_ref() for s in sdfs]
+    pos_j, rot_j = jnp.asarray(pos), jnp.asarray(rot)
+    radii_j = jnp.asarray(radii)
+
+    @jax.jit
+    def gap(centres):
+        def frame(c, p, r):
+            return jnp.min(
+                jnp.stack(
+                    [
+                        (object_distance_rows(ref, c, p[k], r[k])[0] - radii_j).min()
+                        for k, ref in enumerate(refs)
+                    ]
+                )
+            )
+
+        return jax.vmap(frame)(jnp.asarray(centres), pos_j, rot_j)
+
+    return lambda centres: np.asarray(gap(centres))
+
+
+def _limit_root_shift(
+    joint_q: NDArray,
+    shift: float,
+    gap_fn: Callable[[NDArray], NDArray],
+    *,
+    z_index: int = 2,
+    tol: float = 1e-4,
+    bisect_steps: int = 10,
+) -> tuple[float, bool]:
+    """Largest part of a downward root shift ``shift`` (m) that creates no object penetration.
+
+    ``gap_fn(joint_q)`` gives the lowest object gap per frame (``(T,)``).  The shifted motion is
+    *worse* in a frame when its gap is below ``min(gap before, 0) - tol``.  If the full shift
+    is worse anywhere, the largest fraction of it that is not is found by bisection on one
+    scalar.  Returns the shift to apply and whether it was reduced.
+    """
+    if shift == 0.0:
+        return 0.0, False
+    jq = np.asarray(joint_q, dtype=np.float32)
+    floor = np.minimum(np.asarray(gap_fn(jq), dtype=np.float64), 0.0) - tol
+
+    def worse(fraction: float) -> bool:
+        moved = jq.copy()
+        moved[:, z_index] -= np.float32(fraction * shift)
+        return bool((np.asarray(gap_fn(moved), dtype=np.float64) < floor).any())
+
+    if not worse(1.0):
+        return float(shift), False
+    lo, hi = 0.0, 1.0
+    for _ in range(bisect_steps):
+        mid = 0.5 * (lo + hi)
+        if worse(mid):
+            hi = mid
+        else:
+            lo = mid
+    return float(lo * shift), True
+
+
 def _point_key(points: list[RobotMpcPoint]) -> tuple:
     return tuple((p.body_name, tuple(float(x) for x in np.ravel(p.local_offset))) for p in points)
 
@@ -359,6 +451,7 @@ class _SceneSolver:
     constraints: tuple[str, ...]
     points_fn: Callable[[Any], Any]
     floor_fn: Callable[[Any], Any] | None
+    sphere_fn: Callable[[Any], Any] | None = None  # all collision spheres, (T, S, 3)
     compiled: dict[tuple, Any] = field(default_factory=dict)
     lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -393,6 +486,7 @@ def _build_scene_solver(
     has_terrain: bool,
     has_stick: bool,
     terrain_window: int,
+    n_objects: int = 0,
 ) -> _SceneSolver:
     robot = model.robot
     gain = float(fps)
@@ -458,6 +552,18 @@ def _build_scene_solver(
             )
         )
         names.append("floor")
+    if n_objects and model.has_collision:
+        for k in range(n_objects):
+            constraints.append(
+                ObjectConstraint(
+                    robot,
+                    index=k,
+                    max_rows=int(scene_config.object_rows),
+                    gain=gain,
+                    margin=float(scene_config.object_margin),
+                )
+            )
+        names.append("objects")
     if has_stick:
         constraints.append(
             FootStickConstraint(
@@ -520,12 +626,21 @@ def _build_scene_solver(
 
         floor_fn = jax.jit(jax.vmap(floor_fn))
 
+    sphere_fn = None
+    if model.has_collision:
+
+        def sphere_fn(q):
+            return robot._link_collision_positions(robot.joint_to_world_transforms(q))
+
+        sphere_fn = jax.jit(jax.vmap(sphere_fn))
+
     return _SceneSolver(
         ik=solver,
         solve=jax.jit(solve),
         constraints=tuple(names),
         points_fn=jax.jit(jax.vmap(points)),
         floor_fn=floor_fn,
+        sphere_fn=sphere_fn,
     )
 
 
@@ -614,6 +729,7 @@ class FraxScenePipeline:
         has_terrain,
         has_stick,
         terrain_window,
+        n_objects=0,
     ) -> _SceneSolver:
         model = self.frax_model
         key = (
@@ -628,6 +744,7 @@ class FraxScenePipeline:
             has_terrain,
             has_stick,
             terrain_window,
+            n_objects,
         )
         with _CACHE_LOCK:
             solver = _SCENE_SOLVER_CACHE.get(key)
@@ -646,6 +763,7 @@ class FraxScenePipeline:
                 has_terrain=has_terrain,
                 has_stick=has_stick,
                 terrain_window=terrain_window,
+                n_objects=n_objects,
             )
             _SCENE_SOLVER_CACHE[key] = solver
             while len(_SCENE_SOLVER_CACHE) > _MAX_CACHED_SCENE_SOLVERS:
@@ -743,6 +861,36 @@ class FraxScenePipeline:
             static["terrain"] = grid.as_ref()
             window = int(np.clip(np.ceil(cfg.terrain_reach / grid.dx), 2, 12))
 
+        # ---- objects ----
+        object_sdfs: list[ObjectSDF] = []
+        object_build_s: list[float] = []
+        object_pos = object_rot = None
+        if cfg.objects and motion.objects and model.has_collision:
+            build_start = time.perf_counter()
+            for k, ob in enumerate(motion.objects):
+                tic = time.perf_counter()
+                sdf = build_object_sdf(ob, st.smpl_scale, dx=float(cfg.object_grid_dx))
+                object_build_s.append(round(time.perf_counter() - tic, 3))
+                object_sdfs.append(sdf)
+                static[f"object_sdf_{k}"] = sdf.as_ref()
+            _LOG.info(
+                "FRAX object SDFs: %d object(s) in %.2fs",
+                len(object_sdfs),
+                time.perf_counter() - build_start,
+            )
+            # The solver frame of the front half: (p - [0, 0, z_min]) * smpl_scale.
+            shift = np.array([0.0, 0.0, float(st.z_min)])
+            tracks = []
+            for ob in motion.objects:
+                p = np.asarray(ob.positions, dtype=np.float64)
+                q = np.asarray(ob.quaternions, dtype=np.float64)
+                idx = np.minimum(np.arange(T), len(p) - 1)
+                tracks.append(((p[idx] - shift) * float(st.smpl_scale), q[idx]))
+            object_pos = np.stack([t[0] for t in tracks], axis=1)  # (T, K, 3)
+            object_rot = np.stack(
+                [_rotation_matrices(t[1]) for t in tracks], axis=1
+            )  # (T, K, 3, 3)
+
         # ---- per-frame reference data ----
         frames: dict[str, NDArray] = {
             "pos": targets,
@@ -758,6 +906,10 @@ class FraxScenePipeline:
         else:
             frames["root_rmat"] = np.tile(np.eye(3), (T, 1, 1, 1))
             frames["w_root"] = np.zeros((T, 1))
+
+        if object_sdfs:
+            frames["object_pos"] = object_pos
+            frames["object_rot"] = object_rot
 
         left, right = resolve_foot_mpc_points(points, P)
         foot_idx = [next(i for i, p in enumerate(points) if p is pt) for pt in (left, right) if pt]
@@ -794,6 +946,7 @@ class FraxScenePipeline:
             grid is not None,
             has_stick,
             window,
+            len(object_sdfs),
         )
         q0 = self._initial_q(
             points,
@@ -830,9 +983,26 @@ class FraxScenePipeline:
         def sphere_centres(jq: NDArray) -> NDArray:
             return np.asarray(solver.floor_fn(jnp.asarray(model.frax_q_from_joint_q(jq))))
 
-        def min_gap_per_frame(jq: NDArray) -> NDArray:
+        def terrain_gap_per_frame(jq: NDArray) -> NDArray:
             gap = _terrain_distance(grid, sphere_centres(jq), window) - radii
             return gap.min(axis=1)
+
+        object_gap_per_frame = None
+        if object_sdfs:
+            all_radii = np.asarray(model.robot.flat_collision_radii)
+            object_gap = _object_gap_fn(object_sdfs, object_pos, object_rot, all_radii)
+
+            def object_gap_per_frame(jq: NDArray) -> NDArray:
+                q_frax = jnp.asarray(model.frax_q_from_joint_q(jq))
+                return object_gap(solver.sphere_fn(q_frax))
+
+        def min_gap_per_frame(jq: NDArray) -> NDArray:
+            gaps = []
+            if terrain_spheres:
+                gaps.append(terrain_gap_per_frame(jq))
+            if object_gap_per_frame is not None:
+                gaps.append(object_gap_per_frame(jq))
+            return np.min(gaps, axis=0)
 
         pre_edit = joint_q
         joint_q = apply_upper_body_roll_narrowing_post_ik(
@@ -841,14 +1011,14 @@ class FraxScenePipeline:
         # The narrowing edits shoulder joints without regard to their limits.
         joint_q[:, 7:] = np.clip(joint_q[:, 7:], dof_lo, dof_hi)
         limited_frames = 0
-        if terrain_spheres:
+        if terrain_spheres or object_gap_per_frame is not None:
             # The edit must not create or deepen a penetration the solve had avoided.
             joint_q, limited_frames = _limit_edit_by_terrain(
                 pre_edit, joint_q, min_gap_per_frame, fps
             )
             if limited_frames:
                 _LOG.info(
-                    "FRAX shoulder edit limited in %d of %d frames to avoid terrain penetration",
+                    "FRAX shoulder edit limited in %d of %d frames (terrain/object penetration)",
                     limited_frames,
                     T,
                 )
@@ -861,6 +1031,15 @@ class FraxScenePipeline:
             spheres = np.asarray(solver.floor_fn(q_out))  # (T, S, 3)
             drop = float(grid.vertical_clearance(spheres, radii + margin).min())
             floor_offset = _terrain_snap_offset(drop)
+            if object_gap_per_frame is not None:
+                floor_offset, reduced = _limit_root_shift(
+                    joint_q, floor_offset, object_gap_per_frame
+                )
+                if reduced:
+                    _LOG.info(
+                        "FRAX terrain snap reduced to %.4f m to avoid object penetration",
+                        floor_offset,
+                    )
             joint_q[:, 2] -= np.float32(floor_offset)
         signed_min_gap = float("nan")
         if terrain_spheres:
@@ -870,10 +1049,26 @@ class FraxScenePipeline:
             )
         clip_floor_snap = 0.0
         if terrain is None and self.front.cfg.clip_floor_snap:
+            unsnapped = joint_q
             joint_q, clip_floor_snap = snap_joint_q_clip_floor(
                 self.robot, joint_q, root_coord_count=7, ground_z=0.0
             )
+            if object_gap_per_frame is not None and clip_floor_snap != 0.0:
+                # The snap must not create or deepen object penetration.
+                clip_floor_snap, reduced = _limit_root_shift(
+                    unsnapped, clip_floor_snap, object_gap_per_frame
+                )
+                if reduced:
+                    _LOG.info(
+                        "FRAX clip floor snap reduced to %.4f m to avoid object penetration",
+                        clip_floor_snap,
+                    )
+                    joint_q = np.array(unsnapped, dtype=np.float32, copy=True)
+                    joint_q[:, 2] -= np.float32(clip_floor_snap)
             floor_offset = clip_floor_snap
+        object_min_gap = float("nan")
+        if object_gap_per_frame is not None:
+            object_min_gap = float(object_gap_per_frame(joint_q).min())
 
         robot_pts = np.array(solver.points_fn(q_out))
         robot_pts[..., 2] -= floor_offset  # the snaps only translate the root vertically
@@ -896,6 +1091,9 @@ class FraxScenePipeline:
             # Solved against the terrain, so the root height is absolute in its frame.
             "terrain_grounded": "terrain" in solver.constraints,
             "terrain_signed_min_gap": float(signed_min_gap),
+            # Solved against the objects, so the root height is absolute in their frame.
+            "objects_grounded": "objects" in solver.constraints,
+            "object_signed_min_gap": object_min_gap,
             "clip_floor_snap_m": float(clip_floor_snap),
             "alignment_mean_m": float(err.mean()),
             "alignment_max_m": float(err.max()),
@@ -913,6 +1111,10 @@ class FraxScenePipeline:
                 "sole_spheres": len(model.sole_sphere_idxs),
                 "self_collision_pairs": model.num_self_collision_pairs,
                 "substeps": cfg.substeps,
+                "objects": len(object_sdfs),
+                "object_rows": int(cfg.object_rows) if object_sdfs else 0,
+                "object_sdf_shapes": [tuple(s.values.shape) for s in object_sdfs],
+                "object_sdf_build_s": object_build_s,
                 "terrain_grid_shape": None if grid is None else tuple(grid.heights.shape),
                 "terrain_window": None if grid is None else window,
                 "terrain_floor_z": None if grid is None else grid.floor_z,
