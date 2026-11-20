@@ -370,6 +370,56 @@ def test_stepping_out_normal_to_a_wall_at_a_grid_seam_is_allowed(own_high) -> No
     assert (d[active] - r + n[active] @ delta).min() >= -1e-12
 
 
+@pytest.mark.parametrize("layout", ["opposite-below-centre", "same-xy-band"])
+def test_two_reachable_posts_with_free_slots_both_get_rows(layout) -> None:
+    # The 30 degree filter only prioritises: with slots free, a post in a similar direction (here
+    # the opposite side of the sphere, or the same horizontal band) is still given a row.
+    hf = np.zeros((9, 9))
+    if layout == "opposite-below-centre":
+        hf[[3, 5], 4] = _DX16  # two posts at x = -1 and +1 cells, tops below the centre
+        p = _DX16 * np.array([-1 / 32, 0.0, 3.0])  # left one strictly nearer
+        end = _DX16 * np.array([1.0, 0.0, 15 / 16])  # inside the right post
+        r = _DX16 / 4
+    else:
+        hf[7, [3, 5]] = 8 * _DX16
+        p = _DX16 * np.array([0.0, -1 / 16, 1.0])  # the lower-y post is strictly nearer
+        end = _DX16 * np.array([21 / 8, 1.0, 1.0])
+        r = _DX16 / 8
+    grid, d, n = _rows16(hf, p, origin=(-4 * _DX16, -4 * _DX16))
+    assert grid.signed_distance(p) > r and grid.signed_distance(end) < 0.0
+    active = d < 100
+    assert (d[active] - r + n[active] @ (end - p)).min() < 0.0
+
+
+def test_parallel_duplicate_rows_are_skipped_but_other_columns_fill_slots() -> None:
+    # Three posts in a row along x: the middle and far ones have the same normal as the nearest
+    # only if exactly parallel; here the far post keeps a row but is not duplicated.
+    hf = np.zeros((9, 9))
+    hf[5, 4] = hf[6, 4] = 0.5  # a wall two cells deep: same face normal, farther distance
+    grid, d, n = _rows16(hf, np.array([0.0, 0.0, _DX16]), origin=(-4 * _DX16, -4 * _DX16))
+    active = np.flatnonzero(d < 100)
+    assert len(active) == 2  # the face of the first column, plus its upper edge at the second
+    normals = n[active]
+    assert not np.allclose(normals[0], normals[1], atol=1e-9)
+
+
+def test_inside_a_straight_wall_on_a_seam_exits_along_the_face_normal() -> None:
+    # Centre inside a wall spanning several cells, on the seam of two free cells: the exit is
+    # the face normal, whichever free cell argmin picks (it used to be a diagonal, so a slide
+    # along the wall satisfied the row while staying inside).  Obstacle rows at exactly zero
+    # distance on a seam stay conservative, which is not tested for tightness.
+    hf = np.zeros((7, 7))
+    hf[:, :3] = 0.5
+    p = np.array([1.5 * _DX16, 2.5 * _DX16, 0.25])  # inside cell (2, 2); free (1, 3) and (2, 3)
+    r = _DX16 / 8
+    delta = np.array([-2 * r, 0.0, 0.0])  # slides along the wall face
+    grid, d, n = _rows16(hf, p)
+    assert grid.signed_distance(p) == 0.0
+    assert grid.signed_distance(p + delta) - r < 0.0  # still on the wall: overlapping by r
+    np.testing.assert_allclose(n[0], [0.0, 1.0, 0.0], atol=1e-12)
+    assert (d[0] - r + n[0] @ delta) < 0.0
+
+
 def test_a_hair_outside_a_corner_keeps_the_diagonal_direction() -> None:
     hf = np.zeros((5, 5))
     hf[2, 2] = 0.5
@@ -394,6 +444,19 @@ def test_vertical_clearance_beside_a_box_and_at_tangency() -> None:
     # Exactly r from the face it touches the edge too, rather than dropping to the floor.
     tangent = np.array([[face - r, 0.3, 0.20]])
     assert grid.vertical_clearance(tangent, r)[0] == pytest.approx(0.20 - 0.10, abs=1e-12)
+
+
+def test_vertical_clearance_when_already_tangent_to_a_side_is_zero() -> None:
+    # Touching a box's side below its top is contact, not an overlap of (z - top).
+    dx = 1 / 16
+    hf = np.zeros((7, 7))
+    hf[3:, :] = 4 * dx
+    grid = build_terrain_grid(hf, (0.0, 0.0), dx, shape_bucket=1)
+    r = dx / 2
+    p = dx * np.array([2.0, 2.0, 2.0])  # face at x = 2.5 dx: tangent, centre below the top
+    assert grid.vertical_clearance(p, r) == 0.0
+    # A genuine overlap keeps its negative clearance.
+    assert grid.vertical_clearance(p + dx * np.array([0.25, 0.0, 0.0]), r) < 0.0
 
 
 def test_vertical_clearance_matches_lowering_until_contact() -> None:

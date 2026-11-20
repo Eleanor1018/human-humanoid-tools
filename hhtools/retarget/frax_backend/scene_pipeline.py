@@ -12,6 +12,7 @@ floor at z = 0), like the interaction-mesh result.
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from collections import OrderedDict
@@ -82,13 +83,16 @@ _FREE_FOOT_SPEED = 1e3
 
 _MAX_CACHED_SCENE_SOLVERS = 16
 
+_LOG = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True)
 class FraxSceneConfig:
     """Scene-solve options of :class:`FraxScenePipeline` (frozen: part of the solver cache key).
 
     The terrain barrier is a local signed distance linearised at the current configuration; its
-    wall row sees walls within ``terrain_reach``, so one step per frame already holds a foot at a
+    obstacle rows see columns within ``terrain_reach`` (capped at 12 cells each side, so
+    ``0.25 m`` at 1 cm cells sees only 12 cm), so one step per frame already holds a foot at a
     wall or step face (toy robot, up to 10 cm per frame: no sole sphere beyond 2 mm).
     ``substeps`` re-linearises within a frame: on the parkour clips 2 improved mean tracking by
     about 0.5 cm but made the joints jerkier and did not reduce penetration, so the default is 1.
@@ -104,10 +108,14 @@ class FraxSceneConfig:
             accelerations of the interaction-mesh solver; 1.0 tracked 1.2 cm closer with
             1.5 times the acceleration.
         root_rotation_weight: Weight of the source pelvis orientation, when supplied.
-        terrain_margin: Extra clearance above the terrain (m).
-        terrain_rows: Lowest-barrier spheres kept per step.
-        terrain_reach: Horizontal distance (m) within which walls are seen; a sphere moving
-            farther than this in one solver step could cross a wall unseen.
+        terrain_margin: Extra clearance kept between each terrain-constrained sphere's surface
+            and the terrain (m).
+        terrain_rows: Lowest-barrier *rows* kept per step, over all terrain-constrained spheres
+            (each contributes ``ROWS_PER_SPHERE`` = 9: support plus up to 8 obstacle rows);
+            a row dropped here is not enforced that step.
+        terrain_reach: Horizontal distance (m) within which columns are seen, rounded up to
+            cells and clipped to 2..12 cells each side; a sphere moving farther than that in one
+            solver step could cross a wall unseen.
         foot_sticking: Hold planted feet in place horizontally.
         foot_sticking_tolerance: Allowed XY drift per frame of a planted foot (m).
         foot_sticking_velocity_threshold: Source foot XY move per frame below which the foot
@@ -115,7 +123,8 @@ class FraxSceneConfig:
         substeps: QP steps per frame, each re-linearised.
         terrain_snap: If every terrain-constrained sphere (feet, hands, knees, ...) stays clear
             of the terrain in every frame, lower the clip by the smallest straight-down
-            clearance, less ``terrain_margin``.  Never lifts: the terrain constraint already
+            clearance beyond ``terrain_margin`` (sphere surfaces stay ``terrain_margin`` from the
+            terrain; Euclidean, not just vertical).  Never lifts: the terrain constraint already
             keeps the body out, so a sphere inside the terrain is a local violation that a
             global shift cannot fix.
         grid_bucket: ``build_terrain_grid(shape_bucket=...)``.
@@ -241,6 +250,76 @@ def _terrain_snap_offset(min_clearance: float) -> float:
     other frame float.
     """
     return float(min_clearance) if np.isfinite(min_clearance) and min_clearance > 1e-4 else 0.0
+
+
+def _returned_min_gap(grid, spheres: NDArray, radii: NDArray, drop: float, window: int) -> float:
+    """Lowest terrain signed gap (m) of ``spheres`` (T, S, 3) after the clip is lowered by ``drop``.
+
+    The distance is evaluated at the lowered centres: subtracting ``drop`` from a distance would
+    be wrong whenever the nearest terrain feature is a side or an edge rather than the surface
+    straight below.
+    """
+    lowered = np.array(spheres, dtype=np.float64)
+    lowered[..., 2] -= drop
+    return float((_terrain_distance(grid, lowered, window) - radii).min())
+
+
+def _limit_edit_by_terrain(
+    pre: NDArray,
+    post: NDArray,
+    gap_fn: Callable[[NDArray], NDArray],
+    fps: float,
+    *,
+    root_coord_count: int = 7,
+    tol: float = 1e-4,
+    bisect_steps: int = 8,
+) -> tuple[NDArray, int]:
+    """Blend a post-IK joint edit ``pre -> post`` back where it creates terrain penetration.
+
+    ``gap_fn(joint_q)`` returns the lowest terrain signed gap (m) over the constrained spheres of
+    every frame, shape ``(T,)``.  A frame is *worse* when the edited gap is below
+    ``min(pre gap, 0) - tol`` (the edit creates or deepens a penetration).  For those frames the
+    largest ``alpha`` in [0, 1] of ``pre + alpha * (post - pre)`` that is not worse is found by
+    bisection; the alphas are then smoothed over ~0.2 s with a centred min filter and a centred
+    moving average (never above a frame's own limit) and re-checked, a frame still worse falling
+    back to ``alpha = 0``.  Returns the blended joint_q and the number of limited frames.
+    """
+    from scipy.ndimage import minimum_filter1d, uniform_filter1d
+
+    pre = np.asarray(pre, dtype=np.float32)
+    post = np.asarray(post, dtype=np.float32)
+    if pre.shape != post.shape or np.array_equal(pre, post):
+        return post, 0
+    cols = slice(int(root_coord_count), None)
+    delta = post - pre
+
+    def blend(alpha: NDArray) -> NDArray:
+        out = post.copy()
+        out[:, cols] = pre[:, cols] + alpha[:, None].astype(np.float32) * delta[:, cols]
+        return out
+
+    gap_pre = np.asarray(gap_fn(pre), dtype=np.float64)
+    floor = np.minimum(gap_pre, 0.0) - tol
+
+    def worse(alpha: NDArray) -> NDArray:
+        return np.asarray(gap_fn(blend(alpha)), dtype=np.float64) < floor
+
+    alpha = np.ones(len(pre))
+    bad = worse(alpha)
+    if not bad.any():
+        return post, 0
+    lo, hi = np.zeros(len(pre)), np.ones(len(pre))
+    for _ in range(bisect_steps):
+        mid = 0.5 * (lo + hi)
+        ok = ~worse(mid)
+        lo, hi = np.where(ok, mid, lo), np.where(ok, hi, mid)
+    alpha = np.where(bad, lo, 1.0)
+    width = 2 * max(1, int(round(0.1 * fps))) + 1
+    alpha = minimum_filter1d(alpha, width, mode="nearest")
+    alpha = uniform_filter1d(alpha, width, mode="nearest")
+    alpha = np.minimum(alpha, 1.0)
+    alpha[worse(alpha)] = 0.0
+    return blend(alpha), int((alpha < 1.0 - 1e-6).sum())
 
 
 def _point_key(points: list[RobotMpcPoint]) -> tuple:
@@ -745,26 +824,50 @@ class FraxScenePipeline:
         dof_lo, dof_hi = lower[model.dof_to_frax], upper[model.dof_to_frax]
         joint_q[:, 7:] = np.clip(joint_q[:, 7:], dof_lo, dof_hi).astype(np.float32)
         dof_names = self.robot.dof_names()
+        radii = np.asarray(model.robot.flat_collision_radii)[list(model.floor_sphere_idxs)]
+        terrain_spheres = grid is not None and solver.floor_fn is not None
+
+        def sphere_centres(jq: NDArray) -> NDArray:
+            return np.asarray(solver.floor_fn(jnp.asarray(model.frax_q_from_joint_q(jq))))
+
+        def min_gap_per_frame(jq: NDArray) -> NDArray:
+            gap = _terrain_distance(grid, sphere_centres(jq), window) - radii
+            return gap.min(axis=1)
+
+        pre_edit = joint_q
         joint_q = apply_upper_body_roll_narrowing_post_ik(
             joint_q, dof_names, self.robot.preset, root_coord_count=7, robot_model=self.robot
         )
         # The narrowing edits shoulder joints without regard to their limits.
         joint_q[:, 7:] = np.clip(joint_q[:, 7:], dof_lo, dof_hi)
+        limited_frames = 0
+        if terrain_spheres:
+            # The edit must not create or deepen a penetration the solve had avoided.
+            joint_q, limited_frames = _limit_edit_by_terrain(
+                pre_edit, joint_q, min_gap_per_frame, fps
+            )
+            if limited_frames:
+                _LOG.info(
+                    "FRAX shoulder edit limited in %d of %d frames to avoid terrain penetration",
+                    limited_frames,
+                    T,
+                )
         q_out = jnp.asarray(model.frax_q_from_joint_q(joint_q))
 
-        signed_min_gap = float("nan")
         floor_offset = 0.0
-        if grid is not None and solver.floor_fn is not None:
+        if terrain_spheres and cfg.terrain_snap:
+            # The constraint keeps sphere centres r + margin from the terrain.
+            margin = float(cfg.terrain_margin)
             spheres = np.asarray(solver.floor_fn(q_out))  # (T, S, 3)
-            radii = np.asarray(model.robot.flat_collision_radii)[list(model.floor_sphere_idxs)]
-            signed_min_gap = float((_terrain_distance(grid, spheres, window) - radii).min())
-            if cfg.terrain_snap:
-                # The constraint keeps sphere centres r + margin from the terrain.
-                margin = float(cfg.terrain_margin)
-                drop = float(grid.vertical_clearance(spheres, radii + margin).min())
-                floor_offset = _terrain_snap_offset(drop)
-                joint_q[:, 2] -= np.float32(floor_offset)
-                signed_min_gap -= floor_offset
+            drop = float(grid.vertical_clearance(spheres, radii + margin).min())
+            floor_offset = _terrain_snap_offset(drop)
+            joint_q[:, 2] -= np.float32(floor_offset)
+        signed_min_gap = float("nan")
+        if terrain_spheres:
+            # The gap of the returned motion: the snap only translates the root vertically.
+            signed_min_gap = _returned_min_gap(
+                grid, solver.floor_fn(q_out), radii, floor_offset, window
+            )
         clip_floor_snap = 0.0
         if terrain is None and self.front.cfg.clip_floor_snap:
             joint_q, clip_floor_snap = snap_joint_q_clip_floor(
@@ -822,6 +925,7 @@ class FraxScenePipeline:
                 "qp_converged_ratio": float(converged.mean()) if converged.size else 1.0,
                 "qp_max_iterations": int(qp_iters.max(initial=0)),
                 "stick_frames": stick_frames,
+                "shoulder_edit_limited_frames": limited_frames,
             },
         }
         return RetargetedMotion(

@@ -370,6 +370,51 @@ def test_reported_numbers_describe_the_returned_motion(
     assert result.meta["terrain_signed_min_gap"] == pytest.approx(gap, abs=1e-5)
 
 
+def test_returned_gap_is_measured_at_the_lowered_spheres() -> None:
+    from hhtools.retarget.frax_backend.scene_pipeline import _returned_min_gap
+
+    # A 1 cm sphere 20 cm above the floor, its centre 2 cm from a tall wall (below the top): the
+    # wall is 1 cm from its surface, outside its vertical sweep.  Lowering by 19 cm lands it on
+    # the floor with the wall still clear, a gap of 0 (not 1 cm - 19 cm).
+    hf = np.zeros((40, 40))
+    hf[20:, :] = 0.5
+    grid = build_terrain_grid(hf, (0.0, 0.0), 0.01, floor_z=0.0, shape_bucket=1)
+    face = 19.5 * 0.01
+    spheres = np.array([[[face - 0.02, 0.2, 0.20]]])
+    radii = np.array([0.01])
+    assert _returned_min_gap(grid, spheres, radii, 0.0, 4) == pytest.approx(0.01, abs=1e-9)
+    assert _returned_min_gap(grid, spheres, radii, 0.19, 4) == pytest.approx(0.0, abs=1e-9)
+
+
+def test_shoulder_edit_is_limited_where_it_creates_penetration() -> None:
+    from hhtools.retarget.frax_backend.scene_pipeline import _limit_edit_by_terrain
+
+    T, fps = 40, 30.0
+    pre = np.zeros((T, 9), np.float32)
+    post = pre.copy()
+    post[:, 7] = 1.0  # the edit
+    touched = np.zeros(T)
+    touched[15:20] = 1.0  # frames where the edited joint drives a sphere into the terrain
+
+    def gap_fn(jq):
+        return 0.02 - 0.05 * jq[:, 7] * touched  # alpha > ~0.4 penetrates in those frames
+
+    out, limited = _limit_edit_by_terrain(pre, post, gap_fn, fps)
+    assert limited > 0
+    assert (gap_fn(out) >= -1e-4 - 1e-6).all()
+    assert out[15:20, 7].max() <= 0.41
+    assert out[0, 7] == 1.0 and out[-1, 7] == 1.0  # far from the problem the edit is intact
+    assert (out[:, 7] >= 0.0).all() and (out[:, 7] <= 1.0).all()
+    # Smoothed in time: no frame is ever raised above the limit of its own, and neighbours ramp.
+    assert 0.0 < out[12, 7] < 1.0 or 0.0 < out[22, 7] < 1.0
+    # A harmless edit (nothing touches the terrain) passes through untouched.
+    same, none = _limit_edit_by_terrain(pre, post, lambda jq: np.full(T, 0.5), fps)
+    assert none == 0 and np.array_equal(same, post)
+    # A penetration that already existed is not made worse, but is not "fixed" either.
+    deep, _ = _limit_edit_by_terrain(pre, post, lambda jq: -0.03 + 0.0 * jq[:, 7], fps)
+    assert np.array_equal(deep, post)
+
+
 def test_terrain_snap_keeps_the_margin(toy, calibration, base_motion) -> None:
     motion = _walk(base_motion)
     margin = 0.01
@@ -377,6 +422,7 @@ def test_terrain_snap_keeps_the_margin(toy, calibration, base_motion) -> None:
     result = pipe.run(motion)
     gap = _sole_gap(pipe, result, motion)
     assert gap.min() == pytest.approx(margin, abs=2e-3)
+    assert "shoulder_edit_limited_frames" in result.meta["frax"]
 
 
 # --- flat floor, cache ----------------------------------------------------------------------

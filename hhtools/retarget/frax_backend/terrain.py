@@ -37,8 +37,13 @@ __all__ = [
 
 #: Distance reported by an inactive obstacle row; large enough to never be among the kept rows.
 _INACTIVE = 1e3
+#: Two obstacle normals closer than this (squared) are the same half-space; the nearer wins.
+_PARALLEL_SQ = 1e-18
 #: Stand-in for "no candidate" inside ``min``/``argmin`` (finite, so nothing turns into NaN).
 _FAR = 1e30
+#: Added to the distance of a column that only fills a slot (closer than 30 degrees to a taken
+#: row), so every distinct-direction column is taken first.
+_FILL = 1e6
 
 
 @dataclass(frozen=True)
@@ -106,8 +111,10 @@ class TerrainGrid:
     def vertical_clearance(self, points: NDArray, radii: NDArray) -> NDArray:
         """How far spheres (..., 3) of ``radii`` (..., ) can move straight down before touching.
 
-        Negative when a sphere already overlaps the terrain.  Only columns within one radius
-        horizontally can be hit, so the search is local.
+        Negative when a sphere already overlaps the terrain; a sphere exactly tangent to a
+        column's side (horizontal distance ``r``) is in contact, not overlapping, and gets 0 from
+        that column.  Only columns within one radius horizontally can be hit, so the search is
+        local.
         """
         pts = np.asarray(points, dtype=np.float64)
         r = np.broadcast_to(np.asarray(radii, dtype=np.float64), pts.shape[:-1])
@@ -132,6 +139,8 @@ class TerrainGrid:
                 hit = valid & (rho2 <= r**2)  # tangent to a top edge counts as contact
                 lift = np.sqrt(np.maximum(r**2 - rho2, 0.0))
                 gap = pts[:, 2] - self.heights[ic, jc] - lift
+                # Exactly tangent to the side (lift 0) with the centre below the top: contact.
+                gap = np.where(rho2 == r**2, np.maximum(gap, 0.0), gap)
                 out = np.where(hit, np.minimum(out, gap), out)
         return out.reshape(batch)
 
@@ -198,7 +207,8 @@ def _safe_norm(sq: Array) -> Array:
 OBSTACLE_ROWS = 8
 #: Rows per sphere from :func:`column_distance_rows`: support, then the obstacle rows.
 ROWS_PER_SPHERE = 1 + OBSTACLE_ROWS
-#: Obstacle rows whose directions are closer than this angle are redundant; the nearer is kept.
+#: Obstacle rows are first taken in directions at least this far apart; closer ones only fill
+#: slots left empty afterwards (:func:`column_distance_rows`).
 _DISTINCT_DIRECTION_COS = float(np.cos(np.deg2rad(30.0)))
 
 
@@ -216,18 +226,28 @@ def column_distance_rows(terrain: dict, centers: Array, window: int) -> tuple[Ar
       points that way.
     - Rows 1-8, obstacles: the distance to the solid of *raised* columns (higher than the column
       underneath) -- horizontal to the side below the top, diagonal to the edge above --
-      nearest first, skipping a column whose direction is within 30 degrees of a row already
-      taken (it adds little but takes a slot).  Inactive (``d = 1e3``, zero direction) when
-      there are fewer such columns or the centre is inside a column.  A touching column has no
-      direction of its own; it gets the direction from its centre to the centre of the column
-      underneath, the outward normal of the shared face or corner.
+      nearest first.  Columns whose direction is at least 30 degrees from every row already
+      taken go first; if slots remain, the nearest not-yet-taken raised columns fill them (the
+      angle only prioritises, it never discards: two posts in similar directions are both
+      reachable).  Only a column with exactly the same normal as a nearer one is skipped (its
+      half-space is weaker).  Inactive (``d = 1e3``, zero direction) when there are fewer such
+      columns or the centre is inside a column.  A touching column has no direction of its own;
+      it gets the direction from its centre to the centre of the column underneath, the
+      outward normal of the shared face or corner.  At exactly zero distance on a seam between
+      cells these per-column directions are conservative (valid for each column, not tight for
+      the union).  Row 0 handles the same case for a centre inside the columns: the direction
+      is the normalised sum of the horizontal directions to all free cells at zero exit
+      distance, i.e. the face normal of a straight wall however many cells it spans.
 
     Outside the terrain the smallest row is the signed distance; inside, row 0 is (the others
-    are inactive), so ``min`` over the rows is the signed distance everywhere.  Each obstacle
-    row is exact for its own column, whose distance is convex: a translation that keeps the
-    linearised row satisfied never touches that column, along the whole way.  A column without
-    a row can still be reached (a ninth obstacle, or one beyond the window).
-    :meth:`TerrainGrid.signed_distance` is the brute-force reference.
+    are inactive), so ``min`` over the rows is the signed distance, exact only within the
+    searched window (a solid or exit beyond it is not seen).  Each obstacle row is exact for
+    its own column, whose distance is convex: a translation that keeps the linearised row
+    satisfied does not penetrate that column, along the whole way.  A column can still lack a
+    row: more than eight raised columns (angular prioritisation fills the slots in order of
+    direction, then distance, so a distant one can lose), one beyond the window, or the
+    zero-distance seam conservatism above.  :meth:`TerrainGrid.signed_distance` is the
+    brute-force reference.
     """
     heights = jnp.asarray(terrain["heights"], dtype=jnp.float64)
     origin = jnp.asarray(terrain["origin"], dtype=jnp.float64)
@@ -275,6 +295,17 @@ def column_distance_rows(terrain: dict, centers: Array, window: int) -> tuple[Ar
         v = jnp.stack([-hx.ravel()[k], -hy.ravel()[k], rise.ravel()[k]])
         # Touching a free neighbour: leave through the shared face, away from the own column.
         n_in = unit(v, unit(-to_own.reshape(-1, 3)[k], up))
+        # Centre on the boundary (zero exit distance): the free cells touching it share the
+        # exit; the sum of the unit directions to their centres is the face normal of a straight
+        # wall whatever cell ``argmin`` happened to pick.
+        zero_tol = 1e-9 * dx
+        touching = (exit_d <= zero_tol)[:, None]
+        to_cell = jnp.stack([-ox2, -oy2, jnp.zeros_like(ox2)], axis=-1).reshape(-1, 3)
+        to_cell = to_cell / jnp.maximum(jnp.linalg.norm(to_cell, axis=-1, keepdims=True), 1e-30)
+        face = jnp.sum(jnp.where(touching, to_cell, 0.0), axis=0)
+        face_norm = jnp.linalg.norm(face)
+        use_face = (exit_d[k] <= zero_tol) & (face_norm > 1e-9)
+        n_in = jnp.where(use_face, face / jnp.where(face_norm > 0.0, face_norm, 1.0), n_in)
         d0 = jnp.where(inside, -exit_d[k], c[2] - top0)
         n0_dir = jnp.where(inside, n_in, up)
 
@@ -283,16 +314,18 @@ def column_distance_rows(terrain: dict, centers: Array, window: int) -> tuple[Ar
         dist = _safe_norm(rho2 + jnp.maximum(s, 0.0) ** 2).ravel()
         away = jnp.stack([hx, hy, jnp.maximum(s, 0.0)], axis=-1).reshape(-1, 3)
         normals = unit(away, unit(to_own.reshape(-1, 3), up))  # (m*m, 3)
-        allowed = raised & ~inside
+        remaining = raised & ~inside  # not taken, not a weaker duplicate of a taken row
+        distinct = remaining  # ... and at least 30 degrees from every taken row
         d_rows, n_rows = [d0], [n0_dir]
         for _ in range(OBSTACLE_ROWS):
-            cand = jnp.where(allowed, dist, _FAR)
-            kq = jnp.argmin(cand)
-            active = allowed[kq]
+            # Distinct directions first; the rest only fill slots once those ran out.
+            kq = jnp.argmin(jnp.where(distinct, dist, jnp.where(remaining, _FILL + dist, _FAR)))
+            active = remaining[kq]
             nq = normals[kq]
-            d_rows.append(jnp.where(active, cand[kq], _INACTIVE))
+            d_rows.append(jnp.where(active, dist[kq], _INACTIVE))
             n_rows.append(jnp.where(active, nq, 0.0))
-            allowed = allowed & ((normals @ nq) < _DISTINCT_DIRECTION_COS)
+            remaining = remaining & (jnp.sum((normals - nq) ** 2, axis=-1) > _PARALLEL_SQ)
+            distinct = distinct & remaining & ((normals @ nq) < _DISTINCT_DIRECTION_COS)
         return jnp.stack(d_rows), jnp.stack(n_rows)
 
     return jax.vmap(one)(centers)
@@ -305,22 +338,24 @@ class TerrainConstraint(_SphereConstraint):
     Each sphere contributes nine barrier rows ``h = d - r - margin`` from
     :func:`column_distance_rows`; rows are ``-(n . J_sphere) v <= gain * h`` and the ``max_rows``
     lowest-barrier rows are kept.  The *support* row holds the sphere above the column
-    underneath; the *obstacle* rows hold it away from the nearest raised columns, one per
-    direction (their wall below the top, their edge above).  An obstacle row is exact for its
-    column: under a translation (exact Jacobian, ``gain * dt <= 1``) that satisfies it, the
-    sphere does not touch that column anywhere along the step, because the distance to one
-    column is convex.  A column without a row -- farther than eight others in distinct
-    directions, beyond the ``window`` columns searched each side, or dropped by ``max_rows``
-    -- can still be reached; so can any column through the linearisation error of a rotating
-    limb.  A sphere already inside a column leaves towards the nearest free space.  On flat
-    ground the obstacle rows are inactive and the rows reduce to frax's ``FloorConstraint``.
+    underneath; the *obstacle* rows hold it away from the nearest raised columns, distinct
+    directions first (their wall below the top, their edge above).  An obstacle row is exact
+    for its column: under a translation (exact Jacobian, ``0 <= gain * dt <= 1``) that
+    satisfies it, the sphere does not penetrate that column anywhere along the step, because
+    the distance to one column is convex (for a sphere that starts feasible, with the row
+    unrelaxed).  A column without a row can still be reached: more than eight raised columns
+    (angular prioritisation, capacity), beyond the ``window`` columns searched each side, a
+    seam at exactly zero distance (conservative rows), or dropped by the global ``max_rows``
+    pruning; so can any column through the linearisation error of a rotating limb.  A sphere
+    already inside a column leaves towards the nearest free space.  On flat ground the
+    obstacle rows are inactive and the rows reduce to frax's ``FloorConstraint``.
     The terrain is read from ``ref[terrain_key]`` every step (:meth:`TerrainGrid.as_ref`), so
     one compiled solver serves any terrain of the same grid shape.
 
     Args:
         robot: frax robot with collision data
         sphere_idxs: robot collision spheres to check (default all)
-        max_rows: keep only this many lowest-barrier rows per step (of ``9 * spheres``)
+        max_rows: keep only this many lowest-barrier rows per step (``ROWS_PER_SPHERE`` per sphere)
         gain: CBF gain (1/s)
         penalty: relaxation penalty
         margin: clearance kept from the terrain
@@ -356,7 +391,8 @@ class TerrainConstraint(_SphereConstraint):
         pos = robot._link_collision_positions(joint_tfs)[self.sphere_idxs]
         radii = self.radii[self.sphere_idxs]
         d, normals = column_distance_rows(ref[self.terrain_key], pos, self.window)
-        h = (d - radii[:, None]).reshape(-1) - self.margin  # sphere-major: row k is sphere k // 5
+        # Sphere-major: row k belongs to sphere k // ROWS_PER_SPHERE.
+        h = (d - radii[:, None]).reshape(-1) - self.margin
         normals = normals.reshape(-1, 3)
         n_rows = ROWS_PER_SPHERE * len(self.sphere_idxs)
         keep = jnp.arange(n_rows) if self.max_rows is None else self._keep(h)
