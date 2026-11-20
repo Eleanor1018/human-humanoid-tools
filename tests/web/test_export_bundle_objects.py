@@ -129,11 +129,8 @@ def test_export_csv_includes_object_csv(tmp_path: Path, woodchair_motion: Motion
     row0 = [float(x) for x in data_rows[0]]
     assert row0[1:4] == pytest.approx(scaled_pos.tolist(), abs=1e-4)
 
-    extents = (
-        np.asarray(ob.extents, dtype=np.float64).reshape(3)
-        * float(ob.scale)
-        * 0.85
-    )
+    # Extents are metres: the scene scale applies, the mesh-vertex scale does not.
+    extents = np.asarray(ob.extents, dtype=np.float64).reshape(3) * 0.85
     assert row0[8:11] == pytest.approx(extents.tolist(), abs=1e-4)
     assert len(row0) == len(OBJECT_CSV_HEADER)
 

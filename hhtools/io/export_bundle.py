@@ -313,12 +313,12 @@ def _object_track_blob(
     oq_wxyz[..., 0] = oq_xyzw[..., 3]
     oq_wxyz[..., 1:] = oq_xyzw[..., :3]
     mesh_name = Path(str(getattr(ob, "mesh_path", "") or "")).name
-    # Cuboid extents follow the same mesh scaling as the exported OBJ
-    # (``ob.scale * smpl_scale``); they are dimensions, not positions, so the
+    # Cuboid extents are metres (``SceneObject.extents``); like every scene length they
+    # scale by ``smpl_scale``.  ``ob.scale`` converts raw mesh vertices only (the exported
+    # OBJ uses ``ob.scale * smpl_scale``).  They are dimensions, not positions, so the
     # ``z_offset`` grounding shift does not apply.
     extents = (
         np.asarray(getattr(ob, "extents", (0.0, 0.0, 0.0)), dtype=np.float64).reshape(3)
-        * float(getattr(ob, "scale", 1.0))
         * float(smpl_scale)
     )
     return {

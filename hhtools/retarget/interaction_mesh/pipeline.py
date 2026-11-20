@@ -1225,8 +1225,10 @@ class InteractionMeshPipeline:
             op *= smpl_scale
             obj_positions.append(op)
 
+            # ``extents`` are metres (the viewer draws them as is); ``ob.scale`` converts raw
+            # mesh vertices and must not be applied again (0.01 on OmniContact meshes).
             ext = np.asarray(ob.extents, dtype=np.float32).reshape(3)
-            ext = ext * float(ob.scale) * float(smpl_scale)
+            ext = ext * float(smpl_scale)
             local = sample_axis_aligned_box(self.cfg.object_surface_samples, ext)
             F = int(op.shape[0])
             pts = np.zeros((F, local.shape[0], 3), dtype=np.float32)
