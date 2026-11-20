@@ -329,10 +329,12 @@ def _limit_edit_by_terrain(
         return out
 
     gap_pre = np.asarray(gap_fn(pre), dtype=np.float64)
-    floor = np.minimum(gap_pre, 0.0) - tol
+    floor = np.where(np.isnan(gap_pre), -tol, np.minimum(gap_pre, 0.0) - tol)
 
     def worse(alpha: NDArray) -> NDArray:
-        below = np.asarray(gap_fn(blend(alpha)), dtype=np.float64) < floor
+        gap = np.asarray(gap_fn(blend(alpha)), dtype=np.float64)
+        # A NaN gap is a violation where the pair had a finite baseline, else ignored.
+        below = (gap < floor) | (np.isnan(gap) & ~np.isnan(gap_pre))
         return below.reshape(len(below), -1).any(axis=1)
 
     alpha = np.ones(len(pre))
@@ -351,6 +353,11 @@ def _limit_edit_by_terrain(
     alpha = np.minimum(alpha, 1.0)
     alpha[worse(alpha)] = 0.0
     return blend(alpha), int((alpha < 1.0 - 1e-6).sum())
+
+
+def _flat_floor_gaps(centres: NDArray, radii: NDArray) -> NDArray:
+    """Signed gap (m) of sphere ``centres`` (T, S, 3) of ``radii`` (S,) to the plane ``z = 0``."""
+    return np.asarray(centres, dtype=np.float64)[..., 2] - np.asarray(radii, dtype=np.float64)
 
 
 def _object_gap_fn(
@@ -388,45 +395,56 @@ def _limit_root_shift(
     *,
     z_index: int = 2,
     tol: float = 1e-4,
-    bisect_steps: int = 10,
-    max_step: float = 0.005,
-    max_steps: int = 200,
+    eps: float = 5e-5,
+    pen_step: float = 0.002,
+    max_iter: int = 500,
 ) -> tuple[float, bool]:
-    """Largest continuous clear prefix of a downward root shift ``shift`` (m).
+    """Largest certified clear prefix of a vertical root shift ``shift`` (m), by advancement.
 
-    ``gap_fn(joint_q)`` gives the signed gaps of the pairs (``(T, N)``, or ``(T,)``).  The
-    shifted motion is *worse* when any pair's gap is below ``min(that pair's gap before, 0) -
-    tol``: pairs are compared one by one, so an existing penetration cannot hide a new one, and
-    the floor is zero rather than the clearance margin (which only compensates for the sphere
-    model).  The shift is walked in increments of at most ``max_step`` (callers pass half the
-    smallest sphere radius, so a sphere cannot jump over a thin obstacle between two
-    checks; the number of increments is capped at ``max_steps``), stopping at the first
-    increment that is worse, and the boundary inside that increment is bisected.  A far end
-    that is clear is not enough: the prefix must be.  Returns the shift to apply and whether it
-    was reduced.
+    ``gap_fn(joint_q)`` gives the signed gaps of the pairs (``(T, N)``, or ``(T,)``).  A pair is
+    *violated* when its gap is below ``min(its gap before, 0) - tol`` (its *floor*): pairs are
+    compared one by one, so an existing penetration cannot hide a new one, and the floor is zero
+    rather than the clearance margin.  The motion is a pure vertical translation and every gap is
+    a distance, hence (about) 1-Lipschitz in the shift: from a fraction where all pairs are
+    clear, the shift can advance by the smallest slack ``gap - floor`` (metres, taken at 90 %
+    for numerical safety) without any pair reaching its floor, so no violation can hide between
+    samples however thin the obstacle.  This repeats until the full shift is reached or the
+    slack falls below ``eps``, with at most ``max_iter`` samples; the last certified fraction is
+    returned, never a larger one.  A pair that already penetrates or has no finite baseline has
+    no such certificate (its slack is only ``tol``): it is sampled at steps of at least
+    ``pen_step`` instead.  A NaN gap is a violation when the pair's baseline was finite; a NaN
+    baseline floors the pair at ``-tol`` and its NaN gaps are ignored.  Returns the shift to
+    apply and whether it was reduced.
     """
     if shift == 0.0:
         return 0.0, False
     jq = np.asarray(joint_q, dtype=np.float32)
-    floor = np.minimum(np.asarray(gap_fn(jq), dtype=np.float64), 0.0) - tol
+    base = np.asarray(gap_fn(jq), dtype=np.float64)
+    floor = np.where(np.isnan(base), -tol, np.minimum(base, 0.0) - tol)
+    certified = base >= 0.0  # False for penetrating and NaN pairs
+    size = abs(float(shift))
 
-    def worse(fraction: float) -> bool:
+    def check(fraction: float) -> tuple[bool, float]:
         moved = jq.copy()
         moved[:, z_index] -= np.float32(fraction * shift)
-        return bool((np.asarray(gap_fn(moved), dtype=np.float64) < floor).any())
+        gap = np.asarray(gap_fn(moved), dtype=np.float64)
+        bad = (gap < floor) | (np.isnan(gap) & ~np.isnan(base))
+        slack = np.where(np.isnan(gap), np.inf, gap - floor)
+        advance = np.where(certified, slack, np.maximum(slack, pen_step))
+        return bool(bad.any()), float(advance.min())
 
-    n_steps = int(min(max_steps, max(1, np.ceil(abs(shift) / max(float(max_step), 1e-9)))))
-    for i in range(1, n_steps + 1):
-        if worse(i / n_steps):
-            lo, hi = (i - 1) / n_steps, i / n_steps
-            for _ in range(bisect_steps):
-                mid = 0.5 * (lo + hi)
-                if worse(mid):
-                    hi = mid
-                else:
-                    lo = mid
-            return float(lo * shift), True
-    return float(shift), False
+    good, fraction = 0.0, 0.0
+    for _ in range(int(max_iter)):
+        bad, advance = check(fraction)
+        if bad:
+            break
+        good = fraction
+        if fraction >= 1.0:
+            return float(shift), False
+        if advance < eps:
+            break
+        fraction = min(1.0, fraction + 0.9 * advance / size)
+    return float(good * shift), True
 
 
 def _point_key(points: list[RobotMpcPoint]) -> tuple:
@@ -900,9 +918,14 @@ class FraxScenePipeline:
             # The solver frame of the front half: (p - [0, 0, z_min]) * smpl_scale.
             shift = np.array([0.0, 0.0, float(st.z_min)])
             tracks = []
-            for ob in motion.objects:
+            for k, ob in enumerate(motion.objects):
                 p = np.asarray(ob.positions, dtype=np.float64)
                 q = np.asarray(ob.quaternions, dtype=np.float64)
+                if not (np.isfinite(p).all() and np.isfinite(q).all()):
+                    raise ValueError(
+                        f"object {k} ({getattr(ob, 'name', '')!r}) has non-finite positions or "
+                        "quaternions; fix or drop the object track before retargeting"
+                    )
                 idx = np.minimum(np.arange(T), len(p) - 1)
                 tracks.append(((p[idx] - shift) * float(st.smpl_scale), q[idx]))
             object_pos = np.stack([t[0] for t in tracks], axis=1)  # (T, K, 3)
@@ -998,6 +1021,9 @@ class FraxScenePipeline:
         dof_names = self.robot.dof_names()
         radii = np.asarray(model.robot.flat_collision_radii)[list(model.floor_sphere_idxs)]
         terrain_spheres = grid is not None and solver.floor_fn is not None
+        flat_floor_spheres = (
+            grid is None and "floor" in solver.constraints and solver.floor_fn is not None
+        )
 
         def sphere_centres(jq: NDArray) -> NDArray:
             return np.asarray(solver.floor_fn(jnp.asarray(model.frax_q_from_joint_q(jq))))
@@ -1011,7 +1037,6 @@ class FraxScenePipeline:
         if object_sdfs:
             all_radii = np.asarray(model.robot.flat_collision_radii)
             object_gap = _object_gap_fn(object_sdfs, object_pos, object_rot, all_radii)
-            snap_step = 0.5 * float(all_radii.min())
 
             def object_gaps(jq: NDArray) -> NDArray:
                 """Signed gap of every (frame, object, sphere), ``(T, K * S)``."""
@@ -1022,10 +1047,12 @@ class FraxScenePipeline:
                 return object_gaps(jq).min(axis=1)
 
         def guard_gaps(jq: NDArray) -> NDArray:
-            """Every terrain and object pair, side by side: the guards compare them one by one."""
+            """Every floor, terrain and object pair, side by side (compared one by one)."""
             parts = []
             if terrain_spheres:
                 parts.append(terrain_gaps(jq))
+            if flat_floor_spheres:
+                parts.append(_flat_floor_gaps(sphere_centres(jq), radii))
             if object_gaps is not None:
                 parts.append(object_gaps(jq))
             return np.concatenate(parts, axis=1)
@@ -1056,9 +1083,7 @@ class FraxScenePipeline:
             drop = float(grid.vertical_clearance(spheres, radii + margin).min())
             floor_offset = _terrain_snap_offset(drop)
             if object_gap_per_frame is not None:
-                floor_offset, reduced = _limit_root_shift(
-                    joint_q, floor_offset, object_gaps, max_step=snap_step
-                )
+                floor_offset, reduced = _limit_root_shift(joint_q, floor_offset, object_gaps)
                 if reduced:
                     _LOG.info(
                         "FRAX terrain snap reduced to %.4f m to avoid object penetration",
@@ -1080,7 +1105,7 @@ class FraxScenePipeline:
             if object_gap_per_frame is not None and clip_floor_snap != 0.0:
                 # The snap must not create or deepen object penetration.
                 clip_floor_snap, reduced = _limit_root_shift(
-                    unsnapped, clip_floor_snap, object_gaps, max_step=snap_step
+                    unsnapped, clip_floor_snap, object_gaps
                 )
                 if reduced:
                     _LOG.info(

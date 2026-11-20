@@ -52,13 +52,13 @@ _PAD_SLACK = 0.03
 
 
 def object_grid_pad(max_radius: float, margin: float) -> float:
-    """Grid padding (m) that makes the field exact for every query that can be active.
+    """Grid padding (m): the trilinear field is used for every centre that can touch the object.
 
-    A sphere of radius ``max_radius`` keeping ``margin`` from the object constrains the solver
-    only while its centre is closer than ``max_radius + margin`` to the surface (plus the slack
-    of the barrier, which acts on the reported gap too).  With this padding a centre outside the
-    grid is at least that far away, so whatever :func:`object_distance_rows` returns there is
-    inactive.
+    A sphere of radius ``max_radius`` keeping ``margin`` from the object is in contact only
+    while its centre is closer than ``max_radius + margin`` to the surface (plus the slack of the
+    barrier).  With this padding such a centre is inside the grid.  Outside it the field is the
+    distance to the object's bounding box, a conservative lower bound; the row it gives is
+    retained (it bounds the approach velocity), it is not inactive.
     """
     return max(_MIN_PAD, float(max_radius) + float(margin) + _PAD_SLACK)
 
@@ -69,24 +69,37 @@ class ObjectSDF:
 
     ``values[i, j, k]`` is the distance (m) from ``origin + (i, j, k) * dx`` to the object's
     surface, positive outside, negative inside.  Outside the grid, :func:`object_distance_rows`
-    extends it by the distance to the grid; the pipeline pads the grid (:func:`object_grid_pad`)
-    so that nothing outside it is within reach of a collision sphere.
+    returns the distance to the object's local bounding box ``[lo, hi]`` (a lower bound of the
+    distance to the object) with that distance's unit gradient: a supporting plane of a convex
+    set, so a row built from it is conservative.  The pipeline pads the grid
+    (:func:`object_grid_pad`) so the accurate field covers every centre in contact.
     """
 
     values: NDArray[np.float32]  # (nx, ny, nz)
     origin: NDArray[np.float64]  # (3,) object-local position of node (0, 0, 0)
     dx: float
+    lo: NDArray[np.float64] | None = None  # (3,) lower corner of the object's local bounding box
+    hi: NDArray[np.float64] | None = None  # (3,) upper corner (both default to the grid's)
+
+    def __post_init__(self) -> None:
+        extent = self.origin + (np.asarray(self.values.shape) - 1) * self.dx
+        if self.lo is None:
+            object.__setattr__(self, "lo", np.asarray(self.origin, dtype=np.float64))
+        if self.hi is None:
+            object.__setattr__(self, "hi", np.asarray(extent, dtype=np.float64))
 
     def as_ref(self) -> dict[str, NDArray]:
-        """The pytree handed to the solver: ``values``, ``origin``, ``dx``."""
+        """The pytree handed to the solver: ``values``, ``origin``, ``dx``, ``lo``, ``hi``."""
         return {
             "values": np.asarray(self.values, dtype=np.float32),
             "origin": np.asarray(self.origin, dtype=np.float64),
             "dx": np.asarray(self.dx, dtype=np.float64),
+            "lo": np.asarray(self.lo, dtype=np.float64),
+            "hi": np.asarray(self.hi, dtype=np.float64),
         }
 
     def signed_distance(self, points: NDArray) -> NDArray[np.float64]:
-        """Trilinear lookup at object-local ``points`` (..., 3), grid-extended outside (NumPy)."""
+        """Lookup at object-local ``points`` (..., 3): trilinear inside, box distance outside."""
         d, _ = _lookup(self.as_ref(), np.asarray(points, dtype=np.float64).reshape(-1, 3), np)
         return np.asarray(d).reshape(np.shape(points)[:-1])
 
@@ -150,13 +163,15 @@ def build_object_sdf(
 
     With a loadable mesh, vertices are ``(raw - mean of raw) * obj.scale * smpl_scale`` (the
     placement of the viewer, scaled into the solver frame) and the mesh is merged
-    (``process=True``).  The far field is the signed Euclidean distance transform of the filled
-    voxelisation at ``voxel`` pitch (the bundled meshes are not watertight).  Nodes within 3 cm
-    of the *surface* (measured on the unfilled voxelisation, so a cavity wall counts) get the
-    exact distance to the mesh; their sign comes from ray-parity containment when the processed
-    mesh is watertight (any winding, cavities, several components), else from the filled voxels.
-    Deep inside a closed cavity, further than that from every wall, the filled voxels still read
-    "inside".  The grid covers the mesh bounds plus ``pad`` (see :func:`object_grid_pad`).
+    (``process=True``).  The magnitude at every node is the distance to the *unfilled* surface
+    shell (voxel distance transform at ``voxel`` pitch), replaced within 3 cm of the surface by
+    the exact triangle distance.  If the processed mesh is watertight the sign comes from
+    ray-parity containment per connected component, weighted by nesting (a component inside an
+    odd number of others is a cavity, -1; else a solid, +1) and summed, so cavities, nested
+    cavities, overlapping closed parts (a union) and disjoint parts of any winding are right;
+    otherwise (the bundled chairs and the like) from the filled voxelisation.  The grid covers
+    the mesh bounds plus ``pad`` (see :func:`object_grid_pad`); outside it the lookup returns the
+    distance to the bounding box (see :class:`ObjectSDF`).
     Without a mesh (empty ``mesh_path`` or a load failure) the field is the analytic box of half
     extents ``extents * smpl_scale / 2``: ``SceneObject.extents`` are metres, ``obj.scale``
     applies to raw mesh vertices only.  Results are cached in-process, keyed on the mesh file's
@@ -187,7 +202,48 @@ def _build_box(half: NDArray, dx: float, pad: float) -> ObjectSDF:
     origin, shape, axes = _grid_for(-half, half, dx, pad)
     pts = np.stack(np.meshgrid(*axes, indexing="ij"), axis=-1).reshape(-1, 3)
     values = _box_sdf(pts, half).reshape(tuple(shape)).astype(np.float32)
-    return ObjectSDF(values=values, origin=origin, dx=float(dx))
+    return ObjectSDF(values=values, origin=origin, dx=float(dx), lo=-half, hi=half)
+
+
+def _component_weights(parts) -> list[int]:
+    """``+1`` for every solid component, ``-1`` for a cavity (nested in an odd number of others).
+
+    A component is nested in another only if its bounding box and (a sample of) all of its
+    vertices lie inside the other; overlapping parts are not nested in each other.
+    """
+    weights = []
+    for i, part in enumerate(parts):
+        verts = part.vertices[:: max(1, len(part.vertices) // 2000)]
+        depth = 0
+        for j, other in enumerate(parts):
+            if j == i or not _in_bounds(part.bounds, other.bounds).all():
+                continue
+            depth += int(bool(other.contains(verts).all()))
+        weights.append(1 if depth % 2 == 0 else -1)
+    return weights
+
+
+def _in_bounds(points: NDArray, bounds: NDArray) -> NDArray:
+    eps = 1e-9
+    return ((points >= bounds[0] - eps) & (points <= bounds[1] + eps)).all(axis=-1)
+
+
+def _solid_mask(mesh, pts: NDArray, chunk: int = 20000) -> NDArray:
+    """Whether each of ``pts`` is inside the solid of a watertight ``mesh``.
+
+    Per connected component, weighted by nesting (a cavity counts -1, a solid +1), summed over
+    the components that contain the point: nested cavities, overlapping closed parts (a union)
+    and disjoint parts of any winding all come out right.
+    """
+    parts = mesh.split(only_watertight=False)
+    weights = _component_weights(parts)
+    total = np.zeros(len(pts), dtype=np.int64)
+    for part, weight in zip(parts, weights, strict=True):
+        idx = np.flatnonzero(_in_bounds(pts, part.bounds))
+        for start in range(0, len(idx), chunk):
+            sel = idx[start : start + chunk]
+            total[sel] += weight * part.contains(pts[sel]).astype(np.int64)
+    return total > 0
 
 
 def _build_mesh(mesh_data, scale: float, dx: float, pad: float, voxel: float) -> ObjectSDF:
@@ -207,31 +263,37 @@ def _build_mesh(mesh_data, scale: float, dx: float, pad: float, voxel: float) ->
     shell = np.pad(mat, margin)
     vo = np.asarray(surface.translation, dtype=np.float64) - margin * voxel  # centre of voxel 0
     occ = binary_fill_holes(shell)
-    outside = distance_transform_edt(~occ) * voxel - 0.5 * voxel
-    inside = -(distance_transform_edt(occ) * voxel - 0.5 * voxel)
-    field = np.where(occ, inside, outside)
+    filled = np.where(
+        occ,
+        -(distance_transform_edt(occ) * voxel - 0.5 * voxel),
+        distance_transform_edt(~occ) * voxel - 0.5 * voxel,
+    )
     to_surface = distance_transform_edt(~shell) * voxel
 
     grid = np.stack(np.meshgrid(*axes, indexing="ij"), axis=-1).reshape(-1, 3)
     coords = ((grid - vo) / voxel).T
-    approx = map_coordinates(field, coords, order=1, mode="nearest")
-    values = approx.copy()
+    filled_at = map_coordinates(filled, coords, order=1, mode="nearest")
     surface_dist = map_coordinates(to_surface, coords, order=1, mode="nearest")
+    # Magnitude: distance to the (unfilled) surface, so a cavity wall counts like any other.
+    magnitude = surface_dist.copy()
 
+    if mesh.is_watertight:
+        inside = _solid_mask(mesh, grid)
+    else:
+        inside = filled_at < 0.0
     near = surface_dist < _EXACT_BAND + 2.0 * voxel
     if near.any():
-        pts = grid[near]
-        _, dist, _ = trimesh.proximity.closest_point(mesh, pts)
-        if mesh.is_watertight:
-            # Ray parity: independent of the winding, right for cavities and several components.
-            sign = np.where(mesh.contains(pts), -1.0, 1.0)
-        else:
-            sign = np.where(approx[near] < 0.0, -1.0, 1.0)
+        _, dist, _ = trimesh.proximity.closest_point(mesh, grid[near])
         # The voxel distance to the surface is within a voxel of the true one.
-        replace = dist < _EXACT_BAND
-        values[near] = np.where(replace, sign * dist, approx[near])
+        exact = dist < _EXACT_BAND
+        magnitude[near] = np.where(exact, dist, magnitude[near])
+    values = np.where(inside, -magnitude, magnitude)
     return ObjectSDF(
-        values=values.reshape(tuple(shape)).astype(np.float32), origin=origin, dx=float(dx)
+        values=values.reshape(tuple(shape)).astype(np.float32),
+        origin=origin,
+        dx=float(dx),
+        lo=np.asarray(lo, dtype=np.float64),
+        hi=np.asarray(hi, dtype=np.float64),
     )
 
 
@@ -273,15 +335,14 @@ def _trilinear(values, fc, top, xp):
 def _lookup(sdf: dict, local, xp):
     """Distance and local gradient direction at object-local points ``local`` (n, 3).
 
-    Trilinear interpolation inside the grid.  Outside, the point is clamped to the grid, the
-    value there plus the distance from the clamped point is returned (so far points read far)
-    and the direction is the clamped gradient.  With the grid padded by :func:`object_grid_pad`
-    every point outside it is farther from the object than any sphere can reach, so the
-    extension only ever reports inactive rows.  Where the trilinear gradient is (almost) flat
+    Inside the grid: trilinear interpolation.  Where the trilinear gradient is (almost) flat
     (the medial plane of a thin object, which an inside sphere may sit on) the direction is the
     grid axis, ``+-x, +-y, +-z``, along which a one-cell step raises the field most; if the
-    field is flat in all six, the point's own offset from the object origin, then +z.  Returns
-    ``(d, n)`` with ``n`` of unit length.
+    field is flat in all six, the point's own offset from the object origin, then +z.  Outside
+    the grid: the distance to the object's bounding box ``[lo, hi]`` and that distance's unit
+    gradient (the object lies inside the box, so this is a lower bound and a supporting plane;
+    the row stays conservative however far a step goes).  Returns ``(d, n)`` with ``n`` of unit
+    length.
     """
     values = xp.asarray(sdf["values"], dtype=xp.float64)
     origin = xp.asarray(sdf["origin"], dtype=xp.float64)
@@ -290,8 +351,14 @@ def _lookup(sdf: dict, local, xp):
     top = xp.asarray([s - 1 for s in shape], dtype=xp.float64)
     f = (local - origin) / dx
     fc = xp.clip(f, 0.0, top)
-    excess = (f - fc) * dx  # (n, 3) local offset from the clamped point
-    e = xp.sqrt(xp.sum(excess**2, axis=-1))
+    outside = xp.any((f < 0.0) | (f > top), axis=-1)
+    lo = xp.asarray(sdf["lo"], dtype=xp.float64)
+    hi = xp.asarray(sdf["hi"], dtype=xp.float64)
+    off = local - xp.clip(local, lo, hi)  # (n, 3) offset from the nearest box point
+    box2 = xp.sum(off**2, axis=-1)[:, None]
+    okb = box2 > _TINY
+    box_n = xp.where(okb, off / xp.sqrt(xp.where(okb, box2, 1.0)), 0.0)
+    box_d = xp.sqrt(box2[:, 0])
     n_pts = fc.shape[0]
 
     # The value at the point and at one-cell steps along +-x, +-y, +-z (clamped to the grid).
@@ -317,7 +384,8 @@ def _lookup(sdf: dict, local, xp):
     okr = r2 > _TINY
     radial = xp.where(okr, local / xp.sqrt(xp.where(okr, r2, 1.0)), xp.asarray([0.0, 0.0, 1.0]))
     n = xp.where(ok, n, xp.where(has_rise, step_dir, radial))
-    return d0 + e, n
+    far = outside[:, None] & okb
+    return xp.where(outside, box_d, d0), xp.where(far, box_n, n)
 
 
 def object_distance_rows(sdf: dict, centers, pos, rot):

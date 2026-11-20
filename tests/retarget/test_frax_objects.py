@@ -177,7 +177,8 @@ def test_sphere_overlapping_a_box_corner_outside_the_default_halo(tmp_path) -> N
 
     narrow = build_object_sdf(obj, 1.0, dx=0.005, pad=0.08)
     d, _ = object_distance_rows(narrow.as_ref(), centre, pos, rot)
-    assert float(d[0]) - radius > 0.0  # the halo cuts the field short: wrongly clear
+    # The conservative far field (distance to the bounding box) is exact at a box corner.
+    assert float(d[0]) - radius == pytest.approx(true_gap, abs=1e-6)
 
     pad = object_grid_pad(radius, 0.01)
     assert pad == pytest.approx(0.19)
@@ -740,3 +741,196 @@ def test_object_constraint_defaults_to_every_sphere(model) -> None:
     assert c.num_rows == len(c.sphere_idxs)
     capped = ObjectConstraint(model.robot, 0, max_rows=8)
     assert capped.num_rows == 8
+
+
+# --- second review: far field, field sign, certified snap prefix, non-finite data -------------
+
+
+def test_outside_the_grid_a_row_cannot_be_translated_into_a_convex_box() -> None:
+    """A retained positive row outside the pad must bound the approach: it is box-conservative."""
+    r, margin = 0.05, 0.01
+    sdf = build_object_sdf(
+        _object(extents=(0.25, 0.25, 0.25)), 1.0, dx=0.01, pad=object_grid_pad(r, margin)
+    )
+    top = sdf.origin + (np.array(sdf.values.shape) - 1) * sdf.dx
+    start = np.array([top[0] + 0.05, top[1], 0.0])  # (270, 220, 0) mm, outside the grid
+    end = np.array([0.125 + 0.034, 0.125 + 0.034, 0.0])
+    assert np.sqrt(2) * 0.034 - r < -0.001  # the end state truly penetrates
+    d, n = object_distance_rows(sdf.as_ref(), start[None], np.zeros(3), np.eye(3))
+    # The unrelaxed linear row at gain * dt = 1: h + n . (end - start) must stay >= 0.
+    h_end = float(d[0]) - r - margin + np.asarray(n[0]) @ (end - start)
+    assert h_end < 0.0, h_end
+
+
+def test_far_field_is_the_distance_to_the_bounding_box() -> None:
+    sdf = build_object_sdf(_object(extents=(0.2, 0.1, 0.3)), 1.0, dx=0.01, pad=0.08)
+    pts = np.array([[1.0, 0.02, 0.0], [0.05, -0.4, 0.5], [-0.3, 0.3, 0.0]])
+    d, n = object_distance_rows(sdf.as_ref(), pts, np.zeros(3), np.eye(3))
+    lo, hi = np.array([-0.1, -0.05, -0.15]), np.array([0.1, 0.05, 0.15])
+    off = pts - np.clip(pts, lo, hi)
+    np.testing.assert_allclose(np.asarray(d), np.linalg.norm(off, axis=-1), atol=1e-9)
+    np.testing.assert_allclose(
+        np.asarray(n), off / np.linalg.norm(off, axis=-1, keepdims=True), atol=1e-9
+    )
+
+
+def test_nested_cavity_does_not_flip_queries_in_free_space(tmp_path) -> None:
+    import trimesh
+
+    outer = trimesh.creation.box((0.244,) * 3)
+    inner = trimesh.creation.box((0.164,) * 3)
+    inner.invert()
+    shell = trimesh.util.concatenate([outer, inner])
+    assert shell.is_watertight
+    sdf = build_object_sdf(_object(_write_mesh(tmp_path / "shell.obj", shell)), 1.0, dx=0.01)
+    # Nodes 50 and 60 mm are 32 and 22 mm into the cavity air; 54 mm is 28 mm from the wall.
+    np.testing.assert_allclose(
+        sdf.signed_distance([[0.054, 0.0, 0.0], [0.05, 0.0, 0.0], [0.0, 0.0, 0.0]]),
+        [0.028, 0.032, 0.082],
+        atol=2e-3,
+    )
+    np.testing.assert_allclose(sdf.signed_distance([[0.1, 0.0, 0.0]]), [-0.02], atol=2e-3)
+
+
+def test_overlapping_closed_parts_are_a_union(tmp_path) -> None:
+    import trimesh
+
+    a = trimesh.creation.box((0.10, 0.12, 0.12))
+    a.apply_translation([-0.03, 0.0, 0.0])  # x in [-80, 20] mm
+    b = trimesh.creation.box((0.10, 0.10, 0.10))
+    b.apply_translation([0.03, 0.0, 0.0])  # x in [-20, 80] mm
+    both = trimesh.util.concatenate([a, b])
+    assert both.is_watertight
+    sdf = build_object_sdf(_object(_write_mesh(tmp_path / "union.obj", both)), 1.0, dx=0.01)
+    # Inside both parts, 10 mm behind the +x face of the first: deeper than -10 mm.
+    assert float(sdf.signed_distance([[0.01, 0.0, 0.0]])[0]) <= -0.009
+
+
+def test_snap_stops_before_a_graze_between_samples() -> None:
+    """A 10 mm sphere 9.8 mm beyond the edge of a 1 mm sheet, moving from +2.5 to -2.5 mm."""
+    sdf = build_object_sdf(_object(extents=(0.20, 0.20, 0.001)), 1.0, dx=0.001, pad=0.02)
+    r = 0.010
+    q = np.zeros((1, 7), np.float32)
+    q[:, 2] = 0.0025
+
+    def gap(jq):
+        pts = np.column_stack([np.full(len(jq), 0.1098), np.zeros(len(jq)), jq[:, 2]])
+        return (sdf.signed_distance(pts) - r)[:, None]
+
+    end = q.copy()
+    end[:, 2] = -0.0025
+    assert min(gap(q).item(), gap(end).item()) > 0.0
+    mid = q.copy()
+    mid[:, 2] = 0.0
+    assert gap(mid).item() < -1e-4  # the sheet is grazed halfway
+    shift, reduced = _limit_root_shift(q, 0.005, gap)
+    assert reduced and 0.0 <= shift < 0.0025
+
+
+def test_snap_with_a_tiny_sphere_cannot_tunnel_a_slab() -> None:
+    q = np.zeros((1, 7), np.float32)
+    q[:, 2] = 0.0015
+
+    def gap(jq):  # 1 mm sphere, slab z in [-0.1, +0.1] mm
+        return np.abs(jq[:, 2]) - 0.0001 - 0.001
+
+    shift, reduced = _limit_root_shift(q, 0.600, gap)
+    assert reduced and 0.0 <= shift < 0.0006  # stops above the slab, never beyond it
+
+
+def test_snap_limit_works_in_both_directions() -> None:
+    q = np.zeros((1, 7), np.float32)
+    q[:, 2] = -0.025
+
+    def gap(jq):
+        return np.abs(jq[:, 2]) - 0.005 - 0.010
+
+    shift, reduced = _limit_root_shift(q, -0.050, gap)  # a lift through the shelf
+    assert reduced and shift == pytest.approx(-0.010, abs=5e-4)
+
+
+@pytest.mark.parametrize("bad_baseline", [False, True])
+def test_snap_does_not_fail_open_on_a_nan_pair(bad_baseline) -> None:
+    q = np.zeros((2, 7), np.float32)
+
+    def gap(p):
+        z = p[0, 2]
+        if bad_baseline:
+            value = np.nan if z == 0.0 else -0.02
+        else:
+            value = 0.01 if z >= -0.01 else np.nan
+        return np.array([[value, 10.0], [100.0, 12.0]])
+
+    shift, reduced = _limit_root_shift(q, 0.04, gap)
+    assert reduced and shift <= (0.0 if bad_baseline else 0.010001)
+
+
+def test_shoulder_edit_nan_candidate_is_a_violation() -> None:
+    q = np.zeros((2, 8), np.float32)
+    post = q.copy()
+    post[0, 7] = 0.04
+
+    def gap(p):
+        return np.column_stack([np.where(p[:, 7] > 0.01, np.nan, 0.01), np.full(len(p), 1.0)])
+
+    result, count = _limit_edit_by_terrain(q, post, gap, 30.0)
+    assert count > 0 and np.isfinite(gap(result)).all()
+
+
+def test_shoulder_edit_nan_baseline_may_not_worsen_below_zero() -> None:
+    pre = np.zeros((2, 8), np.float32)
+    post = pre.copy()
+    post[:, 7] = 0.04
+
+    def gap(p):
+        return np.column_stack(
+            [np.where(p[:, 7] == 0.0, np.nan, 0.01 - p[:, 7] * 1.0), np.ones(len(p))]
+        )
+
+    out, count = _limit_edit_by_terrain(pre, post, gap, 30.0)
+    assert count > 0 and (out[:, 7] <= 0.0101).all()
+
+
+def test_pipeline_rejects_a_non_finite_object_track(toy, calibration, synthetic_terrain_motion):
+    motion = _carry_motion(synthetic_terrain_motion)
+    motion.objects[0].positions[5, 1] = np.nan
+    pipe = _pipeline(toy, motion, calibration)
+    with pytest.raises(ValueError, match="non-finite"):
+        pipe.run(motion)
+    motion = _carry_motion(synthetic_terrain_motion)
+    motion.objects[0].quaternions[3, 0] = np.inf
+    with pytest.raises(ValueError, match="non-finite"):
+        _pipeline(toy, motion, calibration).run(motion)
+
+
+def test_shoulder_guard_includes_the_flat_floor(
+    toy, calibration, synthetic_terrain_motion, monkeypatch
+):
+    """With no terrain grid the guard's pair matrix carries the flat floor's columns too."""
+    from hhtools.retarget.frax_backend import scene_pipeline
+
+    seen = {}
+
+    def spy(pre, post, gap_fn, fps, **kwargs):
+        seen["gap_fn"], seen["pre"] = gap_fn, np.asarray(pre)
+        return post, 0
+
+    monkeypatch.setattr(scene_pipeline, "_limit_edit_by_terrain", spy)
+    motion = _carry_motion(synthetic_terrain_motion)
+    pipe = _pipeline(toy, motion, calibration)
+    result = pipe.run(motion)
+    assert "floor" in result.meta["frax"]["constraints"]
+    model = pipe.frax_model
+    floor = list(model.floor_sphere_idxs)
+    n_all = len(np.asarray(model.robot.flat_collision_radii))
+    gaps = seen["gap_fn"](seen["pre"])
+    assert gaps.shape[1] == len(floor) + n_all
+    radii = np.asarray(model.robot.flat_collision_radii)[floor]
+    centres = _spheres(model.robot, model.frax_q_from_joint_q(seen["pre"]))[:, floor]
+    np.testing.assert_allclose(gaps[:, : len(floor)], centres[..., 2] - radii, atol=1e-5)
+    # Lowering the whole body by 5 cm lowers every floor column by 5 cm.
+    lowered = seen["pre"].copy()
+    lowered[:, 2] -= 0.05
+    np.testing.assert_allclose(
+        seen["gap_fn"](lowered)[:, : len(floor)], gaps[:, : len(floor)] - 0.05, atol=1e-5
+    )
