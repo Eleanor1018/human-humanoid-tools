@@ -919,6 +919,11 @@ def foot_terrain_clearance(
             world[:n], terrain, floor_z=floor_z, max_distance=max_distance,
             triangulation=triangulation,
         )
+        # A frame with any non-finite sample or cell quantity (a NaN pose) is unmeasurable: it
+        # takes no part in the cell bounds below and its clearances stay NaN.
+        valid = np.ones(n, dtype=bool)
+        for arr in (world, centre, half, normal_z, lowest):
+            valid &= np.isfinite(arr[:n]).reshape(n, -1).all(axis=1)
         zc = centre[:n, :, 2]
         # Lowest the cell reaches: its flat box's height extent, or the tilt of a ball cell,
         # never below the piece's lowest point.
@@ -929,11 +934,21 @@ def foot_terrain_clearance(
         # A sample's cell clearance is at most its point's clearance, so the frame's smallest
         # point clearance bounds the answer from above, and cells that are above that even
         # against the tallest terrain around them cannot lower it: only the rest is bounded.
-        near_top = _neighbourhood_top(cx, cy, float(max(hx.max(), hy.max())), terrain, floor_z)
-        cheap = floor_of_cell - near_top  # no higher a lower bound than the exact one below
+        ok = valid[:, None]
+        pad = float(max(hx[valid].max(), hy[valid].max())) if valid.any() else 0.0
+        near_top = _neighbourhood_top(
+            np.where(ok, cx, 0.0), np.where(ok, cy, 0.0), pad, terrain, floor_z
+        )
+        cheap = np.where(ok, floor_of_cell - near_top, np.inf)  # never above the exact one below
         bound = np.full((n, total), np.inf)
 
-        def tighten(fi, pi, cx=cx, cy=cy, hx=hx, hy=hy, bound=bound, base=floor_of_cell):
+        def tighten(
+            fi, pi, cx=cx, cy=cy, hx=hx, hy=hy, bound=bound, base=floor_of_cell, valid=valid
+        ):
+            keep = valid[fi]
+            fi, pi = fi[keep], pi[keep]
+            if not len(fi):
+                return
             ceiling = terrain_rect_bound(
                 cx[fi, pi] - hx[fi, pi], cx[fi, pi] + hx[fi, pi],
                 cy[fi, pi] - hy[fi, pi], cy[fi, pi] + hy[fi, pi],
@@ -949,7 +964,7 @@ def foot_terrain_clearance(
         limit = np.minimum(point_clear, bound.min(axis=1))[:, None]
         fi, pi = np.nonzero((cheap <= limit + 1e-9) & np.isinf(bound))
         tighten(fi, pi)
-        vertical[start:stop] = bound.min(axis=1)
+        vertical[start:stop] = np.where(valid, bound.min(axis=1), np.nan)
     return FootTerrainClearance(signed, vertical)
 
 

@@ -37,6 +37,8 @@ from numpy.typing import NDArray
 if TYPE_CHECKING:
     from hhtools.core.scene import TerrainHeightfield
 
+from hhtools.core.terrain_repair import sanitize_hfield, sanitize_terrain  # noqa: E402,F401
+
 _log = logging.getLogger(__name__)
 
 
@@ -95,55 +97,6 @@ def collision_ground_z(terrain: TerrainHeightfield | None, default: float = 0.0)
     if finite.size == 0:
         return float(default)
     return min(float(default), float(finite.min()))
-
-
-def sanitize_hfield(hf: NDArray[np.floating]) -> NDArray[np.float64]:
-    """Heightfield with every non-finite cell (NaN, +/-inf) set to the tallest finite height.
-
-    Cells without a height are unknown terrain, which the foot clearance treats as solid, so
-    the uploaded surface must not be lower there.  A grid with no finite cell becomes flat 0.
-    """
-    arr = np.array(hf, dtype=np.float64)
-    bad = ~np.isfinite(arr)
-    if bad.any():
-        good = arr[~bad]
-        _log.warning(
-            "Heightfield has %d non-finite cells; raised to the finite maximum", int(bad.sum())
-        )
-        arr[bad] = float(good.max()) if good.size else 0.0
-    return arr
-
-
-def sanitize_terrain(terrain: TerrainHeightfield) -> TerrainHeightfield:
-    """``terrain`` with every non-finite height (NaN, +/-inf) imputed, or ``terrain`` itself.
-
-    The one place the interaction-mesh pipeline decides what an unknown cell is: solid, as tall as
-    the tallest finite cell (:func:`sanitize_hfield`), so the grounding offset, the Laplacian
-    anchors, the collision scene and the Z-snap all see the same finite surface and unknown ground
-    never reads as free space.  ``hf_maxmin`` bounds of those cells follow.  Raises ``ValueError``
-    when no cell has a finite height: there is no terrain to impute from.
-    """
-    from hhtools.core.scene import TerrainHeightfield as _Terrain
-
-    hf = np.asarray(terrain.hf, dtype=np.float64)
-    bad = ~np.isfinite(hf)
-    if not bad.any():
-        return terrain
-    if bad.all():
-        raise ValueError(
-            f"terrain heightfield {hf.shape} has no finite cell (all NaN/inf); "
-            "cannot impute a surface"
-        )
-    fixed = sanitize_hfield(hf)
-    maxmin = np.array(terrain.hf_maxmin, dtype=np.float64)
-    maxmin[bad] = fixed[bad][:, None]
-    maxmin = np.where(np.isfinite(maxmin), maxmin, fixed[..., None])
-    return _Terrain(
-        hf=fixed.astype(np.float32),
-        hf_maxmin=maxmin.astype(np.float32),
-        min_point=terrain.min_point,
-        dx=terrain.dx,
-    )
 
 
 def _dump_hfield_to_bin(hf: NDArray[np.floating], path: str | Path) -> None:
@@ -214,6 +167,10 @@ def _add_hfield_geom(
       y_center)``.
     * ``contype/conaffinity = 1`` activates the heightfield for every
       collision pair (robot links inherit ``contype=1`` from the URDF).
+
+    The elevation range is floored at 0.1 mm (``elevation_z``), so a field whose relief is below
+    that is stretched: the compiled surface can then sit up to 80 micrometres above the source
+    heights (accepted).
 
     A ``base_thickness`` of 0.5 m is generous but harmless: the box
     underneath the hfield exists only to give cells where the
@@ -439,10 +396,6 @@ def _shifted_hfield_distance(model, data, g1, g2, hf, shift, fromto) -> float:
 
 #: Facet normals closer than this (rad) to one another are probed once.
 _HFIELD_NORMAL_MERGE = 2e-3
-#: A probe's own contact normal is probed again when it differs from the probed one by more.
-_HFIELD_REFINE_ANGLE = np.radians(1.5)
-#: Refinements of the contact normal per pair, at most.
-_HFIELD_MAX_REFINES = 2
 
 
 def _closest_points_on_triangles(p, a, b, c) -> NDArray[np.float64]:
@@ -478,7 +431,9 @@ def _hfield_facets_near(
     The triangles (m, 3, 3) are the two of every cell whose square comes within ``reach`` (m) of
     the geom's bounding sphere in XY, split along the diagonal joining nodes ``(i, j)`` and
     ``(i + 1, j + 1)`` (the one MuJoCo collides with;
-    ``tests/retarget/test_interaction_mesh_terrain_collision_limits.py`` pins it).  ``normals``
+    ``test_triangles_follow_mujoco_diagonal`` in
+    ``tests/retarget/test_interaction_mesh_terrain_collision_limits.py`` pins it on an asymmetric
+    cell, against ``mj_ray``).  ``normals``
     (m, 3) are their unit upward normals.  ``lower bounds`` (m,) are, per triangle, the distance
     from the geom's centre to its bounding box minus the bounding radius: no point of the geom is
     closer to that facet than this.  Flat terrain gives one normal for every triangle.  A geom
@@ -516,6 +471,12 @@ def _hfield_triangles(model, hf: int):
     Returns ``(triangles, normals, lower corners, upper corners, (step_x, step_y, radius_x,
     radius_y))`` with the first four shaped ``(nrow - 1, ncol - 1, 2, ...)``, or ``None`` for a
     degenerate field.
+
+    The cache assumes the compiled model's heightfield data, size and asset bindings are not
+    edited after the first query (true for the solver, which compiles one model per clip).  After
+    such an edit, drop the entry with ``_TRIANGLE_CACHE.pop(model, None)``.  The triangles use the
+    compiled elevation scale, which for a field with under 0.1 mm of relief is up to 80
+    micrometres above the source heights (accepted).
     """
     cache = _TRIANGLE_CACHE.setdefault(model, {})
     if hf in cache:
@@ -636,18 +597,26 @@ def _sampled_gap(
         pi = pi[first]
     i = int(np.argmin(dist))
     gap = float(dist[i]) - shift
-    if gap >= limit or gap < 0.0:
+    if gap >= limit or (gap < 0.0 and not shift):  # a sample's distance is never negative
         return None
+    gap = max(gap, 0.0)  # a sphere the penetration query found clear: touching, within rounding
     on_terrain, point = q[i], pts[pi[i]]
-    if shift:  # sphere: its witness is the surface point towards the terrain
+    if shift and gap > 1e-9:  # sphere: its witness is the surface point towards the terrain
         point = point + shift * (on_terrain - point) / max(float(dist[i]), 1e-12)
+    # A touching sphere keeps its centre as the witness: the surface point would coincide with
+    # the terrain point and lose the normal, and a sphere's gap only depends on its centre.
     return gap, point + origin, on_terrain + origin
 
 
 def _distinct_normals(
     normals: NDArray[np.float64], bound_gap: NDArray[np.float64]
 ) -> list[tuple[float, NDArray[np.float64]]]:
-    """``(lower bound, normal)`` per distinct normal, nearest first."""
+    """``(lower bound, normal)`` per distinct normal, nearest first.
+
+    Normals are binned by rounded components (:data:`_HFIELD_NORMAL_MERGE`); a bin's lower bound
+    is the smallest of its members', and its representative is the first normal in the bin, not
+    necessarily the nearest triangle's.
+    """
     cells = np.round(normals / _HFIELD_NORMAL_MERGE).astype(np.int64)
     base = int(2 * math.ceil(1.0 / _HFIELD_NORMAL_MERGE) + 1)
     key = ((cells[:, 0] + base) * (2 * base) + cells[:, 1] + base) * (2 * base) + cells[:, 2] + base
@@ -706,38 +675,42 @@ def _hfield_pair_distance(
     contact comes back too shallow) and reports 0 for any separation.
 
     So: query at ``distmax = 0``; if the geoms penetrate, that is the answer (the deepest
-    penetration MuJoCo reports; trusted up to :data:`_HFIELD_EXACT_DEPTH`).  Otherwise the gap is
-    an upper bound built from two kinds of evidence, the smaller one wins:
+    penetration MuJoCo reports; trusted up to :data:`_HFIELD_EXACT_DEPTH`).  The heightfield must
+    be axis-aligned (only its position is used); a rotated one raises ``ValueError``.  Otherwise
+    the gap is measured against the triangle set of the compiled surface (the top of the field,
+    rim edges included; its vertical perimeter sides and base are not part of it):
 
-    * Displacement probes (:func:`_probe_hfield_along`): the heightfield's world pose is moved
-      towards the geom along a direction ``n`` by ``L`` until the geom penetrates it by ``p``,
-      which proves gap <= ``L - p``, with equality when the closest terrain point lies in the
-      interior of a planar facet whose upward normal is ``n``.  The directions are the distinct
-      normals of the terrain triangles within ``threshold`` of the geom's bounding sphere,
-      tilted in any direction in XY (:func:`_hfield_facets_near`), each probed only while its
-      facet could still be closer than the best gap found, then the contact normal of the best
-      probe.  A flat window has one direction, the vertical: the plain vertical lift.
-    * Samples of the geom (:func:`_sampled_gap`), used in non-flat windows: the exact distance
-      from sample points of the geom's surface (its centre for a sphere) to the triangles.
+    * A sphere is exact: the distance from its centre to the triangles within reach, minus the
+      radius, whatever the window (flat or not, interior or beside the outer rim).
+    * Any other geom gets an upper bound, the smaller of two kinds of evidence.  Displacement
+      probes (:func:`_probe_hfield_along`): the heightfield is moved towards the geom along a
+      distinct facet normal ``n`` by ``L`` until the geom penetrates it by ``p``, which proves
+      gap <= ``L - p``, with equality when the closest terrain point lies in the interior of a
+      planar facet whose upward normal is ``n``.  The normals are those of the triangles within
+      ``threshold`` of the geom's bounding sphere (:func:`_hfield_facets_near`), probed in order
+      of their lower bound while one could still beat the best gap; a flat window has one, the
+      vertical lift.  Samples of the geom (:func:`_sampled_gap`), taken whenever the window has
+      more than one distinct normal: the exact distance from sample points of the geom's surface
+      to the triangles.
 
-    Guarantees, against the compiled (triangulated) surface, with the penetration query exact
-    (``p`` can come back too small for a deep contact, which only raises the gap):
+    Consequences, with the penetration query exact (``p`` can come back too small for a deep
+    contact, which only raises the gap):
 
-    * The gap is never below the true one, except by the error of the brute-force reference (below a
-      millimetre).
-    * It equals the true gap, to about a millimetre, when the closest terrain point is in a
-      facet interior (any geom, including a facet outside the geom's XY footprint), and for a
-      sphere anywhere, including on a ridge or vertex.
-    * For a box or mesh hull whose closest feature touches a ridge or vertex it is exact when
-      that feature is a corner or an edge or face parallel to the terrain (a sample hits it),
-      and otherwise within the 2 cm sample grid's reach.  Measured against a brute-force
-      surface distance on random terrains (rough and stepped): 194 sphere poses on 12 terrains
-      agreed to the last digit, 133 randomly oriented box poses on 20 terrains to within 3.6 mm
-      (95th percentile 2.2 mm); the previous vertical probe read up to 49 mm low.  Curved primitives other than spheres (capsules, cylinders,
-      ellipsoids) are covered by the facet probes and 1 mm curvature samples, with no separate
-      measurement.
-    * Near a heightfield edge the displaced pose also moves its footprint, which is not
-      corrected for.
+    * The gap is never below the true one against the triangle set, except by the error of the
+      brute-force reference (below a millimetre).
+    * It is exact to about a millimetre for a box, hull or other geom whose closest terrain point
+      is in a facet interior, or on a flat window; and where the closest feature is a corner or
+      an edge or face parallel to the terrain (a sample hits it).
+    * Where a box or mesh hull touches a ridge or vertex with another feature it is bounded by
+      the 2 cm sample grid.  Measured against a brute-force surface distance on random terrains
+      (rough and stepped): 133 randomly oriented box poses on 20 terrains agreed to within
+      3.6 mm (95th percentile 2.2 mm); the previous vertical probe read up to 49 mm low.  Spheres
+      (194 poses on 12 terrains) agreed to the last digit before they became analytic.  Other
+      curved primitives (capsules, cylinders, ellipsoids) rely on the facet probes and 1 mm
+      curvature samples, with no separate measurement.
+    * Boxes and meshes at the outer rim of the field still rely on the vertical probe: the
+      displaced field's footprint moves with it, which is not corrected for, and the perimeter
+      sides are not triangles.
 
     Gaps at or above ``threshold`` return ``threshold`` with ``fromto`` zeroed, like
     ``mj_geomDistance``.  Otherwise ``fromto`` holds ``(p1, p2)``: the geom witness at its
@@ -746,11 +719,16 @@ def _hfield_pair_distance(
     """
     import mujoco
 
+    hf = g1 if int(model.geom_type[g1]) == int(mujoco.mjtGeom.mjGEOM_HFIELD) else g2
+    if not np.allclose(data.geom_xmat[hf].reshape(3, 3), np.eye(3), atol=1e-9, rtol=0.0):
+        raise ValueError(
+            "heightfield geom is rotated; the terrain gap query supports axis-aligned "
+            "heightfields only"
+        )
     fromto[:] = 0.0
     dist = float(mujoco.mj_geomDistance(model, data, g1, g2, 0.0, fromto))
     if dist < 0.0 or threshold <= 0.0:
         return dist
-    hf = g1 if int(model.geom_type[g1]) == int(mujoco.mjtGeom.mjGEOM_HFIELD) else g2
     other = g2 if hf == g1 else g1
     k = 0 if hf == g1 else 3  # offset of the heightfield witness in ``fromto``
     kg = 3 - k  # offset of the other geom's witness
@@ -760,57 +738,32 @@ def _hfield_pair_distance(
     if bound_gap.min() >= threshold:  # even the geom's bounding sphere is out of reach
         fromto[:] = 0.0
         return float(threshold)
+    is_sphere = int(model.geom_type[other]) == int(mujoco.mjtGeom.mjGEOM_SPHERE)
+    if is_sphere and len(tris):
+        # Exact: the distance from the centre to the triangles, minus the radius.
+        sampled = _sampled_gap(model, data, hf, other, tris[bound_gap < threshold], threshold)
+        if sampled is None:
+            fromto[:] = 0.0
+            return float(threshold)
+        fromto[k : k + 3], fromto[kg : kg + 3] = sampled[2], sampled[1]
+        return float(sampled[0])
     candidates = _distinct_normals(normals, bound_gap)
     probe = np.zeros(6, dtype=np.float64)
 
     best_gap = float(threshold)
     best: NDArray[np.float64] | None = None  # witnesses in ``fromto`` layout
-    tried: list[NDArray[np.float64]] = []
-
-    last: tuple[NDArray[np.float64], NDArray[np.float64]] | None = None  # (witnesses, normal)
-
-    def run(normal: NDArray[np.float64]) -> None:
-        nonlocal best_gap, best, last
-        tried.append(normal)
-        hit = _probe_hfield_along(model, data, g1, g2, hf, normal, best_gap, k, kg, probe)
-        if hit is None or hit[0] >= best_gap:
-            return
-        gap, witnesses, shift_len = hit
-        best_gap = gap
-        best = witnesses.copy()
-        best[k : k + 3] -= shift_len * normal  # the real surface, not the displaced one
-        last = (witnesses, normal)
-
-    def contact_normal() -> NDArray[np.float64] | None:
-        """Terrain-to-geom direction at the last probe's witnesses, pointing up."""
-        v = last[0][kg : kg + 3] - last[0][k : k + 3]
-        norm = float(np.linalg.norm(v))
-        return v / norm if norm > 1e-9 and v[2] > 0.0 else None
-
-    def angle(a, b) -> float:
-        return float(np.arccos(np.clip(a @ b, -1.0, 1.0)))
-
     for lower, normal in candidates:
         if lower >= best_gap:
             break
-        run(normal)
-    # The probe is exact when its contact normal is the probed one: the closest point is in the
-    # interior of that facet.  Otherwise (a ridge or vertex has none of the facet normals) probe
-    # along the contact normal itself.
-    exact = False
-    for _ in range(_HFIELD_MAX_REFINES + 1):
-        v = contact_normal() if last is not None else None
-        if v is None:
-            break
-        if angle(v, last[1]) <= _HFIELD_REFINE_ANGLE:
-            exact = True
-            break
-        if any(angle(v, t) <= _HFIELD_REFINE_ANGLE for t in tried):
-            break
-        run(v)
-    if len(candidates) > 1 and not exact:
-        # A non-flat window and no probe that landed on a facet: the closest point may be on a
-        # ridge or vertex, where the samples of the geom bound the gap from above.
+        hit = _probe_hfield_along(model, data, g1, g2, hf, normal, best_gap, k, kg, probe)
+        if hit is None or hit[0] >= best_gap:
+            continue
+        best_gap, witnesses, shift_len = hit
+        best = witnesses.copy()
+        best[k : k + 3] -= shift_len * normal  # the real surface, not the displaced one
+    if len(candidates) > 1:
+        # A non-flat window: the closest point may be on a ridge or vertex, where the samples of
+        # the geom bound the gap from above.
         sampled = _sampled_gap(model, data, hf, other, tris[bound_gap < best_gap], best_gap)
         if sampled is not None:
             best_gap = sampled[0]
@@ -854,7 +807,9 @@ def _plane_rows_duplicated_by_hfield(model, records, normals) -> set[int]:
     heightfield row of the same robot geom has the plane's normal and gap, and keeping both would
     only double that contact's slack penalty.  A plane row is dropped only when such a row exists:
     same robot geom, normals within :data:`_PLANE_DUPLICATE_ANGLE`, gaps within
-    :data:`_PLANE_DUPLICATE_GAP`.  Where the heightfield is elsewhere (its footprint does not
+    :data:`_PLANE_DUPLICATE_GAP`, and robot-side witnesses whose offset across the normal is
+    within the same distance (a toe row on the heightfield is not a heel row on the plane: they
+    pitch the foot oppositely).  Where the heightfield is elsewhere (its footprint does not
     cover the contact, or its surface or base is far above or below the plane) the plane row is the
     only floor and stays.
 
@@ -866,22 +821,27 @@ def _plane_rows_duplicated_by_hfield(model, records, normals) -> set[int]:
     gtype = np.asarray(model.geom_type)
     plane_t, hf_t = int(mujoco.mjtGeom.mjGEOM_PLANE), int(mujoco.mjtGeom.mjGEOM_HFIELD)
     cos_tol = float(np.cos(_PLANE_DUPLICATE_ANGLE))
-    hf_rows: dict[int, list[tuple[float, NDArray[np.float64]]]] = {}
-    planes: list[tuple[int, int, float, NDArray[np.float64]]] = []
-    for i, (g1, g2, dist, _p1, _p2) in enumerate(records):
+    hf_rows: dict[int, list[tuple[float, NDArray[np.float64], NDArray[np.float64]]]] = {}
+    planes: list[tuple[int, int, float, NDArray[np.float64], NDArray[np.float64]]] = []
+    for i, (g1, g2, dist, p1, p2) in enumerate(records):
         if normals[i] is None:
             continue
         scene_first = _is_worldbody_geom(model, g1)
         scene, robot = (g1, g2) if scene_first else (g2, g1)
         normal = normals[i] if scene_first else -normals[i]  # same side whatever the pair order
+        witness = np.asarray(p2 if scene_first else p1, dtype=np.float64)  # on the robot geom
         if int(gtype[scene]) == hf_t:
-            hf_rows.setdefault(robot, []).append((dist, normal))
+            hf_rows.setdefault(robot, []).append((dist, normal, witness))
         elif int(gtype[scene]) == plane_t:
-            planes.append((i, robot, dist, normal))
+            planes.append((i, robot, dist, normal, witness))
     covered: set[int] = set()
-    for i, robot, dist, normal in planes:
-        for h_dist, h_normal in hf_rows.get(robot, ()):
-            if abs(h_dist - dist) <= _PLANE_DUPLICATE_GAP and float(normal @ h_normal) >= cos_tol:
+    for i, robot, dist, normal, witness in planes:
+        for h_dist, h_normal, h_witness in hf_rows.get(robot, ()):
+            if abs(h_dist - dist) > _PLANE_DUPLICATE_GAP or float(normal @ h_normal) < cos_tol:
+                continue
+            arm = witness - h_witness
+            arm = arm - float(arm @ normal) * normal  # offset across the normal
+            if float(np.linalg.norm(arm)) <= _PLANE_DUPLICATE_GAP:
                 covered.add(i)
                 break
     return covered

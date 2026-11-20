@@ -67,3 +67,17 @@ def test_result_without_terrain_grounding_keeps_the_overlay_alignment(robot) -> 
     motion, ret = _scene(robot, grounded=False)
     _, lift = bake_export_root_z(robot, ret, source_motion=motion)
     assert lift == pytest.approx(ANKLE_Z - TERRAIN_Z, abs=1e-5)
+
+
+def test_exported_terrain_carries_the_imputed_heights() -> None:
+    # The solve replaces a non-finite height with the tallest finite one; the export must write
+    # that surface, not a NaN where the solve saw solid ground.
+    from hhtools.io.export_bundle import _scaled_terrain
+
+    hf = np.array([[0.0, 0.1, 0.0], [0.0, np.nan, 0.3], [0.0, 0.0, 0.0]], dtype=np.float32)
+    motion = SimpleNamespace(
+        terrain=TerrainHeightfield(hf, np.stack([hf, hf], -1), [-1.0, -1.0], 1.0)
+    )
+    out = _scaled_terrain(motion, 0.5, 0.1)
+    assert np.isfinite(out.hf).all() and np.isfinite(out.hf_maxmin).all()
+    assert out.hf[1, 1] == pytest.approx((0.3 - 0.1) * 0.5)

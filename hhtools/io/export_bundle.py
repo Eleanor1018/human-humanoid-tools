@@ -254,6 +254,10 @@ def _scaled_terrain(source_motion, smpl_scale: float, z_terrain: float):
     if terrain is None:
         return None
     try:
+        # The interaction-mesh solve imputes non-finite heights; write the surface it saw.
+        from hhtools.core.terrain_repair import sanitize_terrain
+
+        terrain = sanitize_terrain(terrain)
         return terrain.scaled(float(smpl_scale), z_offset=float(z_terrain))
     except Exception:
         return terrain
