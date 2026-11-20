@@ -303,12 +303,35 @@ def _object_track_blob(
     *,
     smpl_scale: float,
     z_offset: float,
+    source_rate: float | None = None,
 ) -> dict[str, object]:
-    """One interaction object's trajectory in the retarget / robot frame."""
+    """One interaction object's trajectory in the retarget / robot frame.
+
+    ``retargeted`` is the exported (possibly resampled) result.  When ``source_rate``, the rate
+    of the object's own frames, differs from its ``sample_rate``, the track is resampled onto
+    the same timeline as the robot (:func:`~hhtools.io.scene_serialize.resample_joint_q`:
+    linear positions, normalised-lerp rotations on the short arc); otherwise the native
+    frames would be labelled with the robot's rate and drift against it.
+    """
     op = np.asarray(ob.positions, dtype=np.float32).copy()
     op[:, 2] -= float(z_offset)
     op *= float(smpl_scale)
     oq_xyzw = np.asarray(ob.quaternions, dtype=np.float32)
+    dst_rate = float(retargeted.sample_rate)
+    if source_rate is not None and abs(float(source_rate) - dst_rate) > 1e-6 and len(op) >= 2:
+        from hhtools.io.scene_serialize import resample_joint_q
+
+        q = np.asarray(oq_xyzw, dtype=np.float64).copy()
+        for i in range(1, len(q)):  # one hemisphere, so the interpolation takes the short arc
+            if float(q[i] @ q[i - 1]) < 0.0:
+                q[i] = -q[i]
+        track = resample_joint_q(
+            np.concatenate([op.astype(np.float64), q], axis=1),
+            float(source_rate),
+            dst_rate,
+            root_coord_count=7,
+        )
+        op, oq_xyzw = track[:, :3].astype(np.float32), track[:, 3:7].astype(np.float32)
     oq_wxyz = np.empty_like(oq_xyzw)
     oq_wxyz[..., 0] = oq_xyzw[..., 3]
     oq_wxyz[..., 1:] = oq_xyzw[..., :3]
@@ -340,9 +363,12 @@ def _object_track_blobs(
     *,
     smpl_scale: float,
     z_offset: float,
+    source_rate: float | None = None,
 ) -> list[dict[str, object]]:
     return [
-        _object_track_blob(ob, retargeted, smpl_scale=smpl_scale, z_offset=z_offset)
+        _object_track_blob(
+            ob, retargeted, smpl_scale=smpl_scale, z_offset=z_offset, source_rate=source_rate
+        )
         for ob in (getattr(source_motion, "objects", []) or [])
     ]
 
@@ -409,13 +435,14 @@ def _write_object_tracks(
     z_offset: float,
     fmt: str,
     csv_header: bool = True,
+    source_rate: float | None = None,
 ) -> list[str]:
     """Write ``object_<i>_<name>.{csv|pkl}`` sidecars in the robot frame."""
     written: list[str] = []
     use_csv = (fmt or "csv").lower() == "csv"
     for idx, ob in enumerate(getattr(source_motion, "objects", []) or []):
         blob = _object_track_blob(
-            ob, retargeted, smpl_scale=smpl_scale, z_offset=z_offset,
+            ob, retargeted, smpl_scale=smpl_scale, z_offset=z_offset, source_rate=source_rate,
         )
         safe_name = "".join(
             (c if c.isalnum() or c in "._-" else "_" for c in str(ob.name)),
@@ -769,6 +796,7 @@ def write_retarget_export_bundle(
                 source_motion,
                 smpl_scale=smpl_scale,
                 z_offset=z_offset,
+                source_rate=float(retargeted.sample_rate),
             ),
         }
         terrain_robot = _scaled_terrain(source_motion, smpl_scale, z_terrain)
@@ -800,6 +828,7 @@ def write_retarget_export_bundle(
             z_offset=z_offset,
             fmt=fmt,
             csv_header=csv_header,
+            source_rate=float(retargeted.sample_rate),
         )
 
     mesh_names: list[str] = []
