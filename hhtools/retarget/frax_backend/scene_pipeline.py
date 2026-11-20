@@ -45,6 +45,7 @@ from hhtools.retarget.frax_backend.objects import (  # noqa: E402
     ObjectSDF,
     build_object_sdf,
     object_distance_rows,
+    object_grid_pad,
 )
 from hhtools.retarget.frax_backend.pipeline import (  # noqa: E402
     _CACHE_LOCK,
@@ -301,9 +302,13 @@ def _limit_edit_by_terrain(
 ) -> tuple[NDArray, int]:
     """Blend a post-IK joint edit ``pre -> post`` back where it creates terrain penetration.
 
-    ``gap_fn(joint_q)`` returns the lowest terrain signed gap (m) over the constrained spheres of
-    every frame, shape ``(T,)``.  A frame is *worse* when the edited gap is below
-    ``min(pre gap, 0) - tol`` (the edit creates or deepens a penetration).  For those frames the
+    ``gap_fn(joint_q)`` returns the signed gaps (m) of the constrained pairs, shape ``(T, N)``
+    (one column per sphere and obstacle; ``(T,)`` is one pair).  Pairs are compared one by one,
+    never through a per-frame minimum, so a penetration that already existed cannot hide a new
+    one in another sphere or another constraint.  A frame is *worse* when any pair's edited gap
+    is below ``min(that pair's gap before, 0) - tol`` (the edit creates or deepens a
+    penetration).  The floor is zero, not the clearance margin: the margin only compensates for
+    the sphere model and a pair may legitimately sit inside it.  For worse frames the
     largest ``alpha`` in [0, 1] of ``pre + alpha * (post - pre)`` that is not worse is found by
     bisection; the alphas are then smoothed over ~0.2 s with a centred min filter and a centred
     moving average (never above a frame's own limit) and re-checked, a frame still worse falling
@@ -327,7 +332,8 @@ def _limit_edit_by_terrain(
     floor = np.minimum(gap_pre, 0.0) - tol
 
     def worse(alpha: NDArray) -> NDArray:
-        return np.asarray(gap_fn(blend(alpha)), dtype=np.float64) < floor
+        below = np.asarray(gap_fn(blend(alpha)), dtype=np.float64) < floor
+        return below.reshape(len(below), -1).any(axis=1)
 
     alpha = np.ones(len(pre))
     bad = worse(alpha)
@@ -350,10 +356,11 @@ def _limit_edit_by_terrain(
 def _object_gap_fn(
     sdfs: list[ObjectSDF], pos: NDArray, rot: NDArray, radii: NDArray
 ) -> Callable[[NDArray], NDArray]:
-    """``gap(centres)``: lowest ``d - r`` (m) over objects and spheres, per frame.
+    """``gap(centres)``: ``d - r`` (m) of every sphere and object, shape ``(T, K * S)``.
 
     ``centres`` is ``(T, S, 3)`` world sphere centres; ``pos`` (T, K, 3) and ``rot``
-    (T, K, 3, 3) are the object poses of those frames.  Negative means penetration.
+    (T, K, 3, 3) are the object poses of those frames.  Negative means penetration.  The
+    columns are the pairs the guards compare one by one; the per-frame minimum is for reporting.
     """
     refs = [s.as_ref() for s in sdfs]
     pos_j, rot_j = jnp.asarray(pos), jnp.asarray(rot)
@@ -362,13 +369,11 @@ def _object_gap_fn(
     @jax.jit
     def gap(centres):
         def frame(c, p, r):
-            return jnp.min(
-                jnp.stack(
-                    [
-                        (object_distance_rows(ref, c, p[k], r[k])[0] - radii_j).min()
-                        for k, ref in enumerate(refs)
-                    ]
-                )
+            return jnp.concatenate(
+                [
+                    object_distance_rows(ref, c, p[k], r[k])[0] - radii_j
+                    for k, ref in enumerate(refs)
+                ]
             )
 
         return jax.vmap(frame)(jnp.asarray(centres), pos_j, rot_j)
@@ -384,13 +389,21 @@ def _limit_root_shift(
     z_index: int = 2,
     tol: float = 1e-4,
     bisect_steps: int = 10,
+    max_step: float = 0.005,
+    max_steps: int = 200,
 ) -> tuple[float, bool]:
-    """Largest part of a downward root shift ``shift`` (m) that creates no object penetration.
+    """Largest continuous clear prefix of a downward root shift ``shift`` (m).
 
-    ``gap_fn(joint_q)`` gives the lowest object gap per frame (``(T,)``).  The shifted motion is
-    *worse* in a frame when its gap is below ``min(gap before, 0) - tol``.  If the full shift
-    is worse anywhere, the largest fraction of it that is not is found by bisection on one
-    scalar.  Returns the shift to apply and whether it was reduced.
+    ``gap_fn(joint_q)`` gives the signed gaps of the pairs (``(T, N)``, or ``(T,)``).  The
+    shifted motion is *worse* when any pair's gap is below ``min(that pair's gap before, 0) -
+    tol``: pairs are compared one by one, so an existing penetration cannot hide a new one, and
+    the floor is zero rather than the clearance margin (which only compensates for the sphere
+    model).  The shift is walked in increments of at most ``max_step`` (callers pass half the
+    smallest sphere radius, so a sphere cannot jump over a thin obstacle between two
+    checks; the number of increments is capped at ``max_steps``), stopping at the first
+    increment that is worse, and the boundary inside that increment is bisected.  A far end
+    that is clear is not enough: the prefix must be.  Returns the shift to apply and whether it
+    was reduced.
     """
     if shift == 0.0:
         return 0.0, False
@@ -402,16 +415,18 @@ def _limit_root_shift(
         moved[:, z_index] -= np.float32(fraction * shift)
         return bool((np.asarray(gap_fn(moved), dtype=np.float64) < floor).any())
 
-    if not worse(1.0):
-        return float(shift), False
-    lo, hi = 0.0, 1.0
-    for _ in range(bisect_steps):
-        mid = 0.5 * (lo + hi)
-        if worse(mid):
-            hi = mid
-        else:
-            lo = mid
-    return float(lo * shift), True
+    n_steps = int(min(max_steps, max(1, np.ceil(abs(shift) / max(float(max_step), 1e-9)))))
+    for i in range(1, n_steps + 1):
+        if worse(i / n_steps):
+            lo, hi = (i - 1) / n_steps, i / n_steps
+            for _ in range(bisect_steps):
+                mid = 0.5 * (lo + hi)
+                if worse(mid):
+                    hi = mid
+                else:
+                    lo = mid
+            return float(lo * shift), True
+    return float(shift), False
 
 
 def _point_key(points: list[RobotMpcPoint]) -> tuple:
@@ -867,9 +882,13 @@ class FraxScenePipeline:
         object_pos = object_rot = None
         if cfg.objects and motion.objects and model.has_collision:
             build_start = time.perf_counter()
+            pad = object_grid_pad(
+                float(np.max(np.asarray(model.robot.flat_collision_radii))),
+                float(cfg.object_margin),
+            )
             for k, ob in enumerate(motion.objects):
                 tic = time.perf_counter()
-                sdf = build_object_sdf(ob, st.smpl_scale, dx=float(cfg.object_grid_dx))
+                sdf = build_object_sdf(ob, st.smpl_scale, dx=float(cfg.object_grid_dx), pad=pad)
                 object_build_s.append(round(time.perf_counter() - tic, 3))
                 object_sdfs.append(sdf)
                 static[f"object_sdf_{k}"] = sdf.as_ref()
@@ -983,26 +1002,33 @@ class FraxScenePipeline:
         def sphere_centres(jq: NDArray) -> NDArray:
             return np.asarray(solver.floor_fn(jnp.asarray(model.frax_q_from_joint_q(jq))))
 
-        def terrain_gap_per_frame(jq: NDArray) -> NDArray:
-            gap = _terrain_distance(grid, sphere_centres(jq), window) - radii
-            return gap.min(axis=1)
+        def terrain_gaps(jq: NDArray) -> NDArray:
+            """Signed gap of every (frame, sphere) to the terrain, ``(T, S)``."""
+            return _terrain_distance(grid, sphere_centres(jq), window) - radii
 
+        object_gaps = None
         object_gap_per_frame = None
         if object_sdfs:
             all_radii = np.asarray(model.robot.flat_collision_radii)
             object_gap = _object_gap_fn(object_sdfs, object_pos, object_rot, all_radii)
+            snap_step = 0.5 * float(all_radii.min())
 
-            def object_gap_per_frame(jq: NDArray) -> NDArray:
+            def object_gaps(jq: NDArray) -> NDArray:
+                """Signed gap of every (frame, object, sphere), ``(T, K * S)``."""
                 q_frax = jnp.asarray(model.frax_q_from_joint_q(jq))
                 return object_gap(solver.sphere_fn(q_frax))
 
-        def min_gap_per_frame(jq: NDArray) -> NDArray:
-            gaps = []
+            def object_gap_per_frame(jq: NDArray) -> NDArray:
+                return object_gaps(jq).min(axis=1)
+
+        def guard_gaps(jq: NDArray) -> NDArray:
+            """Every terrain and object pair, side by side: the guards compare them one by one."""
+            parts = []
             if terrain_spheres:
-                gaps.append(terrain_gap_per_frame(jq))
-            if object_gap_per_frame is not None:
-                gaps.append(object_gap_per_frame(jq))
-            return np.min(gaps, axis=0)
+                parts.append(terrain_gaps(jq))
+            if object_gaps is not None:
+                parts.append(object_gaps(jq))
+            return np.concatenate(parts, axis=1)
 
         pre_edit = joint_q
         joint_q = apply_upper_body_roll_narrowing_post_ik(
@@ -1013,9 +1039,7 @@ class FraxScenePipeline:
         limited_frames = 0
         if terrain_spheres or object_gap_per_frame is not None:
             # The edit must not create or deepen a penetration the solve had avoided.
-            joint_q, limited_frames = _limit_edit_by_terrain(
-                pre_edit, joint_q, min_gap_per_frame, fps
-            )
+            joint_q, limited_frames = _limit_edit_by_terrain(pre_edit, joint_q, guard_gaps, fps)
             if limited_frames:
                 _LOG.info(
                     "FRAX shoulder edit limited in %d of %d frames (terrain/object penetration)",
@@ -1033,7 +1057,7 @@ class FraxScenePipeline:
             floor_offset = _terrain_snap_offset(drop)
             if object_gap_per_frame is not None:
                 floor_offset, reduced = _limit_root_shift(
-                    joint_q, floor_offset, object_gap_per_frame
+                    joint_q, floor_offset, object_gaps, max_step=snap_step
                 )
                 if reduced:
                     _LOG.info(
@@ -1056,7 +1080,7 @@ class FraxScenePipeline:
             if object_gap_per_frame is not None and clip_floor_snap != 0.0:
                 # The snap must not create or deepen object penetration.
                 clip_floor_snap, reduced = _limit_root_shift(
-                    unsnapped, clip_floor_snap, object_gap_per_frame
+                    unsnapped, clip_floor_snap, object_gaps, max_step=snap_step
                 )
                 if reduced:
                     _LOG.info(

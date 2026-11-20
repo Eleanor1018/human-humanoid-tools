@@ -15,14 +15,17 @@ from frax_toy_robot import write_toy_robot  # noqa: E402
 
 from hhtools.retarget.frax_backend.objects import (  # noqa: E402  (configures JAX first)
     ObjectConstraint,
+    ObjectSDF,
     build_object_sdf,
     object_distance_rows,
+    object_grid_pad,
 )
 from hhtools.retarget.frax_backend.scene_pipeline import (  # noqa: E402
     FraxSceneConfig,
     FraxScenePipeline,
     _limit_edit_by_terrain,
     _limit_root_shift,
+    _object_gap_fn,
 )
 import jax  # noqa: E402
 import jax.numpy as jnp  # noqa: E402
@@ -131,8 +134,9 @@ def test_mesh_sdf_follows_object_and_human_scale(tmp_path) -> None:
 def test_box_fallback_equals_the_analytic_sdf(tmp_path, mesh) -> None:
     extents = np.array([0.3, 0.2, 0.1])
     path = "" if not mesh else str(tmp_path / mesh)
+    # ``extents`` are metres: only the human scale applies, never ``obj.scale`` (mesh vertices).
     sdf = build_object_sdf(_object(path, extents=extents, scale=2.0), 0.5)
-    half = extents * 2.0 * 0.5 / 2
+    half = extents * 0.5 / 2
     pts = _random_points(sdf, 2000, 2)
     # Exact at the nodes; trilinear between them is within a fraction of a cell.
     nodes = sdf.origin + sdf.dx * np.stack(
@@ -146,6 +150,125 @@ def test_sdf_cache_returns_the_same_object(tmp_path) -> None:
     obj = _object(_write_box_obj(tmp_path / "c.obj", (0.2, 0.2, 0.2)))
     assert build_object_sdf(obj, 1.0) is build_object_sdf(obj, 1.0)
     assert build_object_sdf(obj, 1.0) is not build_object_sdf(obj, 0.9)
+
+
+def _write_mesh(path, mesh):
+    mesh.export(str(path))
+    return str(path)
+
+
+def test_missing_omnicontact_mesh_keeps_the_metric_box(tmp_path) -> None:
+    """The adapter stores metric extents (0.30 m) and keeps 0.01 as the mesh-vertex scale."""
+    obj = _object(str(tmp_path / "gone.obj"), extents=(0.3, 0.3, 0.3), scale=0.01)
+    sdf = build_object_sdf(obj, 0.8, dx=0.01)
+    half = 0.15 * 0.8
+    np.testing.assert_allclose(sdf.signed_distance([[0.10, 0.0, 0.0]]), [0.10 - half], atol=1e-6)
+    np.testing.assert_allclose(sdf.signed_distance([[0.14, 0.0, 0.0]]), [0.14 - half], atol=1e-6)
+
+
+def test_sphere_overlapping_a_box_corner_outside_the_default_halo(tmp_path) -> None:
+    """A 15 cm sphere whose centre is past an 8 cm halo still intersects the box."""
+    obj = _object(extents=(0.25, 0.25, 0.25))
+    centre = np.array([[0.125 + 0.12, 0.125 + 0.08, 0.011]])
+    radius = 0.15
+    true_gap = np.hypot(0.12, 0.08) - radius
+    assert true_gap < -0.005
+    pos, rot = np.zeros(3), np.eye(3)
+
+    narrow = build_object_sdf(obj, 1.0, dx=0.005, pad=0.08)
+    d, _ = object_distance_rows(narrow.as_ref(), centre, pos, rot)
+    assert float(d[0]) - radius > 0.0  # the halo cuts the field short: wrongly clear
+
+    pad = object_grid_pad(radius, 0.01)
+    assert pad == pytest.approx(0.19)
+    wide = build_object_sdf(obj, 1.0, dx=0.005, pad=pad)
+    d, _ = object_distance_rows(wide.as_ref(), centre, pos, rot)
+    assert float(d[0]) - radius == pytest.approx(true_gap, abs=2e-3)
+    assert float(d[0]) - radius < 0.0
+    assert object_grid_pad(0.02, 0.01) == 0.08  # small spheres keep the old halo
+
+
+def test_pipeline_pads_the_field_by_the_sphere_reach(toy, calibration, synthetic_terrain_motion):
+    motion = _carry_motion(synthetic_terrain_motion)
+    pipe = _pipeline(toy, motion, calibration)
+    result = pipe.run(motion)
+    radii = np.asarray(pipe.frax_model.robot.flat_collision_radii)
+    pad = object_grid_pad(radii.max(), FraxSceneConfig().object_margin)
+    expected = build_object_sdf(
+        motion.objects[0], result.meta["smpl_scale"], dx=FraxSceneConfig().object_grid_dx, pad=pad
+    )
+    assert result.meta["frax"]["object_sdf_shapes"] == [tuple(expected.values.shape)]
+    assert pad > 0.08
+
+
+def test_replaced_mesh_with_the_same_mtime_is_rebuilt(tmp_path) -> None:
+    import os
+
+    path = tmp_path / "m.obj"
+    _write_box_obj(path, (0.2, 0.2, 0.2))
+    mtime = path.stat().st_mtime_ns
+    first = build_object_sdf(_object(str(path)), 1.0)
+    other = tmp_path / "new.obj"
+    _write_box_obj(other, (0.4, 0.4, 0.4))
+    other.write_text(other.read_text() + "# a longer file\n", encoding="utf-8")
+    os.replace(other, path)
+    os.utime(path, ns=(mtime, mtime))
+    assert path.stat().st_mtime_ns == mtime
+    second = build_object_sdf(_object(str(path)), 1.0)
+    assert second is not first
+    assert float(second.signed_distance([[0.15, 0.0, 0.0]])[0]) == pytest.approx(-0.05, abs=3e-3)
+
+
+def test_hollow_box_reads_the_cavity_as_outside(tmp_path) -> None:
+    import trimesh
+
+    outer = trimesh.creation.box((0.24, 0.24, 0.24))
+    inner = trimesh.creation.box((0.16, 0.16, 0.16))
+    inner.invert()  # a correctly oriented cavity
+    shell = trimesh.util.concatenate([outer, inner])
+    assert shell.is_watertight
+    sdf = build_object_sdf(_object(_write_mesh(tmp_path / "shell.obj", shell)), 1.0, dx=0.005)
+    # 5 mm inside the air cavity: the nearest surface is the inner wall.
+    got = sdf.signed_distance([[0.075, 0.0, 0.0], [0.085, 0.0, 0.0], [0.115, 0.0, 0.0]])
+    np.testing.assert_allclose(got, [0.005, -0.005, -0.005], atol=2e-3)
+    # The outside of the shell is unchanged.
+    np.testing.assert_allclose(sdf.signed_distance([[0.13, 0.0, 0.0]]), [0.01], atol=2e-3)
+
+
+def test_disjoint_watertight_solids_of_opposite_winding(tmp_path) -> None:
+    import trimesh
+
+    big = trimesh.creation.box((0.12, 0.12, 0.12))
+    big.apply_translation([-0.10, 0.0, 0.0])
+    small = trimesh.creation.box((0.06, 0.06, 0.06))
+    small.apply_translation([0.10, 0.0, 0.0])
+    small.invert()  # consistent inside its own shell, opposite to the other component
+    both = trimesh.util.concatenate([big, small])
+    assert both.is_watertight and both.is_winding_consistent
+    sdf = build_object_sdf(_object(_write_mesh(tmp_path / "two.obj", both)), 1.0, dx=0.005)
+    # 5 mm inside / outside the face of the smaller solid, and inside the larger one.
+    got = sdf.signed_distance([[0.125, 0.0, 0.0], [0.135, 0.0, 0.0], [-0.055, 0.0, 0.0]])
+    np.testing.assert_allclose(got, [-0.005, 0.005, -0.015], atol=2e-3)
+
+
+def test_flat_gradient_exits_through_the_nearest_face() -> None:
+    """On the medial plane of a thin off-centre slab the trilinear gradient is zero."""
+    dx = 0.01
+    origin = np.array([-0.2, -0.2, -0.04])
+    pts = np.moveaxis(np.indices((41, 41, 10)), 0, -1) * dx + origin
+    q = np.abs(pts - [0.0, 0.0, 0.005]) - [0.15, 0.15, 0.015]
+    field = np.linalg.norm(np.maximum(q, 0.0), axis=-1) + np.minimum(q.max(axis=-1), 0.0)
+    sdf = ObjectSDF(field.astype(np.float32), origin, dx)
+    p = np.array([[0.08, 0.0, 0.002], [-0.08, 0.05, 0.008]])  # inside the medial cell
+    d, n = jax.jit(lambda c: object_distance_rows(sdf.as_ref(), c, np.zeros(3), np.eye(3)))(
+        jnp.asarray(p)
+    )
+    assert (np.asarray(d) < 0.0).all()
+    np.testing.assert_allclose(np.linalg.norm(np.asarray(n), axis=-1), 1.0, atol=1e-9)
+    assert (np.abs(np.asarray(n)[:, 2]) > 0.99).all()
+    # Stepping along the chosen direction raises the field.
+    step = sdf.signed_distance(p + 0.01 * np.asarray(n))
+    assert (step > np.asarray(d)).all()
 
 
 # --- distance rows ----------------------------------------------------------------------------
@@ -398,7 +521,7 @@ def _returned_gap(pipe, motion, result) -> np.ndarray:
     scale, z_min = meta["smpl_scale"], meta["source_z_min"]
     obj = motion.objects[0]
     pos = (obj.positions - np.array([0.0, 0.0, z_min])) * scale
-    half = obj.extents * obj.scale * scale / 2.0
+    half = obj.extents * scale / 2.0
     robot = pipe.frax_model.robot
     radii = np.asarray(robot.flat_collision_radii)
     q = pipe.frax_model.frax_q_from_joint_q(result.joint_q)
@@ -477,7 +600,7 @@ def test_shoulder_edit_is_guarded_for_object_clips(
         return _returned_gap(pipe, motion, result).min(), result
 
     worst_unguarded = min(results(sign, False)[0] for sign in (1.0, -1.0))
-    assert worst_unguarded < -0.01  # the edit does push a hand into the box
+    assert worst_unguarded < -0.004  # the edit does push a hand into the box
     for sign in (1.0, -1.0):
         gap, result = results(sign, True)
         assert gap > -0.002
@@ -535,6 +658,80 @@ def test_shoulder_edit_limiter_uses_object_gaps() -> None:
     assert limited > 0
     assert gap(blended).min() >= -1e-4 - 1e-6
     assert blended[:, 8].max() > 0.0  # but part of the edit survives
+
+
+def _masking_gaps():
+    """Two radius-1 cm spheres and a 25 cm box: ``(gap_fn, q0)``.
+
+    Sphere 0 sits 16 mm inside the box side and stays there; sphere 1 is 10 mm clear above the
+    top.  ``q[:, 2]`` moves both spheres (the root), ``q[:, 7]`` lowers sphere 1 only (an arm).
+    """
+    box = _object(extents=(0.25, 0.25, 0.25))
+    sdf = build_object_sdf(box, 1.0, dx=0.005)
+    gaps = _object_gap_fn([sdf], np.zeros((1, 1, 3)), np.eye(3)[None, None], np.full(2, 0.01))
+
+    def gap(q):
+        centres = np.array([[[0.119, 0.0, 0.03], [0.0, 0.0, 0.145]]], dtype=np.float64)
+        centres = np.repeat(centres, len(q), axis=0)
+        centres[:, :, 2] += np.asarray(q)[:, 2:3]
+        centres[:, 1, 2] -= np.asarray(q)[:, 7]
+        return gaps(centres)
+
+    return gap, np.zeros((1, 8), np.float32)
+
+
+def test_object_gaps_are_per_sphere() -> None:
+    gap, q = _masking_gaps()
+    g = gap(q)
+    assert g.shape == (1, 2)
+    np.testing.assert_allclose(g[0], [-0.016, 0.010], atol=2e-3)
+
+
+def test_root_shift_is_not_masked_by_a_deeper_existing_penetration() -> None:
+    gap, q = _masking_gaps()
+    shift, reduced = _limit_root_shift(q, 0.020, gap)
+    assert reduced
+    assert shift <= 0.0101 + 1e-4  # sphere 1 may use its 10 mm of clearance, not more
+
+
+def test_shoulder_edit_is_not_masked_by_a_deeper_existing_penetration() -> None:
+    gap, q = _masking_gaps()
+    post = q.copy()
+    post[:, 7] = 0.020
+    out, limited = _limit_edit_by_terrain(q, post, gap, 30.0)
+    assert limited == 1
+    assert 0.0 < out[0, 7] <= 0.0101 + 1e-4
+
+
+def test_guards_compare_pairs_not_the_minimum_across_constraints() -> None:
+    """A terrain pair that already penetrates deeply must not hide an object pair."""
+    pre = np.zeros((4, 8), np.float32)
+    post = pre.copy()
+    post[:, 7] = 0.04
+
+    def gaps(q):  # columns: a deep terrain penetration (constant), an object gap that shrinks
+        return np.stack([np.full(len(q), -0.05), 0.02 - q[:, 7]], axis=1)
+
+    out, limited = _limit_edit_by_terrain(pre, post, gaps, 30.0)
+    assert limited > 0
+    assert gaps(out)[:, 1].min() >= -1e-4 - 1e-6
+    shift, reduced = _limit_root_shift(
+        pre, 0.04, lambda q: np.stack([np.full(len(q), -0.05), 0.02 + q[:, 2]], axis=1)
+    )
+    assert reduced and shift == pytest.approx(0.02, abs=5e-4)
+
+
+def test_snap_cannot_move_a_hand_through_a_shelf() -> None:
+    q = np.zeros((1, 7), np.float32)
+    q[0, 2] = 0.025
+
+    def gap(p):  # slab spanning [-5, +5] mm, sphere radius 10 mm
+        return np.abs(p[:, 2]) - 0.005 - 0.010
+
+    assert gap(np.asarray(q) - np.array([0, 0, 0.05, 0, 0, 0, 0], np.float32)).min() > 0.0
+    shift, reduced = _limit_root_shift(q, 0.050, gap)
+    assert reduced
+    assert shift == pytest.approx(0.010, abs=5e-4)
 
 
 def test_object_constraint_defaults_to_every_sphere(model) -> None:

@@ -31,6 +31,7 @@ __all__ = [
     "ObjectConstraint",
     "ObjectSDF",
     "build_object_sdf",
+    "object_grid_pad",
     "object_distance_rows",
 ]
 
@@ -39,10 +40,27 @@ _LOG = logging.getLogger(__name__)
 #: Nodes this close (m) to the surface get the exact mesh distance instead of the voxel one.
 _EXACT_BAND = 0.03
 _MAX_CACHED_SDFS = 8
-#: Below this squared norm a gradient is treated as zero.
+#: Below this squared norm a vector is treated as zero.
 _TINY = 1e-12
-#: Within this many voxels of the surface the sign comes from the mesh, not the voxels.
-_SIGN_BAND = 3.0
+#: Below this squared norm the trilinear gradient (1/m) is flat: the cell has no usable exit
+#: direction (a medial plane of a thin object) and one-sided differences decide.
+_FLAT_GRAD2 = 1e-6
+#: Smallest grid padding (m) around an object's bounds.
+_MIN_PAD = 0.08
+#: Extra clearance (m) of the grid beyond the largest sphere reach.
+_PAD_SLACK = 0.03
+
+
+def object_grid_pad(max_radius: float, margin: float) -> float:
+    """Grid padding (m) that makes the field exact for every query that can be active.
+
+    A sphere of radius ``max_radius`` keeping ``margin`` from the object constrains the solver
+    only while its centre is closer than ``max_radius + margin`` to the surface (plus the slack
+    of the barrier, which acts on the reported gap too).  With this padding a centre outside the
+    grid is at least that far away, so whatever :func:`object_distance_rows` returns there is
+    inactive.
+    """
+    return max(_MIN_PAD, float(max_radius) + float(margin) + _PAD_SLACK)
 
 
 @dataclass(frozen=True)
@@ -51,7 +69,8 @@ class ObjectSDF:
 
     ``values[i, j, k]`` is the distance (m) from ``origin + (i, j, k) * dx`` to the object's
     surface, positive outside, negative inside.  Outside the grid, :func:`object_distance_rows`
-    extends it by the distance to the grid.
+    extends it by the distance to the grid; the pipeline pads the grid (:func:`object_grid_pad`)
+    so that nothing outside it is within reach of a collision sphere.
     """
 
     values: NDArray[np.float32]  # (nx, ny, nz)
@@ -108,42 +127,54 @@ def _load_mesh(path: str):
         return None
 
 
+def _file_identity(path: str) -> tuple:
+    """Stat fields that change when the file at ``path`` is replaced (even keeping its mtime)."""
+    if not path:
+        return (0,)
+    try:
+        st = Path(path).stat()
+    except OSError:
+        return (-1,)
+    return (st.st_mtime_ns, st.st_ino, st.st_size, st.st_ctime_ns)
+
+
 def build_object_sdf(
     obj,
     smpl_scale: float,
     *,
     dx: float = 0.01,
-    pad: float = 0.08,
+    pad: float = _MIN_PAD,
     voxel: float = 0.004,
 ) -> ObjectSDF:
     """Signed distance field of ``obj`` in its scaled local frame.
 
     With a loadable mesh, vertices are ``(raw - mean of raw) * obj.scale * smpl_scale`` (the
     placement of the viewer, scaled into the solver frame) and the mesh is merged
-    (``process=True``).  The inside is the filled voxelisation at ``voxel`` pitch (the bundled
-    meshes are not watertight); the magnitude is the Euclidean distance transform of that
-    occupancy on every node, replaced by the exact distance to the mesh within 3 cm of the
-    surface (there, the sign comes from the face normals when the mesh is a closed, consistently
-    wound surface, else from the voxels).  The grid covers the mesh bounds plus ``pad``.  Without
-    a mesh (empty ``mesh_path`` or a load failure) the field is the analytic box of half extents
-    ``extents * scale * smpl_scale / 2``.  Results are cached in-process.
+    (``process=True``).  The far field is the signed Euclidean distance transform of the filled
+    voxelisation at ``voxel`` pitch (the bundled meshes are not watertight).  Nodes within 3 cm
+    of the *surface* (measured on the unfilled voxelisation, so a cavity wall counts) get the
+    exact distance to the mesh; their sign comes from ray-parity containment when the processed
+    mesh is watertight (any winding, cavities, several components), else from the filled voxels.
+    Deep inside a closed cavity, further than that from every wall, the filled voxels still read
+    "inside".  The grid covers the mesh bounds plus ``pad`` (see :func:`object_grid_pad`).
+    Without a mesh (empty ``mesh_path`` or a load failure) the field is the analytic box of half
+    extents ``extents * smpl_scale / 2``: ``SceneObject.extents`` are metres, ``obj.scale``
+    applies to raw mesh vertices only.  Results are cached in-process, keyed on the mesh file's
+    identity (mtime, inode, size, ctime).
     """
     scale = float(obj.scale) * float(smpl_scale)
     path = str(obj.mesh_path or "")
-    try:
-        mtime = Path(path).stat().st_mtime_ns if path else 0
-    except OSError:
-        mtime = -1
+    identity = _file_identity(path)
     ext = tuple(float(x) for x in np.ravel(obj.extents))
-    key = (path, mtime, ext, round(scale, 9), dx, pad, voxel)
+    key = (path, identity, ext, round(scale, 9), round(float(smpl_scale), 9), dx, pad, voxel)
     cached = _CACHE.get(key)
     if cached is not None:
         _CACHE.move_to_end(key)
         return cached
 
-    mesh_data = _load_mesh(path) if mtime >= 0 else None
+    mesh_data = _load_mesh(path) if identity != (-1,) else None
     if mesh_data is None:
-        sdf = _build_box(np.asarray(ext) * scale / 2.0, dx, pad)
+        sdf = _build_box(np.asarray(ext) * float(smpl_scale) / 2.0, dx, pad)
     else:
         sdf = _build_mesh(mesh_data, scale, dx, pad, voxel)
     _CACHE[key] = sdf
@@ -169,70 +200,39 @@ def _build_mesh(mesh_data, scale: float, dx: float, pad: float, voxel: float) ->
     lo, hi = mesh.bounds
     origin, shape, axes = _grid_for(lo, hi, dx, pad)
 
-    # Filled occupancy on the voxel grid of the voxelisation, padded by ``pad``.
+    # Surface voxels on the voxel grid of the voxelisation, padded by ``pad``.
     surface = mesh.voxelized(voxel)
     mat = np.asarray(surface.matrix, dtype=bool)
     margin = int(np.ceil(pad / voxel)) + 1
-    occ = np.pad(mat, margin)
+    shell = np.pad(mat, margin)
     vo = np.asarray(surface.translation, dtype=np.float64) - margin * voxel  # centre of voxel 0
-    occ = binary_fill_holes(occ)
+    occ = binary_fill_holes(shell)
     outside = distance_transform_edt(~occ) * voxel - 0.5 * voxel
     inside = -(distance_transform_edt(occ) * voxel - 0.5 * voxel)
     field = np.where(occ, inside, outside)
+    to_surface = distance_transform_edt(~shell) * voxel
 
     grid = np.stack(np.meshgrid(*axes, indexing="ij"), axis=-1).reshape(-1, 3)
     coords = ((grid - vo) / voxel).T
     approx = map_coordinates(field, coords, order=1, mode="nearest")
     values = approx.copy()
+    surface_dist = map_coordinates(to_surface, coords, order=1, mode="nearest")
 
-    near = np.abs(approx) < _EXACT_BAND + voxel
+    near = surface_dist < _EXACT_BAND + 2.0 * voxel
     if near.any():
         pts = grid[near]
-        closest, dist, tri = trimesh.proximity.closest_point(mesh, pts)
-        sign = np.where(approx[near] < 0.0, -1.0, 1.0)
-        if mesh.is_watertight and mesh.is_winding_consistent:
-            # The voxel sign is only reliable away from the surface; close to it, use the sign
-            # of the angle-weighted pseudo-normal of the closest feature.
-            close = np.abs(approx[near]) < _SIGN_BAND * voxel
-            outward = 1.0 if mesh.volume >= 0.0 else -1.0
-            side = _pseudo_normal_side(mesh, pts[close], closest[close], tri[close])
-            sign[close] = np.where(side * outward < 0.0, -1.0, 1.0)
-        exact = sign * dist
-        values[near] = np.where(np.abs(approx[near]) < _EXACT_BAND, exact, approx[near])
+        _, dist, _ = trimesh.proximity.closest_point(mesh, pts)
+        if mesh.is_watertight:
+            # Ray parity: independent of the winding, right for cavities and several components.
+            sign = np.where(mesh.contains(pts), -1.0, 1.0)
+        else:
+            sign = np.where(approx[near] < 0.0, -1.0, 1.0)
+        # The voxel distance to the surface is within a voxel of the true one.
+        replace = dist < _EXACT_BAND
+        values[near] = np.where(replace, sign * dist, approx[near])
     return ObjectSDF(
         values=values.reshape(tuple(shape)).astype(np.float32), origin=origin, dx=float(dx)
     )
-
-
-def _pseudo_normal_side(mesh, points: NDArray, closest: NDArray, tri: NDArray) -> NDArray:
-    """``(p - c) . n`` with ``n`` the pseudo-normal of the mesh feature holding closest point ``c``.
-
-    The face normal inside a face, the sum of the two face normals on an edge and the
-    angle-weighted vertex normal at a vertex (the normals under which the sign is exact for a
-    closed, consistently wound surface).  ``tri`` is the closest face of each point.
-    """
-    import trimesh
-
-    corners = mesh.triangles[tri]
-    bary = trimesh.triangles.points_to_barycentric(corners, closest)
-    edge_faces: dict[tuple[int, int], list[int]] = {}
-    for faces, edge in zip(mesh.face_adjacency, mesh.face_adjacency_edges, strict=True):
-        edge_faces[(int(min(edge)), int(max(edge)))] = [int(faces[0]), int(faces[1])]
-    vertex_normals = mesh.vertex_normals
-    eps = 1e-6
-    out = np.empty(len(points))
-    for i in range(len(points)):
-        on = np.flatnonzero(bary[i] > eps)
-        ids = mesh.faces[tri[i]]
-        if len(on) == 1:
-            n = vertex_normals[ids[on[0]]]
-        elif len(on) == 2:
-            key = (int(min(ids[on])), int(max(ids[on])))
-            n = mesh.face_normals[edge_faces.get(key, [int(tri[i])])].sum(axis=0)
-        else:
-            n = mesh.face_normals[tri[i]]
-        out[i] = float(np.dot(points[i] - closest[i], n))
-    return out
 
 
 # ---------------------------------------------------------------------------
@@ -240,25 +240,8 @@ def _pseudo_normal_side(mesh, points: NDArray, closest: NDArray, tri: NDArray) -
 # ---------------------------------------------------------------------------
 
 
-def _lookup(sdf: dict, local, xp):
-    """Distance and local gradient direction at object-local points ``local`` (n, 3).
-
-    Trilinear interpolation inside the grid.  Outside, the point is clamped to the grid, the
-    value there plus the distance from the clamped point is returned (so far points read far)
-    and the direction is the clamped gradient.  A direction of (almost) zero length falls back
-    to the point's own offset from the object origin, then +z.  Returns ``(d, n)`` with ``n``
-    of unit length.
-    """
-    values = xp.asarray(sdf["values"], dtype=xp.float64)
-    origin = xp.asarray(sdf["origin"], dtype=xp.float64)
-    dx = xp.asarray(sdf["dx"], dtype=xp.float64)
-    shape = values.shape
-    top = xp.asarray([s - 1 for s in shape], dtype=xp.float64)
-    f = (local - origin) / dx
-    fc = xp.clip(f, 0.0, top)
-    excess = (f - fc) * dx  # (n, 3) local offset from the clamped point
-    e2 = xp.sum(excess**2, axis=-1)
-    e = xp.sqrt(e2)
+def _trilinear(values, fc, top, xp):
+    """Trilinear value and raw (per-cell) gradient at clamped fractional indices ``fc`` (n, 3)."""
     base = xp.minimum(xp.floor(fc), top - 1.0)
     t = fc - base
     i0 = base.astype(xp.int32)
@@ -284,14 +267,56 @@ def _lookup(sdf: dict, local, xp):
         - (c000 * (1 - ty) + c010 * ty) * (1 - tz)
         - (c001 * (1 - ty) + c011 * ty) * tz
     )
-    grad = xp.stack([gx, gy, gz], axis=-1) / dx
+    return d0, xp.stack([gx, gy, gz], axis=-1)
+
+
+def _lookup(sdf: dict, local, xp):
+    """Distance and local gradient direction at object-local points ``local`` (n, 3).
+
+    Trilinear interpolation inside the grid.  Outside, the point is clamped to the grid, the
+    value there plus the distance from the clamped point is returned (so far points read far)
+    and the direction is the clamped gradient.  With the grid padded by :func:`object_grid_pad`
+    every point outside it is farther from the object than any sphere can reach, so the
+    extension only ever reports inactive rows.  Where the trilinear gradient is (almost) flat
+    (the medial plane of a thin object, which an inside sphere may sit on) the direction is the
+    grid axis, ``+-x, +-y, +-z``, along which a one-cell step raises the field most; if the
+    field is flat in all six, the point's own offset from the object origin, then +z.  Returns
+    ``(d, n)`` with ``n`` of unit length.
+    """
+    values = xp.asarray(sdf["values"], dtype=xp.float64)
+    origin = xp.asarray(sdf["origin"], dtype=xp.float64)
+    dx = xp.asarray(sdf["dx"], dtype=xp.float64)
+    shape = values.shape
+    top = xp.asarray([s - 1 for s in shape], dtype=xp.float64)
+    f = (local - origin) / dx
+    fc = xp.clip(f, 0.0, top)
+    excess = (f - fc) * dx  # (n, 3) local offset from the clamped point
+    e = xp.sqrt(xp.sum(excess**2, axis=-1))
+    n_pts = fc.shape[0]
+
+    # The value at the point and at one-cell steps along +-x, +-y, +-z (clamped to the grid).
+    steps = xp.concatenate([xp.zeros((1, 3)), xp.eye(3), -xp.eye(3)], axis=0).astype(
+        xp.float64
+    )  # (7, 3)
+    probe = xp.clip(fc[None] + steps[:, None, :], 0.0, top).reshape(-1, 3)
+    d_all, g_all = _trilinear(values, probe, top, xp)
+    d_all = d_all.reshape(7, n_pts)
+    d0 = d_all[0]
+    grad = g_all.reshape(7, n_pts, 3)[0] / dx
     g2 = xp.sum(grad**2, axis=-1)[:, None]
-    ok = g2 > _TINY
+    ok = g2 > _FLAT_GRAD2
     n = xp.where(ok, grad / xp.sqrt(xp.where(ok, g2, 1.0)), 0.0)
+
+    rise = d_all[1:] - d0[None]  # (6, n): +x, +y, +z, -x, -y, -z
+    best = xp.argmax(rise, axis=0)
+    axis_dirs = xp.concatenate([xp.eye(3), -xp.eye(3)], axis=0).astype(xp.float64)  # (6, 3)
+    step_dir = axis_dirs[best]
+    has_rise = (xp.max(rise, axis=0) > 1e-9)[:, None]
+
     r2 = xp.sum(local**2, axis=-1)[:, None]
     okr = r2 > _TINY
     radial = xp.where(okr, local / xp.sqrt(xp.where(okr, r2, 1.0)), xp.asarray([0.0, 0.0, 1.0]))
-    n = xp.where(ok, n, radial)
+    n = xp.where(ok, n, xp.where(has_rise, step_dir, radial))
     return d0 + e, n
 
 
