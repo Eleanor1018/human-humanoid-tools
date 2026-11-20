@@ -485,12 +485,11 @@ def _hfield_facets_near(
     outside the grid gets no triangles.
     """
     none = (np.zeros((0, 3, 3)), np.zeros((0, 3)), np.zeros(0))
-    hid = int(model.geom_dataid[hf])
-    nrow, ncol = int(model.hfield_nrow[hid]), int(model.hfield_ncol[hid])
-    radius_x, radius_y, elevation, _ = (float(v) for v in model.hfield_size[hid])
-    if nrow < 2 or ncol < 2:
+    grid = _hfield_triangles(model, hf)
+    if grid is None:
         return none
-    step_x, step_y = 2.0 * radius_x / (ncol - 1), 2.0 * radius_y / (nrow - 1)
+    tris_all, normals_all, lo_all, hi_all, (step_x, step_y, radius_x, radius_y) = grid
+    nrow, ncol = tris_all.shape[0] + 1, tris_all.shape[1] + 1
     centre = data.geom_xpos[other] - data.geom_xpos[hf]
     bound = float(model.geom_rbound[other])
     span = bound + reach
@@ -500,27 +499,55 @@ def _hfield_facets_near(
     r1 = min(int(np.ceil((centre[1] + span + radius_y) / step_y)), nrow - 1)
     if c1 <= c0 or r1 <= r0:
         return none
+    window = (slice(r0, r1), slice(c0, c1))
+    tris = tris_all[window].reshape(-1, 3, 3)
+    normals = normals_all[window].reshape(-1, 3)
+    lo, hi = lo_all[window].reshape(-1, 3), hi_all[window].reshape(-1, 3)
+    box = np.maximum(np.maximum(lo - centre, centre - hi), 0.0)
+    return tris, normals, np.maximum(np.linalg.norm(box, axis=1) - bound, 0.0)
+
+
+_TRIANGLE_CACHE: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+
+
+def _hfield_triangles(model, hf: int):
+    """Every triangle of heightfield geom ``hf`` in its own frame, cached per model.
+
+    Returns ``(triangles, normals, lower corners, upper corners, (step_x, step_y, radius_x,
+    radius_y))`` with the first four shaped ``(nrow - 1, ncol - 1, 2, ...)``, or ``None`` for a
+    degenerate field.
+    """
+    cache = _TRIANGLE_CACHE.setdefault(model, {})
+    if hf in cache:
+        return cache[hf]
+    hid = int(model.geom_dataid[hf])
+    nrow, ncol = int(model.hfield_nrow[hid]), int(model.hfield_ncol[hid])
+    radius_x, radius_y, elevation, _ = (float(v) for v in model.hfield_size[hid])
+    if nrow < 2 or ncol < 2:
+        cache[hf] = None
+        return None
+    step_x, step_y = 2.0 * radius_x / (ncol - 1), 2.0 * radius_y / (nrow - 1)
     adr = int(model.hfield_adr[hid])
-    grid = model.hfield_data[adr : adr + nrow * ncol].reshape(nrow, ncol)
-    h = grid[r0 : r1 + 1, c0 : c1 + 1].astype(np.float64) * elevation
-    xs = -radius_x + step_x * np.arange(c0, c1 + 1)
-    ys = -radius_y + step_y * np.arange(r0, r1 + 1)
-    gx, gy = np.meshgrid(xs, ys)  # (rows, cols)
-    corner = np.stack([gx, gy, h], axis=-1)
+    h = model.hfield_data[adr : adr + nrow * ncol].reshape(nrow, ncol).astype(np.float64)
+    h = h * elevation
+    gx, gy = np.meshgrid(-radius_x + step_x * np.arange(ncol), -radius_y + step_y * np.arange(nrow))
+    corner = np.stack([gx, gy, h], axis=-1)  # (rows, cols, 3)
     p00, p10 = corner[:-1, :-1], corner[:-1, 1:]  # (row, col) and (row, col + 1)
     p01, p11 = corner[1:, :-1], corner[1:, 1:]
     tris = np.stack(
         [
             np.stack([p00, p10, p11], axis=-2),  # below the diagonal: x offset >= y offset
             np.stack([p00, p11, p01], axis=-2),  # above it
-        ]
-    ).reshape(-1, 3, 3)
-    normals = np.cross(tris[:, 1] - tris[:, 0], tris[:, 2] - tris[:, 0])
-    normals /= np.linalg.norm(normals, axis=1, keepdims=True)
-    normals[normals[:, 2] < 0.0] *= -1.0
-    lo, hi = tris.min(axis=1), tris.max(axis=1)
-    box = np.maximum(np.maximum(lo - centre, centre - hi), 0.0)
-    return tris, normals, np.maximum(np.linalg.norm(box, axis=1) - bound, 0.0)
+        ],
+        axis=2,
+    )  # (rows - 1, cols - 1, 2, 3, 3)
+    normals = np.cross(tris[..., 1, :] - tris[..., 0, :], tris[..., 2, :] - tris[..., 0, :])
+    normals /= np.linalg.norm(normals, axis=-1, keepdims=True)
+    normals = np.where(normals[..., 2:3] < 0.0, -normals, normals)
+    spacing = (step_x, step_y, radius_x, radius_y)
+    entry = (tris, normals, tris.min(axis=-2), tris.max(axis=-2), spacing)
+    cache[hf] = entry
+    return entry
 
 
 #: Spacing (m) of the surface samples that bound the gap to a non-flat window (a foot mesh has
@@ -570,14 +597,19 @@ def _sampled_gap(
     if not len(tris):
         return None
     reach = limit + shift
-    # Only point-triangle pairs that can be closer than ``reach``: a cheap box distance first.
     lo, hi = tris.min(axis=1), tris.max(axis=1)
+    # Only point-triangle pairs that can be closer than ``reach``: a cheap box distance first.
     near = np.all((pts > lo.min(axis=0) - reach) & (pts < hi.max(axis=0) + reach), axis=1)
     pts = pts[near]
     if not len(pts):
         return None
     box = np.maximum(np.maximum(lo[None] - pts[:, None], pts[:, None] - hi[None]), 0.0)
     lower = np.sqrt(np.einsum("ptk,ptk->pt", box, box))  # no closer than the triangle's box
+    # ... nor than its plane, the tighter bound above a sloped facet.
+    normal = np.cross(tris[:, 1] - tris[:, 0], tris[:, 2] - tris[:, 0])
+    normal /= np.linalg.norm(normal, axis=1, keepdims=True)
+    plane = np.abs(pts @ normal.T - np.einsum("tk,tk->t", normal, tris[:, 0]))
+    lower = np.fmax(lower, plane)
     pi, ti = np.nonzero(lower < reach)
     if not len(pi):
         return None

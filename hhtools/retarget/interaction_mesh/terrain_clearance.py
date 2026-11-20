@@ -776,6 +776,56 @@ def _actuated_qpos_addresses(model) -> list[int]:
     return [int(model.jnt_qposadr[j]) for j in range(model.njnt) if int(model.jnt_type[j]) in kinds]
 
 
+def _frame_minima(
+    points: NDArray[np.float64],
+    terrain: TerrainHeightfield,
+    *,
+    floor_z: float,
+    max_distance: float,
+    triangulation: str | None,
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """Per-frame minima of :func:`column_terrain_distance` over ``points`` (F, P, 3).
+
+    The same numbers as ``column_terrain_distance(points, ...)`` reduced with ``min(axis=1)``
+    (each point's values do not depend on the others), measured on far fewer points.  No point
+    is nearer the terrain, by either measure, than its height above the tallest node or floor
+    within ``max_distance`` (:func:`_neighbourhood_top`; the signed distance is also clipped to
+    ``max_distance``).  The points with the lowest such bound in each frame give an upper bound
+    of both minima, and only points whose bound is below it can lower them.  A frame with a
+    non-finite point is NaN, as before.
+    """
+    frames, count = points.shape[:2]
+    finite = np.all(np.isfinite(points), axis=-1)
+    top = _neighbourhood_top(
+        np.where(finite, points[..., 0], 0.0),
+        np.where(finite, points[..., 1], 0.0),
+        float(max_distance),
+        terrain,
+        float(floor_z),
+    )
+    lower = np.where(finite, points[..., 2] - top, -np.inf)
+    signed = np.full(frames, np.inf)
+    vertical = np.full(frames, np.inf)
+
+    def measure(fi, pi):
+        sd, vc = column_terrain_distance(
+            points[fi, pi], terrain, floor_z=floor_z, max_distance=max_distance,
+            triangulation=triangulation,
+        )
+        np.minimum.at(signed, fi, sd)
+        np.minimum.at(vertical, fi, vc)
+
+    first = min(64, count)
+    pick = np.argpartition(lower, first - 1, axis=1)[:, :first]
+    measure(np.repeat(np.arange(frames), first), pick.ravel())
+    rest = lower < np.maximum(signed, vertical)[:, None]  # False for a NaN frame
+    rest[np.arange(frames)[:, None], pick] = False
+    fi, pi = np.nonzero(rest)
+    if fi.size:
+        measure(fi, pi)
+    return signed, vertical
+
+
 def foot_terrain_clearance(
     model,
     data,
@@ -865,11 +915,10 @@ def foot_terrain_clearance(
                 lowest[k, off : off + n] = piece_lowest_z(model, g, c, pos, rot)[c.piece]
                 off += n
         n = stop - start
-        sd, point_clear = column_terrain_distance(
+        signed[start:stop], point_clear = _frame_minima(
             world[:n], terrain, floor_z=floor_z, max_distance=max_distance,
             triangulation=triangulation,
         )
-        signed[start:stop] = sd.min(axis=1)
         zc = centre[:n, :, 2]
         # Lowest the cell reaches: its flat box's height extent, or the tilt of a ball cell,
         # never below the piece's lowest point.
@@ -897,7 +946,7 @@ def foot_terrain_clearance(
         first = min(32, total)
         low = np.argpartition(cheap, first - 1, axis=1)[:, :first]
         tighten(np.repeat(np.arange(n), first), low.ravel())
-        limit = np.minimum(point_clear.min(axis=1), bound.min(axis=1))[:, None]
+        limit = np.minimum(point_clear, bound.min(axis=1))[:, None]
         fi, pi = np.nonzero((cheap <= limit + 1e-9) & np.isinf(bound))
         tighten(fi, pi)
         vertical[start:stop] = bound.min(axis=1)

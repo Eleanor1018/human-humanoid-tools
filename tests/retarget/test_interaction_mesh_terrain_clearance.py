@@ -100,6 +100,54 @@ def test_column_distance_matches_a_search_over_every_column() -> None:
     np.testing.assert_allclose(got, want, atol=1e-9)
 
 
+@pytest.mark.parametrize("triangulation", [None, "main", "both"])
+def test_frame_minima_equal_the_minimum_over_every_point(triangulation, monkeypatch) -> None:
+    import hhtools.retarget.interaction_mesh.terrain_clearance as tc
+
+    rng = np.random.default_rng(1)
+    # Boxes 0.1 m wide on 2.5 cm cells: the 0.1 m reach spans four cells.
+    blocks = rng.choice([0.0, 0.05, 0.3, 0.6], size=(12, 10))
+    hf = np.kron(blocks, np.ones((4, 4))).astype(np.float32)
+    hf[17, 21] = np.nan  # unknown, solid
+    terrain = _grid(hf, 0.025)
+    # Feet-like clusters: 400 points within 12 cm of a centre, at heights from inside the
+    # columns to well above the 0.1 m reach.
+    centres = rng.uniform([-0.2, -0.2, -0.1], [1.3, 1.1, 0.9], size=(40, 3))
+    points = centres[:, None, :] + rng.uniform(-0.12, 0.12, size=(40, 400, 3))
+    points[3, 17] = np.nan  # an unmeasurable pose
+    points[5, :, 2] += 2.0  # far above everything
+    measured = []
+    full = tc.column_terrain_distance
+
+    def counting(pts, *args, **kwargs):
+        measured.append(len(pts))
+        return full(pts, *args, **kwargs)
+
+    monkeypatch.setattr(tc, "column_terrain_distance", counting)
+    for floor_z in (0.0, -0.05):
+        kw = dict(floor_z=floor_z, max_distance=0.1, triangulation=triangulation)
+        got_signed, got_vertical = tc._frame_minima(points, terrain, **kw)
+        signed, vertical = full(points, terrain, **kw)
+        np.testing.assert_array_equal(got_signed, signed.min(axis=1))
+        np.testing.assert_array_equal(got_vertical, vertical.min(axis=1))
+    assert np.isnan(got_signed[3]) and np.isnan(got_vertical[3])
+    assert sum(measured) < 2 * points.shape[0] * points.shape[1]  # it skipped points
+
+
+def test_frame_minima_see_a_wall_anywhere_within_reach() -> None:
+    from hhtools.retarget.interaction_mesh.terrain_clearance import _frame_minima
+
+    # 64 points 0.27 m above open ground, then one 0.5 m up but only 0.25 m from the box side:
+    # the nearest point is the high one, whose wall is three cells away.
+    low = np.column_stack([np.linspace(0.0, 0.1, 64), np.full(64, 0.5), np.full(64, 0.27)])
+    points = np.vstack([low, [[0.2, 0.5, 0.5]]])[None]
+    signed, vertical = _frame_minima(
+        points, _box_terrain(), floor_z=0.0, max_distance=0.3, triangulation=None
+    )
+    assert signed[0] == pytest.approx(0.25)
+    assert vertical[0] == pytest.approx(0.27)
+
+
 def test_point_on_a_shared_footprint_edge_is_over_the_higher_column() -> None:
     # dx = 1 is exact in binary, so these points lie exactly on footprint boundaries.
     face = _grid([[0.0], [1.0]], 1.0)  # columns at x = 0 (0 m) and x = 1 (1 m) meet at x = 0.5
