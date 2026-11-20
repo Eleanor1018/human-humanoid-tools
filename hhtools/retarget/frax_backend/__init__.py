@@ -21,6 +21,8 @@ __all__ = [
     "FRAX_DEPENDENCIES",
     "FraxConfig",
     "FraxPipeline",
+    "FraxSceneConfig",
+    "FraxScenePipeline",
     "default_ik_backend",
     "frax_available",
     "frax_config_for_preset",
@@ -53,4 +55,7 @@ def default_ik_backend() -> str:
 def __getattr__(name: str):
     if name == "FraxPipeline":
         return importlib.import_module("hhtools.retarget.frax_backend.pipeline").FraxPipeline
+    if name in ("FraxSceneConfig", "FraxScenePipeline"):
+        module = importlib.import_module("hhtools.retarget.frax_backend.scene_pipeline")
+        return getattr(module, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
