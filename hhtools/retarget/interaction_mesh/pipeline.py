@@ -74,6 +74,9 @@ class SceneTargets:
     #: ``(F, 4)`` continuous source pelvis quaternions (xyzw), or ``None`` when the
     #: root orientation must not be taken from the source.
     source_root_quat_xyzw: NDArray[np.float64] | None
+    #: Per-side summary of the foot-target projection out of the terrain, or ``None`` when it
+    #: did not run (no terrain, or ``terrain_foot_target_projection`` off).
+    foot_target_projection: dict | None = None
 
 
 @dataclass
@@ -690,6 +693,29 @@ class InteractionMeshPipeline:
         )
         mapped_pos = self._enforce_mapped_ankle_laterality(mapped_pos, robot_points)
 
+        foot_target_projection = None
+        if motion.terrain is not None and self.cfg.terrain_foot_target_projection:
+            from hhtools.retarget.interaction_mesh.target_projection import (
+                project_foot_targets,
+            )
+
+            mapped_pos, foot_target_projection = project_foot_targets(
+                mapped_pos,
+                robot_points,
+                self.scaled_terrain(motion, z_min, smpl_scale),
+                fps=float(motion.framerate),
+            )
+            _log.info(
+                "Foot targets moved out of the terrain: %s",
+                "; ".join(
+                    f"{side} {i['frames_shifted']} frames (max {i['max_shift_m'] * 100:.1f} cm, "
+                    f"{i['frames_uncleared']} uncleared, jump "
+                    f"{i['max_jump_raw_m'] * 100:.1f} -> {i['max_jump_ramped_m'] * 100:.1f} cm)"
+                    for side, i in foot_target_projection.items()
+                )
+                or "no foot points",
+            )
+
         source_root_quat_xyzw = None
         # Continuous source pelvis quaternions for **every** frame.
         # The SQP locks the FREE-joint orientation to these values so the
@@ -742,6 +768,7 @@ class InteractionMeshPipeline:
             z_min=z_min,
             smpl_scale=smpl_scale,
             source_root_quat_xyzw=source_root_quat_xyzw,
+            foot_target_projection=foot_target_projection,
         )
 
     def scaled_terrain(

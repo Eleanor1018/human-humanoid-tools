@@ -926,6 +926,7 @@ class FraxScenePipeline:
                 "qp_max_iterations": int(qp_iters.max(initial=0)),
                 "stick_frames": stick_frames,
                 "shoulder_edit_limited_frames": limited_frames,
+                "foot_target_projection": st.foot_target_projection,
             },
         }
         return RetargetedMotion(
