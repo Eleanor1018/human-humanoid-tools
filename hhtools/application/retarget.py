@@ -30,6 +30,137 @@ def _request_human_height(body: dict, preset, reference: str) -> float:
     return default_human_height(preset, reference)
 
 
+def _scene_pipeline_scaler(preset, reference, model, motion, human_height, cal_path):
+    """Human-to-robot scaler for a scene solver, from a calibration or a bundled scaler."""
+    from hhtools.retarget.calibration import load_calibration
+    from hhtools.retarget.newton_basic.scaler import HumanToRobotScaler
+    from hhtools.robot.retarget_profile import resolve_retarget_scaler_config
+
+    calibration = load_calibration(cal_path) if cal_path is not None else None
+    scaler_cfg = resolve_retarget_scaler_config(
+        preset,
+        reference,
+        calibration=calibration,
+        model=model,
+        motion=motion,
+        human_height=human_height,
+    )
+    return HumanToRobotScaler(motion.hierarchy, scaler_cfg, human_height=human_height)
+
+
+def _scene_progress(job, *, compiled: bool):
+    """Map ``(stage, done, total)`` scene-solver progress onto the job's clip progress."""
+
+    floor = [0.04]  # the setup step already reported this
+
+    def _set(job_, value: float, message: str) -> None:
+        # Progress never moves backwards (the setup step already reported 4%).
+        floor[0] = max(floor[0], value)
+        _set_retarget_job_clip_progress(job_, floor[0], message)
+
+    def _cb(stage: str, cur: int, tot: int) -> None:
+        if job is None:
+            return
+        frac_in = cur / max(1, tot)
+        if stage == "precompute":
+            _set(job, 0.3 * frac_in, f"预处理 {cur}/{tot}")
+        elif stage == "build":
+            _set(job, 0.3 + 0.1 * frac_in, "正在构建场景与求解器…")
+        elif stage == "post":
+            _set(job, 0.95, "求解完成，正在后处理…")
+        elif compiled and stage == "mpc":
+            # The FRAX scene solve is one compiled scan: only its ends are reported.
+            if cur <= 0:
+                _set(job, 0.4, f"FRAX 场景整段求解 {tot} 帧（首次需编译，请稍候）…")
+            else:
+                _set(job, 0.92, "FRAX 场景求解完成…")
+        else:
+            _set(job, 0.3 + 0.68 * frac_in, f"MPC 求解 {cur}/{tot}")
+
+    return _cb
+
+
+def _retarget_scene_clip(
+    model,
+    motion,
+    reference,
+    backend,
+    human_height,
+    job,
+    *,
+    preset,
+    cal_path,
+    foot_clamp_anti_penetration,
+):
+    """Run a terrain / object clip on the FRAX scene solver or interaction-mesh."""
+    from hhtools.retarget.interaction_mesh.config import InteractionMeshPipelineConfig
+
+    im_cfg = InteractionMeshPipelineConfig()
+    if foot_clamp_anti_penetration is not None:
+        im_cfg.post_mpc_foot_clamps = bool(foot_clamp_anti_penetration)
+        if not im_cfg.post_mpc_foot_clamps:
+            im_cfg.min_foot_clearance_m = 0.0
+
+    if backend == "frax":
+        _require_frax_package()
+        if job is not None:
+            _set_retarget_job_clip_progress(
+                job,
+                0.04,
+                "正在初始化 FRAX 场景求解器（首次会编译求解器，之后会复用缓存）…",
+            )
+        from hhtools.retarget.frax_backend import FraxScenePipeline
+
+        if cal_path is not None:
+            pipe = FraxScenePipeline.from_calibration(
+                model,
+                motion,
+                str(cal_path),
+                human_height=human_height,
+                front_config=im_cfg,
+            )
+        else:
+            scaler = _scene_pipeline_scaler(
+                preset, reference, model, motion, human_height, cal_path
+            )
+            pipe = FraxScenePipeline(model, scaler, front_config=im_cfg)
+        return pipe.run(motion, progress_callback=_scene_progress(job, compiled=True))
+
+    from hhtools.retarget.interaction_mesh.pipeline import InteractionMeshPipeline
+
+    if job is not None:
+        _set_retarget_job_clip_progress(
+            job,
+            0.04,
+            "正在构建 Interaction-Mesh 场景（新机器人首次较慢）…",
+        )
+    if cal_path is not None:
+        pipe = InteractionMeshPipeline.from_calibration(
+            model,
+            motion,
+            str(cal_path),
+            human_height=human_height,
+            cfg=im_cfg,
+        )
+    else:
+        scaler = _scene_pipeline_scaler(preset, reference, model, motion, human_height, cal_path)
+        pipe = InteractionMeshPipeline(robot=model, scaler=scaler, cfg=im_cfg)
+    cb = _scene_progress(job, compiled=False)
+    try:
+        try:
+            return pipe.run(motion, progress_callback=cb)
+        except TypeError:
+            return pipe.run(motion)
+    except ModuleNotFoundError as err:
+        if "osqp" in str(err).lower():
+            raise ValueError(
+                "interaction-mesh retarget on terrain needs the OSQP solver. "
+                "Install it with `uv pip install osqp` (or re-run "
+                "`uv sync --extra web`)."
+            ) from err
+        raise
+
+
 def _retarget_single(
     model,
     robot_name,
@@ -70,52 +201,22 @@ def _retarget_single(
                 obj.positions = obj.positions[:lf]
                 obj.quaternions = obj.quaternions[:lf]
 
-    if backend == "interaction_mesh":
-        from hhtools.retarget.interaction_mesh.config import InteractionMeshPipelineConfig
-        from hhtools.retarget.interaction_mesh.pipeline import InteractionMeshPipeline
+    has_scene = getattr(motion, "terrain", None) is not None or bool(
+        getattr(motion, "objects", None)
+    )
 
-        if job is not None:
-            _set_retarget_job_clip_progress(
-                job,
-                0.04,
-                "正在构建 Interaction-Mesh 场景（新机器人首次较慢）…",
-            )
-        im_cfg = InteractionMeshPipelineConfig()
-        if foot_clamp_anti_penetration is not None:
-            im_cfg.post_mpc_foot_clamps = bool(foot_clamp_anti_penetration)
-            if not im_cfg.post_mpc_foot_clamps:
-                im_cfg.min_foot_clearance_m = 0.0
-        pipe = InteractionMeshPipeline.from_calibration(
+    if backend == "interaction_mesh" or (backend == "frax" and has_scene):
+        return _retarget_scene_clip(
             model,
             motion,
-            str(cal_path),
-            human_height=human_height,
-            cfg=im_cfg,
+            reference,
+            backend,
+            human_height,
+            job,
+            preset=preset,
+            cal_path=cal_path,
+            foot_clamp_anti_penetration=foot_clamp_anti_penetration,
         )
-
-        def _im_cb(stage: str, cur: int, tot: int) -> None:
-            if job is None:
-                return
-            if stage == "precompute":
-                frac = 0.3 * (cur / max(1, tot))
-                _set_retarget_job_clip_progress(job, frac, f"预处理 {cur}/{tot}")
-            else:
-                frac = 0.3 + 0.68 * (cur / max(1, tot))
-                _set_retarget_job_clip_progress(job, frac, f"MPC 求解 {cur}/{tot}")
-
-        try:
-            try:
-                return pipe.run(motion, progress_callback=_im_cb)
-            except TypeError:
-                return pipe.run(motion)
-        except ModuleNotFoundError as err:
-            if "osqp" in str(err).lower():
-                raise ValueError(
-                    "interaction-mesh retarget on terrain needs the OSQP solver. "
-                    "Install it with `uv pip install osqp` (or re-run "
-                    "`uv sync --extra web`)."
-                ) from err
-            raise
 
     use_frax = backend == "frax"
     if use_frax:
