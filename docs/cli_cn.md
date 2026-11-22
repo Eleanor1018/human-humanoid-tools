@@ -16,7 +16,7 @@
 | `hhtools bodymodel check` / `setup` | SMPL 系权重路径 / 下载说明 |
 | `hhtools robot list` / `info` / `schema` / `validate` / `scaffold` / `add` | 机器人预设 |
 | `hhtools retarget run` | Newton IK → CSV（文件或目录） |
-| `hhtools retarget interaction-mesh run` | Interaction-mesh（地形 / 物体）→ CSV |
+| `hhtools retarget interaction-mesh run` | 场景动作（地形 / 物体）→ CSV；默认使用 FRAX 场景求解器，interaction-mesh SQP 作为备选 |
 | `hhtools retarget interaction-mesh precompute-laplacian` | 预计算 Laplacian 目标（`.npz`） |
 | `hhtools web` | HTML / three.js UI（默认 `127.0.0.1:8009`） |
 | `hhtools agent` | 供自动化使用的严格 JSON 接口，见 [Agent 与 MCP](agent.md)（英文） |
@@ -58,7 +58,7 @@ uv run hhtools robot scaffold g1_29dof            # 已有 yaml 则跳过
 用 `--limit-frames` 快速冒烟测试：
 
 ```bash
-# 平坦 / AMASS 类 NPZ：默认使用 FRAX（CPU），未安装 FRAX 时使用 Newton
+# NPZ 动作：默认使用 FRAX（CPU；NPZ 带地形或物体时使用场景求解器），未安装 FRAX 时使用 Newton
 uv run hhtools retarget run path/to/clip.npz \
   --robot g1_29dof -o /tmp/out.csv \
   --calibration-reference smpl --limit-frames 30
@@ -68,18 +68,18 @@ uv run hhtools retarget run path/to/clip.npz \
   --robot g1_29dof -o /tmp/out_newton.csv \
   --calibration-reference smpl --backend newton --limit-frames 30
 
-# Interaction-mesh（OMOMO / OmniContact / 带地形）
+# 场景动作（OMOMO / OmniContact / 带地形）：默认使用 FRAX 场景求解器
 uv run hhtools retarget interaction-mesh run path/to/clip.pkl \
-  --robot g1_29dof -o /tmp/out_im.csv \
+  --robot g1_29dof -o /tmp/out_scene.csv \
   --calibration-reference smpl --limit-frames 30
 
-# 用实验性的 FRAX 场景求解器处理带地形的动作
+# 备选：interaction-mesh SQP（MuJoCo + OSQP）
 uv run hhtools retarget interaction-mesh run path/to/parkour.npy \
-  --robot rp1 -o /tmp/out_frax.csv \
-  --calibration-reference smplx --solver frax
+  --robot rp1 -o /tmp/out_im.csv \
+  --calibration-reference smplx --solver osqp
 ```
 
-`--solver frax`（实验性，需要 `retarget-frax` extra）用 FRAX 代替 MuJoCo + OSQP 循环来求解场景动作。它使用与默认求解器相同的缩放场景和接触点。地形以符号距离约束的形式作用在机器人的碰撞球上，每个球分别约束到下方表面和侧面墙壁的距离；源动作中某只脚在某一帧静止时，机器人的这只脚在该帧被固定在原地。物体暂时不作为障碍物：与默认求解器一样，物体只通过手部目标起作用。目前只有 CLI 提供这个选项，WebUI 和 Agent 仍把地形与物体动作交给默认求解器。
+`--solver` 默认为 `auto`：安装了 `retarget-frax` extra 时使用 FRAX 场景求解器，否则使用 MuJoCo + OSQP 的 interaction-mesh SQP；也可用 `frax`、`osqp` 强制指定。FRAX 场景求解器使用与 SQP 相同的缩放场景和接触点。地形以符号距离约束的形式作用在机器人的碰撞球上，每个球分别约束到下方表面和侧面墙壁的距离；源动作中某只脚在某一帧静止时，机器人的这只脚在该帧被固定在原地。交互物体同样是障碍物：机器人的碰撞球保持在每个物体的符号距离场之外，双手仍然跟随各自的目标。结果由求解器直接贴合场景，导出和查看器回放不会再次对齐地面。WebUI、Agent 与 `hhtools retarget run` 使用同一规则：安装了 FRAX 时，地形与物体动作使用 FRAX 场景求解器；interaction-mesh 仍可选用（WebUI 求解器菜单、批处理脚本的 `--backend interaction_mesh`、`--solver osqp`），未安装 FRAX 时自动回退到它。
 
 只要安装了 `retarget-frax` extra（`all` 和桌面安装包都已包含），FRAX 就是默认的 IK 求解器；未安装时，CLI、WebUI 和批处理脚本会自动改用 Newton。FRAX 用 [frax](https://github.com/StanfordASL/frax) 差分 IK 求解与 Newton 相同的 IK 目标：关节限位、地面和自碰撞都是约束；一段动作编译一次，之后在 CPU 上几十毫秒即可求解完。`--no-frax-floor`、`--no-frax-self-collision` 可关闭对应约束；`hhtools robot frax-collision <robot>` 会打印这些约束使用的球体模型。FRAX 不使用 `--ik-iterations`，该参数只对 Newton 生效。
 

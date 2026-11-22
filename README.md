@@ -25,7 +25,7 @@
 
 | Workflow | How it works |
 |----------|--------------|
-| **Motion&nbsp;→&nbsp;Robot** | Load a clip → pick a robot → calibrate once → retarget → export. Newton IK for flat motion; MPC-SQP interaction mesh for terrain and objects. |
+| **Motion&nbsp;→&nbsp;Robot** | Load a clip → pick a robot → calibrate once → retarget → export. FRAX by default for every clip (its scene solver handles terrain and objects); Newton IK and the MPC-SQP interaction mesh are the alternatives. |
 | **Robot&nbsp;→&nbsp;Robot** | Retarget existing robot trajectories (CSV, PKL, IsaacLab NPZ) onto a new URDF. |
 | **Video&nbsp;→&nbsp;Motion** | Run official [GVHMR](docs/gvhmr.md) on a video and add the result to your Motion Library (optional, needs CUDA). |
 | **Dataset&nbsp;analysis** | Point at a folder → scan, tag, embed, and cluster → export a subset. |
