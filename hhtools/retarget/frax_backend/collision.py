@@ -150,6 +150,8 @@ class CollisionLayout:
     num_self_collision_pairs: int
     skipped_links: tuple[str, ...] = ()
     skipped_rest_pairs: int = 0
+    #: Flat sphere indices of the spheres on ``spec.sole_links``.
+    sole_sphere_idxs: tuple[int, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -740,10 +742,10 @@ def to_frax_collision_data(
             T = zero_pose.get(link, np.eye(4))
             rest[i] = T[:3, :3] @ local + T[:3, 3]
 
+    is_sole = np.asarray([e[2] in spec.sole_links for e in flat], dtype=bool)
     floor_idxs = list(range(len(flat)))
     if rest is not None and flat:
         bottoms = rest[:, 2] - radii
-        is_sole = np.asarray([e[2] in spec.sole_links for e in flat], dtype=bool)
         floor_z = float(bottoms[is_sole].min() if is_sole.any() else bottoms.min())
         floor_idxs = [
             i
@@ -791,4 +793,5 @@ def to_frax_collision_data(
         num_self_collision_pairs=len(body_pairs),
         skipped_links=tuple(sorted(skipped)),
         skipped_rest_pairs=skipped_rest,
+        sole_sphere_idxs=tuple(int(i) for i in np.flatnonzero(is_sole)),
     )

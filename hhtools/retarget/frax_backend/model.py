@@ -50,6 +50,8 @@ class FraxRobotModel:
     floor_sphere_idxs: tuple[int, ...] = ()
     num_collision_spheres: int = 0
     num_self_collision_pairs: int = 0
+    #: Flat collision-sphere indices of the sole links (``()`` without collision spheres).
+    sole_sphere_idxs: tuple[int, ...] = ()
     #: Content key the pipeline's model cache stored this model under.
     cache_key: tuple = ()
     #: frax actuated-joint indices left out of ``dof_order``.  They are not
@@ -213,6 +215,7 @@ def build_frax_robot_model(
         frozen_joints=frozen,
         collision_source=collision.source if model is not kinematic else "none",
         floor_sphere_idxs=layout.floor_sphere_idxs if model is not kinematic else (),
+        sole_sphere_idxs=layout.sole_sphere_idxs if model is not kinematic else (),
         num_collision_spheres=layout.num_spheres if model is not kinematic else 0,
         num_self_collision_pairs=layout.num_self_collision_pairs if model is not kinematic else 0,
     )
