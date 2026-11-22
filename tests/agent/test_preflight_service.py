@@ -223,6 +223,7 @@ def _setup(
     motion_frame_rate_hz: float = 30.0,
     validation_recorded: bool = True,
     motion_extra: dict[str, np.ndarray] | None = None,
+    sidecar_terrain: object | None = None,
 ) -> tuple[PreflightService, str, str, str | None]:
     motion_root = tmp_path / "motions"
     robot_root = tmp_path / "robots"
@@ -240,6 +241,15 @@ def _setup(
             frame_count=motion_frame_count,
             frame_rate_hz=motion_frame_rate_hz,
             extra=motion_extra,
+        )
+    if sidecar_terrain is not None:
+        from hhtools.io.parc_export import save_parc_pkl
+
+        save_parc_pkl(
+            (motion_root / motion_name).with_suffix(".pkl"),
+            motion_data=None,
+            terrain_data=sidecar_terrain,
+            misc_data=None,
         )
     _write_robot(robot, scaler=scaler, scaler_text=scaler_text)
     calibration_id = (
@@ -1024,12 +1034,12 @@ def test_closed_scheduler_rejects_without_creating_a_plan(tmp_path: Path) -> Non
     assert response.error.retryable is True
 
 
-def test_unified_npz_with_a_terrain_heightfield_cannot_run_on_a_flat_solver(
-    tmp_path: Path,
+def test_unified_npz_with_a_terrain_sidecar_cannot_run_on_a_flat_solver(
+    tmp_path: Path, synthetic_terrain_motion
 ) -> None:
     """Scene content, not only the dataset name, decides the workflow category."""
     service, motion_id, robot_id, _ = _setup(
-        tmp_path, motion_extra={"terrain_heightfield": np.zeros((4, 4), dtype=np.float32)}
+        tmp_path, sidecar_terrain=synthetic_terrain_motion.terrain
     )
 
     default = service.preflight_retarget(_request(motion_id, robot_id))

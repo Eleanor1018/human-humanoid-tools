@@ -137,36 +137,92 @@ _OBJECT_ARRAY_FIELDS = frozenset(
 )
 
 
-def _npz_scene_flags(archive: Any, keys: set[str], primary: Path | None) -> tuple[bool, bool]:
-    """``(has_object, has_terrain)`` for a unified NPZ, as the loader sees it.
+@dataclass(frozen=True, slots=True)
+class _NpzSceneSources:
+    """Scene inputs of a unified NPZ, decided by what ``load_npz`` consumes.
 
-    Mirrors :func:`hhtools.io.npz.load_npz`: an ``objects_*`` entry named or
-    meshed as terrain is the clip's terrain, every other entry is an object,
-    and a clip-named ``<stem>.pkl`` sidecar (written by ``save_npz`` for a
-    clip with a heightfield) also carries terrain.  Only array members are
-    read, with ``allow_pickle=False``; the sidecar is not opened.
+    ``sidecars`` are the terrain pickles ``load_npz`` probes (by name; they are
+    never opened here).  ``terrain_mesh`` is the first terrain-object mesh when
+    that file exists, which is the only mesh ``load_npz`` rasterises.
     """
 
-    from hhtools.io.npz import _is_terrain_mesh_name
+    has_object: bool
+    sidecars: tuple[Path, ...]
+    terrain_mesh: Path | None
+
+    @property
+    def has_terrain(self) -> bool:
+        return self.terrain_mesh is not None or any(item.is_file() for item in self.sidecars)
+
+    def files(self) -> tuple[tuple[AssetFileRole, Path], ...]:
+        found = [(AssetFileRole.OTHER, item) for item in self.sidecars if item.is_file()]
+        if self.terrain_mesh is not None:
+            found.append((AssetFileRole.TERRAIN_MESH, self.terrain_mesh))
+        return tuple(found)
+
+
+def _npz_scene_sources(archive: Any, keys: set[str], primary: Path) -> _NpzSceneSources:
+    """Mirror :func:`hhtools.io.npz.load_npz` scene resolution without pickles.
+
+    Only array members are read, with ``allow_pickle=False``; no sidecar is
+    opened.  The sidecar names, mesh-path resolution and terrain-entry rule
+    come from ``hhtools.io.npz`` so the inspector cannot drift from the loader.
+    """
+
+    from hhtools.io.npz import (
+        is_terrain_object_entry,
+        npz_terrain_sidecar_candidates,
+        resolve_npz_mesh_paths,
+    )
 
     has_object = False
-    has_terrain = "terrain_heightfield" in keys
+    terrain_mesh: Path | None = None
+    first_terrain_seen = False
     if _OBJECT_ARRAY_FIELDS.issubset(keys):
-        names = np.asarray(archive["objects_names"]).reshape(-1)
-        meshes = (
-            np.asarray(archive["objects_mesh_paths"]).reshape(-1)
+        names = [str(x) for x in np.asarray(archive["objects_names"]).reshape(-1)]
+        raw_meshes = (
+            [str(x) for x in np.asarray(archive["objects_mesh_paths"]).reshape(-1)]
             if "objects_mesh_paths" in keys
-            else np.asarray([], dtype=str)
+            else ["" for _ in names]
         )
+        meshes = resolve_npz_mesh_paths(raw_meshes, primary.parent)
         for index, name in enumerate(names):
-            mesh = str(meshes[index]) if index < meshes.size else ""
-            if mesh and _is_terrain_mesh_name(str(name), mesh):
-                has_terrain = True
+            mesh = meshes[index] if index < len(meshes) else ""
+            if is_terrain_object_entry(name, mesh):
+                if not first_terrain_seen:
+                    first_terrain_seen = True
+                    candidate = Path(mesh)
+                    if candidate.is_file():
+                        terrain_mesh = candidate.resolve()
             else:
                 has_object = True
-    if primary is not None and not has_terrain and primary.with_suffix(".pkl").is_file():
-        has_terrain = True
-    return has_object, has_terrain
+    internal_name = ""
+    if "name" in keys:
+        try:
+            internal_name = str(np.asarray(archive["name"]).item())
+        except (TypeError, ValueError):
+            internal_name = ""
+    sidecars: list[Path] = []
+    for item in npz_terrain_sidecar_candidates(primary, internal_name):
+        resolved = item.resolve()
+        if resolved not in sidecars and resolved != primary:
+            sidecars.append(resolved)
+    return _NpzSceneSources(
+        has_object=has_object, sidecars=tuple(sidecars), terrain_mesh=terrain_mesh
+    )
+
+
+def read_npz_scene_sources(primary: Path) -> _NpzSceneSources | None:
+    """Scene sources of a unified NPZ on disk, or ``None`` if it is not one."""
+
+    try:
+        with np.load(primary, allow_pickle=False) as archive:
+            keys = set(archive.files)
+            if not _UNIFIED_NPZ_REQUIRED_KEYS.issubset(keys):
+                return None
+            return _npz_scene_sources(archive, keys, primary.resolve())
+    except (OSError, ValueError, EOFError, KeyError, zipfile.BadZipFile):
+        return None
 
 
 def _category_for_content(primary: Path | None, dataset: str) -> AssetCategory:
@@ -184,11 +240,10 @@ def _category_for_content(primary: Path | None, dataset: str) -> AssetCategory:
         or primary.suffix.lower() != ".npz"
     ):
         return category
-    try:
-        with np.load(primary, allow_pickle=False) as archive:
-            has_object, has_terrain = _npz_scene_flags(archive, set(archive.files), primary)
-    except (OSError, ValueError, EOFError, KeyError, zipfile.BadZipFile):
+    sources = read_npz_scene_sources(primary)
+    if sources is None:
         return category
+    has_object, has_terrain = sources.has_object, sources.has_terrain
     if has_object:
         return AssetCategory.OBJECT_INTERACTION
     if has_terrain:
@@ -356,6 +411,13 @@ def discover_motion_sidecars(
         resolved = path.resolve()
         if resolved not in values:
             values.append(resolved)
+
+    if primary.suffix.lower() == ".npz":
+        # Terrain inputs ``load_npz`` may consume are part of the asset identity.
+        npz_sources = read_npz_scene_sources(primary)
+        if npz_sources is not None:
+            for role, path in npz_sources.files():
+                add(role, path)
 
     if dataset_name == "omomo":
         for path in sorted(directory.glob("*_cleaned_simplified.obj")):
@@ -579,7 +641,11 @@ def _inspect_unified_npz(
             scales = _numeric_array(archive["objects_scales"], "objects_scales")
             if scales.ndim != 1:
                 raise _ContentValidationError("objects_scales must be one-dimensional")
-    has_object, has_terrain = _npz_scene_flags(archive, keys, primary)
+    if primary is not None:
+        sources = _npz_scene_sources(archive, keys, primary.resolve())
+        has_object, has_terrain = sources.has_object, sources.has_terrain
+    else:
+        has_object = has_terrain = False
     return _ContentFacts(
         frame_count=int(positions.shape[0]),
         frame_rate_hz=fps,
@@ -1017,6 +1083,36 @@ class MotionAssetInspector:
                     },
                 )
             )
+
+        if primary_path is not None and primary_path.suffix.lower() == ".npz":
+            # Terrain inputs that ``load_npz`` would consume must be verified
+            # manifest members.  A bundle registered before such a sidecar
+            # existed cannot vouch for it, so ask for re-registration.
+            npz_sources = read_npz_scene_sources(primary_path)
+            registered = {item.relative_path for item in bundle.files}
+            unregistered: list[str] = []
+            if npz_sources is not None:
+                for _role, scene_file in npz_sources.files():
+                    try:
+                        relative_scene = scene_file.relative_to(resolved_root).as_posix()
+                    except ValueError:
+                        relative_scene = scene_file.name
+                        unregistered.append(relative_scene)
+                        continue
+                    if relative_scene not in registered:
+                        unregistered.append(relative_scene)
+            if unregistered:
+                errors.append(
+                    _api_error(
+                        "BUNDLE_INCOMPLETE",
+                        "The motion consumes terrain inputs that are not part of the "
+                        "registered bundle; register the asset again.",
+                        details={
+                            "unregistered_files": sorted(set(unregistered)),
+                            "action": "reregister",
+                        },
+                    )
+                )
 
         role_paths: dict[AssetFileRole, list[Path]] = {}
         for manifest_file in bundle.files:

@@ -234,17 +234,7 @@ def load_npz(
             # paths are passed through unchanged for backwards compatibility with
             # NPZs minted from raw source trees (the ephemeral cache still writes
             # absolute paths there).
-            npz_dir = path.parent
-            mesh_paths: list[str] = []
-            for raw in raw_mesh_paths:
-                if not raw:
-                    mesh_paths.append("")
-                    continue
-                p = Path(raw)
-                if p.is_absolute():
-                    mesh_paths.append(raw)
-                else:
-                    mesh_paths.append(str((npz_dir / raw).resolve()))
+            mesh_paths = resolve_npz_mesh_paths(raw_mesh_paths, path.parent)
             scales_arr = (
                 np.asarray(data["objects_scales"], dtype=np.float32)
                 if "objects_scales" in data.files
@@ -252,7 +242,7 @@ def load_npz(
             )
             for i, obj_name in enumerate(names):
                 obj_mesh = mesh_paths[i] if i < len(mesh_paths) else ""
-                if _is_terrain_mesh_name(obj_name, obj_mesh) and obj_mesh:
+                if is_terrain_object_entry(obj_name, obj_mesh):
                     # Capture pose / scale for one-shot rasterisation
                     # below; we only ever materialise the FIRST terrain
                     # entry — meshmimic clips have a single static
@@ -311,6 +301,38 @@ def load_npz(
     return motion_out
 
 
+def npz_terrain_sidecar_candidates(path: Path, npz_name: str) -> list[Path]:
+    """Terrain sidecar names :func:`load_npz` probes, in priority order.
+
+    ``<file-stem>.pkl`` (clip-named) and ``<motion-name>.pkl`` next to the NPZ.
+    The single source of truth for the loader and the asset inspector.
+    """
+
+    return [path.with_suffix(".pkl"), path.parent / f"{npz_name}.pkl"]
+
+
+def resolve_npz_mesh_paths(raw_paths: list[str], npz_dir: Path) -> list[str]:
+    """Resolve ``objects_mesh_paths`` entries as :func:`load_npz` does.
+
+    Relative paths resolve against the NPZ directory; absolute ones pass through.
+    """
+
+    out: list[str] = []
+    for raw in raw_paths:
+        if not raw:
+            out.append("")
+            continue
+        p = Path(raw)
+        out.append(raw if p.is_absolute() else str((npz_dir / raw).resolve()))
+    return out
+
+
+def is_terrain_object_entry(name: str, mesh_path: str) -> bool:
+    """True when ``load_npz`` routes this ``objects_*`` entry to terrain."""
+
+    return bool(mesh_path) and _is_terrain_mesh_name(name, mesh_path)
+
+
 def _resolve_terrain_for_npz(
     path: Path, npz_name: str, terrain_obj_pose: dict | None
 ) -> TerrainHeightfield | None:
@@ -328,10 +350,7 @@ def _resolve_terrain_for_npz(
     from hhtools.io.parc_export import load_parc_pkl_terrain, save_parc_pkl
     from hhtools.retarget.interaction_mesh.heightfield import obj_to_heightfield
 
-    candidates = [
-        path.with_suffix(".pkl"),
-        path.parent / f"{npz_name}.pkl",
-    ]
+    candidates = npz_terrain_sidecar_candidates(path, npz_name)
     for cand in candidates:
         if cand.is_file():
             terrain = load_parc_pkl_terrain(cand)
@@ -415,4 +434,11 @@ def _strip_unserialisable_meta(meta: dict) -> dict:
     return out
 
 
-__all__ = ["SCHEMA_VERSION", "load_npz", "save_npz"]
+__all__ = [
+    "SCHEMA_VERSION",
+    "is_terrain_object_entry",
+    "load_npz",
+    "npz_terrain_sidecar_candidates",
+    "resolve_npz_mesh_paths",
+    "save_npz",
+]
