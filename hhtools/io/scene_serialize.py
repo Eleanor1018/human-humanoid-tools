@@ -814,7 +814,15 @@ def serialize_robot_trajectory(
     # When foot-follow is off, compute the grounding lift ONCE at the first
     # played frame and reuse it for all frames (same helper as CSV/PKL bake).
     const_lift = 0.0
-    if not ground_follow and len(idx) > 0:
+    # A result the solver already placed in the scene's frame (grounded on its
+    # terrain / around its objects) is shown as solved, exactly as the export
+    # writes it: a lift onto the yellow overlay's foot joint would move it off
+    # the terrain or the object it holds.
+    meta = getattr(retargeted, "meta", None) or {}
+    scene_grounded = bool(meta.get("terrain_grounded") or meta.get("objects_grounded"))
+    if scene_grounded:
+        ground_follow = False
+    if not ground_follow and not scene_grounded and len(idx) > 0:
         const_lift = constant_playback_mesh_z_lift(
             model,
             retargeted,
