@@ -171,7 +171,12 @@ def _capabilities(*, closed: bool = False) -> CapabilityResponse:
                 backend_id="frax",
                 display_name="FRAX differential IK",
                 available=True,
-                supported_categories=["plain_motion", "robot_trajectory"],
+                supported_categories=[
+                    "plain_motion",
+                    "robot_trajectory",
+                    "object_interaction",
+                    "terrain_scene",
+                ],
                 output_formats=["csv", "pkl"],
             ),
             BackendCapability(
@@ -666,9 +671,11 @@ def test_plain_motion_may_choose_frax_which_takes_no_ik_iterations(tmp_path: Pat
     assert rejected.error.code == "INVALID_PARAMETER"
 
 
-def test_terrain_scene_preflight_freezes_interaction_mesh_without_newton_options(
+@pytest.mark.parametrize("backend", ["interaction_mesh", "frax"])
+def test_terrain_scene_preflight_freezes_scene_backend_without_newton_options(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    backend: str,
 ) -> None:
     service, motion_id, robot_id, calibration_id = _setup(tmp_path)
     assets = service._asset_service  # noqa: SLF001 - focused routing fixture
@@ -685,18 +692,23 @@ def test_terrain_scene_preflight_freezes_interaction_mesh_without_newton_options
                 "metadata": {
                     **result.metadata,
                     "content_parsed": True,
-                    "recommended_backend": "interaction_mesh",
+                    "recommended_backend": "interaction_mesh",  # an older recommendation
                 },
             }
         )
 
     monkeypatch.setattr(assets, "inspect", inspect)
 
-    response = service.preflight_retarget(_request(motion_id, robot_id))
+    response = service.preflight_retarget(
+        # Without a request the first available compatible backend (FRAX) runs.
+        _request(motion_id, robot_id, backend="interaction_mesh")
+        if backend == "interaction_mesh"
+        else _request(motion_id, robot_id)
+    )
 
     assert response.status is PreflightStatus.READY
     assert response.plan is not None
-    assert response.plan.backend == "interaction_mesh"
+    assert response.plan.backend == backend
     assert response.plan.calibration_id == calibration_id
     assert response.plan.parameters["run_mode"] == "smoke"
     assert "ik_iterations" not in response.plan.parameters

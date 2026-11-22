@@ -105,6 +105,8 @@ def test_capabilities_report_unlimited_defaults_and_backend_specific_dependencie
     assert [category.value for category in backends["frax"].supported_categories] == [
         "plain_motion",
         "robot_trajectory",
+        "object_interaction",
+        "terrain_scene",
     ]
 
 
@@ -147,6 +149,14 @@ def test_capabilities_normalize_live_scheduler_and_available_gpu_backends(
         "interaction_mesh",
         "newton",
     }
+    frax = next(backend for backend in response.backends if backend.backend_id == "frax")
+    assert [category.value for category in frax.supported_categories] == [
+        "plain_motion",
+        "robot_trajectory",
+        "object_interaction",
+        "terrain_scene",
+    ]
+    assert frax.features["scene_geometry"] is True
     newton = next(backend for backend in response.backends if backend.backend_id == "newton")
     assert [category.value for category in newton.supported_categories] == [
         "plain_motion",

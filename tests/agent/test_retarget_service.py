@@ -452,7 +452,7 @@ def test_plain_motion_plan_may_use_frax_instead_of_the_recommended_newton(
     assert "ik_iterations" not in spec.effective_parameters
 
 
-def test_frax_plan_is_stale_once_the_motion_routes_to_interaction_mesh(
+def test_frax_plan_is_stale_once_the_motion_routing_projection_changes(
     tmp_path: Path,
 ) -> None:
     fixture = _fixture(tmp_path, backend="frax", category="terrain_scene")

@@ -95,13 +95,17 @@ def _write_motion_bundle(motion, source_root: Path, *, dataset: str) -> Path:
     return motion_path
 
 
+@pytest.mark.parametrize("backend", ["interaction_mesh", "frax"])
 @pytest.mark.parametrize("scene_kind", ["terrain", "object"])
 def test_agent_runs_self_contained_interaction_mesh_plan_to_verified_artifacts(
     tmp_path: Path,
     grounding_robot_pair,
     synthetic_terrain_motion,
     scene_kind: str,
+    backend: str,
 ) -> None:
+    """Scene clips run end to end on the FRAX scene solver (the default) and on
+    interaction-mesh (requested explicitly)."""
     model = grounding_robot_pair[1]
     source_root = tmp_path / "source"
     robot_root = tmp_path / "robots"
@@ -176,6 +180,7 @@ def test_agent_runs_self_contained_interaction_mesh_plan_to_verified_artifacts(
                             "motion_asset_id": motion_result.structured_content["asset_id"],
                             "robot_id": model.preset.name,
                             "robot_asset_id": robot_result.structured_content["asset_id"],
+                            "backend": backend,
                             "output_format": "csv",
                             "parameters": {
                                 "run_mode": "smoke",
@@ -187,7 +192,7 @@ def test_agent_runs_self_contained_interaction_mesh_plan_to_verified_artifacts(
                 )
                 preflight = preflight_result.structured_content
                 assert preflight["status"] == "ready", preflight
-                assert preflight["plan"]["backend"] == "interaction_mesh"
+                assert preflight["plan"]["backend"] == backend
                 assert preflight["plan"]["output_format"] == "csv"
                 assert "ik_iterations" not in preflight["plan"]["parameters"]
 
@@ -197,7 +202,7 @@ def test_agent_runs_self_contained_interaction_mesh_plan_to_verified_artifacts(
                         "request": {
                             "schema_version": "1.0",
                             "plan_id": preflight["plan"]["plan_id"],
-                            "idempotency_key": f"interaction-mesh-e2e-{scene_kind}",
+                            "idempotency_key": f"interaction-mesh-e2e-{scene_kind}-{backend}",
                         }
                     },
                 )
@@ -236,8 +241,9 @@ def test_agent_runs_self_contained_interaction_mesh_plan_to_verified_artifacts(
                 manifest = JobManifest.model_validate(
                     json.loads(manifest_resource.contents[0].text)
                 )
-                assert manifest.execution_provenance.backend == "interaction_mesh"
-                assert manifest.execution_provenance.runtime == "mujoco"
+                assert manifest.execution_provenance.backend == backend
+                if backend == "interaction_mesh":
+                    assert manifest.execution_provenance.runtime == "mujoco"
                 assert manifest.execution_provenance.device_kind == "cpu"
                 assert manifest.summary["has_scene"] is True
 

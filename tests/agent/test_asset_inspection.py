@@ -23,6 +23,7 @@ from hhtools.services.asset_inspection import (
     MotionAssetInspector,
     discover_primary,
 )
+from hhtools.services.routing import backend_for_category
 
 
 def _digest(path: Path) -> str:
@@ -356,7 +357,8 @@ def test_object_interaction_requires_and_discovers_object_mesh(tmp_path: Path) -
     assert inspection.dataset == "omomo"
     assert inspection.reference_model == "smplx"
     assert inspection.has_object is True
-    assert inspection.metadata["recommended_backend"] == "interaction_mesh"
+    assert inspection.metadata["recommended_backend"] in ("frax", "interaction_mesh")
+    assert inspection.metadata["recommended_backend"] == backend_for_category(inspection.category)
     assert inspection.metadata["pickle_executed"] is False
     assert inspection.metadata["content_parsed"] is False
     assert inspection.metadata["content_validation_code"] == "CONTENT_REQUIRES_ISOLATED_VALIDATION"
@@ -393,7 +395,48 @@ def test_terrain_scene_inspection_keeps_terrain_sidecar_bound_to_bundle(
     assert inspection.status is InspectionStatus.VALID_WITH_WARNINGS
     assert inspection.category is AssetCategory.TERRAIN_SCENE
     assert inspection.has_terrain is True
-    assert inspection.metadata["recommended_backend"] == "interaction_mesh"
+    assert inspection.metadata["recommended_backend"] in ("frax", "interaction_mesh")
+    assert inspection.metadata["recommended_backend"] == backend_for_category(inspection.category)
+
+
+@pytest.mark.parametrize("persisted", ["interaction_mesh", "frax"])
+def test_scene_clip_accepts_either_persisted_scene_backend(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, persisted: str
+) -> None:
+    """Assets registered before FRAX became the scene default recorded
+    ``interaction_mesh``; any backend compatible with the category is accepted."""
+    from hhtools.retarget import frax_backend
+
+    monkeypatch.setattr(frax_backend, "missing_frax_dependencies", lambda: [])
+    primary = tmp_path / "parc_ms" / "parkour_1" / "parkour_1.pkl"
+    primary.parent.mkdir(parents=True)
+    with primary.open("wb") as handle:
+        pickle.dump({"motion_data": {}, "terrain_data": {}}, handle)
+    terrain = primary.parent / "parkour_1_terrain.obj"
+    terrain.write_text("v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n", encoding="utf-8")
+    primary_relative = primary.relative_to(tmp_path).as_posix()
+    terrain_relative = terrain.relative_to(tmp_path).as_posix()
+    bundle = _bundle(
+        tmp_path,
+        primary=primary_relative,
+        category=AssetCategory.TERRAIN_SCENE,
+        dataset="parc_ms",
+        files=[
+            (primary_relative, AssetFileRole.MOTION),
+            (terrain_relative, AssetFileRole.TERRAIN_MESH),
+        ],
+    ).model_copy(
+        update={
+            "detected": AssetDetected(
+                dataset="parc_ms", reference="smpl", recommended_backend=persisted
+            )
+        }
+    )
+
+    inspection = MotionAssetInspector().inspect(bundle, tmp_path)
+
+    assert inspection.status is InspectionStatus.VALID_WITH_WARNINGS
+    assert inspection.metadata["recommended_backend"] == "frax"
 
 
 def test_missing_required_object_sidecar_returns_stable_bundle_error(tmp_path: Path) -> None:
