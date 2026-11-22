@@ -79,7 +79,7 @@ uv run hhtools retarget interaction-mesh run path/to/parkour.npy \
   --calibration-reference smplx --solver osqp
 ```
 
-`--solver` 默认为 `auto`：安装了 `retarget-frax` extra 时使用 FRAX 场景求解器，否则使用 MuJoCo + OSQP 的 interaction-mesh SQP；也可用 `frax`、`osqp` 强制指定。FRAX 场景求解器使用与 SQP 相同的缩放场景和接触点。地形以符号距离约束的形式作用在机器人的碰撞球上，每个球分别约束到下方表面和侧面墙壁的距离；源动作中某只脚在某一帧静止时，机器人的这只脚在该帧被固定在原地。交互物体同样是障碍物：机器人的碰撞球保持在每个物体的符号距离场之外，双手仍然跟随各自的目标。结果由求解器直接贴合场景，导出和查看器回放不会再次对齐地面。WebUI、Agent 与 `hhtools retarget run` 使用同一规则：安装了 FRAX 时，地形与物体动作使用 FRAX 场景求解器；interaction-mesh 仍可选用（WebUI 求解器菜单、批处理脚本的 `--backend interaction_mesh`、`--solver osqp`），未安装 FRAX 时自动回退到它。
+`--solver` 默认为 `auto`：安装了 FRAX 时（默认安装）使用 FRAX 场景求解器，否则使用 MuJoCo + OSQP 的 interaction-mesh SQP；也可用 `frax`、`osqp` 强制指定。FRAX 场景求解器使用与 SQP 相同的缩放场景和接触点。地形以符号距离约束的形式作用在机器人的碰撞球上，每个球分别约束到下方表面和侧面墙壁的距离；源动作中某只脚在某一帧静止时，机器人的这只脚在该帧被固定在原地。交互物体同样是障碍物：机器人的碰撞球保持在每个物体的符号距离场之外，双手仍然跟随各自的目标。结果由求解器直接贴合场景，导出和查看器回放不会再次对齐地面。WebUI、Agent 与 `hhtools retarget run` 使用同一规则：安装了 FRAX 时，地形与物体动作使用 FRAX 场景求解器；interaction-mesh 仍可选用（WebUI 求解器菜单、批处理脚本的 `--backend interaction_mesh`、`--solver osqp`），未安装 FRAX 时自动回退到它。
 
 只要安装了 FRAX（默认随 HHTools 安装，`retarget-frax` extra 仅作为别名保留），它就是默认的 IK 求解器；未安装时，CLI、WebUI 和批处理脚本会自动改用 Newton。FRAX 用 [frax](https://github.com/StanfordASL/frax) 差分 IK 求解与 Newton 相同的 IK 目标：关节限位、地面和自碰撞都是约束；一段动作编译一次，之后在 CPU 上几十毫秒即可求解完。`--no-frax-floor`、`--no-frax-self-collision` 可关闭对应约束；`hhtools robot frax-collision <robot>` 会打印这些约束使用的球体模型。FRAX 不使用 `--ik-iterations`，该参数只对 Newton 生效。
 
