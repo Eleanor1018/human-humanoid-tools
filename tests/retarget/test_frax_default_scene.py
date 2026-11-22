@@ -212,3 +212,31 @@ def test_r2r_frax_backend_runs_the_scene_solver_for_scene_clips(
     assert [d for d, _ in ticks] == sorted(d for d, _ in ticks)
     assert all(0 <= d < t for d, t in ticks)
     assert r2r.suggested_r2r_backend("mimic", has_scene=True) in ("frax", "interaction_mesh")
+
+
+def test_foot_clamp_option_is_reported_as_ignored_by_the_scene_solver(
+    toy, synthetic_terrain_motion, caplog
+) -> None:
+    motion = _walk(synthetic_terrain_motion)
+
+    def run(flag):
+        return _retarget_single(
+            toy,
+            toy.preset.name,
+            motion,
+            "smpl",
+            "frax",
+            24,
+            1.7,
+            None,
+            None,
+            preset=toy.preset,
+            foot_clamp_anti_penetration=flag,
+        )
+
+    with caplog.at_level("WARNING", logger="hhtools.application.retarget"):
+        asked = run(True)
+    assert asked.meta["scene_solver"] == "frax"
+    assert asked.meta["ignored_options"] == ["foot_clamp_anti_penetration"]
+    assert "foot_clamp_anti_penetration" in caplog.text
+    assert "ignored_options" not in run(False).meta

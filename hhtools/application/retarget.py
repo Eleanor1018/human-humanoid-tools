@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 from hhtools.application.progress import _set_retarget_job_clip_progress
@@ -13,6 +14,8 @@ from hhtools.application.robots import (
 
 if TYPE_CHECKING:
     from hhtools.application.state import SessionState
+
+_log = logging.getLogger(__name__)
 
 
 def _request_human_height(body: dict, preset, reference: str) -> float:
@@ -124,7 +127,16 @@ def _retarget_scene_clip(
                 preset, reference, model, motion, human_height, cal_path
             )
             pipe = FraxScenePipeline(model, scaler, front_config=im_cfg)
-        return pipe.run(motion, progress_callback=_scene_progress(job, compiled=True))
+        result = pipe.run(motion, progress_callback=_scene_progress(job, compiled=True))
+        if foot_clamp_anti_penetration:
+            # The FRAX scene solver has no post-solve foot clamp: it keeps the feet
+            # out of the terrain and apart through its own constraints.
+            _log.warning(
+                "foot_clamp_anti_penetration is ignored by the FRAX scene solver "
+                "(feet are kept clear by its constraints)"
+            )
+            result.meta["ignored_options"] = ["foot_clamp_anti_penetration"]
+        return result
 
     from hhtools.retarget.interaction_mesh.pipeline import InteractionMeshPipeline
 
