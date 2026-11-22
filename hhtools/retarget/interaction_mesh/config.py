@@ -120,6 +120,18 @@ class InteractionMeshPipelineConfig:
     # is translation-invariant and the floating base just smoothness-
     # damps to a near-stationary trajectory.
     terrain_surface_samples: int = 96
+    # Terrain clips: move each foot's contact targets (ankle, toe, heel) out of the terrain
+    # before solving.  The toe / heel targets are the source ankle plus the robot's offset in
+    # the source foot frame, so with the actor against a box they land inside it (parkour_1:
+    # 349 of 701 frames, heels 11-14 cm deep).  Both solvers keep the robot's foot out of the
+    # box, so the foot waits on the box edge while its target is far below, and the knee
+    # catches up in one frame (0.84 rad on parkour_1).  Moving the foot group rigidly by the
+    # smallest clearing shift (ramped in time) removes the trap: parkour_1 trapped frames
+    # 102 -> 0, largest joint step 0.84 -> 0.26 rad, tracking 6.41 -> 5.44 cm.
+    terrain_foot_target_projection: bool = True
+    # Terrain reading the projected foot targets must clear: ``"both"`` = FRAX columns and the
+    # interpolated heightfield this solver collides with; ``"columns"`` = columns only (FRAX).
+    terrain_foot_target_surface: str = "both"
 
     # Per-mapped-joint absolute world-position cost weight.  The
     # Laplacian cost shapes *relative* limb posture but is
