@@ -12,6 +12,7 @@ floor at z = 0), like the interaction-mesh result.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import threading
 import time
@@ -789,8 +790,15 @@ class FraxScenePipeline:
     ) -> None:
         self._jax_state = configure_jax()
         self.robot = robot
+        # FRAX collides with the terrain columns, so its foot targets only need to clear those
+        # (not the interpolated surface that the interaction-mesh solver uses).
         self.front = InteractionMeshPipeline(
-            robot=robot, scaler=scaler, cfg=front_config or InteractionMeshPipelineConfig()
+            robot=robot,
+            scaler=scaler,
+            cfg=dataclasses.replace(
+                front_config or InteractionMeshPipelineConfig(),
+                terrain_foot_target_surface="columns",
+            ),
         )
         self.frax_config = (
             frax_config if frax_config is not None else frax_config_for_preset(robot.preset)
@@ -978,7 +986,6 @@ class FraxScenePipeline:
         grid = None
         window = 0
         targets = np.asarray(st.positions, dtype=np.float64)
-        source_targets = targets
         if terrain is not None:
             grid = build_terrain_grid(
                 terrain.hf,
@@ -1248,8 +1255,13 @@ class FraxScenePipeline:
 
         robot_pts = np.array(solver.points_fn(q_out))
         robot_pts[..., 2] -= floor_offset  # the snaps only translate the root vertically
-        # Against the source targets, not the contact-adjusted ones the solver chased.
-        err = np.linalg.norm(robot_pts - source_targets, axis=-1)  # (T, P)
+        # ``alignment_*``: against the solver targets (foot targets moved out of the terrain and
+        # hand targets moved onto objects when those ran); ``alignment_source_*``: against the
+        # scaled source before either (``st.source_positions``, the yellow overlay).
+        err = np.linalg.norm(robot_pts - frames["pos"], axis=-1)  # (T, P)
+        err_source = np.linalg.norm(
+            robot_pts - np.asarray(st.source_positions, dtype=robot_pts.dtype), axis=-1
+        )
 
         def group_mean(*keys: str) -> float:
             cols = [
@@ -1277,6 +1289,8 @@ class FraxScenePipeline:
             "alignment_pelvis_m": group_mean("pelvis", "hips"),
             "alignment_wrist_m": group_mean("wrist"),
             "alignment_ankle_m": group_mean("ankle"),
+            "alignment_source_mean_m": float(err_source.mean()),
+            "alignment_source_max_m": float(err_source.max()),
             "execution_provenance": self.execution_provenance(),
             "frax": {
                 "frax_version": _frax_version(),
@@ -1305,6 +1319,7 @@ class FraxScenePipeline:
                 "qp_max_iterations": int(qp_iters.max(initial=0)),
                 "stick_frames": stick_frames,
                 "shoulder_edit_limited_frames": limited_frames,
+                "foot_target_projection": st.foot_target_projection,
             },
         }
         if object_sdfs:
