@@ -30,6 +30,7 @@ from pydantic import ValidationError
 from hhtools.contracts import (
     ApiError,
     AssetBundle,
+    AssetCategory,
     AssetInspection,
     AssetInspectionRequest,
     AssetKind,
@@ -1081,6 +1082,9 @@ class LegacyJobUpgradeService:
                 "reference is not a supported calibration reference.",
                 field="reference",
             )
+        # A job that persisted no backend gets the current default for its
+        # content (chosen after inspection below); a persisted one is kept.
+        backend_persisted = "backend" in request
         backend = _optional_string(request, "backend", "newton")
         if backend not in _BACKENDS:
             raise _invalid("backend is not a supported H2R backend.", field="backend")
@@ -1125,6 +1129,16 @@ class LegacyJobUpgradeService:
                 stage=ErrorStage.PREFLIGHT,
                 details={"asset_id": motion_bundle.asset_id},
             )
+        if not backend_persisted:
+            from hhtools.services.routing import default_ik_backend, default_scene_backend
+
+            backend = (
+                default_scene_backend()
+                if motion_inspection.category
+                in {AssetCategory.OBJECT_INTERACTION, AssetCategory.TERRAIN_SCENE}
+                else default_ik_backend()
+            )
+            parameters = _parameters(request, backend)
         _validate_source_inspection_claims(
             request,
             inspection=motion_inspection,

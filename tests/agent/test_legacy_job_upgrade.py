@@ -351,7 +351,13 @@ def test_downloaded_wrapper_conflict_is_rejected(tmp_path: Path) -> None:
     assert harness.boundaries.preflight_calls == []
 
 
-def test_absent_or_zero_frame_limit_maps_to_full_execution(tmp_path: Path) -> None:
+def test_absent_or_zero_frame_limit_maps_to_full_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from hhtools.retarget import frax_backend
+
+    # With no persisted backend the IK default applies; Newton keeps ik_iterations.
+    monkeypatch.setattr(frax_backend, "frax_available", lambda: False)
     harness = _harness(tmp_path)
     payload = _payload(harness)
     request = payload["request"]
@@ -770,3 +776,57 @@ def test_equally_specific_root_aliases_are_rejected(tmp_path: Path) -> None:
         "root_ids": ["motion-a", "motion-b"],
     }
     assert boundaries.preflight_calls == []
+
+
+def _scene_payload(harness: _Harness) -> dict[str, Any]:
+    clip = harness.motion_root / "parc_ms" / "jump" / "jump.npz"
+    _write_motion(clip)
+    (clip.parent / "jump_terrain.obj").write_text("v 0 0 0\n", encoding="utf-8")
+    payload = _payload(harness)
+    request = payload["request"]
+    request["source_path"] = str(clip)
+    request["source_entry"].update(
+        {
+            "dataset": "parc_ms",
+            "folder_label": "jump",
+            "sequence_id": "jump.npz",
+            "source_path": str(clip),
+            "stem": "jump",
+            "motion_category": "terrain",
+        }
+    )
+    request.pop("backend")
+    return payload
+
+
+@pytest.mark.parametrize("frax_installed", [True, False])
+def test_legacy_scene_job_without_backend_gets_the_scene_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, frax_installed: bool
+) -> None:
+    from hhtools.retarget import frax_backend
+
+    monkeypatch.setattr(frax_backend, "frax_available", lambda: frax_installed)
+    harness = _harness(tmp_path)
+
+    harness.service.upgrade(_scene_payload(harness))
+
+    request = harness.boundaries.preflight_calls[-1]
+    assert request.backend == ("frax" if frax_installed else "interaction_mesh")
+    assert "ik_iterations" not in request.parameters
+
+
+def test_legacy_plain_job_without_backend_gets_the_ik_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from hhtools.retarget import frax_backend
+
+    monkeypatch.setattr(frax_backend, "frax_available", lambda: False)
+    harness = _harness(tmp_path)
+    payload = _payload(harness)
+    payload["request"].pop("backend")
+
+    harness.service.upgrade(payload)
+
+    request = harness.boundaries.preflight_calls[-1]
+    assert request.backend == "newton"
+    assert request.parameters["ik_iterations"] == 31
