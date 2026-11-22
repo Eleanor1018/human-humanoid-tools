@@ -18,6 +18,7 @@ import json
 import math
 import pickle
 import pickletools
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -129,6 +130,70 @@ class _ContentFacts:
 
 class _ContentValidationError(ValueError):
     """An expected, path-free explanation of malformed motion content."""
+
+
+_OBJECT_ARRAY_FIELDS = frozenset(
+    {"objects_names", "objects_positions", "objects_quaternions", "objects_extents"}
+)
+
+
+def _npz_scene_flags(archive: Any, keys: set[str], primary: Path | None) -> tuple[bool, bool]:
+    """``(has_object, has_terrain)`` for a unified NPZ, as the loader sees it.
+
+    Mirrors :func:`hhtools.io.npz.load_npz`: an ``objects_*`` entry named or
+    meshed as terrain is the clip's terrain, every other entry is an object,
+    and a clip-named ``<stem>.pkl`` sidecar (written by ``save_npz`` for a
+    clip with a heightfield) also carries terrain.  Only array members are
+    read, with ``allow_pickle=False``; the sidecar is not opened.
+    """
+
+    from hhtools.io.npz import _is_terrain_mesh_name
+
+    has_object = False
+    has_terrain = "terrain_heightfield" in keys
+    if _OBJECT_ARRAY_FIELDS.issubset(keys):
+        names = np.asarray(archive["objects_names"]).reshape(-1)
+        meshes = (
+            np.asarray(archive["objects_mesh_paths"]).reshape(-1)
+            if "objects_mesh_paths" in keys
+            else np.asarray([], dtype=str)
+        )
+        for index, name in enumerate(names):
+            mesh = str(meshes[index]) if index < meshes.size else ""
+            if mesh and _is_terrain_mesh_name(str(name), mesh):
+                has_terrain = True
+            else:
+                has_object = True
+    if primary is not None and not has_terrain and primary.with_suffix(".pkl").is_file():
+        has_terrain = True
+    return has_object, has_terrain
+
+
+def _category_for_content(primary: Path | None, dataset: str) -> AssetCategory:
+    """Workflow category from the dataset identity, promoted by scene content.
+
+    A plain-identity ``.npz`` (``unified_npz`` and friends) that carries a
+    terrain heightfield or interaction objects is a scene clip: the flat
+    solvers would silently drop its scene.
+    """
+
+    category = category_for_dataset(dataset)
+    if (
+        category is not AssetCategory.PLAIN_MOTION
+        or primary is None
+        or primary.suffix.lower() != ".npz"
+    ):
+        return category
+    try:
+        with np.load(primary, allow_pickle=False) as archive:
+            has_object, has_terrain = _npz_scene_flags(archive, set(archive.files), primary)
+    except (OSError, ValueError, EOFError, KeyError, zipfile.BadZipFile):
+        return category
+    if has_object:
+        return AssetCategory.OBJECT_INTERACTION
+    if has_terrain:
+        return AssetCategory.TERRAIN_SCENE
+    return category
 
 
 def _fallback_dataset(path: Path) -> str:
@@ -366,7 +431,7 @@ def discover_primary(candidate: str | Path) -> MotionAssetDiscovery:
             f"The motion format {suffix or '(none)'} is not supported.",
         )
     dataset = _infer_dataset(primary)
-    category = category_for_dataset(dataset)
+    category = _category_for_content(primary, dataset)
     return MotionAssetDiscovery(
         primary_path=primary,
         dataset=dataset,
@@ -434,7 +499,9 @@ def _numeric_array(value: Any, label: str) -> np.ndarray:
     return array
 
 
-def _inspect_unified_npz(archive: Any, keys: set[str]) -> _ContentFacts:
+def _inspect_unified_npz(
+    archive: Any, keys: set[str], primary: Path | None = None
+) -> _ContentFacts:
     """Mirror the structure consumed by :func:`hhtools.io.npz.load_npz`."""
 
     _required_keys(keys, _UNIFIED_NPZ_REQUIRED_KEYS, "Unified NPZ")
@@ -486,7 +553,6 @@ def _inspect_unified_npz(archive: Any, keys: set[str]) -> _ContentFacts:
         "objects_quaternions",
         "objects_extents",
     }
-    has_object = False
     if object_fields.issubset(keys):
         object_names = np.asarray(archive["objects_names"])
         object_positions = _numeric_array(archive["objects_positions"], "objects_positions")
@@ -513,13 +579,13 @@ def _inspect_unified_npz(archive: Any, keys: set[str]) -> _ContentFacts:
             scales = _numeric_array(archive["objects_scales"], "objects_scales")
             if scales.ndim != 1:
                 raise _ContentValidationError("objects_scales must be one-dimensional")
-        has_object = object_count > 0
+    has_object, has_terrain = _npz_scene_flags(archive, keys, primary)
     return _ContentFacts(
         frame_count=int(positions.shape[0]),
         frame_rate_hz=fps,
         joint_count=joint_count,
         has_object=has_object,
-        has_terrain=bool("terrain_heightfield" in keys),
+        has_terrain=has_terrain,
     )
 
 
@@ -584,7 +650,7 @@ def _inspect_npz(path: Path, dataset: str) -> _ContentFacts:
         keys = set(archive.files)
         unified_markers = {"positions", "quaternions", "bone_names", "parent_indices"}
         if dataset in {"unified_npz", "parc_ms"} or bool(keys & unified_markers):
-            return _inspect_unified_npz(archive, keys)
+            return _inspect_unified_npz(archive, keys, path)
         return _inspect_amass_npz(archive, keys)
 
 
@@ -891,9 +957,17 @@ class MotionAssetInspector:
         )
         dataset = detected_dataset or declared_dataset
         dataset = dataset or _fallback_dataset(Path(bundle.primary_file))
-        category = category_for_dataset(dataset)
+        category = _category_for_content(primary_path, dataset)
         reference = reference_for_dataset(dataset, suffix)
         recommended_backend = backend_for_category(category)
+        # Bundles registered before content promotion recorded a plain category
+        # for a clip that carries a scene.  They keep working: the inspection
+        # reports the scene category, and the declared one is kept in metadata.
+        promoted_legacy = (
+            bundle.category is AssetCategory.PLAIN_MOTION
+            and category is not AssetCategory.PLAIN_MOTION
+            and category is not category_for_dataset(dataset)
+        )
 
         routing_mismatches: dict[str, dict[str, str]] = {}
         if declared_dataset and detected_dataset and declared_dataset != detected_dataset:
@@ -911,6 +985,7 @@ class MotionAssetInspector:
             if (
                 declared_backend
                 and declared_backend != recommended_backend
+                and not promoted_legacy
                 and not (
                     # Bundles registered before FRAX became the preferred backend
                     # recorded Newton (plain motion) or interaction_mesh (scene
@@ -931,7 +1006,7 @@ class MotionAssetInspector:
                     details={"mismatches": routing_mismatches},
                 )
             )
-        if bundle.category is not category:
+        if bundle.category is not category and not promoted_legacy:
             errors.append(
                 _api_error(
                     "BUNDLE_METADATA_MISMATCH",
@@ -1039,11 +1114,14 @@ class MotionAssetInspector:
 
         if facts.warning:
             warnings.append(facts.warning)
-        has_object = category is AssetCategory.OBJECT_INTERACTION and (
-            has_object_sidecar or facts.has_object or dataset == "omomo"
+        # Content facts count whatever the dataset identity says, so a unified
+        # NPZ that carries a scene reports it (Agent and Web agree).
+        has_object = facts.has_object or (
+            category is AssetCategory.OBJECT_INTERACTION
+            and (has_object_sidecar or dataset == "omomo")
         )
-        has_terrain = category is AssetCategory.TERRAIN_SCENE and (
-            has_terrain_sidecar or facts.has_terrain
+        has_terrain = facts.has_terrain or (
+            category is AssetCategory.TERRAIN_SCENE and has_terrain_sidecar
         )
         metadata: dict[str, Any] = {
             "recommended_backend": recommended_backend,

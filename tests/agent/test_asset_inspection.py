@@ -622,3 +622,89 @@ def test_directory_discovery_rejects_multiple_logical_clips(tmp_path: Path) -> N
 
     assert caught.value.code == "BUNDLE_AMBIGUOUS"
     assert caught.value.candidates == ("one.npz", "two.npz")
+
+
+def _scene_bundle(tmp_path: Path, name: str, motion, *, declared: AssetCategory, backend=None):
+    from hhtools.io.npz import save_npz
+
+    primary = tmp_path / "unified_npz" / f"{name}.npz"
+    save_npz(motion, primary)
+    relative = primary.relative_to(tmp_path).as_posix()
+    bundle = _bundle(
+        tmp_path,
+        primary=relative,
+        category=declared,
+        dataset="unified_npz",
+        files=[(relative, AssetFileRole.MOTION)],
+    )
+    if backend is not None:
+        bundle = bundle.model_copy(
+            update={"detected": AssetDetected(dataset="unified_npz", recommended_backend=backend)}
+        )
+    return primary, bundle
+
+
+def _object_motion(motion):
+    import dataclasses
+
+    from hhtools.core.scene import SceneObject
+
+    box = SceneObject(
+        name="box",
+        positions=np.zeros((motion.num_frames, 3), dtype=np.float32),
+        quaternions=np.tile(np.array([0, 0, 0, 1], dtype=np.float32), (motion.num_frames, 1)),
+        extents=np.array([0.3, 0.3, 0.3], dtype=np.float32),
+    )
+    return dataclasses.replace(motion, terrain=None, objects=[box])
+
+
+def test_unified_npz_with_terrain_is_a_terrain_scene(tmp_path: Path, synthetic_terrain_motion):
+    primary, bundle = _scene_bundle(
+        tmp_path, "hill", synthetic_terrain_motion, declared=AssetCategory.TERRAIN_SCENE
+    )
+
+    discovery = discover_primary(primary)
+    inspection = MotionAssetInspector().inspect(bundle, tmp_path)
+
+    assert discovery.dataset == "unified_npz"
+    assert discovery.category is AssetCategory.TERRAIN_SCENE
+    assert discovery.recommended_backend == backend_for_category(AssetCategory.TERRAIN_SCENE)
+    assert inspection.status is InspectionStatus.VALID, inspection.errors
+    assert inspection.category is AssetCategory.TERRAIN_SCENE
+    assert inspection.has_terrain and not inspection.has_object
+
+
+def test_unified_npz_with_objects_is_an_object_interaction(
+    tmp_path: Path, synthetic_terrain_motion
+):
+    motion = _object_motion(synthetic_terrain_motion)
+    primary, bundle = _scene_bundle(
+        tmp_path, "carry", motion, declared=AssetCategory.OBJECT_INTERACTION
+    )
+
+    discovery = discover_primary(primary)
+    inspection = MotionAssetInspector().inspect(bundle, tmp_path)
+
+    assert discovery.category is AssetCategory.OBJECT_INTERACTION
+    assert inspection.status is InspectionStatus.VALID, inspection.errors
+    assert inspection.category is AssetCategory.OBJECT_INTERACTION
+    assert inspection.has_object and not inspection.has_terrain
+
+
+def test_plain_registered_scene_clip_is_reported_as_a_scene_not_rejected(
+    tmp_path: Path, synthetic_terrain_motion
+):
+    """A bundle registered as plain motion before content promotion keeps working."""
+    _, bundle = _scene_bundle(
+        tmp_path,
+        "legacy",
+        synthetic_terrain_motion,
+        declared=AssetCategory.PLAIN_MOTION,
+        backend="newton",
+    )
+
+    inspection = MotionAssetInspector().inspect(bundle, tmp_path)
+
+    assert "BUNDLE_METADATA_MISMATCH" not in {error.code for error in inspection.errors}
+    assert inspection.category is AssetCategory.TERRAIN_SCENE
+    assert inspection.metadata["declared_category"] == "plain_motion"

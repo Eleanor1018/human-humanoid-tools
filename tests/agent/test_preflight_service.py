@@ -66,6 +66,7 @@ def _write_motion(
     *,
     frame_count: int = 48,
     frame_rate_hz: float = 30.0,
+    extra: dict[str, np.ndarray] | None = None,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     positions = np.zeros((frame_count, 2, 3), dtype=np.float32)
@@ -82,6 +83,7 @@ def _write_motion(
         parent_indices=np.array([-1, 0], dtype=np.int32),
         positions=positions,
         quaternions=quaternions,
+        **(extra or {}),
     )
 
 
@@ -220,6 +222,7 @@ def _setup(
     motion_frame_count: int = 48,
     motion_frame_rate_hz: float = 30.0,
     validation_recorded: bool = True,
+    motion_extra: dict[str, np.ndarray] | None = None,
 ) -> tuple[PreflightService, str, str, str | None]:
     motion_root = tmp_path / "motions"
     robot_root = tmp_path / "robots"
@@ -236,6 +239,7 @@ def _setup(
             motion_root / motion_name,
             frame_count=motion_frame_count,
             frame_rate_hz=motion_frame_rate_hz,
+            extra=motion_extra,
         )
     _write_robot(robot, scaler=scaler, scaler_text=scaler_text)
     calibration_id = (
@@ -1018,3 +1022,22 @@ def test_closed_scheduler_rejects_without_creating_a_plan(tmp_path: Path) -> Non
     assert response.error is not None
     assert response.error.code == "SCHEDULER_CLOSED"
     assert response.error.retryable is True
+
+
+def test_unified_npz_with_a_terrain_heightfield_cannot_run_on_a_flat_solver(
+    tmp_path: Path,
+) -> None:
+    """Scene content, not only the dataset name, decides the workflow category."""
+    service, motion_id, robot_id, _ = _setup(
+        tmp_path, motion_extra={"terrain_heightfield": np.zeros((4, 4), dtype=np.float32)}
+    )
+
+    default = service.preflight_retarget(_request(motion_id, robot_id))
+    flat = service.preflight_retarget(_request(motion_id, robot_id, backend="newton"))
+
+    assert default.status is PreflightStatus.READY
+    assert default.plan is not None
+    assert default.plan.backend in {"frax", "interaction_mesh"}
+    assert flat.status is PreflightStatus.REJECTED
+    assert flat.error is not None
+    assert flat.error.code == "BACKEND_INCOMPATIBLE"
