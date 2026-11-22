@@ -107,6 +107,21 @@ def _load_motion_any(path: Path):  # noqa: PLR0911 - format routing is branch-he
     )
 
 
+def _scene_progress_echo(label: str):
+    """Progress callback printing scene-solver stage boundaries to stderr."""
+    last: list[tuple[str, int]] = []
+
+    def _cb(stage: str, done: int, total: int) -> None:
+        key = (stage, 1 if done >= total else 0)
+        if last and last[-1] == key:
+            return
+        last.append(key)
+        state = "done" if done >= total else "start"
+        typer.echo(f"[{label}] {stage} {state} ({done}/{total})", file=sys.stderr)
+
+    return _cb
+
+
 def _bvh_dialect_reference(motion) -> str:
     """Map a Mixamo/SOMA/… BVH dialect to a calibration reference name."""
     from hhtools.io.bvh_detect import infer_bvh_dataset_from_joints
@@ -284,6 +299,7 @@ def retarget(
         load_calibration,
         resolve_preset_calibration_file,
     )
+    from hhtools.retarget.frax_backend import motion_has_scene
     from hhtools.robot.loader import load_robot
     from hhtools.robot.registry import get as get_preset
     from hhtools.robot.retarget_profile import (
@@ -395,53 +411,71 @@ def retarget(
             motion.positions = motion.positions[:limit_frames]
             motion.quaternions = motion.quaternions[:limit_frames]
 
-        # Build the scaler config from the robot's saved calibration +
-        # this motion's frame-0 pose (the latter drives the yaw-
-        # preserving root offset).  All per-limb scales are derived
-        # from the URDF's FK at the calibrated joint configuration;
-        # see :mod:`hhtools.retarget.calibration`.
-        try:
-            scaler_cfg = build_scaler_config_for_robot(
-                calibration, robot_model, motion, human_height=human_height,
-            )
-        except Exception as err:  # noqa: BLE001
-            errors.append((src, f"calibration: {err}"))
-            continue
+        retargeted = None
+        if backend == "frax" and motion_has_scene(motion):
+            # Terrain / object clips go to the FRAX scene solver (it grounds the
+            # robot on the scene itself), one pipeline per clip.
+            from hhtools.retarget.frax_backend import FraxScenePipeline
 
-        # One pipeline per run; we don't reset between clips because the
-        # Newton model / IK solver only cares about the robot, not the
-        # source hierarchy.  The scaler is re-created per motion internally.
-        if pipeline is None:
-            if backend == "frax":
-                from hhtools.retarget.frax_backend import FraxPipeline
-
-                pipeline = FraxPipeline(
+            try:
+                retargeted = FraxScenePipeline.from_calibration(
                     robot_model,
-                    scaler_config=scaler_cfg,
-                    feet_stabilizer_config=feet_stabilizer_config,
-                    pipeline_config=pipeline_cfg,
+                    motion,
+                    str(cal_path),
                     human_height=human_height,
                     frax_config=frax_config,
+                ).run(motion, progress_callback=_scene_progress_echo("frax-scene"))
+            except Exception as err:  # noqa: BLE001
+                errors.append((src, f"solve: {err}"))
+                continue
+        if retargeted is None:
+            # Build the scaler config from the robot's saved calibration +
+            # this motion's frame-0 pose (the latter drives the yaw-
+            # preserving root offset).  All per-limb scales are derived
+            # from the URDF's FK at the calibrated joint configuration;
+            # see :mod:`hhtools.retarget.calibration`.
+            try:
+                scaler_cfg = build_scaler_config_for_robot(
+                    calibration, robot_model, motion, human_height=human_height,
                 )
+            except Exception as err:  # noqa: BLE001
+                errors.append((src, f"calibration: {err}"))
+                continue
+
+            # One pipeline per run; we don't reset between clips because the
+            # Newton model / IK solver only cares about the robot, not the
+            # source hierarchy.  The scaler is re-created per motion internally.
+            if pipeline is None:
+                if backend == "frax":
+                    from hhtools.retarget.frax_backend import FraxPipeline
+
+                    pipeline = FraxPipeline(
+                        robot_model,
+                        scaler_config=scaler_cfg,
+                        feet_stabilizer_config=feet_stabilizer_config,
+                        pipeline_config=pipeline_cfg,
+                        human_height=human_height,
+                        frax_config=frax_config,
+                    )
+                else:
+                    from hhtools.retarget.newton_basic import NewtonBasicPipeline
+
+                    pipeline = NewtonBasicPipeline(
+                        robot_model,
+                        scaler_config=scaler_cfg,
+                        feet_stabilizer_config=feet_stabilizer_config,
+                        pipeline_config=pipeline_cfg,
+                        human_height=human_height,
+                        configure_warp=False,
+                    )
             else:
-                from hhtools.retarget.newton_basic import NewtonBasicPipeline
+                pipeline.scaler_config = scaler_cfg
 
-                pipeline = NewtonBasicPipeline(
-                    robot_model,
-                    scaler_config=scaler_cfg,
-                    feet_stabilizer_config=feet_stabilizer_config,
-                    pipeline_config=pipeline_cfg,
-                    human_height=human_height,
-                    configure_warp=False,
-                )
-        else:
-            pipeline.scaler_config = scaler_cfg
-
-        try:
-            retargeted = pipeline.run(motion)
-        except Exception as err:  # noqa: BLE001
-            errors.append((src, f"solve: {err}"))
-            continue
+            try:
+                retargeted = pipeline.run(motion)
+            except Exception as err:  # noqa: BLE001
+                errors.append((src, f"solve: {err}"))
+                continue
 
         if output_is_file:
             out_path = output
@@ -594,12 +628,13 @@ def interaction_mesh_run(
     ),
     limit_frames: int | None = typer.Option(None, "--limit-frames"),
     solver: str = typer.Option(
-        "osqp",
+        "auto",
         "--solver",
         help=(
-            "Scene solver: 'osqp' (MuJoCo SQP, the default) or 'frax' "
-            "(experimental FRAX differential IK with terrain; needs the "
-            "retarget-frax extra)."
+            "Scene solver: 'auto' (default: 'frax' when the retarget-frax extra is "
+            "installed, otherwise 'osqp'), 'frax' (FRAX scene solver: differential "
+            "IK with terrain and object non-penetration) or 'osqp' (MuJoCo "
+            "interaction-mesh SQP)."
         ),
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
@@ -610,8 +645,13 @@ def interaction_mesh_run(
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     # Before the imports below, which already need some of FRAX's dependencies.
-    if solver not in ("osqp", "frax"):
-        raise typer.BadParameter(f"--solver must be 'osqp' or 'frax', got {solver!r}")
+    solver = (solver or "auto").strip().lower()
+    if solver not in ("auto", "osqp", "frax"):
+        raise typer.BadParameter(f"--solver must be 'auto', 'osqp' or 'frax', got {solver!r}")
+    if solver == "auto":
+        from hhtools.retarget.frax_backend import frax_available
+
+        solver = "frax" if frax_available() else "osqp"
     if solver == "frax":
         from hhtools.retarget.frax_backend import missing_frax_dependencies
 
@@ -664,14 +704,15 @@ def interaction_mesh_run(
             pipe = InteractionMeshPipeline.from_calibration(
                 robot_model, motion, str(cal_path), human_height=human_height,
             )
-        ret = pipe.run(motion)
+        ret = pipe.run(motion, progress_callback=_scene_progress_echo(f"interaction-mesh/{solver}"))
         out_path = output if output_is_file else output / f"{motion.name or src.stem}.csv"
         from hhtools.io.export_bundle import bake_export_root_z
 
         joint_q, lift = bake_export_root_z(robot_model, ret, source_motion=motion)
         meta_out = {
             "source": str(src),
-            "retarget_backend": "interaction_mesh",
+            # The solver that ran: "frax" for the FRAX scene solver.
+            "retarget_backend": "frax" if solver == "frax" else "interaction_mesh",
             **{k: str(v) for k, v in ret.meta.items()},
         }
         if abs(lift) > 1e-12:
