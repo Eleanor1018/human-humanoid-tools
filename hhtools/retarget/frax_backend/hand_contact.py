@@ -236,7 +236,8 @@ def project_hand_targets(
     target lies ``depth`` inside the surface (negative: outside).  A reference target already
     deeper than that stays where it is (it presses the hand against the object), unless
     ``push_out``.  The per-frame translation is then ramped over
-    ``ramp_s`` seconds (:func:`_ramp`), so the targets do not jump.
+    ``ramp_s`` seconds (:func:`_ramp`), so the targets do not jump; frames whose reference
+    target is already deeper than ``depth`` keep no translation from the ramp either.
 
     Returns the new targets and, per hand, ``contact_frames`` (frames in contact),
     ``shifted_frames`` (frames moved, ramp included), ``max_correction_m`` (largest translation
@@ -259,6 +260,10 @@ def project_hand_targets(
             frames = frames_all[move]
             raw[move] = _surface_shift(sdfs, obj_pos, obj_rot, tip, frames, which[move], -depth)
         shift = _ramp(raw, width) if move.any() and width > 1 else raw
+        if not push_out:
+            # A reference target already deeper than ``depth`` stays where it is: the ramp must
+            # not carry a neighbour's correction into it (that would push it further in).
+            shift[on & ~move] = 0.0
         out[:, idx] += shift[:, None, :]
         moved = np.any(shift != 0.0, axis=1)
         info[name] = {

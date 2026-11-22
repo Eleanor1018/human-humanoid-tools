@@ -426,6 +426,16 @@ def test_a_target_already_inside_keeps_pressing_unless_pushed_out() -> None:
     assert np.abs(out[15, 2, 1:]).max() < 1e-6  # along the field gradient: straight out
 
 
+def test_the_ramp_does_not_push_a_target_that_is_already_deep_further_in() -> None:
+    """Frame 0 is 2 cm off the face (moved in), frames 1-4 are 5 cm inside (left alone)."""
+    sdfs, pos, rot = _box_world(5)
+    tip_x = np.array([BOX_HALF + 0.02] + [BOX_HALF - 0.05] * 4)
+    targets = _targets(tip_x)
+    out, _ = project_hand_targets(targets, _hand_points(), sdfs, pos, rot, depth=-0.003, fps=30.0)
+    assert out[0, 2, 0] == pytest.approx(BOX_HALF + 0.003, abs=1.5e-3)
+    np.testing.assert_array_equal(out[1:], targets[1:])
+
+
 def test_the_target_can_be_placed_inside_the_surface() -> None:
     """``depth`` is how far inside the face the reference target is put: 2 cm off -> 1 cm in."""
     sdfs, pos, rot = _box_world(30)

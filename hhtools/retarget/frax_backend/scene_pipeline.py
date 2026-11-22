@@ -163,8 +163,11 @@ class FraxSceneConfig:
         object_point_margin: Clearance kept between a hand surface point and an object (m).
         object_points_per_body: Surface points sampled per hand body.
         object_hand_sphere_margin: Clearance of the hand spheres when the hand points are on (m).
-        object_snap_tolerance: How much deeper (m) a final root snap (terrain snap, clip floor
-            snap) may push any robot-object pair than it was before the snap.  With the hand points
+        object_snap_tolerance: How far inside an object (m) a final root snap (terrain snap,
+            clip floor snap) may leave any robot-object pair; a pair that already penetrated by
+            more must not get deeper.  A clear pair may approach the object freely up to that
+            depth (requiring it to stay as far as before would block any snap that brings a
+            hand closer to an object, however far away it starts).  With the hand points
             resting on an object at 0 margin, lifting a clip 1 cm out of the floor moves a point on
             a carried box's side about 0.1 mm deeper; a 0.1 mm tolerance blocked that lift and left
             the feet 5-9 mm in the floor on the OmniContact carries.
