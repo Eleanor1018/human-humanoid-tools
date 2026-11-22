@@ -41,8 +41,13 @@ def _entry(stem: str) -> dict:
     }
 
 
-def _run_batch(tmp_path: Path, monkeypatch, body: dict):
-    """Run a batch whose motions are fakes; return (solved_backends, chunk_stems, job)."""
+def _run_batch(tmp_path: Path, monkeypatch, body: dict, *, succeed: bool = False):
+    """Run a batch whose motions are fakes; return (solved_backends, chunk_stems, job).
+
+    With ``succeed`` the fake solvers return results and exports are written, so
+    the whole job (summary, per-entry solvers, progress) completes.  The job's
+    progress values are recorded on ``job.progress_log``.
+    """
     from hhtools.retarget import frax_backend
     from hhtools.retarget.newton_basic import batch_limits
     from hhtools.services import motion_library_links as links
@@ -64,11 +69,32 @@ def _run_batch(tmp_path: Path, monkeypatch, body: dict):
 
     def fake_single(_model, _robot, motion, _ref, backend, *_a, **_k):
         solved.append((motion.name, backend))
-        raise RuntimeError("stop")
+        if not succeed:
+            raise RuntimeError("stop")
+        return object()
 
     def fake_chunk(loaded, *, failure_log, **_k):
         chunk_stems.extend(e["stem"] for e, _m, _en in loaded)
-        return [], failure_log
+        if not succeed:
+            return [], failure_log
+        return [(e, m, en, object()) for e, m, en in loaded], failure_log
+
+    def fake_write_export(_ret, _model, _motion, out_dir, *, stem, subdir=None, **_k):
+        target = Path(out_dir) / (subdir or "") / f"{stem}.csv"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("x", encoding="utf-8")
+        return target
+
+    progress_log: list[float] = []
+    real_progress = batch_routes._set_batch_job_progress
+
+    def recording_progress(job, *args, **kwargs):
+        real_progress(job, *args, **kwargs)
+        progress_log.append(job.progress)
+
+    monkeypatch.setattr(batch_routes, "_set_batch_job_progress", recording_progress)
+    monkeypatch.setattr(batch_runtime, "_set_batch_job_progress", recording_progress)
+    monkeypatch.setattr(batch_runtime, "_write_export", fake_write_export)
 
     monkeypatch.setattr(batch_routes, "_load_batch_motion", fake_load)
     monkeypatch.setattr(batch_runtime, "_load_batch_motion", fake_load)
@@ -86,6 +112,7 @@ def _run_batch(tmp_path: Path, monkeypatch, body: dict):
             assert time.monotonic() < deadline, "batch job did not finish"
             time.sleep(0.005)
         job = state.jobs[job_id]
+    job.progress_log = progress_log
     assert job.status == "done", job.error
     return solved, chunk_stems, job
 
@@ -101,15 +128,63 @@ def test_default_batch_runs_scene_entry_on_scene_solver(tmp_path: Path, monkeypa
     assert chunk_stems == ["plain_a"]
 
 
-def test_explicit_newton_batch_warns_for_scene_entry(tmp_path: Path, monkeypatch) -> None:
+def test_explicit_newton_batch_defers_scene_entries_with_the_warning(
+    tmp_path: Path, monkeypatch
+) -> None:
     solved, chunk_stems, job = _run_batch(
         tmp_path,
         monkeypatch,
         {"backend": "newton", "entries": [_entry("plain_a"), _entry("scene_b")]},
     )
 
-    assert solved == []
-    assert chunk_stems == ["plain_a", "scene_b"]
+    # The scene never reaches the GPU chunk; it runs alone on the named backend.
+    assert chunk_stems == ["plain_a"]
+    assert solved == [("scene_b", "newton")]
     warnings = job.result["warnings"]
     assert [w["stem"] for w in warnings] == ["scene_b"]
     assert "ignores the terrain" in warnings[0]["warning"]
+
+
+def test_mixed_batch_records_the_solver_that_ran_per_entry(tmp_path: Path, monkeypatch) -> None:
+    _solved, _chunks, job = _run_batch(
+        tmp_path,
+        monkeypatch,
+        {"entries": [_entry("plain_a"), _entry("plain_c"), _entry("scene_b")]},
+        succeed=True,
+    )
+
+    assert {item["stem"]: item["backend"] for item in job.result["solvers"]} == {
+        "plain_a": "newton",
+        "plain_c": "newton",
+        "scene_b": "interaction_mesh",
+    }
+    assert job.result["solver_mode"] == "mixed"
+    assert job.result["clip_count"] == 3
+    assert job.progress_log == sorted(job.progress_log)
+
+
+def test_all_scene_batch_without_frax_never_reports_gpu_parallel_newton(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _solved, chunks, job = _run_batch(
+        tmp_path,
+        monkeypatch,
+        {"entries": [_entry("scene_a"), _entry("scene_b")], "batch_size": 8},
+        succeed=True,
+    )
+
+    assert chunks == []
+    assert {item["backend"] for item in job.result["solvers"]} == {"interaction_mesh"}
+    assert job.result["solver_mode"] == "per-clip"
+    assert job.progress_log == sorted(job.progress_log)
+
+
+def test_plain_batch_reports_gpu_parallel_newton(tmp_path: Path, monkeypatch) -> None:
+    _solved, _chunks, job = _run_batch(
+        tmp_path,
+        monkeypatch,
+        {"entries": [_entry("plain_a"), _entry("plain_b")], "batch_size": 8},
+        succeed=True,
+    )
+
+    assert job.result["solver_mode"] == "GPU-parallel Newton"

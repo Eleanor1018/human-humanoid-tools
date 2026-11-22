@@ -11,6 +11,7 @@ from hhtools.application.motions import _load_batch_motion
 from hhtools.application.progress import (
     _BATCH_CHUNK_EXPORT_FRAC,
     _BATCH_CHUNK_IK_FRAC,
+    _BATCH_ENTRIES_DONE_PROGRESS,
     _BATCH_EXPORT_WORKERS,
     _batch_chunk_export_progress,
     _batch_chunk_ik_progress,
@@ -227,6 +228,7 @@ def _run_batch_entries_sequential(
     t_end: float | None = None,
     done_offset: int = 0,
     total_override: int | None = None,
+    solver_log: list[dict] | None = None,
 ) -> BatchFailureLog | None:
     """Run ``entries`` one after another through the single-clip path.
 
@@ -280,7 +282,7 @@ def _run_batch_entries_sequential(
             _set_batch_job_progress(
                 job,
                 f"加载失败 {entry_dict.get('stem', '?')} · {i + 1}/{total}",
-                (i + 1) / max(1, total),
+                min(_BATCH_ENTRIES_DONE_PROGRESS, (i + 1) / max(1, total)),
                 batch_t0,
                 clip_progress=1.0,
             )
@@ -316,11 +318,19 @@ def _run_batch_entries_sequential(
             _set_batch_job_progress(
                 job,
                 f"重定向失败 {entry_dict.get('stem', '?')} · {i + 1}/{total}",
-                (i + 1) / max(1, total),
+                min(_BATCH_ENTRIES_DONE_PROGRESS, (i + 1) / max(1, total)),
                 batch_t0,
                 clip_progress=1.0,
             )
             continue
+        if solver_log is not None:
+            solver_log.append(
+                {
+                    "stem": str(entry_dict.get("stem", "?")),
+                    "backend": entry_backend,
+                    "gpu_parallel": False,
+                }
+            )
         try:
             subdir = _batch_export_subdir(entry_dict)
             out_path = _write_export(
@@ -342,7 +352,7 @@ def _run_batch_entries_sequential(
             _set_batch_job_progress(
                 job,
                 f"完成 {entry_dict.get('stem', '?')} · {i + 1}/{total}",
-                (i + 1) / max(1, total),
+                min(_BATCH_ENTRIES_DONE_PROGRESS, (i + 1) / max(1, total)),
                 batch_t0,
                 clip_progress=1.0,
             )
@@ -362,14 +372,14 @@ def _run_batch_entries_sequential(
             _set_batch_job_progress(
                 job,
                 f"失败 {entry_dict.get('stem', '?')} · {i + 1}/{total}",
-                (i + 1) / max(1, total),
+                min(_BATCH_ENTRIES_DONE_PROGRESS, (i + 1) / max(1, total)),
                 batch_t0,
                 clip_progress=1.0,
             )
     _set_batch_job_progress(
         job,
         f"批量完成 · {total}/{total}",
-        1.0,
+        _BATCH_ENTRIES_DONE_PROGRESS,
         batch_t0,
         clip_progress=1.0,
     )
