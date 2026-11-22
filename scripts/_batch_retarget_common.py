@@ -143,6 +143,14 @@ def process_sequence(seq_id: str, cfg: BatchClipConfig) -> Path:
             robot_model, motion, str(cal_path), human_height=cfg.human_height,
         )
         retargeted = pipe.run(motion)
+    elif backend == "frax" and motion_has_scene(motion):
+        # Terrain / object clips: the FRAX scene solver (interaction-mesh front half).
+        from hhtools.retarget.frax_backend import FraxScenePipeline
+
+        pipe = FraxScenePipeline.from_calibration(
+            robot_model, motion, str(cal_path), human_height=cfg.human_height,
+        )
+        retargeted = pipe.run(motion)
     elif backend in ("newton", "frax"):
         from hhtools.retarget.calibration import load_calibration
         from hhtools.robot.retarget_profile import (
@@ -220,7 +228,7 @@ def add_common_args(
     p: argparse.ArgumentParser,
     *,
     default_reference: str | None = None,
-    default_backend: str = "interaction_mesh",
+    default_backend: str = "scene",
     datasets: Sequence[str] | None = None,
 ) -> None:
     p.add_argument("--robot", required=True, help="Registered robot preset name (e.g. rp1).")
@@ -240,7 +248,12 @@ def add_common_args(
         default=default_reference,
         help="Calibration reference (default: dataset-specific).",
     )
-    if default_backend == "ik":
+    if default_backend == "scene":
+        # Terrain / object clips: FRAX scene solver when installed, else interaction-mesh.
+        from hhtools.services.routing import default_scene_backend
+
+        default_backend = default_scene_backend()
+    elif default_backend == "ik":
         # Plain motion: FRAX when its optional extra is installed, else Newton.
         from hhtools.retarget.frax_backend import default_ik_backend
 
@@ -251,8 +264,9 @@ def add_common_args(
         default=default_backend,
         help=(
             f"Retarget backend (default here: {default_backend}). frax is the "
-            "default IK solver when the retarget-frax extra is installed; newton is "
-            "the fallback."
+            "default solver (plain IK, and the scene solver for terrain / object "
+            "clips) when the retarget-frax extra is installed; newton (plain "
+            "motion) and interaction_mesh (scene clips) are the fallbacks."
         ),
     )
     p.add_argument("--human-height", type=float, default=1.7, help="Subject height in metres.")

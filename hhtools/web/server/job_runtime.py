@@ -197,8 +197,17 @@ class WebJobRuntime:
             }
 
         backend = str(request.get("backend") or "newton").strip().lower()
-        if backend in ("newton", "frax") and any(
-            Path(path).suffix.lower() != ".npz" for path in source_paths
+        # A terrain / object clip on FRAX runs the FRAX scene solver, which the CLI
+        # exposes as ``interaction-mesh run --solver frax``.
+        has_scene = bool(request.get("has_scene")) or (
+            isinstance(entries, list)
+            and any(isinstance(e, dict) and e.get("has_scene") for e in entries)
+        )
+        frax_scene = backend == "frax" and has_scene
+        if (
+            backend in ("newton", "frax")
+            and not frax_scene
+            and any(Path(path).suffix.lower() != ".npz" for path in source_paths)
         ):
             return {
                 "available": False,
@@ -230,8 +239,10 @@ class WebJobRuntime:
         human_height = float(request.get("human_height") or 1.7)
         ik_iterations = int(request.get("ik_iterations") or 24)
 
-        if backend == "interaction_mesh":
+        if backend == "interaction_mesh" or frax_scene:
             args = ["hhtools", "retarget", "interaction-mesh", "run", *source_paths]
+            if frax_scene:
+                args.extend(["--solver", "frax"])
             args.extend(
                 [
                     "--robot",

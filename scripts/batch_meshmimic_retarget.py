@@ -1,4 +1,4 @@
-"""Batch-retarget meshmimic family clips (terrain + interaction-mesh).
+"""Batch-retarget meshmimic family clips (terrain; FRAX scene solver, interaction-mesh fallback).
 
 Supported ``--dataset`` values:
 
@@ -64,7 +64,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     add_common_args(
         p,
         default_reference=None,
-        default_backend="interaction_mesh",
+        default_backend="scene",
         datasets=tuple(_DATASET_ALIASES),
     )
     return p.parse_args(argv)

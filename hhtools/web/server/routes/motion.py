@@ -24,7 +24,7 @@ from hhtools.application.motions import (
 from hhtools.application.previews import _load_robot_export_for_web
 from hhtools.application.state import Job, _snapshot_job_request
 from hhtools.io.export_bundle import ensure_export_path
-from hhtools.services.routing import default_ik_backend
+from hhtools.services.routing import default_backend_for_motion, motion_has_scene
 from hhtools.web.server.boundary import _safe_upload_directory_name
 from hhtools.web.server.library_runtime import (
     _DATASET_TO_REFERENCE,
@@ -138,10 +138,11 @@ def register_motion_routes(
         if extra:
             payload.update(extra)
         # Hint the front-end which retarget backend fits this clip: anything
-        # with terrain / interaction objects defaults to interaction-mesh, plain
-        # motion to the default IK backend (FRAX when installed).
-        has_scene = bool(motion.terrain is not None or motion.objects)
-        payload["suggested_backend"] = "interaction_mesh" if has_scene else default_ik_backend()
+        # with terrain / interaction objects defaults to the FRAX scene solver
+        # (interaction-mesh when FRAX is not installed), plain motion to the
+        # default IK backend (FRAX when installed, otherwise Newton).
+        has_scene = motion_has_scene(motion)
+        payload["suggested_backend"] = default_backend_for_motion(has_scene)
 
         if job is not None:
             job.message = "完成"
