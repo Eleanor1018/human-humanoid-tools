@@ -132,7 +132,7 @@ def test_group_inside_box_side_moves_horizontally_away_and_stays_rigid():
     terrain = _box_terrain()
     # The foot points toward +x (box): the toe is 6 cm into the box face.
     pos = _group(1, heel_x=BOX_X0 - 0.16 + 0.06)
-    new, info = project_foot_targets(pos, _foot_points(), terrain, fps=30.0)
+    new, info = project_foot_targets(pos, _foot_points(), terrain, surface="columns", fps=30.0)
     delta = new[0] - pos[0]
     foot = [1, 2, 3]
     assert np.allclose(delta[foot], delta[foot][0])  # rigid
@@ -218,8 +218,10 @@ def _box_under_feet(motion):
     return motion
 
 
-def _targets(pipe, motion, flag):
-    pipe.cfg = dataclasses.replace(pipe.cfg, terrain_foot_target_projection=flag)
+def _targets(pipe, motion, flag, surface="columns"):
+    pipe.cfg = dataclasses.replace(
+        pipe.cfg, terrain_foot_target_projection=flag, terrain_foot_target_surface=surface
+    )
     return pipe.prepare_scene_targets(motion, mj_model=MujocoScene.from_robot(pipe._model).model)
 
 
@@ -282,7 +284,9 @@ def test_hook_keeps_the_unprojected_source_targets(pipe_motion):
 def test_interaction_mesh_run_reports_projection_and_source_alignment(pipe_motion):
     pipe, motion = pipe_motion
     _box_under_feet(motion)
-    pipe.cfg = dataclasses.replace(pipe.cfg, terrain_foot_target_projection=True)
+    pipe.cfg = dataclasses.replace(
+        pipe.cfg, terrain_foot_target_projection=True, terrain_foot_target_surface="columns"
+    )
     meta = pipe.run(motion).meta
     info = meta["foot_target_projection"]
     assert info and any(i["frames_shifted"] for i in info.values())
@@ -345,7 +349,21 @@ def test_search_never_exceeds_max_shift():
     np.testing.assert_array_equal(new, pos)
 
 
-def test_non_finite_cell_is_floor_like_frax():
+def test_non_finite_cell_is_floor_like():
+    hf = np.zeros((8, 8))
+    hf[2, 2] = np.nan
+    terrain = _terrain(hf)
+    pos = np.array([[[2 * DX + 0.01, 2 * DX, 0.05]]])
+    d = column_signed_distance(pos, terrain)
+    assert d.item() == pytest.approx(0.05)
+    new, info = project_foot_targets(pos, _left_ankle(), terrain, fps=30.0)
+    np.testing.assert_array_equal(new, pos)
+    assert info["left"]["frames_shifted"] == 0
+
+
+def test_non_finite_cell_matches_frax_terrain_grid():
+    pytest.importorskip("frax")
+    pytest.importorskip("elastiqp")
     from hhtools.retarget.frax_backend.terrain import build_terrain_grid
 
     hf = np.zeros((8, 8))
@@ -355,7 +373,185 @@ def test_non_finite_cell_is_floor_like_frax():
     grid = build_terrain_grid(hf, terrain.min_point, terrain.dx, shape_bucket=1)
     d = column_signed_distance(pos, terrain)
     assert d.item() == pytest.approx(float(grid.signed_distance(pos[0]).item()), abs=1e-6)
-    assert d.item() == pytest.approx(0.05)
-    new, info = project_foot_targets(pos, _left_ankle(), terrain, fps=30.0)
-    np.testing.assert_array_equal(new, pos)
-    assert info["left"]["frames_shifted"] == 0
+
+
+# -- continuity, interpolated surface, bounds, run-owned targets, returned-motion alignment --
+
+
+def _terrain_h(h, dx):
+    h = np.asarray(h, dtype=np.float32)
+    return TerrainHeightfield(
+        hf=h, hf_maxmin=np.stack([h, h], -1), min_point=np.zeros(2, dtype=np.float32), dx=dx
+    )
+
+
+def _project_1(terrain, xyz, **kw):
+    pos = np.array(xyz, dtype=float).reshape(-1, 1, 3)
+    new, info = project_foot_targets(pos, _left_ankle(), terrain, fps=30.0, **kw)
+    return pos[:, 0], new[:, 0], info["left"]
+
+
+def _wall():
+    h = np.zeros((11, 11))
+    h[5, :] = 0.5  # x in [0.9, 1.1], every y; dx = 0.2
+    return _terrain_h(h, 0.2)
+
+
+@pytest.mark.parametrize("surface", ["columns", "both"])
+def test_exit_stays_continuous_when_the_source_crosses_a_wall_centre(surface):
+    terrain = _wall()
+    xyz = [(0.999, 1.0, 0.05)] * 10 + [(1.001, 1.0, 0.05)] * 10
+    src, new, info = _project_1(terrain, xyz, surface=surface)
+    assert info["frames_uncleared"] == 0
+    assert column_signed_distance(new, terrain).min() >= 0.002 - 1e-9
+    # Independent of the ramp: the shortest exits on either side of the centre are opposite
+    # (0.1025 m each way), a single common exit exists, and the target must not flip faces.
+    assert np.linalg.norm(np.diff(new, axis=0), axis=1).max() < 0.05, info
+
+
+def test_clearance_holds_against_the_interpolated_surface_on_a_step_flank():
+    h = np.zeros((30, 30))
+    h[10:, :] = 0.30  # samples 0 at x = 0.36 and 0.30 at x = 0.40: column face at x = 0.38
+    terrain = _terrain_h(h, DX)
+    xyz = [(0.386, 0.40, 0.05)]
+    _, cols, _ = _project_1(terrain, xyz, surface="columns")
+    # Column exit: 8 mm to the face + 2 mm clearance on the 2.5 mm step grid.
+    assert cols[0, 0] == pytest.approx(0.386 - 0.010)
+    surf_cols = np.interp(cols[0, 0], [0.36, 0.40], [0.0, 0.30])
+    assert cols[0, 2] < surf_cols  # 7 cm under the interpolated surface (0.12 m)
+    _, both, info = _project_1(terrain, xyz)  # default surface="both"
+    assert info["frames_uncleared"] == 0
+    surf = np.interp(both[0, 0], [0.36, 0.40], [0.0, 0.30])
+    assert both[0, 2] - surf >= 0.002 - 1e-9
+    assert column_signed_distance(both, terrain).min() >= 0.002 - 1e-9
+
+
+def test_invalid_surface_is_rejected():
+    with pytest.raises(ValueError):
+        _project_1(_wall(), [(1.0, 1.0, 0.05)], surface="mesh")
+
+
+def test_uncleared_frame_stays_put_next_to_a_shifted_neighbour():
+    hf = np.zeros((70, 70))
+    hf[0:30, :] = 5.0  # slab x in [-0.02, 1.18]
+    hf[40, 10] = 0.30  # C: x in [1.58, 1.62], y in [0.38, 0.42]
+    terrain = _terrain(hf)
+    xyz = [(1.614, 0.40, 0.05), (0.20, 1.40, 1.00)]  # frame 1: 0.22 m from the slab face
+    src, new, info = _project_1(terrain, xyz, max_shift=0.03)
+    assert info["frames_uncleared"] == 1
+    assert info["frames_shifted"] == 1
+    assert column_signed_distance(new[:1], terrain).min() >= 0.002 - 1e-9
+    np.testing.assert_array_equal(new[1], src[1])
+
+
+def test_far_off_grid_dent_below_the_floor_is_not_a_collision():
+    terrain = _terrain(np.zeros((8, 8)))
+    p = np.array([[-4.0, 0.12, -0.001], [-4.0, 0.12, -0.1]])
+    # Off the grid the floor plane is the only solid: depth is vertical.
+    np.testing.assert_allclose(column_signed_distance(p, terrain), [-0.001, -0.1], atol=1e-9)
+    src, new, info = _project_1(terrain, p[:1])
+    np.testing.assert_array_equal(new, src)
+    assert info["frames_shifted"] == 0
+
+
+def test_step_grid_never_exceeds_a_sub_step_limit():
+    hf = np.zeros((30, 30))
+    hf[10:20, :20] = 0.30
+    cap = 0.0025 * (1 - 5e-10)
+    src, new, info = _project_1(
+        _terrain(hf), [(0.3802, 0.30, 0.05)],
+        max_shift=cap, step=0.0025, trigger=0.0001, ramp_s=0.0, surface="columns",
+    )  # fmt: skip
+    assert info["max_shift_m"] <= cap
+    assert info["frames_uncleared"] == 1
+
+
+def test_ramped_shift_obeys_the_vector_budget_across_axis_changes():
+    terrain = _wall()
+    # +x exits (0.100) and +z exits (0.100) in adjacent frames: the componentwise ramp
+    # envelope would give (0.1, 0, 0.1), norm 0.141.
+    xyz = [(1.003, 1.0, 0.399), (1.0, 1.0, 0.403)]
+    src, new, info = _project_1(terrain, xyz, max_shift=0.1, surface="columns")
+    assert info["frames_uncleared"] == 0
+    assert column_signed_distance(new, terrain).min() >= 0.002 - 1e-9
+    assert np.linalg.norm(new - src, axis=1).max() <= 0.1 + 1e-9, info
+
+
+def test_fallback_keeps_the_shift_within_the_budget_after_capping():
+    terrain = _wall()
+    xyz = [(1.003, 1.0, 0.399)] * 3 + [(1.0, 1.0, 0.403)] * 3
+    src, new, info = _project_1(terrain, xyz, max_shift=0.1, surface="columns")
+    assert np.linalg.norm(new - src, axis=1).max() <= 0.1 + 1e-9
+    assert info["max_shift_m"] <= 0.1 + 1e-9
+
+
+def test_scene_targets_belong_to_the_run_that_reports_them(pipe_motion):
+    pipe, motion = pipe_motion
+    _box_under_feet(motion)
+    pipe.cfg = dataclasses.replace(pipe.cfg, terrain_foot_target_surface="columns")
+    baseline = pipe.run(motion).meta["foot_target_projection"]
+    assert baseline and any(i["frames_shifted"] for i in baseline.values())
+
+    other = dataclasses.replace(
+        motion, positions=motion.positions[:1], quaternions=motion.quaternions[:1], terrain=None
+    )
+    mj = MujocoScene.from_robot(pipe._model).model
+    nested = []
+
+    def callback(stage, cur, total):
+        if stage == "precompute" and not nested:
+            nested.append(pipe.precompute_laplacian_targets(other, mj_model=mj))
+
+    meta = pipe.run(motion, progress_callback=callback).meta
+    assert len(nested) == 1 and len(nested[0]) == 5 and len(nested[0][0]) == 1
+    assert meta["foot_target_projection"] == baseline
+    assert not hasattr(pipe, "_last_scene_targets")
+
+
+def _fk_points(model, joint_q, points):
+    import mujoco
+
+    data = mujoco.MjData(model)
+    out = []
+    for row in joint_q:
+        data.qpos[:] = model.qpos0
+        data.qpos[:3] = row[:3]
+        data.qpos[3:7] = row[[6, 3, 4, 5]]  # xyzw -> wxyz
+        data.qpos[7:] = row[7:]
+        mujoco.mj_forward(model, data)
+        out.append(
+            [
+                data.body(p.body_name).xpos
+                + data.body(p.body_name).xmat.reshape(3, 3) @ np.asarray(p.local_offset)
+                for p in points
+            ]
+        )
+    return np.asarray(out)
+
+
+def test_interaction_mesh_alignment_is_measured_on_the_returned_motion(pipe_motion, monkeypatch):
+    from hhtools.robot import retarget_profile
+
+    pipe, motion = pipe_motion
+    _box_under_feet(motion)
+    pipe.cfg = dataclasses.replace(pipe.cfg, terrain_foot_target_surface="columns")
+    mj = MujocoScene.from_robot(pipe._model).model
+    st = pipe.prepare_scene_targets(motion, mj_model=mj)
+    plain = pipe.run(motion)
+
+    def shift_root(q, *args, **kwargs):
+        out = np.array(q, copy=True)
+        out[:, 0] += 0.25
+        return out
+
+    monkeypatch.setattr(retarget_profile, "apply_upper_body_roll_narrowing_post_ik", shift_root)
+    edited = pipe.run(motion)
+    assert edited.joint_q.shape[1] == mj.nq  # free joint + scalar hinges only
+    pts = _fk_points(mj, edited.joint_q, st.robot_points)
+    for key, ref in (("alignment", st.positions), ("alignment_source", st.source_positions)):
+        err = np.linalg.norm(pts - ref, axis=-1)
+        assert edited.meta[f"{key}_mean_m"] == pytest.approx(err.mean(), abs=1e-5)
+        assert edited.meta[f"{key}_max_m"] == pytest.approx(err.max(), abs=1e-5)
+    # The forced edit is visible in the report (it is not the solver trajectory's residual).
+    plain_mean = plain.meta["alignment_mean_m"]
+    assert edited.meta["alignment_mean_m"] != pytest.approx(plain_mean, abs=1e-3)

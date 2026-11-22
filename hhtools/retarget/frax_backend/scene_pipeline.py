@@ -12,6 +12,7 @@ floor at z = 0), like the interaction-mesh result.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import threading
 import time
@@ -556,8 +557,15 @@ class FraxScenePipeline:
     ) -> None:
         self._jax_state = configure_jax()
         self.robot = robot
+        # FRAX collides with the terrain columns, so its foot targets only need to clear those
+        # (not the interpolated surface that the interaction-mesh solver uses).
         self.front = InteractionMeshPipeline(
-            robot=robot, scaler=scaler, cfg=front_config or InteractionMeshPipelineConfig()
+            robot=robot,
+            scaler=scaler,
+            cfg=dataclasses.replace(
+                front_config or InteractionMeshPipelineConfig(),
+                terrain_foot_target_surface="columns",
+            ),
         )
         self.frax_config = (
             frax_config if frax_config is not None else frax_config_for_preset(robot.preset)
