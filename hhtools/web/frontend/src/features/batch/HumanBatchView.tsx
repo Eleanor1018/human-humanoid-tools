@@ -436,8 +436,8 @@ export function HumanBatchView({
               )
             : settings.backend === "frax"
               ? text(
-                  "FRAX solves each clip on the CPU, one clip at a time.",
-                  "FRAX 在 CPU 上逐条求解各个动作。",
+                  "FRAX solves each clip on the CPU, one clip at a time; clips with terrain or objects run on the FRAX scene solver.",
+                  "FRAX 在 CPU 上逐条求解各个动作；带地形或物体的动作使用 FRAX 场景求解器。",
                 )
               : text(
                   "Interaction-Mesh processes clips sequentially.",
