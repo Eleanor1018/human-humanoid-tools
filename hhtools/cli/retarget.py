@@ -269,29 +269,13 @@ def retarget(
         level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    backend_explicit = backend is not None
     if backend is None:
-        from hhtools.retarget.frax_backend import default_ik_backend, motion_has_scene
+        # Without FRAX this resolves to flat Newton; a scene clip is refused
+        # when it is about to be solved (below), not by a pre-scan load.
+        from hhtools.retarget.frax_backend import default_ik_backend
 
         backend = default_ik_backend()
-        if backend == "newton":
-            # FRAX is not installed.  The flat Newton solver ignores terrain and
-            # objects, so refuse scene clips instead of silently dropping them.
-            scene_inputs = []
-            for candidate in _expand_inputs(inputs):
-                try:
-                    if motion_has_scene(_load_input_motion(candidate)):
-                        scene_inputs.append(candidate.name)
-                except Exception:  # noqa: BLE001 - reported per clip below
-                    continue
-            if scene_inputs:
-                typer.echo(
-                    "Terrain/object clips need a scene solver, but FRAX is not installed "
-                    f"({', '.join(scene_inputs)}).  Run them with "
-                    "`hhtools retarget interaction-mesh run`, or install FRAX "
-                    "(uv sync --extra retarget-frax).",
-                    err=True,
-                )
-                raise typer.Exit(code=2)
     backend = backend.strip().lower()
     if backend not in ("newton", "frax"):
         raise typer.BadParameter("--backend must be 'newton' or 'frax'")
@@ -432,6 +416,22 @@ def retarget(
             motion.quaternions = motion.quaternions[:limit_frames]
 
         retargeted = None
+        if backend == "newton" and motion_has_scene(motion) and not backend_explicit:
+            # FRAX is not installed and no backend was named.  Flat Newton
+            # would silently drop the scene, so stop at this clip.
+            kept = (
+                f"  Outputs already written for earlier inputs are kept ({len(written)}).\n"
+                if written
+                else ""
+            )
+            typer.echo(
+                f"Terrain/object clip {src.name} needs a scene solver, but FRAX is not "
+                "installed.  Run it with `hhtools retarget interaction-mesh run`, or "
+                "install FRAX (uv sync --extra retarget-frax), or pass "
+                "`--backend newton` to ignore the scene.\n" + kept,
+                err=True,
+            )
+            raise typer.Exit(code=2)
         if backend == "newton" and motion_has_scene(motion):
             typer.echo(
                 f"warning: {src.name} has terrain/objects, which --backend newton "
