@@ -593,6 +593,15 @@ def interaction_mesh_run(
         ),
     ),
     limit_frames: int | None = typer.Option(None, "--limit-frames"),
+    solver: str = typer.Option(
+        "osqp",
+        "--solver",
+        help=(
+            "Scene solver: 'osqp' (MuJoCo SQP, the default) or 'frax' "
+            "(experimental FRAX differential IK with terrain; needs the "
+            "retarget-frax extra)."
+        ),
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
     """Retarget with interaction-mesh (Laplacian SQP / RTI MPC) and write robot CSV."""
@@ -600,6 +609,18 @@ def interaction_mesh_run(
         level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    # Before the imports below, which already need some of FRAX's dependencies.
+    if solver not in ("osqp", "frax"):
+        raise typer.BadParameter(f"--solver must be 'osqp' or 'frax', got {solver!r}")
+    if solver == "frax":
+        from hhtools.retarget.frax_backend import missing_frax_dependencies
+
+        missing = missing_frax_dependencies()
+        if missing:
+            raise typer.BadParameter(
+                f"--solver frax needs {', '.join(missing)}; install the retarget-frax extra"
+            )
+
     from hhtools.io.robot_csv import save_robot_csv
     from hhtools.retarget.calibration import resolve_preset_calibration_file
     from hhtools.retarget.interaction_mesh.pipeline import InteractionMeshPipeline
@@ -633,9 +654,16 @@ def interaction_mesh_run(
                 for o in motion.objects:
                     o.positions = o.positions[:limit_frames]
                     o.quaternions = o.quaternions[:limit_frames]
-        pipe = InteractionMeshPipeline.from_calibration(
-            robot_model, motion, str(cal_path), human_height=human_height,
-        )
+        if solver == "frax":
+            from hhtools.retarget.frax_backend import FraxScenePipeline
+
+            pipe = FraxScenePipeline.from_calibration(
+                robot_model, motion, str(cal_path), human_height=human_height,
+            )
+        else:
+            pipe = InteractionMeshPipeline.from_calibration(
+                robot_model, motion, str(cal_path), human_height=human_height,
+            )
         ret = pipe.run(motion)
         out_path = output if output_is_file else output / f"{motion.name or src.stem}.csv"
         from hhtools.io.export_bundle import bake_export_root_z

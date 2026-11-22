@@ -57,6 +57,25 @@ _ALIGNMENT_DIAG_MAX_FRAMES = 256
 
 
 @dataclass
+class SceneTargets:
+    """Scaled position targets for the robot's tracked points (front half of a scene retarget)."""
+
+    #: ``(F, P, 3)`` float32 world targets, one per entry of ``robot_points``.
+    positions: NDArray[np.float32]
+    #: The tracked robot points (mapped links plus collision-derived contact points).
+    robot_points: list  # list[RobotMpcPoint]
+    #: Robot link / MuJoCo body name per ik_map entry.
+    robot_links: list[str]
+    #: Source floor height subtracted before scaling (source units).
+    z_min: float
+    #: Uniform scene scale (robot height / human height).
+    smpl_scale: float
+    #: ``(F, 4)`` continuous source pelvis quaternions (xyzw), or ``None`` when the
+    #: root orientation must not be taken from the source.
+    source_root_quat_xyzw: NDArray[np.float64] | None
+
+
+@dataclass
 class InteractionMeshPipeline:
     """Laplacian interaction-mesh backend: precompute + RTI MPC + SQP (no cvxpy)."""
 
@@ -631,23 +650,20 @@ class InteractionMeshPipeline:
         )
         return all_pos.astype(np.float32), all_quat.astype(np.float32), z_min, smpl_scale
 
-    def precompute_laplacian_targets(
+    def prepare_scene_targets(
         self,
         motion: Motion,
         *,
         mj_model=None,
-        progress_callback: Callable[[int, int], None] | None = None,
-    ):
-        """Per-frame Laplacian targets using only IK-mapped joints.
+    ) -> SceneTargets:
+        """Scaled robot-point targets, floor/scale parameters and source pelvis quaternions.
 
-        Returns ``(targets, robot_links, z_min, smpl_scale)`` so callers
-        can reuse the scaling parameters (e.g. for terrain height maps).
+        This is the front half of :meth:`precompute_laplacian_targets` (no
+        Delaunay / Laplacian work), reusable by solvers that only need the
+        scaled position targets.
         """
         from hhtools.retarget.interaction_mesh.contact_points import build_contact_mpc_points
-        from hhtools.retarget.interaction_mesh.mpc_loop import (
-            RobotMpcPoint,
-            precompute_target_laplacians,
-        )
+        from hhtools.retarget.interaction_mesh.mpc_loop import RobotMpcPoint
 
         motion = self._with_finite_terrain(motion)
         source_indices, robot_links, canonical_names = self._resolve_mapped_joints(motion)
@@ -697,6 +713,92 @@ class InteractionMeshPipeline:
         )
         mapped_pos = self._enforce_mapped_ankle_laterality(mapped_pos, robot_points)
 
+        source_root_quat_xyzw = None
+        # Continuous source pelvis quaternions for **every** frame.
+        # The SQP locks the FREE-joint orientation to these values so the
+        # floating base cannot flip into another orientation basin during
+        # ground rolls (the root cause of stand-up leg / yaw teleports).
+        # Use the **raw** source quaternion (no ``source_body_quat``)
+        # because :meth:`_build_scaled_source_pose` and the heightfield
+        # transform also keep the source frame.
+        #
+        # Position-only datasets (OMOMO, holosoma, …) leave every joint
+        # quaternion at identity.  Locking the FREE joint to that identity
+        # freezes yaw for the whole clip — the actor looks "heading-locked"
+        # while the body still translates.  Skip the attach so SQP can yaw
+        # freely from position / Laplacian costs.
+        #
+        # OmniContact / 2-segment Mixamo BVH also skip: Mixamo ``Hips``
+        # local axes are (+Z forward, +Y up) after Y→Z, while the robot
+        # FREE joint is (+X forward, +Z up).  Copying the hips quat into
+        # the FREE joint tips the robot ~90° and folds the arms behind
+        # the back even though wrist *positions* are in front of the box.
+        try:
+            from hhtools.core.math import quaternion as Q
+
+            pelvis_idx = self._pelvis_source_index(motion)
+            F = int(mapped_pos.shape[0])
+            if (
+                pelvis_idx >= 0
+                and motion.quaternions.shape[0] >= F
+                and F > 0
+                and self._pelvis_orientations_are_informative(
+                    motion, pelvis_idx, F,
+                )
+                and not self._skip_source_root_quat_lock(motion)
+            ):
+                source_root_quat_xyzw = Q.ensure_continuous(
+                    Q.normalize(
+                        np.asarray(
+                            motion.quaternions[:F, pelvis_idx],
+                            dtype=np.float64,
+                        )
+                    )
+                )
+        except Exception:
+            source_root_quat_xyzw = None
+
+        return SceneTargets(
+            positions=mapped_pos,
+            robot_points=robot_points,
+            robot_links=robot_links,
+            z_min=z_min,
+            smpl_scale=smpl_scale,
+            source_root_quat_xyzw=source_root_quat_xyzw,
+        )
+
+    def scaled_terrain(
+        self, motion: Motion, z_min: float, smpl_scale: float,
+    ) -> TerrainHeightfield | None:
+        """The motion's heightfield in the solver frame (scene scale, floor-referenced), or None."""
+        if motion.terrain is None:
+            return None
+        return motion.terrain.scaled(
+            float(smpl_scale),
+            z_offset=float(terrain_heightfield_z_offset_world(motion, z_min)),
+        )
+
+    def precompute_laplacian_targets(
+        self,
+        motion: Motion,
+        *,
+        mj_model=None,
+        progress_callback: Callable[[int, int], None] | None = None,
+    ):
+        """Per-frame Laplacian targets using only IK-mapped joints.
+
+        Returns ``(targets, robot_links, z_min, smpl_scale)`` so callers
+        can reuse the scaling parameters (e.g. for terrain height maps).
+        """
+        from hhtools.retarget.interaction_mesh.mpc_loop import precompute_target_laplacians
+
+        scene_targets = self.prepare_scene_targets(motion, mj_model=mj_model)
+        robot_links = scene_targets.robot_links
+        robot_points = scene_targets.robot_points
+        z_min = scene_targets.z_min
+        smpl_scale = scene_targets.smpl_scale
+        mapped_pos = scene_targets.positions
+
         obj_positions, object_points = self._build_scaled_object_points(
             motion, z_min, smpl_scale,
         )
@@ -736,58 +838,19 @@ class InteractionMeshPipeline:
             progress_callback=progress_callback,
         )
 
-        # Attach continuous source pelvis quaternions on **every** frame.
-        # The SQP locks the FREE-joint orientation to these values so the
-        # floating base cannot flip into another orientation basin during
-        # ground rolls (the root cause of stand-up leg / yaw teleports).
-        # Use the **raw** source quaternion (no ``source_body_quat``)
-        # because :meth:`_build_scaled_source_pose` and the heightfield
-        # transform also keep the source frame.
-        #
-        # Position-only datasets (OMOMO, holosoma, …) leave every joint
-        # quaternion at identity.  Locking the FREE joint to that identity
-        # freezes yaw for the whole clip — the actor looks "heading-locked"
-        # while the body still translates.  Skip the attach so SQP can yaw
-        # freely from position / Laplacian costs.
-        #
-        # OmniContact / 2-segment Mixamo BVH also skip: Mixamo ``Hips``
-        # local axes are (+Z forward, +Y up) after Y→Z, while the robot
-        # FREE joint is (+X forward, +Z up).  Copying the hips quat into
-        # the FREE joint tips the robot ~90° and folds the arms behind
-        # the back even though wrist *positions* are in front of the box.
-        try:
-            from hhtools.core.math import quaternion as Q
-
-            pelvis_idx = self._pelvis_source_index(motion)
-            F = len(targets)
-            if (
-                pelvis_idx >= 0
-                and motion.quaternions.shape[0] >= F
-                and F > 0
-                and self._pelvis_orientations_are_informative(
-                    motion, pelvis_idx, F,
-                )
-                and not self._skip_source_root_quat_lock(motion)
-            ):
-                qs = Q.ensure_continuous(
-                    Q.normalize(
-                        np.asarray(
-                            motion.quaternions[:F, pelvis_idx],
-                            dtype=np.float64,
-                        )
+        # Attach the continuous source pelvis quaternion on every frame (see
+        # :meth:`prepare_scene_targets` for when it is withheld).
+        quats = scene_targets.source_root_quat_xyzw
+        if quats is not None:
+            for f in range(min(len(targets), quats.shape[0])):
+                pq = quats[f]
+                if float(np.linalg.norm(pq)) > 1e-9:
+                    targets[f].source_root_quat_xyzw = (
+                        float(pq[0]),
+                        float(pq[1]),
+                        float(pq[2]),
+                        float(pq[3]),
                     )
-                )
-                for f in range(F):
-                    pq = qs[f]
-                    if float(np.linalg.norm(pq)) > 1e-9:
-                        targets[f].source_root_quat_xyzw = (
-                            float(pq[0]),
-                            float(pq[1]),
-                            float(pq[2]),
-                            float(pq[3]),
-                        )
-        except Exception:
-            pass
 
         return targets, robot_links, z_min, smpl_scale, robot_points
 
@@ -1290,7 +1353,7 @@ class InteractionMeshPipeline:
         K = max(8, int(self.cfg.terrain_surface_samples))
 
         z_terrain = float(terrain_heightfield_z_offset_world(motion, z_min))
-        scaled_terrain = terrain.scaled(smpl_scale, z_offset=z_terrain)
+        scaled_terrain = self.scaled_terrain(motion, z_min, smpl_scale)
         nx, ny = int(scaled_terrain.shape[0]), int(scaled_terrain.shape[1])
         if nx < 2 or ny < 2:
             return None
@@ -1415,12 +1478,7 @@ class InteractionMeshPipeline:
             return None, None, []
         urdf_dir = Path(urdf_path).parent
 
-        terrain_robot = None
-        if motion.terrain is not None:
-            terrain_robot = motion.terrain.scaled(
-                smpl_scale,
-                z_offset=float(terrain_heightfield_z_offset_world(motion, z_min)),
-            )
+        terrain_robot = self.scaled_terrain(motion, z_min, smpl_scale)
 
         try:
             coll_model, tmp_files = build_collision_model_with_hfield(
@@ -1643,10 +1701,7 @@ class InteractionMeshPipeline:
                 terrain_snap_offset,
             )
 
-            terrain_robot = motion.terrain.scaled(
-                float(smpl_scale),
-                z_offset=float(terrain_heightfield_z_offset_world(motion, z_min)),
-            )
+            terrain_robot = self.scaled_terrain(motion, z_min, smpl_scale)
             # Same ground plane as the collision scene the SQP solved against.
             clearance = foot_terrain_clearance(
                 coll_model, coll_data, joint_q, terrain_robot,
@@ -1854,4 +1909,4 @@ class InteractionMeshPipeline:
         return out
 
 
-__all__ = ["InteractionMeshPipeline", "InteractionMeshPipelineConfig"]
+__all__ = ["InteractionMeshPipeline", "InteractionMeshPipelineConfig", "SceneTargets"]

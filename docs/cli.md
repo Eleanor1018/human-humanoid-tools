@@ -72,7 +72,14 @@ uv run hhtools retarget run path/to/clip.npz \
 uv run hhtools retarget interaction-mesh run path/to/clip.pkl \
   --robot g1_29dof -o /tmp/out_im.csv \
   --calibration-reference smpl --limit-frames 30
+
+# Terrain clips with the experimental FRAX scene solver
+uv run hhtools retarget interaction-mesh run path/to/parkour.npy \
+  --robot rp1 -o /tmp/out_frax.csv \
+  --calibration-reference smplx --solver frax
 ```
+
+`--solver frax` (experimental, needs the `retarget-frax` extra) solves scene clips with FRAX instead of the MuJoCo + OSQP loop. It uses the same scaled scene and contact points as the default solver. The terrain acts on the robot's collision spheres as a signed-distance constraint, with separate rows for the surface below and the walls beside each sphere, and a foot is held in place in every frame in which its source foot stands still. Objects are not obstacles yet: as with the default solver, they only enter through the hand targets. The option exists in the CLI only; the WebUI and the Agent still send terrain and object clips to the default solver.
 
 FRAX is the default IK solver whenever the `retarget-frax` extra is installed (it is part of `all` and of the desktop packages); otherwise the CLI, WebUI and batch scripts fall back to Newton. FRAX solves the same IK targets as Newton with [frax](https://github.com/StanfordASL/frax) differential IK: joint limits, the floor and self-collision are constraints, and a clip compiles once and then solves in tens of milliseconds on the CPU. `--no-frax-floor` and `--no-frax-self-collision` turn those constraints off; `hhtools robot frax-collision <robot>` prints the sphere model they use. FRAX ignores `--ik-iterations`, which applies to Newton only.
 
