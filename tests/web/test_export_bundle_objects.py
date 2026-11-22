@@ -7,6 +7,7 @@ import io
 import pickle
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -17,6 +18,7 @@ from hhtools.retarget.retarget_result import RetargetedMotion
 from hhtools.web.output import r2r_export_bundle
 from hhtools.web.output.export_bundle import (
     OBJECT_CSV_HEADER,
+    _object_track_blobs,
     _resolve_export_scene_params,
     resolve_clip_export_dir,
     sanitize_export_stem,
@@ -129,11 +131,8 @@ def test_export_csv_includes_object_csv(tmp_path: Path, woodchair_motion: Motion
     row0 = [float(x) for x in data_rows[0]]
     assert row0[1:4] == pytest.approx(scaled_pos.tolist(), abs=1e-4)
 
-    extents = (
-        np.asarray(ob.extents, dtype=np.float64).reshape(3)
-        * float(ob.scale)
-        * 0.85
-    )
+    # Extents are metres: the scene scale applies, the mesh-vertex scale does not.
+    extents = np.asarray(ob.extents, dtype=np.float64).reshape(3) * 0.85
     assert row0[8:11] == pytest.approx(extents.tolist(), abs=1e-4)
     assert len(row0) == len(OBJECT_CSV_HEADER)
 
@@ -390,3 +389,31 @@ def test_resolve_export_scene_params_uses_terrain_z_offset() -> None:
     assert smpl == pytest.approx(0.9)
     assert z_sk == pytest.approx(0.2)
     assert z_terr == pytest.approx(0.15)
+
+
+def test_object_tracks_follow_the_robot_onto_a_resampled_timeline(tmp_path: Path) -> None:
+    """With an FPS override the object track is resampled with the robot, not relabelled."""
+    from hhtools.application.export import _resample_retargeted
+    from hhtools.core.scene import SceneObject
+
+    box = SceneObject(
+        "box",
+        positions=np.array([[0.0, 0.0, 0.5], [0.04, 0.0, 0.5], [0.08, 0.0, 0.5]]),
+        quaternions=np.tile([0.0, 0.0, 0.0, 1.0], (3, 1)),
+    )
+    source = SimpleNamespace(objects=[box], terrain=None, num_frames=3, framerate=30.0)
+    ret = RetargetedMotion(
+        name="clip",
+        joint_q=np.zeros((3, 10), dtype=np.float32),
+        sample_rate=30.0,
+        dof_names=("j1", "j2", "j3"),
+        meta={"smpl_scale": 1.0, "source_z_min": 0.0},
+    )
+    joint_q, rate = _resample_retargeted(ret, 60.0)
+    ret60 = RetargetedMotion("clip", joint_q, rate, ("j1", "j2", "j3"), meta=ret.meta)
+    (blob,) = _object_track_blobs(
+        ret60, source, smpl_scale=1.0, z_offset=0.0, source_rate=ret.sample_rate
+    )
+    assert len(blob["positions"]) == len(joint_q) == 5
+    np.testing.assert_allclose(blob["positions"][:, 0], [0.0, 0.02, 0.04, 0.06, 0.08], atol=1e-6)
+    np.testing.assert_allclose(blob["quaternions"], np.tile([1.0, 0.0, 0.0, 0.0], (5, 1)))

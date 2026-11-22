@@ -111,6 +111,29 @@ class InteractionMeshPipeline:
         )
         return cls(robot=robot, scaler=scaler, cfg=cfg or InteractionMeshPipelineConfig())
 
+    @staticmethod
+    def _with_finite_terrain(motion: Motion) -> Motion:
+        """``motion`` with its terrain sanitised (:func:`~.collision.sanitize_terrain`).
+
+        Cells without a finite height (NaN, +/-inf) become solid at the tallest finite height;
+        a terrain with no finite cell raises ``ValueError``.  ``motion`` itself is returned when
+        there is nothing to fix, and is never modified.
+        """
+        if motion.terrain is None:
+            return motion
+        import dataclasses
+
+        from hhtools.retarget.interaction_mesh.collision import sanitize_terrain
+
+        terrain = sanitize_terrain(motion.terrain)
+        if terrain is motion.terrain:
+            return motion
+        _log.warning(
+            "Terrain has non-finite height cells; treating them as solid at the tallest "
+            "finite height"
+        )
+        return dataclasses.replace(motion, terrain=terrain)
+
     def scale_scene(self, motion: Motion) -> ScaledMotionScene:
         """Human + ``motion.objects`` in the same scaled world frame as mimic."""
         return scale_motion_and_objects(motion, self.scaler, motion.objects)
@@ -643,6 +666,7 @@ class InteractionMeshPipeline:
         from hhtools.retarget.interaction_mesh.contact_points import build_contact_mpc_points
         from hhtools.retarget.interaction_mesh.mpc_loop import RobotMpcPoint
 
+        motion = self._with_finite_terrain(motion)
         source_indices, robot_links, canonical_names = self._resolve_mapped_joints(motion)
         if mj_model is not None:
             robot_links = self._validate_body_names_against_mujoco(
@@ -845,9 +869,14 @@ class InteractionMeshPipeline:
         )
         if qs.ndim != 2 or qs.shape[0] == 0 or qs.shape[1] != 4:
             return False
-        identity = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float64)
-        # Same threshold as the scaler's position-only heading probe.
-        return float(np.abs(qs - identity[None, :]).max()) >= 0.01
+        from hhtools.retarget.interaction_mesh.mpc_loop import (
+            IDENTITY_QUAT_TOLERANCE,
+            quat_deviation_from_identity,
+        )
+
+        # Same threshold as the scaler's position-only heading probe; ``q`` and ``-q`` are one
+        # rotation, so a clip of ``(0, 0, 0, -1)`` is as uninformative as ``(0, 0, 0, 1)``.
+        return float(quat_deviation_from_identity(qs).max()) >= IDENTITY_QUAT_TOLERANCE
 
     @staticmethod
     def _skip_source_root_quat_lock(motion: Motion) -> bool:
@@ -1260,8 +1289,10 @@ class InteractionMeshPipeline:
             op *= smpl_scale
             obj_positions.append(op)
 
+            # ``extents`` are metres (the viewer draws them as is); ``ob.scale`` converts raw
+            # mesh vertices and must not be applied again (0.01 on OmniContact meshes).
             ext = np.asarray(ob.extents, dtype=np.float32).reshape(3)
-            ext = ext * float(ob.scale) * float(smpl_scale)
+            ext = ext * float(smpl_scale)
             local = sample_axis_aligned_box(self.cfg.object_surface_samples, ext)
             F = int(op.shape[0])
             pts = np.zeros((F, local.shape[0], 3), dtype=np.float32)
@@ -1436,6 +1467,7 @@ class InteractionMeshPipeline:
 
         from hhtools.retarget.interaction_mesh.collision import (
             build_collision_model_with_hfield,
+            collision_ground_z,
         )
 
         urdf_path = getattr(self.robot.preset, "urdf_path", None)
@@ -1456,7 +1488,7 @@ class InteractionMeshPipeline:
                 terrain_robot,
                 base_xml=base_xml,
                 add_ground=True,
-                ground_z=0.0,
+                ground_z=collision_ground_z(terrain_robot),
             )
         except Exception as exc:
             _log.error(
@@ -1485,6 +1517,9 @@ class InteractionMeshPipeline:
         )
         from hhtools.retarget.retarget_result import RetargetedMotion
 
+        # Terrain without a height somewhere is made finite once, here, before grounding, the
+        # Laplacian anchors, the collision scene and the Z-snap read it.
+        motion = self._with_finite_terrain(motion)
         scene = MujocoScene.from_robot(self.robot)
         mj = scene.model
 
@@ -1640,48 +1675,69 @@ class InteractionMeshPipeline:
         # genuinely airborne for some frames may end the entire
         # retargeted trajectory floating a few centimetres above
         # the heightfield even at frames where contact was clearly
-        # intended.  Per the user spec, the lowest foot point over
-        # the **whole** clip should sit exactly on the heightfield
-        # (gap = 0); anything above that "floor offset" is removed
-        # in a single global Z translation that preserves all
-        # relative motion (jumps, stairs, terrain following).
+        # intended.  A clip whose feet clear the terrain in every
+        # frame is therefore lowered in one global Z translation
+        # until its lowest foot point touches the terrain, which
+        # preserves all relative motion (jumps, stairs, terrain
+        # following).
         #
-        # We re-use the SAME collision model that the SQP just
-        # solved against — so foot geoms and the heightfield
-        # exist in a single MuJoCo scene at the right scale — but
-        # measure the gap **geometrically** (foot OBB lowest Z vs
-        # bilinear-interp terrain Z at that XY) rather than via
-        # ``mj_geomDistance``.  The latter returns ambiguous deep-
-        # penetration depths for any foot pose that intersects the
-        # hfield solid (a known MuJoCo limitation for non-convex
-        # primitives), which would falsely report the entire clip
-        # as "in penetration" and disable the snap.  The OBB-Z vs
-        # bilinear-Z formulation is what the user wrote in their
-        # spec ("足端最低点和跑酷地形之间的距离") and is robust
-        # against constraint slack at SQP termination.
+        # The clip is never lifted.  Contact or penetration in any
+        # frame means the solver already put the feet on the
+        # terrain; a toe grazing a box side in one frame would
+        # otherwise lift every other frame off the ground.
+        #
+        # The gap is measured geometrically on the SQP's collision
+        # model rather than with ``mj_geomDistance`` (ambiguous for
+        # deep hfield penetration): every foot collision point
+        # (convex-hull vertex or primitive surface sample) against
+        # the terrain read as columns, at that point's own XY.  See
+        # :mod:`~hhtools.retarget.interaction_mesh.terrain_clearance`.
         floor_offset = 0.0
         signed_min_gap = float("nan")
         used_terrain_snap = False
         if coll_model is not None and motion.terrain is not None:
-            terrain_robot = self.scaled_terrain(motion, z_min, smpl_scale)
-            signed_min_gap = self._terrain_signed_min_gap_geom(
-                coll_model, coll_data, joint_q, terrain_robot,
+            from hhtools.retarget.interaction_mesh.collision import collision_ground_z
+            from hhtools.retarget.interaction_mesh.terrain_clearance import (
+                foot_terrain_clearance,
+                terrain_snap_offset,
             )
-            # Bidirectional: float → push down; penetrate → lift up, so the
-            # clip-wide minimum foot↔terrain gap is exactly 0.
-            floor_offset = float(signed_min_gap) if np.isfinite(signed_min_gap) else 0.0
+
+            terrain_robot = self.scaled_terrain(motion, z_min, smpl_scale)
+            # Same ground plane as the collision scene the SQP solved against.
+            clearance = foot_terrain_clearance(
+                coll_model, coll_data, joint_q, terrain_robot,
+                floor_z=collision_ground_z(terrain_robot),
+            )
+            signed_min_gap = clearance.min_signed_distance
+            floor_offset = terrain_snap_offset(
+                signed_min_gap, clearance.min_vertical_clearance,
+            )
             used_terrain_snap = True
-            if abs(floor_offset) > 1e-4:
+            if floor_offset > 0.0:
                 joint_q = joint_q.copy()
                 joint_q[:, 2] -= np.float32(floor_offset)
                 _log.info(
-                    "Z-snap: Δz=%+.4fm so the lowest foot point during the "
-                    "trajectory touches the terrain (was gap %+.4fm)",
+                    "Z-snap: lowered the clip by %.4fm so its lowest foot point "
+                    "touches the terrain (feet clear in every frame, min gap %+.4fm)",
                     floor_offset,
                     signed_min_gap,
                 )
-        elif bool(getattr(self.cfg, "clip_floor_snap", True)):
+            elif np.isfinite(signed_min_gap):
+                _log.info(
+                    "Z-snap: not applied; the feet touch or penetrate the terrain "
+                    "(min signed gap %+.4fm at frame %d)",
+                    signed_min_gap,
+                    int(np.argmin(clearance.signed_distance)),
+                )
+            else:
+                _log.warning(
+                    "Z-snap: not applied; foot-terrain clearance could not be measured "
+                    "in every frame (no foot collision geoms, or non-finite poses)",
+                )
+        elif motion.terrain is None and bool(getattr(self.cfg, "clip_floor_snap", True)):
             # Flat-ground clips (LAFAN, etc.): no heightfield — snap sole to z=0.
+            # A terrain clip whose clearance could not be measured (no collision
+            # model) keeps its root height: z = 0 is not its floor.
             from hhtools.retarget.clip_ground_snap import snap_joint_q_clip_floor
 
             joint_q, floor_offset = snap_joint_q_clip_floor(
@@ -1725,6 +1781,10 @@ class InteractionMeshPipeline:
                 else float("nan")
             ),
             "terrain_floor_offset": float(floor_offset),
+            # The SQP collided with the terrain, so the root height is absolute in its frame.
+            "terrain_grounded": bool(used_terrain_snap),
+            # The interaction objects are part of the scene the Laplacian targets are built in.
+            "objects_grounded": bool(getattr(motion, "objects", None)),
             "terrain_signed_min_gap": float(signed_min_gap),
             "clip_floor_snap_m": float(floor_offset) if not used_terrain_snap else 0.0,
             "position_weight": float(self.cfg.position_weight),
@@ -1848,139 +1908,6 @@ class InteractionMeshPipeline:
             len(sample_idx), F, nh,
         )
         return out
-
-    @staticmethod
-    def _terrain_signed_min_gap_geom(
-        coll_model,
-        coll_data,
-        joint_q: NDArray[np.float32],
-        terrain_robot: TerrainHeightfield,
-    ) -> float:
-        """Signed minimum foot-OBB-bottom ↔ terrain-elevation gap.
-
-        For every frame and every foot **body** (URDF link whose
-        name contains ``"foot"``, ``"ankle"`` or ``"toe"``) we:
-
-        1. Compute the body's world XY from ``data.xpos``.
-        2. Query the heightfield's bilinearly-interpolated elevation
-           at that XY — this is "the terrain the foot is standing on".
-        3. Compute the lowest world-Z point reachable by any
-           collidable geom rigidly attached to that body.  We use
-           the OBB closed-form ``z_min = xpos.z − Σ |R[2,i]| · h_i``
-           where ``R`` is ``geom_xmat`` and ``h`` is the local AABB
-           half-extents from ``geom_aabb`` — exact for boxes/spheres
-           and for mesh geoms whose AABB is precomputed by MuJoCo.
-        4. Track the minimum of ``z_min − terrain_z`` over the
-           whole clip.
-
-        Querying terrain at the *body* XY (rather than at every OBB
-        corner XY) is what the user's "foot point vs terrain"
-        requirement captures: we don't want the lowest corner to
-        sample a different stair next to the foot's standing
-        location, which would falsely report metres of "penetration"
-        because the OBB corner happens to sit over a tall box.
-
-        Returns the signed minimum gap; negative values mean some
-        frame already shows the foot sole sitting below the
-        heightfield (constraint slack at SQP termination) and the
-        caller is responsible for clamping to ``≥ 0`` before using
-        it as a Z-snap offset.
-
-        Frames whose foot XY falls outside the heightfield extent
-        are skipped — the source clip likely has the actor stepping
-        off the hfield's footprint and the gap there isn't well
-        defined.
-        """
-        import mujoco
-
-        # Group collidable geoms by foot body so we can reduce
-        # "lowest world-Z" per body × frame.
-        foot_body_to_geoms: dict[int, list[int]] = {}
-        for g in range(coll_model.ngeom):
-            if int(coll_model.geom_contype[g]) == 0 and int(coll_model.geom_conaffinity[g]) == 0:
-                continue
-            bid = int(coll_model.geom_bodyid[g])
-            bname = (mujoco.mj_id2name(coll_model, mujoco.mjtObj.mjOBJ_BODY, bid) or "").lower()
-            if any(tag in bname for tag in ("foot", "ankle", "toe")):
-                foot_body_to_geoms.setdefault(bid, []).append(g)
-        if not foot_body_to_geoms:
-            return 0.0
-
-        actuated_qadr: list[int] = []
-        for j in range(coll_model.njnt):
-            jt = int(coll_model.jnt_type[j])
-            if jt in (int(mujoco.mjtJoint.mjJNT_HINGE),
-                      int(mujoco.mjtJoint.mjJNT_SLIDE)):
-                actuated_qadr.append(int(coll_model.jnt_qposadr[j]))
-
-        nx, ny = terrain_robot.hf.shape
-        min_x = float(terrain_robot.min_point[0])
-        min_y = float(terrain_robot.min_point[1])
-        dx = float(terrain_robot.dx)
-        ext_x = (nx - 1) * dx
-        ext_y = (ny - 1) * dx
-        hf = terrain_robot.hf.astype(np.float64, copy=False)
-
-        def hf_at(x: float, y: float) -> float | None:
-            if x < min_x or x > min_x + ext_x or y < min_y or y > min_y + ext_y:
-                return None
-            fx = (x - min_x) / dx
-            fy = (y - min_y) / dx
-            i0 = int(np.clip(int(fx), 0, nx - 2))
-            j0 = int(np.clip(int(fy), 0, ny - 2))
-            tx = fx - i0
-            ty = fy - j0
-            h00 = float(hf[i0, j0]); h10 = float(hf[i0 + 1, j0])
-            h01 = float(hf[i0, j0 + 1]); h11 = float(hf[i0 + 1, j0 + 1])
-            return ((1 - tx) * (1 - ty) * h00 + tx * (1 - ty) * h10
-                    + (1 - tx) * ty * h01 + tx * ty * h11)
-
-        F = int(joint_q.shape[0])
-        min_gap = float("inf")
-        for f in range(F):
-            row = joint_q[f]
-            coll_data.qpos[:3] = row[:3]
-            coll_data.qpos[3] = float(row[6])
-            coll_data.qpos[4] = float(row[3])
-            coll_data.qpos[5] = float(row[4])
-            coll_data.qpos[6] = float(row[5])
-            for k, qadr in enumerate(actuated_qadr):
-                coll_data.qpos[qadr] = float(row[7 + k])
-            mujoco.mj_forward(coll_model, coll_data)
-            for bid, geoms in foot_body_to_geoms.items():
-                # Body XY (= the foot's standing location).
-                bx, by, _ = coll_data.xpos[bid]
-                h_terrain = hf_at(float(bx), float(by))
-                if h_terrain is None:
-                    continue
-                # Lowest reachable world-Z over all collidable geoms
-                # rigidly attached to this foot body.  Closed-form
-                # OBB minimum-Z: z_c − Σ |R[2,i]| · h_i.  Includes
-                # the AABB centre offset ``ab[:3]`` projected onto
-                # world Z so spheres / capsules whose local centres
-                # are non-zero don't drift up.
-                z_lowest = float("inf")
-                for g in geoms:
-                    cw_z = float(coll_data.geom_xpos[g, 2])
-                    R = np.asarray(
-                        coll_data.geom_xmat[g], dtype=np.float64,
-                    ).reshape(3, 3)
-                    ab = np.asarray(
-                        coll_model.geom_aabb[g], dtype=np.float64,
-                    )
-                    centre_z = float(R[2] @ ab[:3])
-                    half_z = float(np.abs(R[2]) @ ab[3:])
-                    z_geom = cw_z + centre_z - half_z
-                    if z_geom < z_lowest:
-                        z_lowest = z_geom
-                if not np.isfinite(z_lowest):
-                    continue
-                gap = z_lowest - h_terrain
-                if gap < min_gap:
-                    min_gap = gap
-        if not np.isfinite(min_gap):
-            return float("nan")
-        return float(min_gap)
 
 
 __all__ = ["InteractionMeshPipeline", "InteractionMeshPipelineConfig", "SceneTargets"]
