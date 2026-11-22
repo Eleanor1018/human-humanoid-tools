@@ -52,7 +52,7 @@ def _reference(points, terrain, ring=3) -> np.ndarray:
     """Brute force over every column of the grid, padded with floor columns, plus the floor."""
     hf = np.asarray(terrain.hf, dtype=np.float64)
     floor = min(0.0, float(hf[np.isfinite(hf)].min()))
-    h = np.where(np.isfinite(hf), np.maximum(hf, floor), 1e9)
+    h = np.where(np.isfinite(hf), np.maximum(hf, floor), floor)
     nx, ny = h.shape
     hp = np.pad(h, ring, constant_values=floor)
     half = terrain.dx / 2
@@ -265,3 +265,97 @@ def test_hook_moves_foot_targets_out_of_a_box(pipe_motion):
     assert column_signed_distance(on.positions[:, foot], terrain).min() >= 0.002 - 1e-6
     other = [i for i in range(on.positions.shape[1]) if i not in foot]
     np.testing.assert_array_equal(on.positions[:, other], off.positions[:, other])
+
+
+def test_hook_keeps_the_unprojected_source_targets(pipe_motion):
+    pipe, motion = pipe_motion
+    flat = _targets(pipe, motion, True)
+    assert flat.source_positions is flat.positions  # nothing moved: the same array
+    _box_under_feet(motion)
+    off = _targets(pipe, motion, False)
+    on = _targets(pipe, motion, True)
+    np.testing.assert_array_equal(on.source_positions, off.positions)
+    assert np.any(on.source_positions != on.positions)
+    assert off.source_positions is off.positions
+
+
+def test_interaction_mesh_run_reports_projection_and_source_alignment(pipe_motion):
+    pipe, motion = pipe_motion
+    _box_under_feet(motion)
+    pipe.cfg = dataclasses.replace(pipe.cfg, terrain_foot_target_projection=True)
+    meta = pipe.run(motion).meta
+    info = meta["foot_target_projection"]
+    assert info and any(i["frames_shifted"] for i in info.values())
+    # The robot tracks the moved targets, so the residual against the source differs.
+    assert np.isfinite(meta["alignment_source_mean_m"])
+    assert meta["alignment_source_mean_m"] != pytest.approx(meta["alignment_mean_m"], abs=1e-6)
+
+
+# -- ramp clearance, max_shift, non-finite cells ----------------------------------------
+
+
+def _left_ankle():
+    return [SimpleNamespace(semantic="left_ankle")]
+
+
+def test_ramp_does_not_push_a_clear_frame_into_a_neighbouring_column():
+    hf = np.zeros((30, 30))
+    hf[10, 10] = 0.30  # A: x, y in [0.38, 0.42]; clears a foot inside it towards +x
+    hf[15, 10] = 0.30  # B: x in [0.58, 0.62], y in [0.38, 0.42]
+    terrain = _terrain(hf)
+    pos = np.zeros((20, 1, 3))
+    pos[:, 0] = (0.579, 0.40, 0.05)  # 1 mm outside B
+    pos[10:, 0] = (0.414, 0.40, 0.05)  # 6 mm inside A: needs +x 10 mm
+    new, info = project_foot_targets(pos, _left_ankle(), terrain, fps=30.0, ramp_s=0.2)
+    assert info["left"]["frames_shifted"] > 0
+    assert column_signed_distance(new[10:], terrain).min() >= 0.002 - 1e-9
+    # The width-7 ramp would copy ~5.7 mm of +x shift into frame 7 (4.7 mm inside B).
+    assert column_signed_distance(new[:10], terrain).min() >= 0.0
+    assert info["left"]["frames_ramp_fallback"] > 0
+
+
+def test_ramp_does_not_push_an_uncleared_frame_deeper():
+    hf = np.zeros((70, 70))
+    hf[0:30, :] = 5.0  # slab x in [-0.02, 1.18]: from x = 0.03 the nearest exit is 5 cm away
+    hf[40, 10] = 0.30  # C: x in [1.58, 1.62], y in [0.38, 0.42]
+    terrain = _terrain(hf)
+    pos = np.zeros((2, 1, 3))
+    pos[0, 0] = (1.614, 0.40, 0.05)  # 6 mm inside C: cleared by +x 10 mm
+    pos[1, 0] = (0.03, 1.40, 1.00)  # inside the slab, 5 cm from its -x face, 4 m from the top
+    new, info = project_foot_targets(
+        pos, _left_ankle(), terrain, fps=30.0, ramp_s=0.2, max_shift=0.03
+    )  # fmt: skip
+    assert info["left"]["frames_uncleared"] == 1
+    assert column_signed_distance(new[:1], terrain).min() >= 0.002 - 1e-9
+    d0 = column_signed_distance(pos[1:], terrain)
+    # +x is the way deeper into the slab: the neighbour's ramp must not take it there.
+    assert column_signed_distance(new[1:], terrain).item() >= min(d0.item(), 0.0) - 1e-9
+
+
+def test_search_never_exceeds_max_shift():
+    hf = np.zeros((30, 30))
+    hf[10:20, :20] = 0.30  # low-x face at x = 0.38
+    terrain = _terrain(hf)
+    pos = np.array([[[0.3802, 0.30, 0.05]]])  # 0.2 mm inside; a 2.5 mm step would clear it
+    new, info = project_foot_targets(
+        pos, _left_ankle(), terrain, fps=30.0,
+        trigger=0.0001, max_shift=0.0015, step=0.0025, ramp_s=0.0,
+    )  # fmt: skip
+    assert info["left"]["frames_uncleared"] == 1
+    np.testing.assert_array_equal(new, pos)
+
+
+def test_non_finite_cell_is_floor_like_frax():
+    from hhtools.retarget.frax_backend.terrain import build_terrain_grid
+
+    hf = np.zeros((8, 8))
+    hf[2, 2] = np.nan
+    terrain = _terrain(hf)
+    pos = np.array([[[2 * DX + 0.01, 2 * DX, 0.05]]])
+    grid = build_terrain_grid(hf, terrain.min_point, terrain.dx, shape_bucket=1)
+    d = column_signed_distance(pos, terrain)
+    assert d.item() == pytest.approx(float(grid.signed_distance(pos[0]).item()), abs=1e-6)
+    assert d.item() == pytest.approx(0.05)
+    new, info = project_foot_targets(pos, _left_ankle(), terrain, fps=30.0)
+    np.testing.assert_array_equal(new, pos)
+    assert info["left"]["frames_shifted"] == 0

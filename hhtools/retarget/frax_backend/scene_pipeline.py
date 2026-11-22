@@ -877,7 +877,13 @@ class FraxScenePipeline:
 
         robot_pts = np.array(solver.points_fn(q_out))
         robot_pts[..., 2] -= floor_offset  # the snaps only translate the root vertically
+        # ``alignment_*``: against the solver targets (``st.positions``, foot targets moved out of
+        # the terrain when the projection ran); ``alignment_source_*``: against the scaled source
+        # before that projection (``st.source_positions``, the yellow overlay).
         err = np.linalg.norm(robot_pts - frames["pos"], axis=-1)  # (T, P)
+        err_source = np.linalg.norm(
+            robot_pts - np.asarray(st.source_positions, dtype=robot_pts.dtype), axis=-1
+        )
 
         def group_mean(*keys: str) -> float:
             cols = [
@@ -902,6 +908,8 @@ class FraxScenePipeline:
             "alignment_pelvis_m": group_mean("pelvis", "hips"),
             "alignment_wrist_m": group_mean("wrist"),
             "alignment_ankle_m": group_mean("ankle"),
+            "alignment_source_mean_m": float(err_source.mean()),
+            "alignment_source_max_m": float(err_source.max()),
             "execution_provenance": self.execution_provenance(),
             "frax": {
                 "frax_version": _frax_version(),

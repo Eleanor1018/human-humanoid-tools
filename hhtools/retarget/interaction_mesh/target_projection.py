@@ -10,7 +10,8 @@ out in time so the targets do not jump.
 
 The terrain is read as in the FRAX solver: ``hf[ix, iy]`` is the top of a square column of side
 ``dx`` centred at ``min_point + (ix, iy) * dx``, over a floor plane at ``min(0, lowest finite
-cell)`` outside and below the grid.  Non-finite cells count as tall solid.
+cell)`` outside and below the grid.  Non-finite cells become the floor, as in
+``frax_backend.terrain.build_terrain_grid``, so this and the FRAX solver see the same terrain.
 """
 
 from __future__ import annotations
@@ -25,8 +26,6 @@ from hhtools.core.scene import TerrainHeightfield
 
 __all__ = ["column_signed_distance", "project_foot_targets"]
 
-#: Height standing in for a non-finite cell ("tall solid"); finite so no inf - inf appears.
-_TALL = 1.0e9
 #: Points per chunk of the windowed distance (memory bound: chunk * (2 window + 1)^2 floats).
 _CHUNK = 20000
 
@@ -45,7 +44,7 @@ def _columns(terrain: TerrainHeightfield, pad: int) -> _Columns:
     hf = np.asarray(terrain.hf, dtype=np.float64)
     finite = hf[np.isfinite(hf)]
     floor_z = min(0.0, float(finite.min())) if finite.size else 0.0
-    heights = np.where(np.isfinite(hf), np.maximum(hf, floor_z), _TALL)
+    heights = np.where(np.isfinite(hf), np.maximum(hf, floor_z), floor_z)
     heights = np.pad(heights, pad, constant_values=floor_z)
     dx = float(terrain.dx)
     origin = np.asarray(terrain.min_point, dtype=np.float64).reshape(2) - pad * dx
@@ -165,8 +164,10 @@ def project_foot_targets(
     to ``max_shift``) that leaves every point at signed distance >= ``clearance``.  Frames with
     no such shift are left alone and counted.  The per-frame shifts are then ramped (max filter
     plus moving average of ``ramp_s`` seconds, per component and sign, an envelope never below
-    the raw value) so the targets do not jump; a frame the ramp would leave blocked while the
-    raw shift was clear keeps its raw shift.  Other limbs' points are never moved.
+    the raw value) so the targets do not jump.  Every frame the ramp changed is re-checked: one
+    whose raw shift cleared it must still be at signed distance >= ``clearance``, any other
+    must not be deeper than unshifted; a frame failing that gets its raw shift back.
+    Other limbs' points are never moved.
 
     ``info[side]``: ``frames_shifted``, ``frames_uncleared``, ``max_shift_m``,
     ``max_jump_raw_m`` and ``max_jump_ramped_m`` (largest frame-to-frame change of the target
@@ -181,7 +182,7 @@ def project_foot_targets(
 
     window = max(2, int(np.ceil(clearance / terrain.dx)) + 1)
     cols = _columns(terrain, window + 1)
-    steps = np.arange(0.0, max_shift + 0.5 * step, step)
+    steps = np.arange(int(np.floor(max_shift / step + 1e-9)) + 1) * step
     width = 2 * int(round(ramp_s * float(fps) / 2.0)) + 1
     n_frames = len(work)
 
@@ -211,10 +212,12 @@ def project_foot_targets(
             changed = np.flatnonzero(np.any(ramped != raw, axis=1))
             if changed.size:
                 d_ramp = _min_signed(cols, g[changed] + ramped[changed, None, :], window)
-                d_raw = _min_signed(cols, g[changed] + raw[changed, None, :], window)
-                shifted_raw = np.any(raw[changed] != 0.0, axis=1)
-                tol = np.where(shifted_raw, clearance, -trigger)
-                revert = (d_ramp < tol) & (d_raw >= tol)
+                cleared_raw = np.any(raw[changed] != 0.0, axis=1)
+                d_unshifted = d0[changed]
+                # A frame whose raw shift cleared it must still be clear; any other frame
+                # (clear, or not clearable) must not end deeper than it was unshifted.
+                need = np.where(cleared_raw, clearance, np.minimum(d_unshifted, 0.0))
+                revert = d_ramp < need - 1e-9
                 ramped[changed[revert]] = raw[changed[revert]]
                 fallback = int(revert.sum())
             shift = ramped
