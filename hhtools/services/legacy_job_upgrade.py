@@ -821,6 +821,7 @@ def _validate_source_inspection_claims(
     *,
     inspection: AssetInspection,
     backend: str,
+    backend_persisted: bool = True,
 ) -> None:
     raw = request.get("source_entry")
     if not isinstance(raw, dict):
@@ -866,8 +867,17 @@ def _validate_source_inspection_claims(
             conflict("has_scene")
 
     suggested_backend = raw.get("suggested_backend")
-    if isinstance(suggested_backend, str) and suggested_backend != backend:
-        conflict("suggested_backend")
+    if isinstance(suggested_backend, str):
+        if backend_persisted:
+            if suggested_backend != backend:
+                conflict("suggested_backend")
+        else:
+            # The job chose no backend, so the old suggestion is not an
+            # execution override: it only has to suit the inspected content.
+            from hhtools.services.routing import compatible_backends_for_category
+
+            if suggested_backend not in compatible_backends_for_category(inspection.category):
+                conflict("suggested_backend")
 
 
 def _verified_registration(
@@ -1143,6 +1153,7 @@ class LegacyJobUpgradeService:
             request,
             inspection=motion_inspection,
             backend=backend,
+            backend_persisted=backend_persisted,
         )
 
         # Preflight and RetargetService perform their own content-hash

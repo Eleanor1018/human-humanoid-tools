@@ -830,3 +830,37 @@ def test_legacy_plain_job_without_backend_gets_the_ik_default(
     request = harness.boundaries.preflight_calls[-1]
     assert request.backend == "newton"
     assert request.parameters["ik_iterations"] == 31
+
+
+def test_historical_suggestion_is_a_compatibility_check_not_the_new_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from hhtools.retarget import frax_backend
+
+    monkeypatch.setattr(frax_backend, "frax_available", lambda: True)
+    harness = _harness(tmp_path)
+    payload = _scene_payload(harness)
+    payload["request"]["source_entry"]["suggested_backend"] = "interaction_mesh"
+
+    harness.service.upgrade(payload)
+
+    assert harness.boundaries.preflight_calls[-1].backend == "frax"
+
+
+def test_historical_suggestion_incompatible_with_the_content_is_still_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from hhtools.retarget import frax_backend
+
+    monkeypatch.setattr(frax_backend, "frax_available", lambda: True)
+    harness = _harness(tmp_path)
+    payload = _scene_payload(harness)
+    payload["request"]["source_entry"]["suggested_backend"] = "newton"
+
+    with pytest.raises(Exception) as raised:
+        harness.service.upgrade(payload)
+
+    assert (
+        "LEGACY_METADATA_MISMATCH" in repr(raised.value)
+        or getattr(raised.value, "code", "") == "LEGACY_METADATA_MISMATCH"
+    )
