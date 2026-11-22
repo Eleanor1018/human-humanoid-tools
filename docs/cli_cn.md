@@ -81,7 +81,7 @@ uv run hhtools retarget interaction-mesh run path/to/parkour.npy \
 
 `--solver frax`（实验性，需要 `retarget-frax` extra）用 FRAX 代替 MuJoCo + OSQP 循环来求解场景动作。它使用与默认求解器相同的缩放场景和接触点。地形以符号距离约束的形式作用在机器人的碰撞球上，每个球分别约束到下方表面和侧面墙壁的距离；源动作中某只脚在某一帧静止时，机器人的这只脚在该帧被固定在原地。物体暂时不作为障碍物：与默认求解器一样，物体只通过手部目标起作用。目前只有 CLI 提供这个选项，WebUI 和 Agent 仍把地形与物体动作交给默认求解器。
 
-只要安装了 `retarget-frax` extra（`all` 和桌面安装包都已包含），FRAX 就是默认的 IK 求解器；未安装时，CLI、WebUI 和批处理脚本会自动改用 Newton。FRAX 用 [frax](https://github.com/StanfordASL/frax) 差分 IK 求解与 Newton 相同的 IK 目标：关节限位、地面和自碰撞都是约束；一段动作编译一次，之后在 CPU 上几十毫秒即可求解完。`--no-frax-floor`、`--no-frax-self-collision` 可关闭对应约束；`hhtools robot frax-collision <robot>` 会打印这些约束使用的球体模型。FRAX 不使用 `--ik-iterations`，该参数只对 Newton 生效。
+只要安装了 FRAX（默认随 HHTools 安装，`retarget-frax` extra 仅作为别名保留），它就是默认的 IK 求解器；未安装时，CLI、WebUI 和批处理脚本会自动改用 Newton。FRAX 用 [frax](https://github.com/StanfordASL/frax) 差分 IK 求解与 Newton 相同的 IK 目标：关节限位、地面和自碰撞都是约束；一段动作编译一次，之后在 CPU 上几十毫秒即可求解完。`--no-frax-floor`、`--no-frax-self-collision` 可关闭对应约束；`hhtools robot frax-collision <robot>` 会打印这些约束使用的球体模型。FRAX 不使用 `--ik-iterations`，该参数只对 Newton 生效。
 
 ## 大批量离线任务
 

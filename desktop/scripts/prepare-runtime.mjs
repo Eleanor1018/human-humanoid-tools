@@ -201,7 +201,7 @@ function verifyRuntime() {
     [
       '-c',
       [
-        'import fastapi, hhtools, mujoco, newton, torch, warp',
+        'import fastapi, frax, hhtools, jax, mujoco, newton, torch, warp',
         'from hhtools.web.server import create_app',
         'from hhtools.retarget.calibration.reference import load_reference_pose',
         "[load_reference_pose(name) for name in ('soma_bvh', 'lafan_bvh', 'mocap_bvh', 'xsens_mocap')]",

@@ -115,3 +115,53 @@ print(json.dumps({
         "warp_not_imported": True,
         "newton_not_imported": True,
     }
+
+
+def _frax_check(monkeypatch, *, available: bool, exclusion: str | None):
+    monkeypatch.setattr(doctor, "_available", lambda _module: available)
+    monkeypatch.setattr(doctor, "_frax_platform_exclusion", lambda: exclusion)
+    return doctor._check_retarget_frax()
+
+
+def test_doctor_reports_frax_ready(monkeypatch) -> None:
+    check = _frax_check(monkeypatch, available=True, exclusion=None)
+
+    assert check.ready is True
+    assert check.details["missing"] == []
+    assert check.details["platform_supported"] is True
+
+
+def test_doctor_reports_frax_missing_on_a_supported_platform(monkeypatch) -> None:
+    check = _frax_check(monkeypatch, available=False, exclusion=None)
+
+    assert check.ready is False
+    assert "frax" in check.details["missing"]
+    assert "not available on this platform" not in check.summary
+    assert "reinstall" in check.summary
+
+
+def test_doctor_reports_frax_unavailable_on_excluded_platform(monkeypatch) -> None:
+    check = _frax_check(
+        monkeypatch, available=False, exclusion="macOS x86_64 (jaxlib ships no wheels)"
+    )
+
+    assert check.ready is False
+    assert check.details["platform_supported"] is False
+    assert check.summary.startswith("FRAX is not available on this platform")
+    assert "macOS x86_64" in check.details["reason"]
+
+
+def test_frax_platform_exclusion_mirrors_the_dependency_markers(monkeypatch) -> None:
+    monkeypatch.setattr(doctor.sys, "version_info", (3, 13, 1))
+    monkeypatch.setattr(doctor.sys, "platform", "linux")
+    assert doctor._frax_platform_exclusion() is None
+
+    monkeypatch.setattr(doctor.sys, "platform", "darwin")
+    monkeypatch.setattr(doctor.platform, "machine", lambda: "x86_64")
+    assert "macOS x86_64" in doctor._frax_platform_exclusion()
+
+    monkeypatch.setattr(doctor.platform, "machine", lambda: "arm64")
+    assert doctor._frax_platform_exclusion() is None
+
+    monkeypatch.setattr(doctor.sys, "version_info", (3, 14, 0))
+    assert "3.14" in doctor._frax_platform_exclusion()
