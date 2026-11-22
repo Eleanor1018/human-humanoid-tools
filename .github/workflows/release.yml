@@ -100,7 +100,7 @@ jobs:
           "$smoke_home/.local/bin/hhtools" --version
           HOME="$smoke_home" \
             "$smoke_home/.local/bin/hhtools" doctor \
-              --require web --require retarget --require mcp
+              --require web --require retarget --require retarget-frax --require mcp
 
       - name: Publish GitHub Release
         env:

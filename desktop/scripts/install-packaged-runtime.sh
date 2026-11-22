@@ -162,7 +162,7 @@ say '[4/5] Verifying the installed CLI, WebUI, retargeting, and Agent runtime...
 hhtools_bin="$bin_dir/hhtools"
 [ -x "$hhtools_bin" ] || die "installed command not found: $hhtools_bin"
 "$hhtools_bin" --version
-"$hhtools_bin" doctor --require web --require retarget --require mcp
+"$hhtools_bin" doctor --require web --require retarget --require retarget-frax --require mcp
 runtime_python="$install_root/tools/hhtools/bin/python"
 [ -x "$runtime_python" ] || die "installed runtime Python not found: $runtime_python"
 

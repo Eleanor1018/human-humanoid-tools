@@ -50,6 +50,13 @@ dependencies = [
     "scikit-learn>=1.4",
     "tqdm>=4.66",
     "platformdirs>=4.2",
+    # FRAX retarget backend, installed by default. frax pulls jax/jaxlib and
+    # elastiqp: jaxlib ships no macOS x86_64 wheels and elastiqp only ships
+    # cp312/cp313 wheels, so the markers keep frax off those platforms
+    # instead of failing (or compiling from sdist) there.
+    "frax[ik]==0.2.0; python_version < '3.14' and (sys_platform != 'darwin' or platform_machine != 'x86_64')",
+    "yourdfpy>=0.0.56",
+    "mujoco>=3.1",
 ]
 
 [project.optional-dependencies]
@@ -101,6 +108,7 @@ retarget-interaction = [
 ]
 # FRAX differential-IK backend (JAX + ElastiQP, runs on CPU).  frax is 0.x, so
 # the version is pinned exactly; every frax call lives in hhtools/retarget/frax_backend.
+# Compatibility alias: FRAX is now part of the base dependencies.
 retarget-frax = [
     "frax[ik]==0.2.0",
     "yourdfpy>=0.0.56",

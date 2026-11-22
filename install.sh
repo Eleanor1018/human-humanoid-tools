@@ -204,7 +204,7 @@ UV_CACHE_DIR="$cache_dir" \
 hhtools_bin="$bin_dir/hhtools"
 [ -x "$hhtools_bin" ] || die "installed command not found: $hhtools_bin"
 "$hhtools_bin" --version
-"$hhtools_bin" doctor --require web --require retarget --require mcp >/dev/null
+"$hhtools_bin" doctor --require web --require retarget --require retarget-frax --require mcp >/dev/null
 
 # Publish the completion marker only after the installed interpreter and all
 # required runtime imports have passed validation. The desktop shell ignores a
