@@ -849,17 +849,22 @@ class FraxScenePipeline:
         *,
         progress_callback: Callable[[str, int, int], None] | None = None,
     ) -> RetargetedMotion:
-        """Retarget ``motion`` (with its terrain, if any) in one compiled FRAX solve."""
+        """Retarget ``motion`` (with its terrain, if any) in one compiled FRAX solve.
+
+        ``progress_callback(stage, done, total)`` is called for the stages
+        ``precompute`` (front half), ``build`` (terrain grid, object SDFs,
+        solver build), ``mpc`` (the compiled scan, reported as 0/T then T/T)
+        and ``post`` (back half).  An exception raised by the callback aborts
+        the run.
+        """
         from hhtools.retarget.clip_ground_snap import snap_joint_q_clip_floor
         from hhtools.robot.retarget_profile import apply_upper_body_roll_narrowing_post_ik
 
         def stage(name: str, done: int, total: int) -> None:
-            if progress_callback is None:
-                return
-            try:
+            # Exceptions propagate on purpose: callers cancel a run by raising
+            # from the callback (e.g. ``JobCancelledError``).
+            if progress_callback is not None:
                 progress_callback(name, done, total)
-            except Exception:  # pragma: no cover - UI hooks must not break the solve
-                pass
 
         if motion.num_frames == 0:
             return self._empty_result(motion)
@@ -873,6 +878,7 @@ class FraxScenePipeline:
         scene = self._scene
         st = self.front.prepare_scene_targets(motion, mj_model=scene.model)
         stage("precompute", n, n)
+        stage("build", 0, n)
         points = st.robot_points
         T, P = st.positions.shape[0], len(points)
         point_joints, point_offsets = self._frames_for(scene, points)
@@ -999,6 +1005,8 @@ class FraxScenePipeline:
             float(frames["w_root"][0, 0]),
         )
 
+        stage("build", n, n)
+
         # ---- solve ----
         stage("mpc", 0, T)
         fn, compile_s = solver.compiled_for(padded, static, q0)
@@ -1013,6 +1021,7 @@ class FraxScenePipeline:
         stage("mpc", T, T)
 
         # ---- back half ----
+        stage("post", 0, T)
         # Joint edits first, so the snap and the reported numbers describe the returned motion.
         joint_q = model.joint_q_from_frax_q(q)
         lower, upper = _actuated_limits(model, self.frax_config)

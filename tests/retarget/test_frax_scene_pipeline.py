@@ -452,19 +452,39 @@ def test_second_run_of_the_same_shapes_does_not_recompile(toy, calibration, base
     assert other.run(motion).meta["frax"]["compile_s"] == 0
 
 
-def test_progress_callback_reports_stages_and_swallows_errors(
-    toy, calibration, base_motion
-) -> None:
+def test_progress_callback_reports_stages(toy, calibration, base_motion) -> None:
     motion = _walk(base_motion, frames=10)
     pipe = _pipeline(toy, motion, calibration)
     seen = []
     pipe.run(motion, progress_callback=lambda *a: seen.append(a))
-    assert [s for s, *_ in seen] == ["precompute", "precompute", "mpc", "mpc"]
+    assert [s for s, *_ in seen] == [
+        "precompute",
+        "precompute",
+        "build",
+        "build",
+        "mpc",
+        "mpc",
+        "post",
+    ]
 
-    def boom(*_a):
-        raise RuntimeError("ui")
 
-    assert pipe.run(motion, progress_callback=boom).num_frames == 10
+def test_progress_callback_exception_aborts_the_run(toy, calibration, base_motion) -> None:
+    motion = _walk(base_motion, frames=10)
+    pipe = _pipeline(toy, motion, calibration)
+
+    class Cancelled(Exception):
+        pass
+
+    seen = []
+
+    def cancel_in_solve(stage, done, total):
+        seen.append(stage)
+        if stage == "mpc":
+            raise Cancelled
+
+    with pytest.raises(Cancelled):
+        pipe.run(motion, progress_callback=cancel_in_solve)
+    assert "post" not in seen
 
 
 def test_scene_config_overrides_are_validated() -> None:
