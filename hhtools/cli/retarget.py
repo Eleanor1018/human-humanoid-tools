@@ -246,8 +246,9 @@ def retarget(
         "--backend",
         help=(
             "IK solver: frax (default when installed; JAX on the CPU, joint limits "
-            "and floor as constraints) or newton (Warp, CUDA when available; the "
-            "default when the retarget-frax extra is missing)."
+            "and floor as constraints; terrain/object clips use its scene solver) "
+            "or newton (Warp, CUDA when available; the default when the "
+            "retarget-frax extra is missing; ignores terrain and objects)."
         ),
         show_default=False,
     ),
@@ -269,9 +270,28 @@ def retarget(
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     if backend is None:
-        from hhtools.retarget.frax_backend import default_ik_backend
+        from hhtools.retarget.frax_backend import default_ik_backend, motion_has_scene
 
         backend = default_ik_backend()
+        if backend == "newton":
+            # FRAX is not installed.  The flat Newton solver ignores terrain and
+            # objects, so refuse scene clips instead of silently dropping them.
+            scene_inputs = []
+            for candidate in _expand_inputs(inputs):
+                try:
+                    if motion_has_scene(_load_input_motion(candidate)):
+                        scene_inputs.append(candidate.name)
+                except Exception:  # noqa: BLE001 - reported per clip below
+                    continue
+            if scene_inputs:
+                typer.echo(
+                    "Terrain/object clips need a scene solver, but FRAX is not installed "
+                    f"({', '.join(scene_inputs)}).  Run them with "
+                    "`hhtools retarget interaction-mesh run`, or install FRAX "
+                    "(uv sync --extra retarget-frax).",
+                    err=True,
+                )
+                raise typer.Exit(code=2)
     backend = backend.strip().lower()
     if backend not in ("newton", "frax"):
         raise typer.BadParameter("--backend must be 'newton' or 'frax'")
@@ -412,6 +432,12 @@ def retarget(
             motion.quaternions = motion.quaternions[:limit_frames]
 
         retargeted = None
+        if backend == "newton" and motion_has_scene(motion):
+            typer.echo(
+                f"warning: {src.name} has terrain/objects, which --backend newton "
+                "ignores; use the FRAX scene solver or `retarget interaction-mesh run`.",
+                err=True,
+            )
         if backend == "frax" and motion_has_scene(motion):
             # Terrain / object clips go to the FRAX scene solver (it grounds the
             # robot on the scene itself), one pipeline per clip.
