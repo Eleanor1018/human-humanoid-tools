@@ -164,6 +164,8 @@ def _frax_platform_exclusion() -> str | None:
 
 def _check_retarget_frax() -> DoctorCheck:
     modules = _availability(("frax", "jax", "elastiqp", "mujoco", "yourdfpy"))
+    # Readiness means "the imports are available": the doctor reports what is
+    # installed; the platform exclusion stays in the details and summary.
     ready = all(modules.values())
     exclusion = _frax_platform_exclusion()
     details: dict[str, Any] = {

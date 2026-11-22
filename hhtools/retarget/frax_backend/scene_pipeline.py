@@ -855,14 +855,20 @@ class FraxScenePipeline:
         ``precompute`` (front half), ``build`` (terrain grid, object SDFs,
         solver build), ``mpc`` (the compiled scan, reported as 0/T then T/T)
         and ``post`` (back half).  An exception raised by the callback aborts
-        the run.
+        the run, but only where the callback is called: before the front half,
+        before building, before the solve, after the solve and before the
+        back half.  It cannot interrupt the compiled scan (or its first-time
+        compilation) once that has started; the solve of the bundled clips
+        takes a few seconds.
         """
         from hhtools.retarget.clip_ground_snap import snap_joint_q_clip_floor
         from hhtools.robot.retarget_profile import apply_upper_body_roll_narrowing_post_ik
 
         def stage(name: str, done: int, total: int) -> None:
             # Exceptions propagate on purpose: callers cancel a run by raising
-            # from the callback (e.g. ``JobCancelledError``).
+            # from the callback (e.g. ``JobCancelledError``).  Cancellation is
+            # therefore honoured at these stage boundaries only, not inside
+            # the compiled scan.
             if progress_callback is not None:
                 progress_callback(name, done, total)
 
