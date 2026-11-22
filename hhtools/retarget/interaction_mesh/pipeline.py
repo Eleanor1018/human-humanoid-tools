@@ -33,6 +33,7 @@ from hhtools.core.grounding import (
 )
 from hhtools.core.math import quaternion as Q
 from hhtools.core.motion import Motion
+from hhtools.core.scene import TerrainHeightfield
 from hhtools.retarget.calibration import (
     load_calibration,
 )
