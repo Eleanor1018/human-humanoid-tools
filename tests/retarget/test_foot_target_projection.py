@@ -555,3 +555,16 @@ def test_interaction_mesh_alignment_is_measured_on_the_returned_motion(pipe_moti
     # The forced edit is visible in the report (it is not the solver trajectory's residual).
     plain_mean = plain.meta["alignment_mean_m"]
     assert edited.meta["alignment_mean_m"] != pytest.approx(plain_mean, abs=1e-3)
+
+
+def test_one_row_terrain_has_no_interpolated_surface_beyond_its_nodes() -> None:
+    """A (1, 4) grid is edge-replicated for interpolation, but the replica is not terrain."""
+    from hhtools.retarget.interaction_mesh.target_projection import _columns, _surface_height
+
+    hf = np.full((1, 4), 0.3, dtype=np.float32)
+    terrain = TerrainHeightfield(hf, np.stack([hf, hf], -1), np.zeros(2), 0.1)
+    cols = _columns(terrain, 3)
+    beyond = _surface_height(cols, np.array([[0.06, 0.15]]))
+    on_nodes = _surface_height(cols, np.array([[0.0, 0.15]]))
+    assert beyond[0] == pytest.approx(cols.floor_z)
+    assert on_nodes[0] == pytest.approx(0.3)

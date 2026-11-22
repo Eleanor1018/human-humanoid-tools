@@ -99,7 +99,10 @@ def _surface_height(cols: _Columns, xy: NDArray[np.float64]) -> NDArray[np.float
     hg = cols.grid
     nx, ny = hg.shape
     g = (xy - cols.grid_min) / cols.dx
-    inside = (g[:, 0] >= 0) & (g[:, 0] <= nx - 1) & (g[:, 1] >= 0) & (g[:, 1] <= ny - 1)
+    # The compiled heightfield spans the real nodes only: a one-row or one-column grid is
+    # edge-replicated for the arithmetic, but the replica is not terrain.
+    rx, ry = cols.shape
+    inside = (g[:, 0] >= 0) & (g[:, 0] <= rx - 1) & (g[:, 1] >= 0) & (g[:, 1] <= ry - 1)
     i0 = np.clip(np.floor(g[:, 0]).astype(np.int64), 0, nx - 2)
     j0 = np.clip(np.floor(g[:, 1]).astype(np.int64), 0, ny - 2)
     u = np.clip(g[:, 0] - i0, 0.0, 1.0)

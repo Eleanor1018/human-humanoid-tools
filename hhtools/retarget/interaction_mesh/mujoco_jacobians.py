@@ -131,6 +131,9 @@ def unpack_joint_q_csv(
 ) -> NDArray[np.float64]:
     """Inverse of :func:`pack_joint_q_csv` for ``(F, 7 + N)`` rows: MuJoCo ``qpos`` ``(F, nq)``.
 
+    Like :func:`pack_joint_q_csv`, the actuated columns are in MuJoCo joint declaration order;
+    ``robot_dof_names`` is only checked for length.
+
     Coordinates other than the free joint and the hinge / slide joints keep ``model.qpos0``.
     """
     import mujoco
