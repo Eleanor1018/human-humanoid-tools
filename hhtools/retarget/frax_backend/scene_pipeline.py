@@ -12,6 +12,7 @@ floor at z = 0), like the interaction-mesh result.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import threading
 import time
@@ -39,6 +40,11 @@ from frax.ik import (  # noqa: E402
 
 from hhtools.core.motion import Motion  # noqa: E402
 from hhtools.retarget.frax_backend.config import FraxConfig, frax_config_for_preset  # noqa: E402
+from hhtools.retarget.frax_backend.hand_contact import (  # noqa: E402
+    hand_body_joints,
+    hand_surface_points,
+    project_hand_targets,
+)
 from hhtools.retarget.frax_backend.model import FraxRobotModel  # noqa: E402
 from hhtools.retarget.frax_backend.objects import (  # noqa: E402
     ObjectConstraint,
@@ -150,6 +156,31 @@ class FraxSceneConfig:
         object_rows: Lowest-barrier rows kept per step *per object* (one row per sphere); a row
             dropped here is not enforced that step.
         object_grid_dx: Cell size (m) of the object signed distance fields.
+        object_hand_points: Also keep ``object_points_per_body`` sampled surface points of every
+            hand/wrist collision geometry (:func:`~hhtools.retarget.frax_backend.hand_contact.
+            hand_surface_points`) ``object_point_margin`` out of the objects, and give the
+            collision spheres of those bodies the margin ``object_hand_sphere_margin`` (the
+            points cover the mesh the spheres underfill) instead of ``object_margin``.
+        object_point_margin: Clearance kept between a hand surface point and an object (m).
+        object_points_per_body: Surface points sampled per hand body.
+        object_hand_sphere_margin: Clearance of the hand spheres when the hand points are on (m).
+        object_snap_tolerance: How far inside an object (m) a final root snap (terrain snap,
+            clip floor snap) may leave any robot-object pair; a pair that already penetrated by
+            more must not get deeper.  A clear pair may approach the object freely up to that
+            depth (requiring it to stay as far as before would block any snap that brings a
+            hand closer to an object, however far away it starts).  With the hand points
+            resting on an object at 0 margin, lifting a clip 1 cm out of the floor moves a point on
+            a carried box's side about 0.1 mm deeper; a 0.1 mm tolerance blocked that lift and left
+            the feet 5-9 mm in the floor on the OmniContact carries.
+        object_contact_targets: While a source hand touches an object (its reference target, the
+            ``hand_tip`` point, inside or within ``object_contact_distance`` of the surface;
+            leaves at ``object_contact_release``, episodes of at least
+            ``object_contact_min_frames``), move that hand's targets (rigidly, along the field
+            gradient) so the reference target lies ``object_contact_depth`` inside the surface,
+            ramped in and out over ``object_contact_ramp_s`` seconds.  A target already deeper
+            is left where it is (it presses the hand against the object) unless
+            ``object_contact_push_out``.  The hand tip of rp1 lies about 2 cm beyond the hand
+            mesh, so a tip on the surface leaves the mesh that far off.
     """
 
     position_weight: float = 0.5
@@ -167,6 +198,18 @@ class FraxSceneConfig:
     object_margin: float = 0.01
     object_rows: int = 32
     object_grid_dx: float = 0.01
+    object_hand_points: bool = True
+    object_point_margin: float = 0.0
+    object_points_per_body: int = 24
+    object_hand_sphere_margin: float = 0.0
+    object_contact_targets: bool = False
+    object_contact_depth: float = 0.0
+    object_contact_push_out: bool = False
+    object_contact_distance: float = 0.03
+    object_contact_release: float = 0.05
+    object_contact_min_frames: int = 3
+    object_contact_ramp_s: float = 0.15
+    object_snap_tolerance: float = 0.002
 
     def __post_init__(self) -> None:
         if self.substeps < 1:
@@ -238,6 +281,12 @@ def _frax_point_frames(
         joints.append(candidates[best[p]])
         offsets[p, :3, 3] = local[:, best[p], p].mean(axis=0)
     return joints, offsets
+
+
+def _sphere_joints(robot) -> NDArray[np.int64]:
+    """Frax joint index of every flat collision sphere."""
+    per_joint = int(np.asarray(robot.padded_collision_positions).shape[1])
+    return np.asarray(robot.collision_slice_indices) // per_joint
 
 
 def _terrain_distance(grid, points: NDArray, window: int) -> NDArray[np.float64]:
@@ -362,30 +411,36 @@ def _flat_floor_gaps(centres: NDArray, radii: NDArray) -> NDArray:
 
 def _object_gap_fn(
     sdfs: list[ObjectSDF], pos: NDArray, rot: NDArray, radii: NDArray
-) -> Callable[[NDArray], NDArray]:
-    """``gap(centres)``: ``d - r`` (m) of every sphere and object, shape ``(T, K * S)``.
+) -> Callable[..., NDArray]:
+    """``gap(centres, points=None)``: ``d - r`` (m) of every sphere and ``d`` of every point.
 
-    ``centres`` is ``(T, S, 3)`` world sphere centres; ``pos`` (T, K, 3) and ``rot``
-    (T, K, 3, 3) are the object poses of those frames.  Negative means penetration.  The
-    columns are the pairs the guards compare one by one; the per-frame minimum is for reporting.
+    ``centres`` is ``(T, S, 3)`` world sphere centres and ``points`` (optional) ``(T, P, 3)``
+    world hand surface points; ``pos`` (T, K, 3) and ``rot`` (T, K, 3, 3) are the object poses
+    of those frames.  Negative means penetration.  The columns, per object the spheres then the
+    points, ``(T, K * (S + P))``, are the pairs the guards compare one by one; the per-frame
+    minimum is for reporting.
     """
     refs = [s.as_ref() for s in sdfs]
     pos_j, rot_j = jnp.asarray(pos), jnp.asarray(rot)
     radii_j = jnp.asarray(radii)
 
     @jax.jit
-    def gap(centres):
-        def frame(c, p, r):
-            return jnp.concatenate(
-                [
-                    object_distance_rows(ref, c, p[k], r[k])[0] - radii_j
-                    for k, ref in enumerate(refs)
-                ]
-            )
+    def gap(centres, points):
+        def frame(c, pt, p, r):
+            parts = []
+            for k, ref in enumerate(refs):
+                parts.append(object_distance_rows(ref, c, p[k], r[k])[0] - radii_j)
+                if pt is not None:
+                    parts.append(object_distance_rows(ref, pt, p[k], r[k])[0])
+            return jnp.concatenate(parts)
 
-        return jax.vmap(frame)(jnp.asarray(centres), pos_j, rot_j)
+        return jax.vmap(frame)(jnp.asarray(centres), points, pos_j, rot_j)
 
-    return lambda centres: np.asarray(gap(centres))
+    def call(centres, points=None):
+        pts = None if points is None else jnp.asarray(points)
+        return np.asarray(gap(centres, pts))
+
+    return call
 
 
 def _limit_root_shift(
@@ -485,6 +540,7 @@ class _SceneSolver:
     points_fn: Callable[[Any], Any]
     floor_fn: Callable[[Any], Any] | None
     sphere_fn: Callable[[Any], Any] | None = None  # all collision spheres, (T, S, 3)
+    hand_points_fn: Callable[[Any], Any] | None = None  # hand surface points, (T, H, 3)
     compiled: dict[tuple, Any] = field(default_factory=dict)
     lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -520,6 +576,9 @@ def _build_scene_solver(
     has_stick: bool,
     terrain_window: int,
     n_objects: int = 0,
+    hand_joints: list[int] | None = None,
+    hand_offsets: NDArray | None = None,
+    hand_sphere_joints: tuple[int, ...] = (),
 ) -> _SceneSolver:
     robot = model.robot
     gain = float(fps)
@@ -585,7 +644,21 @@ def _build_scene_solver(
             )
         )
         names.append("floor")
+    hand_joints = list(hand_joints or [])
     if n_objects and model.has_collision:
+        hand_kwargs: dict[str, Any] = {}
+        if hand_joints:
+            # The hand points cover the hand meshes: their spheres need no extra clearance.
+            hand_kwargs = {
+                "sphere_margins": np.where(
+                    np.isin(_sphere_joints(robot), hand_sphere_joints),
+                    float(scene_config.object_hand_sphere_margin),
+                    float(scene_config.object_margin),
+                ),
+                "point_joints": hand_joints,
+                "point_offsets": hand_offsets,
+                "point_margin": float(scene_config.object_point_margin),
+            }
         for k in range(n_objects):
             constraints.append(
                 ObjectConstraint(
@@ -594,6 +667,7 @@ def _build_scene_solver(
                     max_rows=int(scene_config.object_rows),
                     gain=gain,
                     margin=float(scene_config.object_margin),
+                    **hand_kwargs,
                 )
             )
         names.append("objects")
@@ -667,6 +741,17 @@ def _build_scene_solver(
 
         sphere_fn = jax.jit(jax.vmap(sphere_fn))
 
+    hand_points_fn = None
+    if hand_joints:
+        hj = np.asarray(hand_joints)
+        ho = np.asarray(hand_offsets, dtype=float)[:, :3, 3]
+
+        def hand_points(q):
+            tfs = robot.joint_to_world_transforms(q)[hj]
+            return jnp.einsum("pab,pb->pa", tfs[:, :3, :3], ho) + tfs[:, :3, 3]
+
+        hand_points_fn = jax.jit(jax.vmap(hand_points))
+
     return _SceneSolver(
         ik=solver,
         solve=jax.jit(solve),
@@ -674,6 +759,7 @@ def _build_scene_solver(
         points_fn=jax.jit(jax.vmap(points)),
         floor_fn=floor_fn,
         sphere_fn=sphere_fn,
+        hand_points_fn=hand_points_fn,
     )
 
 
@@ -704,8 +790,15 @@ class FraxScenePipeline:
     ) -> None:
         self._jax_state = configure_jax()
         self.robot = robot
+        # FRAX collides with the terrain columns, so its foot targets only need to clear those
+        # (not the interpolated surface that the interaction-mesh solver uses).
         self.front = InteractionMeshPipeline(
-            robot=robot, scaler=scaler, cfg=front_config or InteractionMeshPipelineConfig()
+            robot=robot,
+            scaler=scaler,
+            cfg=dataclasses.replace(
+                front_config or InteractionMeshPipelineConfig(),
+                terrain_foot_target_surface="columns",
+            ),
         )
         self.frax_config = (
             frax_config if frax_config is not None else frax_config_for_preset(robot.preset)
@@ -763,6 +856,9 @@ class FraxScenePipeline:
         has_stick,
         terrain_window,
         n_objects=0,
+        hand_joints=(),
+        hand_offsets=None,
+        hand_sphere_joints=(),
     ) -> _SceneSolver:
         model = self.frax_model
         key = (
@@ -778,6 +874,9 @@ class FraxScenePipeline:
             has_stick,
             terrain_window,
             n_objects,
+            tuple(hand_joints),
+            () if not len(hand_joints) else _offset_key(hand_offsets),
+            tuple(hand_sphere_joints),
         )
         with _CACHE_LOCK:
             solver = _SCENE_SOLVER_CACHE.get(key)
@@ -797,6 +896,9 @@ class FraxScenePipeline:
                 has_stick=has_stick,
                 terrain_window=terrain_window,
                 n_objects=n_objects,
+                hand_joints=list(hand_joints),
+                hand_offsets=hand_offsets,
+                hand_sphere_joints=tuple(hand_sphere_joints),
             )
             _SCENE_SOLVER_CACHE[key] = solver
             while len(_SCENE_SOLVER_CACHE) > _MAX_CACHED_SCENE_SOLVERS:
@@ -945,6 +1047,32 @@ class FraxScenePipeline:
                 [_rotation_matrices(t[1]) for t in tracks], axis=1
             )  # (T, K, 3, 3)
 
+        hand_joints: list[int] = []
+        hand_offsets = np.zeros((0, 4, 4))
+        hand_sphere_joints: tuple[int, ...] = ()
+        object_contact: dict[str, dict] | None = None
+        if object_sdfs:
+            if cfg.object_hand_points:
+                hand_points = hand_surface_points(scene.model, int(cfg.object_points_per_body))
+                if hand_points:
+                    hand_joints, hand_offsets = self._frames_for(scene, hand_points)
+                    hand_sphere_joints = hand_body_joints(hand_points, hand_joints)
+            if cfg.object_contact_targets:
+                targets, object_contact = project_hand_targets(
+                    targets,
+                    points,
+                    object_sdfs,
+                    object_pos,
+                    object_rot,
+                    depth=float(cfg.object_contact_depth),
+                    push_out=bool(cfg.object_contact_push_out),
+                    contact_distance=float(cfg.object_contact_distance),
+                    release_distance=float(cfg.object_contact_release),
+                    min_frames=int(cfg.object_contact_min_frames),
+                    ramp_s=float(cfg.object_contact_ramp_s),
+                    fps=fps,
+                )
+
         # ---- per-frame reference data ----
         frames: dict[str, NDArray] = {
             "pos": targets,
@@ -1001,6 +1129,9 @@ class FraxScenePipeline:
             has_stick,
             window,
             len(object_sdfs),
+            hand_joints,
+            hand_offsets,
+            hand_sphere_joints,
         )
         q0 = self._initial_q(
             points,
@@ -1056,7 +1187,8 @@ class FraxScenePipeline:
             def object_gaps(jq: NDArray) -> NDArray:
                 """Signed gap of every (frame, object, sphere), ``(T, K * S)``."""
                 q_frax = jnp.asarray(model.frax_q_from_joint_q(jq))
-                return object_gap(solver.sphere_fn(q_frax))
+                hand = solver.hand_points_fn(q_frax) if hand_joints else None
+                return object_gap(solver.sphere_fn(q_frax), hand)
 
             def object_gap_per_frame(jq: NDArray) -> NDArray:
                 return object_gaps(jq).min(axis=1)
@@ -1098,7 +1230,9 @@ class FraxScenePipeline:
             drop = float(grid.vertical_clearance(spheres, radii + margin).min())
             floor_offset = _terrain_snap_offset(drop)
             if object_gap_per_frame is not None:
-                floor_offset, reduced = _limit_root_shift(joint_q, floor_offset, object_gaps)
+                floor_offset, reduced = _limit_root_shift(
+                    joint_q, floor_offset, object_gaps, tol=float(cfg.object_snap_tolerance)
+                )
                 if reduced:
                     _LOG.info(
                         "FRAX terrain snap reduced to %.4f m to avoid object penetration",
@@ -1120,7 +1254,7 @@ class FraxScenePipeline:
             if object_gap_per_frame is not None and clip_floor_snap != 0.0:
                 # The snap must not create or deepen object penetration.
                 clip_floor_snap, reduced = _limit_root_shift(
-                    unsnapped, clip_floor_snap, object_gaps
+                    unsnapped, clip_floor_snap, object_gaps, tol=float(cfg.object_snap_tolerance)
                 )
                 if reduced:
                     _LOG.info(
@@ -1136,7 +1270,13 @@ class FraxScenePipeline:
 
         robot_pts = np.array(solver.points_fn(q_out))
         robot_pts[..., 2] -= floor_offset  # the snaps only translate the root vertically
+        # ``alignment_*``: against the solver targets (foot targets moved out of the terrain and
+        # hand targets moved onto objects when those ran); ``alignment_source_*``: against the
+        # scaled source before either (``st.source_positions``, the yellow overlay).
         err = np.linalg.norm(robot_pts - frames["pos"], axis=-1)  # (T, P)
+        err_source = np.linalg.norm(
+            robot_pts - np.asarray(st.source_positions, dtype=robot_pts.dtype), axis=-1
+        )
 
         def group_mean(*keys: str) -> float:
             cols = [
@@ -1164,6 +1304,8 @@ class FraxScenePipeline:
             "alignment_pelvis_m": group_mean("pelvis", "hips"),
             "alignment_wrist_m": group_mean("wrist"),
             "alignment_ankle_m": group_mean("ankle"),
+            "alignment_source_mean_m": float(err_source.mean()),
+            "alignment_source_max_m": float(err_source.max()),
             "execution_provenance": self.execution_provenance(),
             "frax": {
                 "frax_version": _frax_version(),
@@ -1192,8 +1334,12 @@ class FraxScenePipeline:
                 "qp_max_iterations": int(qp_iters.max(initial=0)),
                 "stick_frames": stick_frames,
                 "shoulder_edit_limited_frames": limited_frames,
+                "foot_target_projection": st.foot_target_projection,
             },
         }
+        if object_sdfs:
+            meta["frax"]["object_hand_points"] = len(hand_joints)
+            meta["frax"]["object_contact"] = object_contact or {}
         return RetargetedMotion(
             name=motion.name or "frax_scene",
             joint_q=np.asarray(joint_q, dtype=np.float32),

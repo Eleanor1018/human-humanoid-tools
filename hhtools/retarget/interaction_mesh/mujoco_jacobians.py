@@ -124,9 +124,42 @@ def pack_joint_q_csv(
     return np.concatenate([root7, np.asarray(hinge_vals, dtype=np.float32)], axis=0)
 
 
+def unpack_joint_q_csv(
+    model,
+    robot_dof_names: tuple[str, ...],
+    joint_q: NDArray[np.floating],
+) -> NDArray[np.float64]:
+    """Inverse of :func:`pack_joint_q_csv` for ``(F, 7 + N)`` rows: MuJoCo ``qpos`` ``(F, nq)``.
+
+    Like :func:`pack_joint_q_csv`, the actuated columns are in MuJoCo joint declaration order;
+    ``robot_dof_names`` is only checked for length.
+
+    Coordinates other than the free joint and the hinge / slide joints keep ``model.qpos0``.
+    """
+    import mujoco
+
+    q = np.atleast_2d(np.asarray(joint_q, dtype=np.float64))
+    hinge_adr = [
+        int(model.jnt_qposadr[j])
+        for j in range(model.njnt)
+        if model.jnt_type[j] in (mujoco.mjtJoint.mjJNT_HINGE, mujoco.mjtJoint.mjJNT_SLIDE)
+    ]
+    if len(hinge_adr) != len(robot_dof_names) or q.shape[1] != 7 + len(hinge_adr):
+        raise ValueError(
+            f"joint_q width {q.shape[1]} / hinge count {len(hinge_adr)} does not match "
+            f"len(robot_dof_names)={len(robot_dof_names)}"
+        )
+    qpos = np.tile(np.asarray(model.qpos0, dtype=np.float64), (q.shape[0], 1))
+    qpos[:, 0:3] = q[:, 0:3]
+    qpos[:, 3:7] = q[:, [6, 3, 4, 5]]  # xyzw -> wxyz
+    qpos[:, hinge_adr] = q[:, 7:]
+    return qpos
+
+
 __all__ = [
     "body_id_or_raise",
     "build_T_qdot_to_qpos",
     "jacobian_translation_wrt_qpos",
     "pack_joint_q_csv",
+    "unpack_joint_q_csv",
 ]

@@ -42,7 +42,10 @@ from hhtools.retarget.interaction_mesh.motion_bridge import (
     ScaledMotionScene,
     scale_motion_and_objects,
 )
-from hhtools.retarget.interaction_mesh.mujoco_jacobians import pack_joint_q_csv
+from hhtools.retarget.interaction_mesh.mujoco_jacobians import (
+    pack_joint_q_csv,
+    unpack_joint_q_csv,
+)
 from hhtools.retarget.interaction_mesh.mujoco_scene import MujocoScene, require_mujoco_model
 from hhtools.retarget.newton_basic.human_aliases import auto_source_to_canonical
 from hhtools.retarget.newton_basic.scaler import HumanToRobotScaler
@@ -74,6 +77,16 @@ class SceneTargets:
     #: ``(F, 4)`` continuous source pelvis quaternions (xyzw), or ``None`` when the
     #: root orientation must not be taken from the source.
     source_root_quat_xyzw: NDArray[np.float64] | None
+    #: Per-side summary of the foot-target projection out of the terrain, or ``None`` when it
+    #: did not run (no terrain, or ``terrain_foot_target_projection`` off).
+    foot_target_projection: dict | None = None
+    #: ``(F, P, 3)`` scaled source targets *before* the foot projection (the yellow overlay).
+    #: The same array as ``positions`` when nothing moved; ``None`` means "same as positions".
+    source_positions: NDArray[np.float32] | None = None
+
+    def __post_init__(self) -> None:
+        if self.source_positions is None:
+            self.source_positions = self.positions
 
 
 @dataclass
@@ -714,6 +727,33 @@ class InteractionMeshPipeline:
         )
         mapped_pos = self._enforce_mapped_ankle_laterality(mapped_pos, robot_points)
 
+        source_positions = mapped_pos
+        foot_target_projection = None
+        if motion.terrain is not None and self.cfg.terrain_foot_target_projection:
+            from hhtools.retarget.interaction_mesh.target_projection import (
+                project_foot_targets,
+            )
+
+            mapped_pos, foot_target_projection = project_foot_targets(
+                mapped_pos,
+                robot_points,
+                self.scaled_terrain(motion, z_min, smpl_scale),
+                surface=self.cfg.terrain_foot_target_surface,
+                fps=float(motion.framerate),
+            )
+            if not any(i["frames_shifted"] for i in foot_target_projection.values()):
+                mapped_pos = source_positions  # nothing moved: keep the very same array
+            _log.info(
+                "Foot targets moved out of the terrain: %s",
+                "; ".join(
+                    f"{side} {i['frames_shifted']} frames (max {i['max_shift_m'] * 100:.1f} cm, "
+                    f"{i['frames_uncleared']} uncleared, jump "
+                    f"{i['max_jump_raw_m'] * 100:.1f} -> {i['max_jump_ramped_m'] * 100:.1f} cm)"
+                    for side, i in foot_target_projection.items()
+                )
+                or "no foot points",
+            )
+
         source_root_quat_xyzw = None
         # Continuous source pelvis quaternions for **every** frame.
         # The SQP locks the FREE-joint orientation to these values so the
@@ -766,6 +806,8 @@ class InteractionMeshPipeline:
             z_min=z_min,
             smpl_scale=smpl_scale,
             source_root_quat_xyzw=source_root_quat_xyzw,
+            foot_target_projection=foot_target_projection,
+            source_positions=source_positions,
         )
 
     def scaled_terrain(
@@ -788,8 +830,24 @@ class InteractionMeshPipeline:
     ):
         """Per-frame Laplacian targets using only IK-mapped joints.
 
-        Returns ``(targets, robot_links, z_min, smpl_scale)`` so callers
+        Returns ``(targets, robot_links, z_min, smpl_scale, robot_points)`` so callers
         can reuse the scaling parameters (e.g. for terrain height maps).
+        """
+        return self._precompute_laplacian_targets_with_scene(
+            motion, mj_model=mj_model, progress_callback=progress_callback,
+        )[0]
+
+    def _precompute_laplacian_targets_with_scene(
+        self,
+        motion: Motion,
+        *,
+        mj_model=None,
+        progress_callback: Callable[[int, int], None] | None = None,
+    ):
+        """:meth:`precompute_laplacian_targets` plus the :class:`SceneTargets` it was built from.
+
+        Returns ``((targets, robot_links, z_min, smpl_scale, robot_points), scene_targets)``.
+        Nothing is stored on ``self``, so a run owns the scene targets it reports.
         """
         from hhtools.retarget.interaction_mesh.mpc_loop import precompute_target_laplacians
 
@@ -853,7 +911,7 @@ class InteractionMeshPipeline:
                         float(pq[3]),
                     )
 
-        return targets, robot_links, z_min, smpl_scale, robot_points
+        return (targets, robot_links, z_min, smpl_scale, robot_points), scene_targets
 
     @staticmethod
     def _pelvis_orientations_are_informative(
@@ -1527,7 +1585,10 @@ class InteractionMeshPipeline:
             if progress_callback is not None:
                 progress_callback("precompute", cur, tot)
 
-        targets, robot_links, z_min, smpl_scale, robot_points = self.precompute_laplacian_targets(
+        (
+            (targets, robot_links, z_min, smpl_scale, robot_points),
+            scene_targets,
+        ) = self._precompute_laplacian_targets_with_scene(
             motion, mj_model=mj, progress_callback=_pre_cb,
         )
 
@@ -1652,22 +1713,6 @@ class InteractionMeshPipeline:
                             out_s[t, c] = (1.0 - b) * out_s[t, c] + b * out_s[t - 1, c]
                     joint_q = out_s
 
-        # ---- Diagnostic: per-clip alignment quality vs. yellow-skeleton ----
-        # Measures the residual between every retargeted robot
-        # contact-point world position and its scaled-source target
-        # (i.e. the yellow-overlay landmark it was supposed to hit).
-        # This is the same quantity the user complains about when
-        # they say "the robot doesn't track the yellow skeleton" —
-        # logging it explicitly turns "feels off" into "12 cm at the
-        # left wrist", which is far easier to debug.  Cheap (one
-        # ``mj_forward`` per frame in the pre-existing collision
-        # model) and only runs once per clip, so the cost is
-        # negligible relative to the SQP itself.
-        align_summary = self._summarise_alignment_quality(
-            traj, targets, robot_points,
-            mj_model=coll_model if coll_model is not None else mj,
-        )
-
         # ---- Z-snap to terrain ----------------------------------
         # The SQP only enforces ``foot ≥ terrain`` via hard non-
         # penetration; nothing pulls the foot **down** to actually
@@ -1747,6 +1792,31 @@ class InteractionMeshPipeline:
                 ground_z=0.0,
             )
 
+        from hhtools.robot.retarget_profile import apply_upper_body_roll_narrowing_post_ik
+
+        joint_q = apply_upper_body_roll_narrowing_post_ik(
+            joint_q,
+            dof_names,
+            self.robot.preset,
+            root_coord_count=7,
+            robot_model=self.robot,
+        )
+
+        # ---- Diagnostic: per-clip alignment quality vs. the solver / source targets ----
+        # Residual between every robot contact-point world position and (a) its solver target
+        # (the scaled source landmark, foot targets moved out of the terrain when the projection
+        # ran) and (b) the scaled source before that projection (``alignment_source_*``).  It is
+        # measured on the *returned* motion (after the terrain snap, foot clamps and
+        # post-processing), converted back to MuJoCo qpos, so it describes what the user gets.
+        # Cheap (one ``mj_forward`` per sampled frame), runs once per clip.
+        align_model = coll_model if coll_model is not None else mj
+        align_summary = self._summarise_alignment_quality(
+            unpack_joint_q_csv(align_model, dof_names, joint_q),
+            targets, robot_points,
+            mj_model=align_model,
+            source_positions=scene_targets.source_positions,
+        )
+
         fallback_reasons: list[str] = []
         if self.cfg.enable_collision and used_collision_mode == "none":
             fallback_reasons.append("hard_collision_model_unavailable")
@@ -1793,6 +1863,9 @@ class InteractionMeshPipeline:
             "alignment_pelvis_m": align_summary["pelvis_m"],
             "alignment_wrist_m": align_summary["wrist_m"],
             "alignment_ankle_m": align_summary["ankle_m"],
+            "alignment_source_mean_m": align_summary["source_mean_m"],
+            "alignment_source_max_m": align_summary["source_max_m"],
+            "foot_target_projection": scene_targets.foot_target_projection,
             "execution_provenance": {
                 "backend": "interaction_mesh",
                 "device": "cpu",
@@ -1809,16 +1882,6 @@ class InteractionMeshPipeline:
             "osqp_fallback_count": execution_diagnostics["osqp_fallback_count"],
         }
 
-        from hhtools.robot.retarget_profile import apply_upper_body_roll_narrowing_post_ik
-
-        joint_q = apply_upper_body_roll_narrowing_post_ik(
-            joint_q,
-            dof_names,
-            self.robot.preset,
-            root_coord_count=7,
-            robot_model=self.robot,
-        )
-
         return RetargetedMotion(
             name=motion.name or "interaction_mesh",
             joint_q=joint_q,
@@ -1830,20 +1893,24 @@ class InteractionMeshPipeline:
 
     @staticmethod
     def _summarise_alignment_quality(
-        traj: NDArray[np.float64],
+        traj: NDArray[np.float64],  # MuJoCo qpos per frame (F, nq)
         targets,
         robot_points,
         *,
         mj_model,
+        source_positions: NDArray | None = None,
     ) -> dict[str, float]:
         """Mean/max world-space residual between robot points and targets.
 
         Diagnostic only — the SQP has already converged, so this just
         replays each frame's qpos through MuJoCo's forward kinematics
         and compares ``robot_points[i]`` world position against
-        ``targets[f].source_vertices[i]`` (which is the **same**
-        scaled-source landmark that the yellow overlay renders for
-        that joint).  Logged at ``info`` level so the user can see
+        ``targets[f].source_vertices[i]`` (the solver target: the scaled-source
+        landmark, with foot targets moved out of the terrain when that ran).
+        ``source_positions`` (``(F, P, 3)``, the scaled source before the foot
+        projection, i.e. what the yellow overlay renders) adds the
+        ``source_mean_m`` / ``source_max_m`` residuals; without it they equal
+        ``mean_m`` / ``max_m``.  Logged at ``info`` level so the user can see
         "is the robot tracking the yellow skeleton" directly without
         running an external script.
         """
@@ -1854,6 +1921,7 @@ class InteractionMeshPipeline:
                 "mean_m": float("nan"), "max_m": float("nan"),
                 "pelvis_m": float("nan"), "wrist_m": float("nan"),
                 "ankle_m": float("nan"),
+                "source_mean_m": float("nan"), "source_max_m": float("nan"),
             }
         nh = int(targets[0].n_human_vertices)
         F = int(traj.shape[0])
@@ -1875,6 +1943,10 @@ class InteractionMeshPipeline:
             body_ids.append(int(bid))
         d = mujoco.MjData(mj_model)
         all_err = np.zeros((len(sample_idx), nh), dtype=np.float64)
+        src_err = np.zeros_like(all_err)
+        src = None
+        if source_positions is not None:
+            src = np.asarray(source_positions, dtype=np.float64)
         for row_i, f in enumerate(sample_idx):
             f = int(f)
             target_pos = np.asarray(
@@ -1889,6 +1961,11 @@ class InteractionMeshPipeline:
                 off = np.asarray(robot_points[i].local_offset, dtype=np.float64).reshape(3)
                 p_w = d.xpos[bid].astype(np.float64) + R @ off
                 all_err[row_i, i] = float(np.linalg.norm(p_w - target_pos[i]))
+                src_err[row_i, i] = (
+                    float(np.linalg.norm(p_w - src[f, i]))
+                    if src is not None
+                    else all_err[row_i, i]
+                )
         # Per-semantic subsets so we can spot which body region drifts.
         wrist_idx = [i for i, p in enumerate(robot_points[:nh]) if "wrist" in str(p.semantic).lower()]
         ankle_idx = [i for i, p in enumerate(robot_points[:nh]) if "ankle" in str(p.semantic).lower()]
@@ -1898,13 +1975,16 @@ class InteractionMeshPipeline:
             "pelvis_m": float(all_err[:, 0].mean()) if nh > 0 else float("nan"),
             "wrist_m": float(all_err[:, wrist_idx].mean()) if wrist_idx else float("nan"),
             "ankle_m": float(all_err[:, ankle_idx].mean()) if ankle_idx else float("nan"),
+            "source_mean_m": float(src_err.mean()),
+            "source_max_m": float(src_err.max()),
         }
         _log.info(
-            "Yellow-skeleton alignment: mean %.3fm  max %.3fm  "
-            "(pelvis %.3fm, wrist %.3fm, ankle %.3fm) — "
-            "sampled %d/%d frames, n_points=%d",
+            "Alignment of the returned motion, solver targets: mean %.3fm  max %.3fm  "
+            "(pelvis %.3fm, wrist %.3fm, ankle %.3fm); source (pre-projection) targets: "
+            "mean %.3fm  max %.3fm — sampled %d/%d frames, n_points=%d",
             out["mean_m"], out["max_m"],
             out["pelvis_m"], out["wrist_m"], out["ankle_m"],
+            out["source_mean_m"], out["source_max_m"],
             len(sample_idx), F, nh,
         )
         return out

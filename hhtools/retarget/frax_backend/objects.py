@@ -26,6 +26,7 @@ import jax  # noqa: E402  (configured by import_frax)
 import jax.numpy as jnp  # noqa: E402
 from frax.ik import DEFAULT_PENALTY  # noqa: E402
 from frax.ik.constraints import _SphereConstraint  # noqa: E402
+from frax.utils.spatial_utils import offset_transforms_and_jacobians  # noqa: E402
 
 __all__ = [
     "ObjectConstraint",
@@ -102,6 +103,14 @@ class ObjectSDF:
         """Lookup at object-local ``points`` (..., 3): trilinear inside, box distance outside."""
         d, _ = _lookup(self.as_ref(), np.asarray(points, dtype=np.float64).reshape(-1, 3), np)
         return np.asarray(d).reshape(np.shape(points)[:-1])
+
+    def distance_and_normal(
+        self, points: NDArray
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+        """Lookup at object-local ``points`` (..., 3): distance and the unit outward gradient."""
+        shape = np.shape(points)[:-1]
+        d, n = _lookup(self.as_ref(), np.asarray(points, dtype=np.float64).reshape(-1, 3), np)
+        return np.asarray(d).reshape(shape), np.asarray(n).reshape(*shape, 3)
 
 
 def _box_sdf(p: NDArray, half: NDArray) -> NDArray:
@@ -405,18 +414,21 @@ def object_distance_rows(sdf: dict, centers, pos, rot):
 
 @jax.tree_util.register_static
 class ObjectConstraint(_SphereConstraint):
-    """Keep collision spheres out of one moving rigid object.
+    """Keep collision spheres and surface points out of one moving rigid object.
 
     Each sphere contributes one barrier row ``h = d - r - margin`` with ``d`` from
-    :func:`object_distance_rows`: ``-(n . J_sphere) v <= gain * h``, and the ``max_rows``
-    lowest-barrier rows are kept.  A sphere already inside is pushed out along the field's
-    gradient.  The SDF is read every step from ``ref[f"object_sdf_{index}"]`` and the pose from
-    ``ref["object_pos"][index]`` (3,) and ``ref["object_rot"][index]`` (3, 3), so one compiled
-    solver serves any pose track and any field of the same grid shape.  The row is a half-space
-    through the closest surface point: exact for a convex object under translation, a local
-    approximation for concave ones and for rotating limbs.  Object motion between frames is
-    not predicted: a sphere may be reached by an object moving towards it faster than the gain
-    pushes it away, so keep ``margin`` above the per-frame object travel for fast props.
+    :func:`object_distance_rows`: ``-(n . J_sphere) v <= gain * h``.  Optional *points* (frames
+    rigidly attached to joint frames, e.g. samples of a hand's collision mesh) contribute one
+    row each, ``h = d - point_margin``, with the Jacobian of the point.  The ``max_rows``
+    lowest-barrier rows over spheres and points together are kept.  A sphere or point already
+    inside is pushed out along the field's gradient.  The SDF is read every step from
+    ``ref[f"object_sdf_{index}"]`` and the pose from ``ref["object_pos"][index]`` (3,) and
+    ``ref["object_rot"][index]`` (3, 3), so one compiled solver serves any pose track and any
+    field of the same grid shape.  The row is a half-space through the closest surface point:
+    exact for a convex object under translation, a local approximation for concave ones and
+    for rotating limbs.  Object motion between frames is not predicted: a sphere may be reached
+    by an object moving towards it faster than the gain pushes it away, so keep ``margin``
+    above the per-frame object travel for fast props.
 
     Args:
         robot: frax robot with collision data
@@ -426,6 +438,10 @@ class ObjectConstraint(_SphereConstraint):
         gain: CBF gain (1/s)
         penalty: relaxation penalty
         margin: clearance kept from the object
+        sphere_margins: per-sphere clearance (one per checked sphere), instead of ``margin``
+        point_joints: frax joint index of every point (default none)
+        point_offsets: ``(n, 4, 4)`` frame of every point in its joint's frame
+        point_margin: clearance kept between a point and the object
     """
 
     def __init__(
@@ -437,6 +453,10 @@ class ObjectConstraint(_SphereConstraint):
         gain: float = 10.0,
         penalty: float = DEFAULT_PENALTY,
         margin: float = 0.0,
+        sphere_margins=None,
+        point_joints=None,
+        point_offsets=None,
+        point_margin: float = 0.0,
     ):
         assert robot.has_collision_data
         super().__init__(robot, gain, penalty)
@@ -445,7 +465,21 @@ class ObjectConstraint(_SphereConstraint):
         self.sphere_idxs = (
             np.arange(len(self.radii)) if sphere_idxs is None else np.asarray(sphere_idxs)
         )
-        self._set_num_rows(len(self.sphere_idxs), max_rows)
+        n_s = len(self.sphere_idxs)
+        self.sphere_margins = (
+            None
+            if sphere_margins is None
+            else np.broadcast_to(np.asarray(sphere_margins, dtype=float), (n_s,)).copy()
+        )
+        self.point_joints = np.asarray([] if point_joints is None else point_joints, dtype=int)
+        n_p = len(self.point_joints)
+        self.point_offsets = (
+            np.zeros((0, 4, 4))
+            if n_p == 0
+            else np.broadcast_to(np.asarray(point_offsets, dtype=float), (n_p, 4, 4)).copy()
+        )
+        self.point_margin = float(point_margin)
+        self._set_num_rows(n_s + n_p, max_rows)
 
     def rows(self, q, ref):
         robot = self.robot
@@ -453,14 +487,35 @@ class ObjectConstraint(_SphereConstraint):
         pos = robot._link_collision_positions(joint_tfs)[self.sphere_idxs]
         radii = self.radii[self.sphere_idxs]
         k = self.index
-        d, normals = object_distance_rows(
-            ref[f"object_sdf_{k}"], pos, ref["object_pos"][k], ref["object_rot"][k]
-        )
-        h = d - radii - self.margin
-        n_rows = len(self.sphere_idxs)
-        keep = jnp.arange(n_rows) if self.max_rows is None else self._keep(h)
-        spheres = jnp.asarray(self.sphere_idxs)[keep]
+        n_s, n_p = len(self.sphere_idxs), len(self.point_joints)
+        sphere_margin = self.margin if self.sphere_margins is None else self.sphere_margins
+        if n_p == 0:
+            d, normals = object_distance_rows(
+                ref[f"object_sdf_{k}"], pos, ref["object_pos"][k], ref["object_rot"][k]
+            )
+            h = d - radii - sphere_margin
+            keep = jnp.arange(n_s) if self.max_rows is None else self._keep(h)
+            spheres = jnp.asarray(self.sphere_idxs)[keep]
+            Jv, Jw = robot._joint_jacobians(joint_tfs)
+            J = robot._link_collision_jacobians(joint_tfs, Jv, Jw, spheres)  # (k, 3, nv)
+            dh = jnp.einsum("ki,kij->kj", normals[keep], J)
+            return -dh, self.gain * h[keep]
+
         Jv, Jw = robot._joint_jacobians(joint_tfs)
-        J = robot._link_collision_jacobians(joint_tfs, Jv, Jw, spheres)  # (k, 3, nv)
+        pj = self.point_joints
+        tfs_p, Jv_p, _ = offset_transforms_and_jacobians(
+            joint_tfs[pj], Jv[pj], Jw[pj], self.point_offsets
+        )  # (n_p, 4, 4), (n_p, 3, nv)
+        centres = jnp.concatenate([pos, tfs_p[:, :3, 3]], axis=0)
+        d, normals = object_distance_rows(
+            ref[f"object_sdf_{k}"], centres, ref["object_pos"][k], ref["object_rot"][k]
+        )
+        h = jnp.concatenate([d[:n_s] - radii - sphere_margin, d[n_s:] - self.point_margin])
+        keep = jnp.arange(n_s + n_p) if self.max_rows is None else self._keep(h)
+        is_sphere = keep < n_s
+        spheres = jnp.asarray(self.sphere_idxs)[jnp.minimum(keep, n_s - 1)]
+        J_s = robot._link_collision_jacobians(joint_tfs, Jv, Jw, spheres)  # (k, 3, nv)
+        J_p = Jv_p[jnp.clip(keep - n_s, 0, n_p - 1)]  # (k, 3, nv)
+        J = jnp.where(is_sphere[:, None, None], J_s, J_p)
         dh = jnp.einsum("ki,kij->kj", normals[keep], J)
         return -dh, self.gain * h[keep]

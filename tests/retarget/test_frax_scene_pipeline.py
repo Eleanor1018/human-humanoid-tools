@@ -495,3 +495,22 @@ def test_scene_config_overrides_are_validated() -> None:
         FraxSceneConfig(substeps=0)
     assert FraxSceneConfig().terrain_reach == 0.25
     assert FraxSceneConfig().substeps == 1
+
+
+def test_alignment_is_reported_against_targets_and_source(toy, calibration, base_motion) -> None:
+    motion = _walk(base_motion, platform=(0.3, 0.9, 0.03))
+    pipe = _pipeline(toy, motion, calibration)
+    result = pipe.run(motion)
+    st = pipe.front.prepare_scene_targets(motion, mj_model=MujocoScene.from_robot(toy).model)
+    info = result.meta["frax"]["foot_target_projection"]
+    assert info and any(i["frames_shifted"] for i in info.values())
+    assert np.any(st.source_positions != st.positions)
+    joints, offsets = pipe._frames_for(MujocoScene.from_robot(toy), st.robot_points)
+    q = pipe.frax_model.frax_q_from_joint_q(result.joint_q)
+    pts = np.stack([_fk_points(pipe.frax_model, qq, joints, offsets) for qq in q])
+    err_target = np.linalg.norm(pts - st.positions, axis=-1)
+    err_source = np.linalg.norm(pts - st.source_positions, axis=-1)
+    assert result.meta["alignment_mean_m"] == pytest.approx(err_target.mean(), abs=1e-5)
+    assert result.meta["alignment_source_mean_m"] == pytest.approx(err_source.mean(), abs=1e-5)
+    assert result.meta["alignment_source_max_m"] == pytest.approx(err_source.max(), abs=1e-5)
+    assert result.meta["alignment_source_mean_m"] > result.meta["alignment_mean_m"]
