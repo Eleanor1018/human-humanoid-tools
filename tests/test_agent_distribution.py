@@ -81,6 +81,10 @@ def test_frax_is_a_base_dependency_with_platform_markers() -> None:
     assert str(frax.specifier) == "==0.2.0"
     assert {"yourdfpy", "mujoco"} <= base.keys()
     assert isinstance(frax.marker, Marker)
+    # The base yourdfpy/mujoco serve only the FRAX scene solver; mujoco has no cp314 wheels,
+    # so an unmarked base mujoco breaks a plain Python 3.14 install (sdist build).
+    assert str(base["yourdfpy"].marker) == str(frax.marker)
+    assert str(base["mujoco"].marker) == str(frax.marker)
 
     def installs(version: str, platform: str, machine: str) -> bool:
         env = {
