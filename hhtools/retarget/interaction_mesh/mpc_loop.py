@@ -462,9 +462,18 @@ def _mpc_point_vertex_index(
     nh: int,
     pt: RobotMpcPoint | None,
 ) -> int | None:
-    """Index of ``pt`` within ``mpc_points[:nh]``, or ``None`` if not in the Laplacian mesh."""
+    """Index of ``pt`` within ``mpc_points[:nh]``, or ``None`` if not in the Laplacian mesh.
+
+    A copy of a point (not the list's own object) falls back to the first point with the same
+    body and offset.
+    """
     if pt is None:
         return None
+    # The selected point itself: points on one body at one offset (a knee and an ankle merged
+    # by a fixed joint) differ in their source vertex, so equal geometry is not identity.
+    for i, p in enumerate(mpc_points[:nh]):
+        if p is pt:
+            return i
     for i, p in enumerate(mpc_points[:nh]):
         if p.body_name != pt.body_name:
             continue
@@ -479,7 +488,14 @@ def extract_foot_sticking_sequences(
     *,
     velocity_threshold: float = 0.01,
 ) -> list[dict[str, bool]]:
-    """Contact flags from source-foot XY velocity (holosoma ``extract_foot_sticking_sequence_velocity``)."""
+    """Contact flags from source-foot XY velocity (holosoma ``extract_foot_sticking_sequence_velocity``).
+
+    Each side reads the source vertex of its ``*_foot`` point.  A side without
+    one (robots mapped by ankle, e.g. ``left_ankle`` / ``left_ankle:toe`` /
+    ``left_ankle:heel``) falls back to the source vertex of the point
+    :func:`resolve_foot_mpc_points` picks, i.e. the point the foot-sticking
+    rows pin.
+    """
 
     n = len(targets)
     if n == 0:
@@ -497,6 +513,13 @@ def extract_foot_sticking_sequences(
                 right_vi is None and "right" in sem and "foot" in sem and ":" not in sem
             ):
                 right_vi = i
+        if left_vi is None or right_vi is None:
+            nh = int(targets[0].n_human_vertices)
+            left_pt, right_pt = resolve_foot_mpc_points(robot_points, nh)
+            if left_vi is None:
+                left_vi = _mpc_point_vertex_index(robot_points, nh, left_pt)
+            if right_vi is None:
+                right_vi = _mpc_point_vertex_index(robot_points, nh, right_pt)
 
     left_xy = right_xy = None
     if left_vi is not None:
@@ -739,6 +762,21 @@ def _set_freejoint_quat_from_source(
     return out
 
 
+#: A source quaternion closer than this to the identity rotation counts as "no orientation".
+IDENTITY_QUAT_TOLERANCE = 0.01
+
+
+def quat_deviation_from_identity(quats) -> np.ndarray:
+    """Largest component difference of xyzw quaternions ``(..., 4)`` from the identity rotation.
+
+    ``q`` and ``-q`` are the same rotation, so this is the smaller of the distances to
+    ``(0, 0, 0, 1)`` and ``(0, 0, 0, -1)``; shape ``quats.shape[:-1]``.
+    """
+    q = np.asarray(quats, dtype=np.float64)
+    identity = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float64)
+    return np.minimum(np.abs(q - identity).max(axis=-1), np.abs(q + identity).max(axis=-1))
+
+
 def sqp_step_laplacian(
     model,
     data,
@@ -856,9 +894,7 @@ def sqp_step_laplacian(
     # must not freeze the FREE joint — that locks yaw for the whole clip.
     _src_usable = False
     if src_quat is not None:
-        _sq = np.asarray(src_quat, dtype=np.float64).reshape(4)
-        _id = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float64)
-        _src_usable = float(np.abs(_sq - _id).max()) >= 0.01
+        _src_usable = float(quat_deviation_from_identity(src_quat)) >= IDENTITY_QUAT_TOLERANCE
     lock_ori = (
         bool(lock_root_orientation_to_source)
         and src_quat is not None
@@ -1101,24 +1137,19 @@ def sqp_step_laplacian(
 
 # Quadratic penalty on the per-row non-penetration slack.
 #
-# Tuned on holosoma parkour_1 (rp1, 80 frames).  This is deliberately a
-# *gentle* backstop, not a stiff barrier, for two reasons:
-#
-#  1. The base + feet are already anchored in absolute world space by the
-#     position cost (``position_weight`` = 400), which tracks the scaled
-#     source feet whose contact pattern relative to the terrain is correct
-#     by construction — so collision only has to stop gross penetration,
-#     not reproduce contact.
-#  2. Heightfield ``mj_geomDistance`` witness points / normals flip
-#     discontinuously as a foot crosses terrain cell boundaries.  A stiff
-#     penalty turns that chatter into the whole-robot "flashing" jitter the
-#     user reported (sweep: ρ=1e2 → 1.6°/frame² jerk_max; ρ=1e3 → 10.9°;
-#     ρ=1e4 → 30.3°, clearly trembling).  ρ=1e2 keeps the trajectory as
-#     smooth as the old (collision-dropped) path while still feasible.
+# The rows stay soft (a fully hard stack can be infeasible on contact-rich
+# frames), but the penalty must beat the position cost, which pulls feet
+# towards targets that can lie slightly inside the terrain.  On the 12
+# bundled terrain clips (rp1, full length), raising it from 1e2 to 1e4
+# cut the frames with a foot more than 1 cm inside the terrain from 36%
+# to 15% and the worst foot penetration from 128 to 45 mm (mean over
+# clips), for +0.2 cm tracking error and +1% joint acceleration p99.  The
+# earlier sweep that found 1e4 "clearly trembling" ran against a
+# transposed heightfield with biased hfield distances.
 #
 # Override via ``HHTOOLS_NP_SLACK_PENALTY`` for experiments.
 NONPENETRATION_SLACK_PENALTY = float(
-    os.environ.get("HHTOOLS_NP_SLACK_PENALTY", "1.0e2")
+    os.environ.get("HHTOOLS_NP_SLACK_PENALTY", "1.0e4")
 )
 
 
