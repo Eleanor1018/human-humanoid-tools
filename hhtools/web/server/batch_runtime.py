@@ -11,6 +11,7 @@ from hhtools.application.motions import _load_batch_motion
 from hhtools.application.progress import (
     _BATCH_CHUNK_EXPORT_FRAC,
     _BATCH_CHUNK_IK_FRAC,
+    _BATCH_ENTRIES_DONE_PROGRESS,
     _BATCH_EXPORT_WORKERS,
     _batch_chunk_export_progress,
     _batch_chunk_ik_progress,
@@ -225,11 +226,23 @@ def _run_batch_entries_sequential(
     foot_clamp_anti_penetration: bool = False,
     t_start: float | None = None,
     t_end: float | None = None,
+    done_offset: int = 0,
+    total_override: int | None = None,
+    solver_log: list[dict] | None = None,
 ) -> BatchFailureLog | None:
-    from hhtools.services.motion_library_links import library_entry_for_load
+    """Run ``entries`` one after another through the single-clip path.
 
-    total = len(entries)
-    for i, entry_dict in enumerate(entries):
+    ``backend=None`` resolves the backend per entry from its motion content
+    (scene default for terrain/object clips, plain IK default otherwise).
+    ``done_offset`` / ``total_override`` keep the progress counter monotonic
+    when this runs after other entries of the same job.
+    """
+    from hhtools.services.motion_library_links import library_entry_for_load
+    from hhtools.services.routing import default_backend_for_motion, motion_has_scene
+
+    total = total_override or len(entries)
+    for local_i, entry_dict in enumerate(entries):
+        i = done_offset + local_i
         _set_batch_job_progress(
             job,
             f"{i + 1}/{total}: {entry_dict.get('stem', '?')}",
@@ -269,18 +282,19 @@ def _run_batch_entries_sequential(
             _set_batch_job_progress(
                 job,
                 f"加载失败 {entry_dict.get('stem', '?')} · {i + 1}/{total}",
-                (i + 1) / max(1, total),
+                min(_BATCH_ENTRIES_DONE_PROGRESS, (i + 1) / max(1, total)),
                 batch_t0,
                 clip_progress=1.0,
             )
             continue
+        entry_backend = backend or default_backend_for_motion(motion_has_scene(motion))
         try:
             ret = _retarget_single(
                 model,
                 robot_name,
                 motion,
                 ref,
-                backend,
+                entry_backend,
                 ik_iters,
                 human_height,
                 limit_frames,
@@ -304,11 +318,19 @@ def _run_batch_entries_sequential(
             _set_batch_job_progress(
                 job,
                 f"重定向失败 {entry_dict.get('stem', '?')} · {i + 1}/{total}",
-                (i + 1) / max(1, total),
+                min(_BATCH_ENTRIES_DONE_PROGRESS, (i + 1) / max(1, total)),
                 batch_t0,
                 clip_progress=1.0,
             )
             continue
+        if solver_log is not None:
+            solver_log.append(
+                {
+                    "stem": str(entry_dict.get("stem", "?")),
+                    "backend": entry_backend,
+                    "gpu_parallel": False,
+                }
+            )
         try:
             subdir = _batch_export_subdir(entry_dict)
             out_path = _write_export(
@@ -319,7 +341,7 @@ def _run_batch_entries_sequential(
                 stem=(motion.name or entry.stem),
                 fps=export_fps,
                 fmt=fmt,
-                backend=backend,
+                backend=entry_backend,
                 subdir=subdir,
                 csv_header=csv_header,
                 source_path=entry_dict.get("source_path"),
@@ -330,7 +352,7 @@ def _run_batch_entries_sequential(
             _set_batch_job_progress(
                 job,
                 f"完成 {entry_dict.get('stem', '?')} · {i + 1}/{total}",
-                (i + 1) / max(1, total),
+                min(_BATCH_ENTRIES_DONE_PROGRESS, (i + 1) / max(1, total)),
                 batch_t0,
                 clip_progress=1.0,
             )
@@ -350,14 +372,14 @@ def _run_batch_entries_sequential(
             _set_batch_job_progress(
                 job,
                 f"失败 {entry_dict.get('stem', '?')} · {i + 1}/{total}",
-                (i + 1) / max(1, total),
+                min(_BATCH_ENTRIES_DONE_PROGRESS, (i + 1) / max(1, total)),
                 batch_t0,
                 clip_progress=1.0,
             )
     _set_batch_job_progress(
         job,
         f"批量完成 · {total}/{total}",
-        1.0,
+        _BATCH_ENTRIES_DONE_PROGRESS,
         batch_t0,
         clip_progress=1.0,
     )

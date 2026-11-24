@@ -394,6 +394,38 @@ def test_cli_for_frax_h2r_job_selects_the_backend_without_ik_iterations(
     assert "--ik-iterations" not in cli["command"]
 
 
+def test_cli_for_frax_scene_h2r_job_uses_the_frax_scene_solver_command(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    app = _create_test_app(tmp_path, monkeypatch)
+    source = tmp_path / "parkour_1.pkl"
+    source.write_bytes(b"test")
+    job = server_state.Job(
+        id="cli-frax-scene-job",
+        kind="retarget",
+        request={
+            "source_path": str(source),
+            "robot": "unitree_g1",
+            "backend": "frax",
+            "has_scene": True,
+            "reference": "smpl",
+            "human_height": 1.72,
+            "ik_iterations": 24,
+        },
+    )
+    with app.state.session_state.job_lock:
+        app.state.session_state.jobs[job.id] = job
+
+    with TestClient(app) as client:
+        cli = client.get(f"/api/job/{job.id}/cli").json()
+
+    assert cli["available"] is True
+    assert "hhtools retarget interaction-mesh run" in cli["command"]
+    assert "--solver frax" in cli["command"]
+    assert "--ik-iterations" not in cli["command"]
+
+
 def test_cli_and_config_download_for_source_backed_h2r_job(
     tmp_path: Path,
     monkeypatch,
@@ -567,4 +599,9 @@ def test_solver_list_reports_frax_availability_from_dependency_probes(
     assert solvers["frax"]["available"] is False
     assert solvers["frax"]["experimental"] is False
     assert solvers["frax"]["reason"] == "missing dependencies: elastiqp"
-    assert solvers["frax"]["categories"] == ["plain_motion", "robot_trajectory"]
+    assert solvers["frax"]["categories"] == [
+        "plain_motion",
+        "robot_trajectory",
+        "object_interaction",
+        "terrain_scene",
+    ]

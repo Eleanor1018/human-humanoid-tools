@@ -30,6 +30,7 @@ from pydantic import ValidationError
 from hhtools.contracts import (
     ApiError,
     AssetBundle,
+    AssetCategory,
     AssetInspection,
     AssetInspectionRequest,
     AssetKind,
@@ -820,6 +821,7 @@ def _validate_source_inspection_claims(
     *,
     inspection: AssetInspection,
     backend: str,
+    backend_persisted: bool = True,
 ) -> None:
     raw = request.get("source_entry")
     if not isinstance(raw, dict):
@@ -865,8 +867,17 @@ def _validate_source_inspection_claims(
             conflict("has_scene")
 
     suggested_backend = raw.get("suggested_backend")
-    if isinstance(suggested_backend, str) and suggested_backend != backend:
-        conflict("suggested_backend")
+    if isinstance(suggested_backend, str):
+        if backend_persisted:
+            if suggested_backend != backend:
+                conflict("suggested_backend")
+        else:
+            # The job chose no backend, so the old suggestion is not an
+            # execution override: it only has to suit the inspected content.
+            from hhtools.services.routing import compatible_backends_for_category
+
+            if suggested_backend not in compatible_backends_for_category(inspection.category):
+                conflict("suggested_backend")
 
 
 def _verified_registration(
@@ -1081,6 +1092,9 @@ class LegacyJobUpgradeService:
                 "reference is not a supported calibration reference.",
                 field="reference",
             )
+        # A job that persisted no backend gets the current default for its
+        # content (chosen after inspection below); a persisted one is kept.
+        backend_persisted = "backend" in request
         backend = _optional_string(request, "backend", "newton")
         if backend not in _BACKENDS:
             raise _invalid("backend is not a supported H2R backend.", field="backend")
@@ -1125,10 +1139,21 @@ class LegacyJobUpgradeService:
                 stage=ErrorStage.PREFLIGHT,
                 details={"asset_id": motion_bundle.asset_id},
             )
+        if not backend_persisted:
+            from hhtools.services.routing import default_ik_backend, default_scene_backend
+
+            backend = (
+                default_scene_backend()
+                if motion_inspection.category
+                in {AssetCategory.OBJECT_INTERACTION, AssetCategory.TERRAIN_SCENE}
+                else default_ik_backend()
+            )
+            parameters = _parameters(request, backend)
         _validate_source_inspection_claims(
             request,
             inspection=motion_inspection,
             backend=backend,
+            backend_persisted=backend_persisted,
         )
 
         # Preflight and RetargetService perform their own content-hash

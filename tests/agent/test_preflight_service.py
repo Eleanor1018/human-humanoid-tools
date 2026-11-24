@@ -66,6 +66,7 @@ def _write_motion(
     *,
     frame_count: int = 48,
     frame_rate_hz: float = 30.0,
+    extra: dict[str, np.ndarray] | None = None,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     positions = np.zeros((frame_count, 2, 3), dtype=np.float32)
@@ -82,6 +83,7 @@ def _write_motion(
         parent_indices=np.array([-1, 0], dtype=np.int32),
         positions=positions,
         quaternions=quaternions,
+        **(extra or {}),
     )
 
 
@@ -171,7 +173,12 @@ def _capabilities(*, closed: bool = False) -> CapabilityResponse:
                 backend_id="frax",
                 display_name="FRAX differential IK",
                 available=True,
-                supported_categories=["plain_motion", "robot_trajectory"],
+                supported_categories=[
+                    "plain_motion",
+                    "robot_trajectory",
+                    "object_interaction",
+                    "terrain_scene",
+                ],
                 output_formats=["csv", "pkl"],
             ),
             BackendCapability(
@@ -215,6 +222,8 @@ def _setup(
     motion_frame_count: int = 48,
     motion_frame_rate_hz: float = 30.0,
     validation_recorded: bool = True,
+    motion_extra: dict[str, np.ndarray] | None = None,
+    sidecar_terrain: object | None = None,
 ) -> tuple[PreflightService, str, str, str | None]:
     motion_root = tmp_path / "motions"
     robot_root = tmp_path / "robots"
@@ -231,6 +240,16 @@ def _setup(
             motion_root / motion_name,
             frame_count=motion_frame_count,
             frame_rate_hz=motion_frame_rate_hz,
+            extra=motion_extra,
+        )
+    if sidecar_terrain is not None:
+        from hhtools.io.parc_export import save_parc_pkl
+
+        save_parc_pkl(
+            (motion_root / motion_name).with_suffix(".pkl"),
+            motion_data=None,
+            terrain_data=sidecar_terrain,
+            misc_data=None,
         )
     _write_robot(robot, scaler=scaler, scaler_text=scaler_text)
     calibration_id = (
@@ -666,9 +685,11 @@ def test_plain_motion_may_choose_frax_which_takes_no_ik_iterations(tmp_path: Pat
     assert rejected.error.code == "INVALID_PARAMETER"
 
 
-def test_terrain_scene_preflight_freezes_interaction_mesh_without_newton_options(
+@pytest.mark.parametrize("backend", ["interaction_mesh", "frax"])
+def test_terrain_scene_preflight_freezes_scene_backend_without_newton_options(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    backend: str,
 ) -> None:
     service, motion_id, robot_id, calibration_id = _setup(tmp_path)
     assets = service._asset_service  # noqa: SLF001 - focused routing fixture
@@ -685,18 +706,23 @@ def test_terrain_scene_preflight_freezes_interaction_mesh_without_newton_options
                 "metadata": {
                     **result.metadata,
                     "content_parsed": True,
-                    "recommended_backend": "interaction_mesh",
+                    "recommended_backend": "interaction_mesh",  # an older recommendation
                 },
             }
         )
 
     monkeypatch.setattr(assets, "inspect", inspect)
 
-    response = service.preflight_retarget(_request(motion_id, robot_id))
+    response = service.preflight_retarget(
+        # Without a request the first available compatible backend (FRAX) runs.
+        _request(motion_id, robot_id, backend="interaction_mesh")
+        if backend == "interaction_mesh"
+        else _request(motion_id, robot_id)
+    )
 
     assert response.status is PreflightStatus.READY
     assert response.plan is not None
-    assert response.plan.backend == "interaction_mesh"
+    assert response.plan.backend == backend
     assert response.plan.calibration_id == calibration_id
     assert response.plan.parameters["run_mode"] == "smoke"
     assert "ik_iterations" not in response.plan.parameters
@@ -1006,3 +1032,22 @@ def test_closed_scheduler_rejects_without_creating_a_plan(tmp_path: Path) -> Non
     assert response.error is not None
     assert response.error.code == "SCHEDULER_CLOSED"
     assert response.error.retryable is True
+
+
+def test_unified_npz_with_a_terrain_sidecar_cannot_run_on_a_flat_solver(
+    tmp_path: Path, synthetic_terrain_motion
+) -> None:
+    """Scene content, not only the dataset name, decides the workflow category."""
+    service, motion_id, robot_id, _ = _setup(
+        tmp_path, sidecar_terrain=synthetic_terrain_motion.terrain
+    )
+
+    default = service.preflight_retarget(_request(motion_id, robot_id))
+    flat = service.preflight_retarget(_request(motion_id, robot_id, backend="newton"))
+
+    assert default.status is PreflightStatus.READY
+    assert default.plan is not None
+    assert default.plan.backend in {"frax", "interaction_mesh"}
+    assert flat.status is PreflightStatus.REJECTED
+    assert flat.error is not None
+    assert flat.error.code == "BACKEND_INCOMPATIBLE"

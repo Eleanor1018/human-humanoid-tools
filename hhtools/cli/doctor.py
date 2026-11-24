@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import platform
 import shutil
 import sys
 from dataclasses import asdict, dataclass
@@ -151,17 +152,39 @@ def _check_retarget() -> DoctorCheck:
     )
 
 
+def _frax_platform_exclusion() -> str | None:
+    """Return why FRAX is not installable here, mirroring the pyproject markers."""
+
+    if sys.version_info >= (3, 14):
+        return "Python 3.14 or newer (elastiqp has no wheels; use Python 3.12 or 3.13)"
+    if sys.platform == "darwin" and platform.machine() == "x86_64":
+        return "macOS x86_64 (jaxlib ships no wheels for this platform)"
+    return None
+
+
 def _check_retarget_frax() -> DoctorCheck:
     modules = _availability(("frax", "jax", "elastiqp", "mujoco", "yourdfpy"))
+    # Readiness means "the imports are available": the doctor reports what is
+    # installed; the platform exclusion stays in the details and summary.
     ready = all(modules.values())
-    return DoctorCheck(
-        "retarget-frax",
-        ready,
-        "FRAX, JAX and ElastiQP imports are available (default CPU IK solver)"
-        if ready
-        else "FRAX solver imports are missing (install the retarget-frax extra)",
-        {"modules": modules},
-    )
+    exclusion = _frax_platform_exclusion()
+    details: dict[str, Any] = {
+        "modules": modules,
+        "platform_supported": exclusion is None,
+        "missing": [module for module, available in modules.items() if not available],
+    }
+    if ready:
+        summary = "FRAX, JAX and ElastiQP imports are available (default CPU IK solver)"
+    elif exclusion is not None:
+        details["reason"] = exclusion
+        summary = f"FRAX is not available on this platform: {exclusion}"
+    else:
+        summary = (
+            "FRAX solver imports are missing: "
+            + ", ".join(details["missing"])
+            + " (reinstall hhtools; FRAX is a default dependency)"
+        )
+    return DoctorCheck("retarget-frax", ready, summary, details)
 
 
 def _check_mcp() -> DoctorCheck:

@@ -28,7 +28,7 @@ from hhtools.application.robots import (
     _require_newton_package,
 )
 from hhtools.application.state import _snapshot_job_request
-from hhtools.services.routing import default_ik_backend
+from hhtools.services.routing import default_backend_for_motion, default_ik_backend
 
 if TYPE_CHECKING:
     from hhtools.application.state import Job, SessionState
@@ -313,8 +313,8 @@ def _r2r_prepare_retarget_motion(
     profile: str,
     has_scene: bool,
 ):
-    """Attach terrain/objects when the Interaction-Mesh backend is selected."""
-    if (backend or "newton").strip().lower() != "interaction_mesh":
+    """Attach terrain/objects when a scene-capable backend (FRAX, interaction-mesh) is selected."""
+    if (backend or "newton").strip().lower() not in ("interaction_mesh", "frax"):
         return motion
     if not has_scene or clip_dir is None or robot_path is None:
         return motion
@@ -357,8 +357,15 @@ def _r2r_retarget_progress_cb(
     if backend == "frax":
         if done <= 0:
             _set_retarget_job_clip_progress(job, 0.1, f"FRAX 整段求解 {total} 帧…")
-        else:
+        elif done >= total:
             _set_retarget_job_clip_progress(job, 0.95, "FRAX 求解完成，正在后处理…")
+        else:
+            # FRAX scene solver: staged progress (precompute, build, solve).
+            _set_retarget_job_clip_progress(
+                job,
+                min(0.94, 0.05 + 0.9 * (done / max(1, total))),
+                f"FRAX 场景求解 {done}/{total}",
+            )
         return
     if done <= 0:
         _set_retarget_job_clip_progress(job, 0.08, "正在准备逐帧 IK…")
@@ -440,7 +447,14 @@ def _run_r2r_batch_job(job: Job, body: dict, state: SessionState) -> None:
         fmt = (body.get("format") or "csv").lower()
         csv_header = _parse_csv_header(body.get("csv_header", True))
         out_name = body.get("out_dir") or "r2r_batch_export"
-        backend = (body.get("backend") or default_ik_backend()).strip().lower()
+        backend = (
+            (
+                body.get("backend")
+                or default_backend_for_motion(any(bool(e.get("has_scene")) for e in entries))
+            )
+            .strip()
+            .lower()
+        )
 
         job.request = _snapshot_job_request(
             {

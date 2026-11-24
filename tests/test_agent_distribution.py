@@ -67,3 +67,53 @@ def test_readmes_discover_the_public_agent_guide() -> None:
         assert "(docs/agent.md)" in contents
         assert "uv sync --locked" in contents
         assert "--managed-python --python 3.12" not in contents
+
+
+def test_frax_is_a_base_dependency_with_platform_markers() -> None:
+    from packaging.markers import Marker
+    from packaging.requirements import Requirement
+
+    project = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    base = {Requirement(item).name: Requirement(item) for item in project["dependencies"]}
+
+    frax = base["frax"]
+    assert frax.extras == {"ik"}
+    assert str(frax.specifier) == "==0.2.0"
+    assert {"yourdfpy", "mujoco"} <= base.keys()
+    assert isinstance(frax.marker, Marker)
+    # The base yourdfpy/mujoco serve only the FRAX scene solver; mujoco has no cp314 wheels,
+    # so an unmarked base mujoco breaks a plain Python 3.14 install (sdist build).
+    assert str(base["yourdfpy"].marker) == str(frax.marker)
+    assert str(base["mujoco"].marker) == str(frax.marker)
+
+    def installs(version: str, platform: str, machine: str) -> bool:
+        env = {
+            "python_version": version,
+            "python_full_version": f"{version}.0",
+            "sys_platform": platform,
+            "platform_machine": machine,
+        }
+        return frax.marker.evaluate(env)
+
+    assert installs("3.12", "darwin", "arm64")
+    assert installs("3.13", "linux", "x86_64")
+    assert installs("3.13", "linux", "aarch64")
+    assert installs("3.12", "win32", "AMD64")
+    assert not installs("3.12", "darwin", "x86_64")
+    assert not installs("3.14", "linux", "x86_64")
+
+    # The compatibility alias keeps old ``--extra retarget-frax`` commands valid.
+    alias = {_requirement_name(item) for item in project["optional-dependencies"]["retarget-frax"]}
+    assert alias == {"frax", "yourdfpy", "mujoco"}
+
+
+def test_installers_require_the_frax_runtime() -> None:
+    for relative in (
+        "install.sh",
+        "desktop/scripts/install-packaged-runtime.sh",
+        ".github/workflows/release.yml",
+    ):
+        text = (REPO_ROOT / relative).read_text(encoding="utf-8")
+        assert "--require retarget-frax" in text, relative
+    runtime = (REPO_ROOT / "desktop/scripts/prepare-runtime.mjs").read_text(encoding="utf-8")
+    assert "import fastapi, frax, hhtools, jax," in runtime

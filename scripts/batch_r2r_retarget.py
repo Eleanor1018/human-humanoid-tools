@@ -99,8 +99,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         choices=("auto", "newton", "frax", "interaction_mesh"),
         default="auto",
         help=(
-            "Retarget backend (default: auto — interaction_mesh for scene clips, "
-            "otherwise frax when installed, else newton)."
+            "Retarget backend (default: auto — frax when installed, else "
+            "interaction_mesh for scene clips / newton for plain motion; frax runs "
+            "scene clips on the FRAX scene solver)."
         ),
     )
     p.add_argument(
@@ -424,7 +425,7 @@ def _prepare_source_motion(
         framerate=src_fps,
         name=traj_path.stem,
     )
-    if backend == "interaction_mesh" and has_scene:
+    if backend in ("interaction_mesh", "frax") and has_scene:
         from hhtools.web.output.r2r_scene import attach_r2r_clip_scene_to_motion
 
         motion = attach_r2r_clip_scene_to_motion(

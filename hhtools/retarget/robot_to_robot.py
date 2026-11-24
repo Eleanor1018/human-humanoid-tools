@@ -1522,15 +1522,14 @@ def r2r_scene_scale_ratio(
 def suggested_r2r_backend(profile: str, *, has_scene: bool = False) -> str:
     """Default retarget backend for an R2R upload profile.
 
-    Scene profiles use interaction-mesh; plain trajectories use the default IK
-    backend (FRAX when installed, otherwise Newton).
+    Scene profiles use the FRAX scene solver when FRAX is installed and
+    interaction-mesh otherwise; plain trajectories use the default IK backend
+    (FRAX when installed, otherwise Newton).
     """
-    from hhtools.retarget.frax_backend import default_ik_backend
+    from hhtools.retarget.frax_backend import default_backend_for_motion
 
     prof = (profile or "mimic").strip().lower()
-    if prof in ("intermimic", "meshmimic") or has_scene:
-        return "interaction_mesh"
-    return default_ik_backend()
+    return default_backend_for_motion(prof in ("intermimic", "meshmimic") or has_scene)
 
 
 def retarget_robot_to_robot(
@@ -1550,9 +1549,10 @@ def retarget_robot_to_robot(
 
     ``backend`` is ``"frax"`` (CPU differential IK; the default when
     installed), ``"newton"`` (GPU IK; the fallback) or ``"interaction_mesh"``
-    (MPC on terrain / interaction objects).  For the latter, attach scene data to
-    ``source_motion`` before calling (see
-    :func:`~hhtools.io.r2r_scene.attach_r2r_clip_scene_to_motion`).
+    (MPC on terrain / interaction objects).  Terrain / objects attached to
+    ``source_motion`` (see
+    :func:`~hhtools.io.r2r_scene.attach_r2r_clip_scene_to_motion`) make
+    ``"frax"`` run the FRAX scene solver and ``"interaction_mesh"`` the MPC.
     """
     cfg, ref = _build_scaler_config(source_model, target_model, calibrated_joint_q)
     reference_key = f"robot_{source_model.preset.name}"
@@ -1562,6 +1562,48 @@ def retarget_robot_to_robot(
 
         backend = default_ik_backend()
     backend = backend.strip().lower()
+
+    if backend == "frax" and (
+        source_motion.terrain is not None or bool(source_motion.objects)
+    ):
+        from hhtools.retarget.frax_backend import FraxScenePipeline
+        from hhtools.retarget.newton_basic.scaler import HumanToRobotScaler
+
+        scaler = HumanToRobotScaler(
+            source_motion.hierarchy,
+            cfg,
+            human_height=float(ref.height_m),
+        )
+
+        def _scene_cb(stage: str, cur: int, tot: int) -> None:
+            if progress_callback is None:
+                return
+            tot = max(1, tot)
+            cur = max(0, min(cur, tot))
+            # precompute 0-30%, build 30-40%, solve (one compiled scan) 40-95%.
+            if stage == "precompute":
+                done = 0.3 * cur
+            elif stage == "build":
+                done = 0.3 * tot + 0.1 * cur
+            elif stage == "mpc":
+                done = 0.4 * tot + (0.55 * tot if cur >= tot else 0.0)
+            else:
+                done = 0.97 * tot
+            progress_callback(max(0, min(tot - 1, int(round(done)))), tot)
+
+        ret = FraxScenePipeline(target_model, scaler).run(
+            source_motion, progress_callback=_scene_cb
+        )
+        # Same ankle realignment as the interaction-mesh branch: a no-op for clips
+        # with a real interaction scene (the scene solver grounds the robot on the
+        # terrain / objects itself), kept for the prop-less edge case.
+        return align_retargeted_ankles_to_scaled_source(
+            target_model,
+            source_model,
+            source_motion,
+            ret,
+            calibrated_joint_q,
+        )
 
     if backend == "interaction_mesh":
         from hhtools.retarget.interaction_mesh.config import InteractionMeshPipelineConfig

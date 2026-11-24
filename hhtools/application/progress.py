@@ -27,6 +27,8 @@ def _format_duration(seconds: float) -> str:
 _BATCH_CHUNK_IK_FRAC = 0.82
 _BATCH_CHUNK_EXPORT_FRAC = 0.18
 _BATCH_ZIP_PROGRESS = 0.985
+# Entry loops stop below the archive stage so progress never goes backwards.
+_BATCH_ENTRIES_DONE_PROGRESS = 0.98
 _BATCH_EXPORT_WORKERS = 8
 
 
@@ -74,7 +76,7 @@ def _set_batch_job_progress(
 ) -> None:
     if job is None:
         return
-    job.progress = min(0.99, max(0.0, float(progress)))
+    job.progress = max(job.progress, min(0.99, max(0.0, float(progress))))
     if clip_progress is not None:
         job.clip_progress = min(1.0, max(0.0, float(clip_progress)))
     job.message = message + _batch_eta_suffix(job.progress, t0)

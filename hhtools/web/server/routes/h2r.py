@@ -21,7 +21,7 @@ from hhtools.application.previews import (
 from hhtools.application.retarget import _request_human_height, _retarget_single
 from hhtools.application.state import Job, _snapshot_job_request
 from hhtools.io.export_bundle import ensure_export_path, sanitize_export_stem
-from hhtools.services.routing import default_ik_backend
+from hhtools.services.routing import default_backend_for_motion, motion_has_scene
 from hhtools.web.server.requests import HumanRetargetRequest
 
 _log = logging.getLogger(__name__)
@@ -232,7 +232,6 @@ def register_h2r_routes(app, *, state, jobs) -> H2RRouteOperations:
             robot = body["robot"]
             token = body["motion_token"]
             reference = body.get("reference", "smpl")
-            backend = body.get("backend") or default_ik_backend()
             ik_iters = int(body.get("ik_iterations", 24))
             foot_clamp_anti_penetration = bool(body.get("foot_clamp_anti_penetration", False))
             from hhtools.robot.registry import get as _get_preset
@@ -244,6 +243,9 @@ def register_h2r_routes(app, *, state, jobs) -> H2RRouteOperations:
             rec = state.motions.get(token)
             if rec is None:
                 raise ValueError("motion token expired; reload the clip")
+            backend = body.get("backend") or default_backend_for_motion(
+                motion_has_scene(rec["motion"])
+            )
             source_entry = rec.get("library_entry")
             job.request = _snapshot_job_request(
                 {
@@ -253,6 +255,7 @@ def register_h2r_routes(app, *, state, jobs) -> H2RRouteOperations:
                     "robot": robot,
                     "reference": reference,
                     "backend": backend,
+                    "has_scene": motion_has_scene(rec["motion"]),
                     "ik_iterations": ik_iters,
                     "human_height": human_height,
                     "limit_frames": limit_frames,
@@ -411,7 +414,9 @@ def register_h2r_routes(app, *, state, jobs) -> H2RRouteOperations:
         body = request.model_dump()
         # Record the backend the job will run, not ``None``, so history and the
         # reproduce-CLI command stay exact regardless of later installs.
-        body["backend"] = body["backend"] or default_ik_backend()
+        body["backend"] = body["backend"] or default_backend_for_motion(
+            motion_has_scene(state.motions[request.motion_token]["motion"])
+        )
         job = _schedule_job("retarget", body, _run_retarget_job, args=(body,))
         return {"job_id": job.id}
 

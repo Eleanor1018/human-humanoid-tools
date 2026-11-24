@@ -251,6 +251,7 @@ export function HumanToRobotView({
   const [retargetFps, setRetargetFps] = useState("");
   const [backend, setBackend] = useState<Backend>("newton");
   const [backendTouched, setBackendTouched] = useState(false);
+  const hasScene = Boolean(motion?.terrain || motion?.objects?.length);
   const fraxAvailable = useFraxAvailable();
   useDefaultIkBackend(backend, setBackend, fraxAvailable, backendTouched);
   const actionRequest = useRef<AbortController | null>(null);
@@ -689,7 +690,9 @@ export function HumanToRobotView({
         backend === "newton"
           ? text("Starting Newton IK…", "正在启动 Newton IK…")
           : backend === "frax"
-            ? text("Starting FRAX…", "正在启动 FRAX…")
+            ? hasScene
+              ? text("Starting FRAX scene solver…", "正在启动 FRAX 场景求解器…")
+              : text("Starting FRAX…", "正在启动 FRAX…")
             : text("Starting Interaction-Mesh…", "正在启动 Interaction-Mesh…"),
       );
       const value = await retarget(
@@ -930,7 +933,9 @@ export function HumanToRobotView({
                   }}
                 >
                   {(fraxAvailable || backend === "frax") && (
-                    <option value="frax">FRAX</option>
+                    <option value="frax">
+                      {hasScene ? text("FRAX (scene solver)", "FRAX（场景求解器）") : "FRAX"}
+                    </option>
                   )}
                   <option value="newton">Newton IK</option>
                   <option value="interaction_mesh">Interaction-Mesh</option>

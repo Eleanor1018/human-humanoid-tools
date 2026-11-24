@@ -23,7 +23,7 @@ from hhtools.application.motions import _load_batch_motion
 from hhtools.application.progress import _BATCH_ZIP_PROGRESS, _set_batch_job_progress
 from hhtools.application.retarget import _request_human_height
 from hhtools.application.state import Job, _snapshot_job_request
-from hhtools.services.routing import default_ik_backend
+from hhtools.services.routing import default_ik_backend, motion_has_scene
 from hhtools.web.server.batch_runtime import (
     _batch_export_retargeted_chunk,
     _record_batch_failure,
@@ -44,6 +44,17 @@ _log = logging.getLogger(__name__)
 @dataclass(frozen=True, slots=True)
 class BatchRouteOperations:
     run_batch_job: Callable
+
+
+def _solver_mode_summary(solver_log: list[dict]) -> str:
+    """Summarise the solvers that actually ran, from the per-entry records."""
+
+    backends = {str(item["backend"]) for item in solver_log}
+    if len(backends) > 1:
+        return "mixed"
+    if any(item.get("gpu_parallel") for item in solver_log):
+        return "GPU-parallel Newton"
+    return "per-clip"
 
 
 def register_batch_routes(app, *, state, jobs) -> BatchRouteOperations:
@@ -71,7 +82,11 @@ def register_batch_routes(app, *, state, jobs) -> BatchRouteOperations:
         try:
             robot = body["robot"]
             default_reference = body.get("reference", "smpl")
-            backend = body.get("backend") or default_ik_backend()
+            explicit_backend = body.get("backend") or None
+            # No backend named: the plain default for plain clips, the scene
+            # default per scene clip (resolved from each entry's content).
+            backend = explicit_backend or default_ik_backend()
+            auto_backend = explicit_backend is None
             ik_iters = int(body.get("ik_iterations", 24))
             from hhtools.robot.registry import get as _get_preset
 
@@ -116,6 +131,7 @@ def register_batch_routes(app, *, state, jobs) -> BatchRouteOperations:
                 "robot": robot,
                 "reference": default_reference,
                 "backend": backend,
+                "backend_auto": auto_backend,
                 "ik_iterations": ik_iters,
                 "human_height": human_height,
                 "limit_frames": limit_frames,
@@ -150,6 +166,9 @@ def register_batch_routes(app, *, state, jobs) -> BatchRouteOperations:
             done_clips = 0
             batch_t0 = time.monotonic()
             clamp_note = ""
+            entry_warnings: list[dict] = []
+            # One record per entry that was solved: the solver that really ran.
+            solver_log: list[dict] = []
             if backend == "newton" and batch_size < requested_batch:
                 clamp_note = f"（GPU 上限，批量 {requested_batch}→{batch_size}）"
             _set_batch_job_progress(
@@ -168,7 +187,7 @@ def register_batch_routes(app, *, state, jobs) -> BatchRouteOperations:
                     model,
                     robot,
                     default_reference,
-                    backend,
+                    explicit_backend,
                     ik_iters,
                     human_height,
                     limit_frames,
@@ -189,10 +208,14 @@ def register_batch_routes(app, *, state, jobs) -> BatchRouteOperations:
                     foot_clamp_anti_penetration=foot_clamp_anti_penetration,
                     t_start=export_t_start,
                     t_end=export_t_end,
+                    solver_log=solver_log,
                 )
             else:
                 from collections import defaultdict
 
+                # Scene clips found while loading (backend not named) run on
+                # the scene solver after the plain chunks.
+                scene_deferred: list[dict] = []
                 by_ref: dict[str, list[dict]] = defaultdict(list)
                 for e in entries:
                     by_ref[_entry_reference(e, default_reference)].append(e)
@@ -234,6 +257,21 @@ def register_batch_routes(app, *, state, jobs) -> BatchRouteOperations:
                                     retarget_fps=retarget_fps,
                                     limit_frames=limit_frames,
                                 )
+                                if motion_has_scene(motion):
+                                    # A scene never goes to the GPU chunks: it runs
+                                    # after them, one clip at a time.  An explicit
+                                    # Newton backend stays attached and warns.
+                                    if not auto_backend:
+                                        warning = (
+                                            f"backend {backend!r} ignores the terrain/objects "
+                                            "of this clip"
+                                        )
+                                        _log.warning("%s: %s", e.get("stem", "?"), warning)
+                                        entry_warnings.append(
+                                            {"stem": e.get("stem", "?"), "warning": warning}
+                                        )
+                                    scene_deferred.append(e)
+                                    continue
                                 loaded_chunk.append((e, motion, entry))
                             except Exception as err:  # noqa: BLE001
                                 failure_log = _record_batch_failure(
@@ -296,6 +334,14 @@ def register_batch_routes(app, *, state, jobs) -> BatchRouteOperations:
                                 chunk_label=chunk_label,
                                 foot_clamp_anti_penetration=(foot_clamp_anti_penetration),
                             )
+                            solver_log.extend(
+                                {
+                                    "stem": str(item[0].get("stem", "?")),
+                                    "backend": "newton",
+                                    "gpu_parallel": len(loaded_chunk) > 1,
+                                }
+                                for item in exports
+                            )
                             done_clips, failure_log = _batch_export_retargeted_chunk(
                                 exports,
                                 model=model,
@@ -344,6 +390,38 @@ def register_batch_routes(app, *, state, jobs) -> BatchRouteOperations:
                                 clip_progress=1.0,
                             )
 
+            if backend not in ("interaction_mesh", "frax") and scene_deferred:
+                failure_log = _run_batch_entries_sequential(
+                    scene_deferred,
+                    model,
+                    robot,
+                    default_reference,
+                    explicit_backend,
+                    ik_iters,
+                    human_height,
+                    limit_frames,
+                    retarget_fps,
+                    export_fps,
+                    fmt,
+                    csv_header,
+                    out_dir,
+                    state,
+                    job=job,
+                    job_id=job.id,
+                    out_name=out_name,
+                    written=written,
+                    errors=errors,
+                    failures=failures,
+                    failure_log=failure_log,
+                    batch_t0=batch_t0,
+                    foot_clamp_anti_penetration=foot_clamp_anti_penetration,
+                    t_start=export_t_start,
+                    t_end=export_t_end,
+                    done_offset=total - len(scene_deferred),
+                    total_override=total,
+                    solver_log=solver_log,
+                )
+
             if failure_log is not None:
                 failure_log.finalize(job_id=job.id, out_name=out_name)
 
@@ -357,9 +435,7 @@ def register_batch_routes(app, *, state, jobs) -> BatchRouteOperations:
             from hhtools.io.export_bundle import zip_directory
 
             zip_path = zip_directory(out_dir, out_name, compress=False)
-            gpu_note = (
-                "GPU-parallel Newton" if backend == "newton" and batch_size > 1 else "per-clip"
-            )
+            gpu_note = _solver_mode_summary(solver_log)
             job.result = {
                 "written": written,
                 "errors": errors,
@@ -372,12 +448,15 @@ def register_batch_routes(app, *, state, jobs) -> BatchRouteOperations:
                 "batch_size": batch_size,
                 "requested_batch_size": requested_batch,
                 "solver_mode": gpu_note,
+                "solvers": solver_log,
             }
+            if entry_warnings:
+                job.result["warnings"] = entry_warnings
             job.progress = 1.0
             job.clip_progress = 1.0
             fail_note = f"，{len(failures)} 失败" if failures else ""
             job.message = f"{len(written)} 成功{fail_note}" + (
-                f" · {gpu_note}" if backend == "newton" else ""
+                f" · {gpu_note}" if gpu_note != "per-clip" else ""
             )
             job.mark_terminal("done")
         except Exception as err:  # noqa: BLE001

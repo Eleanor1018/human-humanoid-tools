@@ -21,8 +21,10 @@ from hhtools.services import asset_inspection as asset_inspection_module
 from hhtools.services.asset_inspection import (
     MotionAssetDiscoveryError,
     MotionAssetInspector,
+    discover_motion_sidecars,
     discover_primary,
 )
+from hhtools.services.routing import backend_for_category
 
 
 def _digest(path: Path) -> str:
@@ -356,7 +358,8 @@ def test_object_interaction_requires_and_discovers_object_mesh(tmp_path: Path) -
     assert inspection.dataset == "omomo"
     assert inspection.reference_model == "smplx"
     assert inspection.has_object is True
-    assert inspection.metadata["recommended_backend"] == "interaction_mesh"
+    assert inspection.metadata["recommended_backend"] in ("frax", "interaction_mesh")
+    assert inspection.metadata["recommended_backend"] == backend_for_category(inspection.category)
     assert inspection.metadata["pickle_executed"] is False
     assert inspection.metadata["content_parsed"] is False
     assert inspection.metadata["content_validation_code"] == "CONTENT_REQUIRES_ISOLATED_VALIDATION"
@@ -393,7 +396,48 @@ def test_terrain_scene_inspection_keeps_terrain_sidecar_bound_to_bundle(
     assert inspection.status is InspectionStatus.VALID_WITH_WARNINGS
     assert inspection.category is AssetCategory.TERRAIN_SCENE
     assert inspection.has_terrain is True
-    assert inspection.metadata["recommended_backend"] == "interaction_mesh"
+    assert inspection.metadata["recommended_backend"] in ("frax", "interaction_mesh")
+    assert inspection.metadata["recommended_backend"] == backend_for_category(inspection.category)
+
+
+@pytest.mark.parametrize("persisted", ["interaction_mesh", "frax"])
+def test_scene_clip_accepts_either_persisted_scene_backend(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, persisted: str
+) -> None:
+    """Assets registered before FRAX became the scene default recorded
+    ``interaction_mesh``; any backend compatible with the category is accepted."""
+    from hhtools.retarget import frax_backend
+
+    monkeypatch.setattr(frax_backend, "missing_frax_dependencies", lambda: [])
+    primary = tmp_path / "parc_ms" / "parkour_1" / "parkour_1.pkl"
+    primary.parent.mkdir(parents=True)
+    with primary.open("wb") as handle:
+        pickle.dump({"motion_data": {}, "terrain_data": {}}, handle)
+    terrain = primary.parent / "parkour_1_terrain.obj"
+    terrain.write_text("v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n", encoding="utf-8")
+    primary_relative = primary.relative_to(tmp_path).as_posix()
+    terrain_relative = terrain.relative_to(tmp_path).as_posix()
+    bundle = _bundle(
+        tmp_path,
+        primary=primary_relative,
+        category=AssetCategory.TERRAIN_SCENE,
+        dataset="parc_ms",
+        files=[
+            (primary_relative, AssetFileRole.MOTION),
+            (terrain_relative, AssetFileRole.TERRAIN_MESH),
+        ],
+    ).model_copy(
+        update={
+            "detected": AssetDetected(
+                dataset="parc_ms", reference="smpl", recommended_backend=persisted
+            )
+        }
+    )
+
+    inspection = MotionAssetInspector().inspect(bundle, tmp_path)
+
+    assert inspection.status is InspectionStatus.VALID_WITH_WARNINGS
+    assert inspection.metadata["recommended_backend"] == "frax"
 
 
 def test_missing_required_object_sidecar_returns_stable_bundle_error(tmp_path: Path) -> None:
@@ -579,3 +623,217 @@ def test_directory_discovery_rejects_multiple_logical_clips(tmp_path: Path) -> N
 
     assert caught.value.code == "BUNDLE_AMBIGUOUS"
     assert caught.value.candidates == ("one.npz", "two.npz")
+
+
+def _scene_bundle(
+    tmp_path: Path,
+    name: str,
+    motion,
+    *,
+    declared: AssetCategory,
+    backend=None,
+    register_sidecars: bool = True,
+):
+    from hhtools.io.npz import save_npz
+
+    primary = tmp_path / "unified_npz" / f"{name}.npz"
+    save_npz(motion, primary)
+    relative = primary.relative_to(tmp_path).as_posix()
+    files = [(relative, AssetFileRole.MOTION)]
+    if register_sidecars:
+        for role, paths in discover_motion_sidecars(primary, dataset="unified_npz").items():
+            files.extend((path.relative_to(tmp_path.resolve()).as_posix(), role) for path in paths)
+    bundle = _bundle(
+        tmp_path,
+        primary=relative,
+        category=declared,
+        dataset="unified_npz",
+        files=files,
+    )
+    if backend is not None:
+        bundle = bundle.model_copy(
+            update={"detected": AssetDetected(dataset="unified_npz", recommended_backend=backend)}
+        )
+    return primary, bundle
+
+
+def _object_motion(motion):
+    import dataclasses
+
+    from hhtools.core.scene import SceneObject
+
+    box = SceneObject(
+        name="box",
+        positions=np.zeros((motion.num_frames, 3), dtype=np.float32),
+        quaternions=np.tile(np.array([0, 0, 0, 1], dtype=np.float32), (motion.num_frames, 1)),
+        extents=np.array([0.3, 0.3, 0.3], dtype=np.float32),
+    )
+    return dataclasses.replace(motion, terrain=None, objects=[box])
+
+
+def test_unified_npz_with_terrain_is_a_terrain_scene(tmp_path: Path, synthetic_terrain_motion):
+    primary, bundle = _scene_bundle(
+        tmp_path, "hill", synthetic_terrain_motion, declared=AssetCategory.TERRAIN_SCENE
+    )
+
+    discovery = discover_primary(primary)
+    inspection = MotionAssetInspector().inspect(bundle, tmp_path)
+
+    assert discovery.dataset == "unified_npz"
+    assert discovery.category is AssetCategory.TERRAIN_SCENE
+    assert discovery.recommended_backend == backend_for_category(AssetCategory.TERRAIN_SCENE)
+    assert inspection.status is InspectionStatus.VALID, inspection.errors
+    assert inspection.category is AssetCategory.TERRAIN_SCENE
+    assert inspection.has_terrain and not inspection.has_object
+
+
+def test_unified_npz_with_objects_is_an_object_interaction(
+    tmp_path: Path, synthetic_terrain_motion
+):
+    motion = _object_motion(synthetic_terrain_motion)
+    primary, bundle = _scene_bundle(
+        tmp_path, "carry", motion, declared=AssetCategory.OBJECT_INTERACTION
+    )
+
+    discovery = discover_primary(primary)
+    inspection = MotionAssetInspector().inspect(bundle, tmp_path)
+
+    assert discovery.category is AssetCategory.OBJECT_INTERACTION
+    assert inspection.status is InspectionStatus.VALID, inspection.errors
+    assert inspection.category is AssetCategory.OBJECT_INTERACTION
+    assert inspection.has_object and not inspection.has_terrain
+
+
+def test_plain_registered_scene_clip_is_reported_as_a_scene_not_rejected(
+    tmp_path: Path, synthetic_terrain_motion
+):
+    """A bundle registered as plain motion before content promotion keeps working."""
+    _, bundle = _scene_bundle(
+        tmp_path,
+        "legacy",
+        synthetic_terrain_motion,
+        declared=AssetCategory.PLAIN_MOTION,
+        backend="newton",
+    )
+
+    inspection = MotionAssetInspector().inspect(bundle, tmp_path)
+
+    assert "BUNDLE_METADATA_MISMATCH" not in {error.code for error in inspection.errors}
+    assert inspection.category is AssetCategory.TERRAIN_SCENE
+    assert inspection.metadata["declared_category"] == "plain_motion"
+
+
+def _assert_inspection_matches_loader(tmp_path: Path, primary: Path, bundle) -> object:
+    """The inspector's scene flags equal what ``load_npz`` builds."""
+    from hhtools.io.npz import load_npz
+
+    inspection = MotionAssetInspector().inspect(bundle, tmp_path)
+    loaded = load_npz(primary)
+    assert inspection.has_terrain == (loaded.terrain is not None)
+    assert inspection.has_object == bool(loaded.objects)
+    return inspection
+
+
+def test_inspection_follows_the_internal_name_sidecar(tmp_path: Path, synthetic_terrain_motion):
+    import dataclasses
+
+    motion = dataclasses.replace(synthetic_terrain_motion, name="hill")
+    primary, _ = _scene_bundle(
+        tmp_path, "renamed", motion, declared=AssetCategory.TERRAIN_SCENE
+    )
+    (tmp_path / "unified_npz" / "renamed.pkl").rename(tmp_path / "unified_npz" / "hill.pkl")
+    _, bundle = _scene_bundle(
+        tmp_path, "renamed", motion, declared=AssetCategory.TERRAIN_SCENE
+    )
+    # save_npz rewrote renamed.pkl; keep only the internal-name sidecar.
+    (tmp_path / "unified_npz" / "renamed.pkl").unlink()
+    bundle = bundle.model_copy(
+        update={
+            "files": [
+                f
+                for f in bundle.files
+                if f.relative_path != "unified_npz/renamed.pkl"
+            ]
+            + [
+                _manifest_file(tmp_path, "unified_npz/hill.pkl", AssetFileRole.OTHER),
+            ]
+        }
+    )
+
+    inspection = _assert_inspection_matches_loader(tmp_path, primary, bundle)
+
+    assert inspection.has_terrain
+    assert discover_primary(primary).category is AssetCategory.TERRAIN_SCENE
+
+
+def test_inline_heightfield_key_alone_is_not_terrain(tmp_path: Path, synthetic_terrain_motion):
+    import dataclasses
+
+    plain = dataclasses.replace(synthetic_terrain_motion, terrain=None)
+    primary, _ = _scene_bundle(tmp_path, "inline", plain, declared=AssetCategory.PLAIN_MOTION)
+    with np.load(primary, allow_pickle=False) as archive:
+        members = {key: archive[key] for key in archive.files}
+    members["terrain_heightfield"] = np.zeros((4, 4), dtype=np.float32)
+    np.savez(primary, **members)
+    _, bundle = _scene_bundle(
+        tmp_path, "inline", plain, declared=AssetCategory.PLAIN_MOTION, register_sidecars=False
+    )
+    np.savez(primary, **members)
+    bundle = bundle.model_copy(
+        update={"files": [_manifest_file(tmp_path, "unified_npz/inline.npz", AssetFileRole.MOTION)]}
+    )
+
+    inspection = _assert_inspection_matches_loader(tmp_path, primary, bundle)
+
+    assert not inspection.has_terrain
+    assert discover_primary(primary).category is AssetCategory.PLAIN_MOTION
+
+
+def test_inspection_agrees_with_loader_for_objects_and_plain(
+    tmp_path: Path, synthetic_terrain_motion
+):
+    import dataclasses
+
+    primary, bundle = _scene_bundle(
+        tmp_path,
+        "carry",
+        _object_motion(synthetic_terrain_motion),
+        declared=AssetCategory.OBJECT_INTERACTION,
+    )
+    assert _assert_inspection_matches_loader(tmp_path, primary, bundle).has_object
+
+    plain = dataclasses.replace(synthetic_terrain_motion, terrain=None)
+    primary, bundle = _scene_bundle(
+        tmp_path, "flat", plain, declared=AssetCategory.PLAIN_MOTION
+    )
+    inspection = _assert_inspection_matches_loader(tmp_path, primary, bundle)
+    assert not inspection.has_object and not inspection.has_terrain
+
+
+def test_terrain_sidecar_is_part_of_the_bundle_identity(tmp_path: Path, synthetic_terrain_motion):
+    primary, _ = _scene_bundle(
+        tmp_path, "hill", synthetic_terrain_motion, declared=AssetCategory.TERRAIN_SCENE
+    )
+
+    sidecars = discover_primary(primary).sidecars
+
+    assert [path.name for path in sidecars[AssetFileRole.OTHER]] == ["hill.pkl"]
+
+
+def test_registered_bundle_without_a_present_sidecar_asks_for_reregistration(
+    tmp_path: Path, synthetic_terrain_motion
+):
+    _, bundle = _scene_bundle(
+        tmp_path,
+        "hill",
+        synthetic_terrain_motion,
+        declared=AssetCategory.TERRAIN_SCENE,
+        register_sidecars=False,
+    )
+
+    inspection = MotionAssetInspector().inspect(bundle, tmp_path)
+
+    assert inspection.status is InspectionStatus.INVALID
+    error = next(e for e in inspection.errors if e.code == "BUNDLE_INCOMPLETE")
+    assert error.details["unregistered_files"] == ["unified_npz/hill.pkl"]
+    assert error.details["action"] == "reregister"

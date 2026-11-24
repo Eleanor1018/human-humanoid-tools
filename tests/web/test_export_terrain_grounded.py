@@ -117,3 +117,29 @@ def test_exported_terrain_carries_the_imputed_heights() -> None:
     out = _scaled_terrain(motion, 0.5, 0.1)
     assert np.isfinite(out.hf).all() and np.isfinite(out.hf_maxmin).all()
     assert out.hf[1, 1] == pytest.approx((0.3 - 0.1) * 0.5)
+
+
+@pytest.mark.parametrize("flag", ["terrain_grounded", "objects_grounded"])
+@pytest.mark.parametrize("ground_follow", [False, True])
+def test_viewer_playback_does_not_lift_a_scene_grounded_result(
+    robot, flag: str, ground_follow: bool
+) -> None:
+    """Playback shows a scene-solved result as solved, like the export (no mesh_z_lift)."""
+    from hhtools.io.scene_serialize import serialize_robot_trajectory
+
+    motion, ret = _scene(robot, grounded=True)
+    ret.meta.pop("terrain_grounded", None)
+    ret.meta[flag] = True
+    yellow = np.array([[0.0, 0.0, 1.0]])
+    scaled = {"frames": [{"left_ankle": yellow[0].tolist()}]}
+    grounded = serialize_robot_trajectory(
+        robot, ret, scaled_preview=scaled, ground_follow=ground_follow
+    )
+    assert {frame["mesh_z_lift"] for frame in grounded["frames"]} == {0.0}
+
+    plain_meta = {k: v for k, v in ret.meta.items() if k != flag}
+    plain = RetargetedMotion("clip", ret.joint_q, 30.0, robot.dof_names(), meta=plain_meta)
+    if ground_follow:
+        return  # control below uses the constant lift only
+    lifted = serialize_robot_trajectory(robot, plain, ground_follow=False)
+    assert any(abs(frame["mesh_z_lift"]) > 1e-6 for frame in lifted["frames"])

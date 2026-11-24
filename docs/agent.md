@@ -9,9 +9,10 @@ agent should discover and call tools directly.
 | JSON CLI | Client of a running WebUI Agent API | `uv run hhtools agent ...` |
 | MCP | Own local stdio process; no WebUI required | `uv run --extra mcp hhtools-mcp` |
 
-The current Agent surface supports human-to-robot (H2R) retargeting—plain motion through Newton
-and safely inspectable object-interaction or terrain-scene bundles through Interaction-Mesh—and
-scene-free robot-to-robot (R2R) trajectories through Newton, plus ordered H2R/R2R batches. It
+The current Agent surface supports human-to-robot (H2R) retargeting—plain motion through FRAX
+(Newton as the fallback) and safely inspectable object-interaction or terrain-scene bundles
+through the FRAX scene solver (Interaction-Mesh as the fallback or on request)—and
+scene-free robot-to-robot (R2R) trajectories through FRAX (Newton as the fallback), plus ordered H2R/R2R batches. It
 includes content-bound H2R and R2R pair-calibration status, constrained proposals, deterministic
 validation, front/side visual previews, validated silent save, capability and robot
 discovery, allowlisted asset registration and inspection, workflow-specific preflight, jobs,

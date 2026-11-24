@@ -1,4 +1,4 @@
-"""Batch-retarget intermimic / human–object clips (interaction-mesh).
+"""Batch-retarget intermimic / human–object clips (FRAX scene solver, interaction-mesh fallback).
 
 Supported ``--dataset`` values:
 
@@ -51,7 +51,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     add_common_args(
         p,
         default_reference=None,
-        default_backend="interaction_mesh",
+        default_backend="scene",
         datasets=_INTERMIMIC_DATASETS,
     )
     return p.parse_args(argv)

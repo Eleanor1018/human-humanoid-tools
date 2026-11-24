@@ -110,21 +110,26 @@ uv sync --locked
 uv run hhtools --help
 ```
 
-需要 WebUI 预览和 Newton 重映射时：
+需要 WebUI 预览（已包含 FRAX 重映射）时：
 
 ```bash
-uv sync --locked --extra web --extra retarget
+uv sync --locked --extra web
 uv run hhtools web
 ```
 
-安装了 FRAX 时，它就是默认的 IK 求解器（只用 CPU，不依赖 Newton）。加上 `--extra retarget-frax` 即可安装；未安装时会自动改用 Newton：
+另外需要 Newton 重映射时（可选，依赖 Newton 和 Warp）：
 
 ```bash
-uv sync --locked --extra web --extra retarget --extra retarget-frax
+uv sync --locked --extra web --extra retarget
+```
+
+FRAX 是默认的 IK 求解器，随 HHTools 一起安装，无需额外的 extra（只用 CPU，不依赖 Newton）。它支持 macOS arm64、Linux 和 Windows，Python 3.12 或 3.13。macOS x86_64（JAX 没有对应 wheel）和 Python 3.14 及更新版本（ElastiQP 没有 wheel）上不会安装，此时会自动改用 Newton。`retarget-frax` extra 仍作为别名保留，已有的安装命令继续有效。检查方式：
+
+```bash
 uv run hhtools doctor --require retarget-frax
 ```
 
-只需要预览时可省略 `--extra retarget`。缺少必需的包时，启动程序会列出缺失的包和准确的修复命令，而不是直接显示 import traceback。
+不需要 Newton 时可省略 `--extra retarget`。缺少必需的包时，启动程序会列出缺失的包和准确的修复命令，而不是直接显示 import traceback。
 
 ### 常见问题
 

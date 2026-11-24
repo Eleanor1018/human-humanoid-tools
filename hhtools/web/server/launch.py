@@ -70,7 +70,8 @@ def run_web(
         "  侧栏应为 3 项（含「机器人 · Retarget」）；舞台左上角有「骨架|身体|机器人」。"
         "\n  git pull 后请在本仓库执行 uv sync 并用 uv run hhtools web 重启（勿用全局旧包）。"
         "\n  若界面异常：确认终端 UI build 与浏览器地址栏端口一致，再 Ctrl+Shift+R。"
-        "\n  Retarget 需：uv sync --extra web --extra retarget + NVIDIA newton 包。\n"
+        "\n  Retarget 默认使用随安装提供的 FRAX；"
+        "Newton 为可选：uv sync --extra web --extra retarget。\n"
     )
     try:
         import webbrowser

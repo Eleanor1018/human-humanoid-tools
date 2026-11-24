@@ -65,11 +65,16 @@ def reference_for_dataset(dataset: str, suffix: str) -> str:
 #: Newton is the fallback when the optional FRAX dependencies are missing.
 IK_BACKENDS: tuple[str, ...] = ("frax", "newton")
 
+#: Scene-clip (terrain / object) backends in order of preference.  The FRAX
+#: scene solver is the default; interaction-mesh is the fallback and an
+#: explicit alternative.
+SCENE_BACKENDS: tuple[str, ...] = ("frax", "interaction_mesh")
+
 #: Retarget backends that can solve each workflow category, recommended first.
 _CATEGORY_BACKENDS: dict[AssetCategory, tuple[str, ...]] = {
     AssetCategory.PLAIN_MOTION: IK_BACKENDS,
-    AssetCategory.OBJECT_INTERACTION: ("interaction_mesh",),
-    AssetCategory.TERRAIN_SCENE: ("interaction_mesh",),
+    AssetCategory.OBJECT_INTERACTION: SCENE_BACKENDS,
+    AssetCategory.TERRAIN_SCENE: SCENE_BACKENDS,
 }
 
 
@@ -86,14 +91,17 @@ def compatible_backends_for_category(category: AssetCategory) -> tuple[str, ...]
 def backend_for_category(category: AssetCategory) -> str:
     """Return the recommended retarget backend for ``category``.
 
-    This is a static preference, independent of what is installed, so it is
-    safe to persist as asset metadata.  Use :func:`default_ik_backend` to pick
-    the plain-motion backend that can actually run in this install.
+    Plain motion keeps a static preference (safe to persist as asset
+    metadata).  Scene categories follow :func:`default_scene_backend`, so the
+    recommendation depends on whether FRAX is installed; persisted older
+    recommendations stay acceptable because every compatible backend is.
     """
 
     backends = compatible_backends_for_category(category)
     if not backends:
         raise ValueError(f"asset category {category.value!r} is not retargetable motion")
+    if backends == SCENE_BACKENDS:
+        return default_scene_backend()
     return backends[0]
 
 
@@ -110,16 +118,45 @@ def default_ik_backend() -> str:
     return _default()
 
 
+def default_scene_backend() -> str:
+    """Backend to run for terrain / object clips when the caller names none.
+
+    The FRAX scene solver when FRAX is installed, otherwise interaction-mesh.
+    """
+
+    from hhtools.retarget.frax_backend import default_scene_backend as _default
+
+    return _default()
+
+
+def motion_has_scene(motion) -> bool:
+    """True when ``motion`` carries terrain or interaction objects."""
+
+    from hhtools.retarget.frax_backend import motion_has_scene as _has_scene
+
+    return _has_scene(motion)
+
+
+def default_backend_for_motion(has_scene: bool) -> str:
+    """Default backend for a clip: the scene default when it has terrain / objects."""
+
+    return default_scene_backend() if has_scene else default_ik_backend()
+
+
 __all__ = [
     "DATASET_REFERENCE",
     "FORMAT_REFERENCE",
     "IK_BACKENDS",
     "OBJECT_DATASETS",
     "R2R_BACKENDS",
+    "SCENE_BACKENDS",
     "TERRAIN_DATASETS",
     "backend_for_category",
     "category_for_dataset",
     "compatible_backends_for_category",
+    "default_backend_for_motion",
     "default_ik_backend",
+    "default_scene_backend",
+    "motion_has_scene",
     "reference_for_dataset",
 ]

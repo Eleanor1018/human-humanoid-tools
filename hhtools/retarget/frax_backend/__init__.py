@@ -23,10 +23,13 @@ __all__ = [
     "FraxPipeline",
     "FraxSceneConfig",
     "FraxScenePipeline",
+    "default_backend_for_motion",
     "default_ik_backend",
+    "default_scene_backend",
     "frax_available",
     "frax_config_for_preset",
     "missing_frax_dependencies",
+    "motion_has_scene",
 ]
 
 #: Import names the backend needs at run time.
@@ -50,6 +53,26 @@ def default_ik_backend() -> str:
     extra, part of ``all``), otherwise Newton.
     """
     return "frax" if frax_available() else "newton"
+
+
+def default_scene_backend() -> str:
+    """The backend for terrain / object clips when the caller names none.
+
+    The FRAX scene solver when FRAX is installed, otherwise ``interaction_mesh``.
+    """
+    return "frax" if frax_available() else "interaction_mesh"
+
+
+def motion_has_scene(motion) -> bool:
+    """True when ``motion`` carries terrain or interaction objects."""
+    return bool(
+        getattr(motion, "terrain", None) is not None or getattr(motion, "objects", None)
+    )
+
+
+def default_backend_for_motion(has_scene: bool) -> str:
+    """Default backend for a clip: the scene default when it has terrain / objects."""
+    return default_scene_backend() if has_scene else default_ik_backend()
 
 
 def __getattr__(name: str):

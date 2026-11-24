@@ -110,21 +110,27 @@ uv sync --locked
 uv run hhtools --help
 ```
 
-For WebUI preview and Newton retargeting:
+For WebUI preview (FRAX retargeting included):
+
+```bash
+uv sync --locked --extra web
+uv run hhtools web
+```
+
+For Newton retargeting as well (optional, needs the Newton and Warp stack):
 
 ```bash
 uv sync --locked --extra web --extra retarget
 uv run hhtools web
 ```
 
-FRAX is the default IK solver when it is installed (CPU only, no Newton needed). Add `--extra retarget-frax` to get it; without it, HHTools falls back to Newton:
+FRAX is the default IK solver and is installed with HHTools, so no extra is needed (CPU only, no Newton needed). It is available on macOS arm64, Linux and Windows with Python 3.12 or 3.13. It is not installed on macOS x86_64 (JAX ships no wheels) or on Python 3.14 and newer (ElastiQP has no wheels); there HHTools falls back to Newton. The `retarget-frax` extra remains as an alias for existing install commands. Check it with:
 
 ```bash
-uv sync --locked --extra web --extra retarget --extra retarget-frax
 uv run hhtools doctor --require retarget-frax
 ```
 
-For a preview-only WebUI, omit `--extra retarget`. If a required package is absent, startup exits with the missing package names and the exact recovery command instead of an import traceback.
+For a UI without Newton, omit `--extra retarget`. If a required package is absent, startup exits with the missing package names and the exact recovery command instead of an import traceback.
 
 ### Troubleshooting
 

@@ -334,10 +334,15 @@ def _backend_capabilities(
             # frax.ik solves on the CPU with JAX + ElastiQP; the robot adapter
             # (URDF, collision geometry) needs yourdfpy and MuJoCo as for Newton.
             ("frax", "jax", "elastiqp", "mujoco", "yourdfpy"),
-            [AssetCategory.PLAIN_MOTION, AssetCategory.ROBOT_TRAJECTORY],
+            [
+                AssetCategory.PLAIN_MOTION,
+                AssetCategory.ROBOT_TRAJECTORY,
+                AssetCategory.OBJECT_INTERACTION,
+                AssetCategory.TERRAIN_SCENE,
+            ],
             {
                 "batch": True,
-                "scene_geometry": False,
+                "scene_geometry": True,
                 "r2r": True,
                 "cuda_graph": False,
                 "cpu_fallback": True,

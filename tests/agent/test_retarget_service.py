@@ -153,12 +153,22 @@ def _fixture(
     semantics: str = "hhtools.retarget.plan.v1",
     category: str | None = None,
     backend: str = "newton",
+    sidecar_terrain: object | None = None,
 ) -> _Fixture:
     motion_root = tmp_path / "motions"
     robot_root = tmp_path / "robots"
     motion_path = motion_root / "walk.npz"
     robot_dir = robot_root / "test_robot"
     _write_motion(motion_path)
+    if sidecar_terrain is not None:
+        from hhtools.io.parc_export import save_parc_pkl
+
+        save_parc_pkl(
+            motion_path.with_suffix(".pkl"),
+            motion_data=None,
+            terrain_data=sidecar_terrain,
+            misc_data=None,
+        )
     robot_urdf, scaler = _write_robot(robot_dir)
     if profile_source == "calibration" and profile_storage == "user_calibration":
         calibration_path = _write_user_calibration(tmp_path / "user-robots")
@@ -436,6 +446,38 @@ def test_changed_asset_bytes_make_the_plan_stale(
     assert captured.value.error.next_action.action == "run_preflight"
 
 
+def test_replaced_terrain_sidecar_makes_the_plan_stale(
+    tmp_path: Path, synthetic_terrain_motion
+) -> None:
+    import dataclasses
+
+    from hhtools.io.parc_export import save_parc_pkl
+
+    terrain = synthetic_terrain_motion.terrain
+    fixture = _fixture(tmp_path, backend="frax", sidecar_terrain=terrain)
+    assert fixture.payload["motion"]["category"] == "terrain_scene"  # type: ignore[index]
+    service = RetargetService(
+        fixture.store,
+        fixture.assets,
+        provenance_provider=_fixed_provenance,
+    )
+    service.get_job_spec(fixture.plan.plan_id)
+
+    other = dataclasses.replace(terrain, hf=terrain.hf + 0.25)
+    save_parc_pkl(
+        fixture.motion_path.with_suffix(".pkl"),
+        motion_data=None,
+        terrain_data=other,
+        misc_data=None,
+    )
+
+    with pytest.raises(RetargetServiceError) as captured:
+        service.get_job_spec(fixture.plan.plan_id)
+
+    _assert_error(captured, "PLAN_STALE")
+    assert "ASSET_HASH_MISMATCH" in captured.value.error.details["reason_code"]
+
+
 def test_plain_motion_plan_may_use_frax_instead_of_the_recommended_newton(
     tmp_path: Path,
 ) -> None:
@@ -452,7 +494,7 @@ def test_plain_motion_plan_may_use_frax_instead_of_the_recommended_newton(
     assert "ik_iterations" not in spec.effective_parameters
 
 
-def test_frax_plan_is_stale_once_the_motion_routes_to_interaction_mesh(
+def test_frax_plan_is_stale_once_the_motion_routing_projection_changes(
     tmp_path: Path,
 ) -> None:
     fixture = _fixture(tmp_path, backend="frax", category="terrain_scene")
